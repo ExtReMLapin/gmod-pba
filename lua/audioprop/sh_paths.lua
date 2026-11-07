@@ -157,25 +157,42 @@ end
 
 local DOOR_CLASSES = { prop_door_rotating = true, func_door = true, func_door_rotating = true,
 	func_movelinear = true, func_brush = true, func_wall = true, func_breakable = true }
+local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, prop_physics_override = true,
+	prop_dynamic = true, prop_dynamic_override = true, func_physbox = true, func_breakable_surf = true }
 
+-- current source entity (never obstructs its own sound)
+local ignoreEnt
 local function traceFilter(ent)
-	return DOOR_CLASSES[ent:GetClass()] or false
+	if ent == ignoreEnt then return false end
+	local cls = ent:GetClass()
+	if DOOR_CLASSES[cls] then return true end
+	if PROP_CLASSES[cls] and A.cfg.trans_props >= 0.5 then
+		return ent:BoundingRadius() >= A.cfg.trans_prop_min
+	end
+	return false
 end
 
 --- Walls crossed by the straight line S -> L (game state: traces). Returns a list of
 -- { entry, exit, thickness, mat, surf }, mirroring the mcp `trace_through` oracle.
-function P.Walls(S, L, maxWalls)
+function P.Walls(S, L, maxWalls, srcEnt)
 	local walls = {}
 	local dir = (L - S):GetNormalized()
 	local start = S
+	ignoreEnt = srcEnt
 	for _ = 1, maxWalls or 6 do
-		local tr = util.TraceLine({ start = start, endpos = L, mask = MASK_SOLID_BRUSHONLY, filter = traceFilter })
+		local tr = util.TraceLine({ start = start, endpos = L, mask = MASK_SOLID, filter = traceFilter })
 		if not tr.Hit or tr.Fraction >= 1 then break end
 		local entry = tr.HitPos
 		local surf = util.GetSurfacePropName(tr.SurfaceProps)
-		local inside = util.TraceLine({ start = entry + dir * 0.5, endpos = L, mask = MASK_SOLID_BRUSHONLY, filter = traceFilter })
+		local hitEnt = IsValid(tr.Entity) and not tr.Entity:IsWorld() and tr.Entity or nil
+		local inside = not hitEnt and util.TraceLine({ start = entry + dir * 0.5, endpos = L, mask = MASK_SOLID_BRUSHONLY, filter = traceFilter })
 		local exit
-		if inside.StartSolid then
+		if hitEnt then
+			-- entity (prop, door): exit face = first hit of that entity seen from the far side
+			local far = entry + dir * math.min(entry:Distance(L), hitEnt:BoundingRadius() * 2 + 8)
+			local back = util.TraceLine({ start = far, endpos = entry, mask = MASK_SOLID, filter = function(e) return e == hitEnt end })
+			exit = (back.Hit and not back.StartSolid) and back.HitPos or entry
+		elseif inside.StartSolid then
 			if inside.AllSolid or inside.FractionLeftSolid >= 1 then
 				exit = L -- listener inside solid: give up on this wall
 			else
@@ -184,24 +201,96 @@ function P.Walls(S, L, maxWalls)
 		else
 			exit = entry -- zero-thickness surface (displacement, model face)
 		end
-		walls[#walls + 1] = { entry = entry, exit = exit, thickness = entry:Distance(exit), mat = tr.MatType, surf = surf,
-			ent = IsValid(tr.Entity) and tr.Entity or nil }
+		local w = { entry = entry, exit = exit, thickness = entry:Distance(exit), mat = tr.MatType, surf = surf,
+			surfIdx = tr.SurfaceProps, ent = hitEnt }
+		if hitEnt and not DOOR_CLASSES[hitEnt:GetClass()] then
+			local mn, mx = hitEnt:WorldSpaceAABB()
+			-- grow the box a little so detour points sit just outside the object
+			mn, mx = mn - Vector(2, 2, 2), mx + Vector(2, 2, 2)
+			w.detour = P.DetourDelta(S, L, mn, mx, function(e)
+				local f = function() return false end
+				return not util.TraceLine({ start = S, endpos = e, mask = MASK_SOLID_BRUSHONLY, filter = f }).Hit
+					and not util.TraceLine({ start = e, endpos = L, mask = MASK_SOLID_BRUSHONLY, filter = f }).Hit
+			end)
+		end
+		walls[#walls + 1] = w
 		if exit == L then break end
 		start = exit + dir * 0.5
 	end
 	return walls
 end
 
+--- Smallest path difference (units) for going around a finite obstacle (world AABB
+-- mins/maxs) between S and L: over the top, under, or round either side. `valid(e)`
+-- (optional) rejects detour points blocked by the world (object on the floor, against a
+-- wall). math.huge when no way round.
+function P.DetourDelta(S, L, mins, maxs, valid)
+	-- source or listener enclosed by the obstacle: no way round it
+	if S:WithinAABox(mins, maxs) or L:WithinAABox(mins, maxs) then return math.huge end
+	local dir = L - S
+	local len2 = math.max(dir:LengthSqr(), 1e-6)
+	local c = (mins + maxs) * 0.5
+	-- point of the S-L line closest to the obstacle centre: detours are taken there
+	local t = math.Clamp((c - S):Dot(dir) / len2, 0, 1)
+	local P0 = S + dir * t
+	local side = Vector(-dir.y, dir.x, 0)
+	if side:LengthSqr() < 1e-6 then side = Vector(1, 0, 0) end
+	side:Normalize()
+	local ext = maxs - mins
+	local halfSide = math.abs(side.x) * ext.x / 2 + math.abs(side.y) * ext.y / 2
+	local sc = (c - P0):Dot(side)
+	local cands = {
+		Vector(P0.x, P0.y, maxs.z),        -- over
+		Vector(P0.x, P0.y, mins.z),        -- under (raised / floating object)
+		P0 + side * (sc + halfSide),       -- round one side
+		P0 + side * (sc - halfSide),       -- round the other
+	}
+	local d0 = S:Distance(L)
+	local best = math.huge
+	for _, e in ipairs(cands) do
+		if not valid or valid(e) then
+			best = math.min(best, S:Distance(e) + e:Distance(L) - d0)
+		end
+	end
+	return math.max(best, 0)
+end
+
 --- Transmission summary of a wall list (pure).
 function P.EvalWalls(walls, cfg)
 	cfg = cfg or A.cfg
-	local loss, lp = 0, 0
+	local loss, mid, lp = 0, 0, 0
 	for _, w in ipairs(walls) do
 		local db, l = AC.WallLoss(w.mat, w.surf, w.thickness)
-		loss = loss + db * cfg.trans_scale
-		lp = math.max(lp, l)
+		local dd
+		if w.ent and not DOOR_CLASSES[w.ent:GetClass()] then
+			-- props: hollow models (sheet metal, panels...) follow the mass law on the
+			-- surfaceprop's own thickness when it declares one
+			local data = w.surfIdx and util.GetSurfaceData(w.surfIdx)
+			if data and (data.thickness or 0) > 0 then
+				db = math.min(db, AC.MassLaw(data.density, data.thickness, 500))
+			end
+			-- a prop is finite: sound also bends around it. Combine (power sum) the
+			-- transmission through it with the diffraction over / round it. A small object
+			-- (can, crate) gives a tiny detour, hence ~0 dB: it barely shadows.
+			if w.detour and w.detour < math.huge then
+				dd = AC.Diffraction(w.detour, cfg.diff_freq, cfg.diff_max_edge)
+				w.diffDb = dd
+			end
+		end
+		-- the transmitted part is rendered low-passed: low-frequency loss (table - bonus);
+		-- the diffracted part (round a prop) keeps its own loss
+		local through = math.max(db * cfg.trans_scale - cfg.trans_lf_bonus, 0)
+		local midDb = db * cfg.trans_scale
+		if dd then
+			through = math.min(through, AC.PowerSumDb({ through, dd }))
+			midDb = math.min(midDb, AC.PowerSumDb({ midDb, dd }))
+		end
+		w.lossDb = through
+		loss = loss + through
+		mid = mid + midDb
+		lp = math.max(lp, (dd and dd < through) and math.min(l, AC.LowpassLevel(dd, cfg)) or l)
 	end
-	return math.min(loss, cfg.trans_max), lp
+	return math.min(loss, cfg.trans_max), lp, math.min(mid, cfg.trans_max)
 end
 
 -- ------------------------------------------------------------------ selection
@@ -216,6 +305,15 @@ P.PathLevel = pathLevel
 -- Each voice: { pos, gain (linear target gain at the listener), lp, kind, members }.
 function P.SelectVoices(L, paths, trans, sndlvl, cfg)
 	cfg = cfg or A.cfg
+	-- loud sources keep their headroom above the engine's full scale (see AC.Headroom)
+	for _, p in ipairs(paths) do
+		p.rawLossDb = p.rawLossDb or p.lossDb
+		p.lossDb = math.max(p.rawLossDb - AC.Headroom(sndlvl, p.length, cfg.fullscale_db), 0)
+	end
+	if trans then
+		trans.rawLossDb = trans.rawLossDb or trans.lossDb
+		trans.lossDb = math.max(trans.rawLossDb - AC.Headroom(sndlvl, trans.length, cfg.fullscale_db), 0)
+	end
 	local list = {}
 	for _, p in ipairs(paths) do
 		p.level = pathLevel(p.length, p.lossDb, sndlvl)
@@ -302,7 +400,7 @@ local function q(v) return math.floor(v.x / 32) .. "," .. math.floor(v.y / 32) .
 
 --- Full computation for one sound. S, L: positions; returns result table:
 -- { clear = bool, aS, aL, paths, trans, voices }.
-function P.Compute(S, L, sndlvl, cfg)
+function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
 	local key = q(S) .. "|" .. q(L) .. "|" .. sndlvl
 	local now = RealTime()
@@ -310,19 +408,24 @@ function P.Compute(S, L, sndlvl, cfg)
 	if c and now - c.t < cfg.cache_ttl then return c.r end
 
 	local r = { S = S, L = L }
-	local walls = P.Walls(S, L, cfg.trans_max_walls)
+	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt)
 	if #walls == 0 then
 		r.clear = true
 	else
 		r.clear = false
-		local loss, lp = P.EvalWalls(walls, cfg)
+		local loss, lp, mid = P.EvalWalls(walls, cfg)
 		local last = walls[#walls]
 		local dir = (L - S):GetNormalized()
 		local tpos = last.exit + dir * 2
-		r.trans = { walls = walls, lossDb = loss, lp = lp, length = S:Distance(L), pos = tpos }
+		r.trans = { walls = walls, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
 		local g = A.Graph.Get()
 		r.paths = {}
-		if g then
+		-- portals and probes describe the world geometry only: use them only when the world
+		-- itself blocks the direct line (not when a prop, a door leaf... does)
+		local worldBlocked = false
+		for _, w in ipairs(walls) do if not w.ent then worldBlocked = true break end end
+		r.worldBlocked = worldBlocked
+		if g and worldBlocked then
 			r.aS, r.aL = A.Graph.Area(g, S), A.Graph.Area(g, L)
 			if r.aS ~= 0 and r.aL ~= 0 and r.aS ~= r.aL then
 				for _, chain in ipairs(P.FindChains(g, S, r.aS, L, r.aL, cfg)) do
@@ -330,7 +433,8 @@ function P.Compute(S, L, sndlvl, cfg)
 				end
 			end
 		end
-		if #r.paths == 0 and CLIENT and A.Probes and cfg.probes >= 0.5 then
+		if worldBlocked and #r.paths == 0 and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist
+			and not (A.FrameBudgetExceeded and A.FrameBudgetExceeded()) then
 			r.paths = A.Probes.Paths(S, L, cfg.max_paths, cfg)
 			r.viaProbes = #r.paths > 0
 		end

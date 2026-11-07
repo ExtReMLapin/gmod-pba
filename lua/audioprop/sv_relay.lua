@@ -72,7 +72,7 @@ A.AddHook("EntityEmitSound", function(data)
 		if ply ~= predicted then
 			local eye = ply:EyePos()
 			if eye:DistToSqr(pos) <= radius * radius then
-				local walls = A.Paths.Walls(pos, eye, 1)
+				local walls = A.Paths.Walls(pos, eye, 1, data.Entity)
 				if #walls == 0 then clear[#clear + 1] = ply else blocked[#blocked + 1] = ply end
 			end
 		end

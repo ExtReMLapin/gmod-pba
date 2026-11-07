@@ -35,6 +35,10 @@ def ensure_map(m):
 
 
 def run(name, map_, wait=2.5, sound="click"):
+    return run_snd(name, map_, wait, sound)
+
+
+def run_snd(name, map_, wait=2.5, sound="click"):
     ensure_map(map_)
     call("reports_clear", {})
     srv0 = lua("server", "return audioprop.stats.relayed")
@@ -123,6 +127,49 @@ for m in ["concrete", "brick", "wood", "metal", "glass", "plaster"]:
         check(f"P3-mat-{m}", t and v and v["kind"] == "transmission" and abs(v["az"]) < 10, f"trans={t} voice={v}")
 if "concrete" in mats and "wood" in mats and mats["concrete"] and mats["wood"]:
     check("P3-concrete-gt-wood", mats["concrete"] > mats["wood"], f"losses={mats}")
+
+if want("prop_wall"):
+    r, _, _ = run("prop_wall", "gm_flatgrass", wait=3)
+    v = dom(r)
+    t = r and r.get("trans")
+    check("P3-prop-sheet-metal", v and v["kind"] == "transmission" and abs(v["az"]) < 10 and t and t["loss_db"] < 40 and (v.get("vol") or 0) > 0.01,
+          f"trans={t} voice={v}")
+
+if want("loud_through_concrete"):
+    rv, _, _ = run_snd("mat_concrete", "ap_materials", 3, "voice")
+    rg, _, _ = run_snd("mat_concrete", "ap_materials", 3, "gun")
+    vv, vg = dom(rv), dom(rg)
+    check("P3-loud-headroom", vv and vg and vg["level_db"] > vv["level_db"] + 15 and (vg.get("vol") or 0) > 0.01,
+          f"voice={vv} gun={vg}")
+
+def trans_loss(r):
+    t = r and r.get("trans")
+    return t["loss_db"] if t else None
+
+
+if want("obs_can"):
+    r, items, relayed = run("obs_can", "gm_flatgrass", wait=3)
+    v = dom(r)
+    check("O-can", not items or (trans_loss(r) or 0) < 3, f"reports={len(items)} trans={r and r.get('trans')} voice={v}")
+
+if want("obs_car"):
+    r, items, _ = run("obs_car", "gm_flatgrass", wait=3)
+    tl = trans_loss(r)
+    check("O-car", tl is not None and 1 < tl < 15, f"trans={r and r.get('trans')} voice={dom(r)}")
+
+if want("obs_container"):
+    r, items, _ = run("obs_container", "gm_flatgrass", wait=3)
+    tl = trans_loss(r)
+    check("O-container", tl is not None and tl > 4, f"trans={r and r.get('trans')} voice={dom(r)}")
+
+if want("obs_crate"):
+    r, items, _ = run("obs_crate", "gm_flatgrass", wait=3)
+    tl = trans_loss(r)
+    check("O-crate-enclosed", tl is not None and tl > 10, f"trans={r and r.get('trans')} voice={dom(r)}")
+
+if want("obs_crowd"):
+    r, items, relayed = run("obs_crowd", "gm_flatgrass", wait=3)
+    check("O-crowd-untouched", not items and relayed == 0, f"reports={len(items)} relayed={relayed}")
 
 if want("open_field"):
     r, items, relayed = run("open_field", "gm_flatgrass")

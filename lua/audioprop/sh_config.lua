@@ -33,6 +33,10 @@ A.CONFIG = {
 	trans_scale     = { 1, 0, 3, "sv", "Multiplier on the material transmission losses." },
 	trans_max       = { 70, 10, 120, "sv", "Max transmission loss summed over walls (dB)." },
 	trans_max_walls = { 6, 1, 16, "sv", "Max walls crossed by the transmission trace." },
+	trans_lf_bonus  = { 10, 0, 30, "sv", "Transmission is rendered low-passed: use the low-frequency loss, this many dB below the mid-band table." },
+	trans_props     = { 1, 0, 1, "sv", "Props (prop_physics, prop_dynamic...) obstruct and transmit like walls." },
+	trans_prop_min  = { 4, 0, 200, "sv", "Props with a smaller bounding radius (units) are ignored (cheap cut-off; diffraction around props already makes small ones negligible)." },
+	fullscale_db    = { 90, 60, 140, "sv", "Sound pressure level mapped to the engine's full scale. Loud sources (gunfire, explosions) exceed it and keep that headroom through walls." },
 
 	-- doors
 	door_closed_db  = { 28, 0, 60, "sv", "Loss of a closed door when its material is unknown (dB)." },
@@ -49,6 +53,8 @@ A.CONFIG = {
 
 	-- level of detail
 	lod_dist        = { 6000, 500, 30000, "sv", "Beyond this distance sounds are left untouched." },
+	probe_dist      = { 3000, 0, 30000, "sv", "Beyond this distance no probe path search (transmission only)." },
+	frame_budget_ms = { 1, 0.1, 20, "cl", "Path search time per frame; beyond it, sounds fall back to cheaper processing." },
 	min_level       = { 50, 0, 140, "sv", "Sounds with a lower SNDLVL are left untouched." },
 	cache_ttl       = { 0.25, 0, 5, "sv", "Seconds a (source cell, listener cell) result stays cached." },
 	hysteresis      = { 0.3, 0, 2, "sv", "Seconds before the voice layout of a repeating source may change." },

@@ -9,6 +9,8 @@ local NET = "audioprop_snd"
 
 A.active = A.active or {}      -- list of { t_end, gain } for the voice budget
 A.lastResults = A.lastResults or {}
+A.perf = A.perf or { sum = 0, n = 0, maxCall = 0, maxFrame = 0, frames = 0, cur = 0 }
+function A.ResetPerf() A.perf = { sum = 0, n = 0, maxCall = 0, maxFrame = 0, frames = 0, cur = 0 } end
 A.stats = A.stats or { processed = 0, vanilla = 0, voices = 0, relayedIn = 0, dropped = 0 }
 
 local function listenerPos()
@@ -23,6 +25,12 @@ local function activeCount(now)
 		if A.active[i] < now then table.remove(A.active, i) else n = n + 1 end
 	end
 	return n
+end
+
+--- True once this frame's path-search budget is spent (cheaper fallback for the rest).
+function A.FrameBudgetExceeded()
+	local pf = A.perf
+	return pf.frame == FrameNumber() and pf.cur >= (A.cfg.frame_budget_ms or 1)
 end
 
 --- Azimuth of `pos` seen from L with view yaw, degrees, positive = to the RIGHT.
@@ -54,7 +62,9 @@ function A.Process(data, relayed)
 	local lvl = data.SoundLevel or 75
 	if S:Distance(L) > A.cfg.lod_dist then return false end
 	local t0 = SysTime()
-	local r = A.Paths.Compute(S, L, lvl)
+	local src = data.Entity
+	if not IsValid(src) and data.EntIndex and data.EntIndex > 0 then src = Entity(data.EntIndex) end
+	local r = A.Paths.Compute(S, L, lvl, nil, IsValid(src) and src or nil)
 	if r.clear or not r.voices or #r.voices == 0 then
 		A.stats.vanilla = A.stats.vanilla + 1
 		return false
@@ -71,6 +81,21 @@ function A.Process(data, relayed)
 		end
 	end
 	A.stats.processed = A.stats.processed + 1
+	-- per-frame cost accounting (dev / perf campaign)
+	local ms = (SysTime() - t0) * 1000
+	local fr = FrameNumber()
+	local pf = A.perf
+	if pf.frame ~= fr then
+		if pf.frame then
+			pf.frames = pf.frames + 1
+			pf.maxFrame = math.max(pf.maxFrame, pf.cur)
+		end
+		pf.frame, pf.cur = fr, 0
+	end
+	pf.cur = pf.cur + ms
+	pf.sum = pf.sum + ms
+	pf.n = pf.n + 1
+	pf.maxCall = math.max(pf.maxCall, ms)
 	A.stats.voices = A.stats.voices + emitted
 
 	local rec = { t = now, S = S, L = L, r = r, name = data.SoundName, relayed = relayed, ms = (SysTime() - t0) * 1000 }
@@ -91,7 +116,8 @@ function A.Process(data, relayed)
 				az = math.Round(A.Azimuth(L, ang.y, p.pos), 1) }
 		end
 		A.Report("paths", { name = data.SoundName, relayed = relayed, aS = r.aS, aL = r.aL, voices = vs, paths = ps,
-			trans = r.trans and { loss_db = math.Round(r.trans.lossDb, 1), walls = #r.trans.walls, lp = r.trans.lp },
+			trans = r.trans and { loss_db = math.Round(r.trans.lossDb, 1), raw_db = math.Round(r.trans.rawLossDb or r.trans.lossDb, 1),
+				mid_db = math.Round(r.trans.midDb or 0, 1), walls = #r.trans.walls, lp = r.trans.lp },
 			ms = math.Round(rec.ms, 3) })
 	end
 	return true

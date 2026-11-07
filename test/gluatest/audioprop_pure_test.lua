@@ -174,6 +174,20 @@ return {
 			expect(#m).to.equal(1)
 			expect(near(m[1].pos.y, 0, 1)).to.beTrue()
 		end },
+		{ name = "DetourDelta: a can barely shadows, a container does", func = function()
+			local S, L = Vector(0, 0, 40), Vector(400, 0, 40)
+			local can = P.DetourDelta(S, L, Vector(196, -3, 34), Vector(204, 3, 46))
+			-- the box stands on the floor (z = 0): no way under it
+			local box = P.DetourDelta(S, L, Vector(150, -300, 0), Vector(250, 300, 300), function(e) return e.z > 1 end)
+			expect(can < 2).to.beTrue()
+			expect(AC.Diffraction(can, 500, 20) < 1).to.beTrue()
+			expect(AC.Diffraction(box, 500, 20) > 12).to.beTrue()
+			expect(P.DetourDelta(Vector(200, 0, 40), L, Vector(180, -20, 0), Vector(220, 20, 60))).to.equal(math.huge)
+		end },
+		{ name = "Headroom: a 140 dB source keeps tens of dB, a 75 dB one none", func = function()
+			expect(AC.Headroom(140, 300, 90) > 25).to.beTrue()
+			expect(AC.Headroom(75, 300, 90)).to.equal(0)
+		end },
 		{ name = "SelectVoices: transmission kept within the window, alone when no portal", func = function()
 			local L = Vector(0, 0, 0)
 			local t = { walls = { {} }, lossDb = 40, lp = 4, length = 500, pos = Vector(50, 0, 0) }

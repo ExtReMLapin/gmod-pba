@@ -46,6 +46,7 @@ end
 -- delta = 0 (shadow boundary) gives 0 dB. Clamped to [0, maxDb].
 function AC.Diffraction(delta, freq, maxDb)
 	if delta <= 0 then return 0 end
+	if delta == math.huge or delta ~= delta then return maxDb or 20 end
 	local lambda = SPEED / freq -- metres
 	local N = 2 * (delta * UNIT_M) / lambda
 	local x = sqrt(2 * math.pi * N)
@@ -142,6 +143,15 @@ function AC.DoorGain(frac, closedDb)
 	local gc = 10 ^ (-closedDb / 20)
 	frac = min(max(frac, 0), 1)
 	return gc + (1 - gc) * sqrt(frac)
+end
+
+--- Headroom (dB) of a loud source: the engine renders every source at most at full scale,
+-- whatever its sound level. A 140 dB explosion and a 75 dB voice nearby are both "full
+-- volume", but through a 55 dB wall one stays loud and the other becomes inaudible. The
+-- level above `fullscale` at the listener (without obstacles) is subtracted from the losses.
+function AC.Headroom(sndlvl, len, fullscale)
+	local spl = sndlvl + AC.GainToDb(AC.EngineGain(math.max(len, 36), sndlvl)) -- ~SPL at the listener
+	return math.max(spl - fullscale, 0)
 end
 
 --- Propagation delay (seconds) of a path length in units.

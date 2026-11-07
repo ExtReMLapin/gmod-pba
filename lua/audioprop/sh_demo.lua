@@ -12,6 +12,8 @@ Demo.SOUNDS = {
 	click = "buttons/button14.wav",
 	music = "music/hl2_song20_submix0.mp3",
 }
+-- sound level per demo sound (gunfire and explosions are 140 dB in HL2 soundscripts)
+Demo.LEVELS = { voice = 75, gun = 140, click = 75, music = 80 }
 
 -- Positions from maps/src/refs.json (generated with the maps).
 Demo.SCENARIOS = {
@@ -33,6 +35,25 @@ Demo.SCENARIOS = {
 		expect = "seule la porte sud (droite) est ouverte" },
 	window = { map = "ap_window", listener = { 256, 256, 0 }, yaw = 0, source = { 784, 256, 40 },
 		expect = "fenêtre à gauche (nord, az < 0)" },
+	prop_wall = { map = "gm_flatgrass", listener = { 0, 0, -12288 }, yaw = 0, source = { 400, 0, -12248 },
+		props = { { "models/props_phx/construct/metal_plate4x4.mdl", { 200, 0, -12288 + 95 }, { 90, 0, 0 } } },
+		expect = "plaque de tôle entre source et auditeur : transmission étouffée, pas le silence" },
+	-- everyday obstacles on an open map (props between source and listener)
+	obs_can = { map = "gm_flatgrass", listener = { 0, 0, -12288 }, yaw = 0, source = { 400, 0, -12248 },
+		props = { { "models/props_junk/PopCan01a.mdl", { 200, 0, -12224 }, { 0, 0, 0 } } },
+		expect = "canette sur la ligne : rien d'audible ne change" },
+	obs_car = { map = "gm_flatgrass", listener = { 0, 0, -12288 }, yaw = 0, source = { 300, 0, -12274 },
+		props = { { "models/props_vehicles/car002a_physics.mdl", { 200, 0, -12260 }, { 0, 90, 0 } } },
+		expect = "voiture entre les deux : légère ombre (quelques dB), pas d'étouffement fort" },
+	obs_container = { map = "gm_flatgrass", listener = { 0, 0, -12288 }, yaw = 0, source = { 400, 0, -12248 },
+		props = { { "models/props_wasteland/cargo_container01.mdl", { 200, 0, -12220 }, { 0, 0, 0 } } },
+		expect = "conteneur entre les deux : ombre nette" },
+	obs_crate = { map = "gm_flatgrass", listener = { 0, 0, -12288 }, yaw = 0, source = { 400, 0, -12248 },
+		props = { { "models/props_junk/wood_crate002a.mdl", { 400, 0, -12248 }, { 0, 0, 0 } } },
+		expect = "source enfermée dans une caisse : étouffée" },
+	obs_crowd = { map = "gm_flatgrass", listener = { 0, 0, -12288 }, yaw = 0, source = { 400, 0, -12248 },
+		npcs = { { "npc_citizen", { 200, -40, -12288 } }, { "npc_citizen", { 200, 0, -12288 } }, { "npc_citizen", { 200, 40, -12288 } } },
+		expect = "foule entre les deux : aucun traitement (les personnages ne bloquent pas)" },
 	open_field = { map = "gm_flatgrass", listener = { 0, 0, -12288 }, yaw = 0, source = { 600, 0, -12248 },
 		expect = "espace ouvert : aucun traitement" },
 }
@@ -47,6 +68,8 @@ if SERVER then
 
 	function Demo.Stop()
 		timer.Remove("audioprop_demo")
+		for _, p in ipairs(Demo.props or {}) do if IsValid(p) then p:Remove() end end
+		Demo.props = {}
 		if IsValid(Demo.src) then Demo.src:Remove() end
 		Demo.src = nil
 	end
@@ -88,6 +111,26 @@ if SERVER then
 			ply:SetVelocity(-ply:GetVelocity())
 		end
 		for door, mode in pairs(sc.doors or {}) do setDoor(door, mode) end
+		Demo.props = Demo.props or {}
+		for _, p in ipairs(Demo.props) do if IsValid(p) then p:Remove() end end
+		Demo.props = {}
+		for _, def in ipairs(sc.props or {}) do
+			local e = ents.Create("prop_physics")
+			e:SetModel(def[1])
+			e:SetPos(Vector(unpack(def[2])))
+			e:SetAngles(Angle(unpack(def[3])))
+			e:Spawn()
+			local ph = e:GetPhysicsObject()
+			if IsValid(ph) then ph:EnableMotion(false) end
+			Demo.props[#Demo.props + 1] = e
+		end
+		for _, def in ipairs(sc.npcs or {}) do
+			local e = ents.Create(def[1])
+			e:SetPos(Vector(unpack(def[2])))
+			e:Spawn()
+			e:AddFlags(FL_NOTARGET)
+			Demo.props[#Demo.props + 1] = e
+		end
 		local snd = Demo.SOUNDS[soundArg or "voice"] or soundArg or Demo.SOUNDS.voice
 		local src = ents.Create("prop_dynamic")
 		src:SetModel("models/props_lab/citizenradio.mdl")
@@ -97,10 +140,11 @@ if SERVER then
 		Demo.src = src
 		util.PrecacheSound(snd)
 		local dur = math.max(SoundDuration(snd) or 1, 0.3)
+		local lvl = Demo.LEVELS[soundArg or "voice"] or 80
 		timer.Create("audioprop_demo", math.max(interval or (dur + 0.6), 0.2), 0, function()
 			if IsValid(src) then
 				Demo.emits = (Demo.emits or 0) + 1
-				src:EmitSound(snd, 80, 100, 1, CHAN_AUTO)
+				src:EmitSound(snd, lvl, 100, 1, CHAN_AUTO)
 			end
 		end)
 		Demo.current = name
