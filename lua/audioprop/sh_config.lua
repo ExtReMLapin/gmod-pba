@@ -59,6 +59,7 @@ A.CONFIG = {
 	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },
 	native_render   = { 0, 0, 1, "cl", "Experimental: the native module plays processed sounds itself (Steam Audio HRTF + 3-band EQ)." },
 	native_gain     = { 1, 0, 4, "cl", "Loudness of natively rendered sounds relative to the engine's (tune by ear)." },
+	native_max_probes = { 3000, 100, 20000, "cl", "Steam Audio pathing: max probes baked (the grid is thinned above)." },
 	native_probe_spacing = { 128, 32, 512, "cl", "Steam Audio pathing probe spacing (units)." },
 	frame_budget_ms = { 1, 0.1, 20, "cl", "Path search time per frame; beyond it, sounds fall back to cheaper processing." },
 	min_level       = { 50, 0, 140, "sv", "Sounds with a lower SNDLVL are left untouched." },

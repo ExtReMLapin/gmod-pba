@@ -116,20 +116,39 @@ function N.Start()
 end
 
 function N.Bake()
-	local t0 = SysTime()
-	-- probe positions: audioprop's own probe graph (inside the playable volume), thinned to
-	-- the requested spacing
+	-- probe positions: audioprop's own probe graph (inside the playable volume), thinned until
+	-- there are at most audioprop_native_max_probes of them (large open maps)
 	local pr = A.Probes and A.Probes.current
 	if not pr then N.err = "probe graph not ready" return end
 	local step = math.max(math.Round(A.cfg.native_probe_spacing / pr.spacing), 1)
-	local pts = {}
-	for _, n in ipairs(pr.nodes) do
-		if n.i % step == 0 and n.j % step == 0 then pts[#pts + 1] = n.pos end
-	end
-	local np, bytes = audioprop_native.BakePaths(pts, pr.spacing * step * 0.75)
-	N.bakeMs, N.probes, N.bakeBytes = (SysTime() - t0) * 1000, np, bytes
-	N.pathsReady = np > 0
-	MsgN(string.format("[audioprop] native paths: %d probes baked in %.0f ms (%d KB)", np, N.bakeMs, bytes / 1024))
+	local pts
+	repeat
+		pts = {}
+		for _, n in ipairs(pr.nodes) do
+			if n.i % step == 0 and n.j % step == 0 then pts[#pts + 1] = n.pos end
+		end
+		step = step + 1
+	until #pts <= A.cfg.native_max_probes or step > 64
+	local t0 = SysTime()
+	N.pathsReady = false
+	local ok, err = pcall(audioprop_native.BakePaths, pts, pr.spacing * (step - 1) * 0.75)
+	if not ok then N.err = err return end
+	N.probes = #pts
+	-- the bake runs on a worker thread: poll it
+	timer.Create("audioprop_native_bakepoll", 0.25, 0, function()
+		if not audioprop_native then timer.Remove("audioprop_native_bakepoll") return end
+		local st, info = audioprop_native.BakeStatus()
+		if st == "ready" then
+			timer.Remove("audioprop_native_bakepoll")
+			N.pathsReady, N.bakeMs, N.bakeBytes = true, (SysTime() - t0) * 1000, info
+			MsgN(string.format("[audioprop] native paths: %d probes baked in %.0f ms (%d KB)", N.probes, N.bakeMs, (info or 0) / 1024))
+			if A.Paths then A.Paths.InvalidateCache() end
+		elseif st == "error" then
+			timer.Remove("audioprop_native_bakepoll")
+			N.err = "bake failed: " .. tostring(info)
+			MsgN("[audioprop] native paths: ", N.err)
+		end
+	end)
 end
 
 --- Direct line through the world: occlusion (1 = clear) and per-band transmission.

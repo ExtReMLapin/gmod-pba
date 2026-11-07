@@ -21,8 +21,11 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "GarrysMod/Lua/Interface.h"
@@ -31,6 +34,8 @@
 #include "render.h"
 
 using namespace GarrysMod::Lua;
+
+void JoinBakeThread(); // defined after the bake state (below)
 
 namespace {
 
@@ -110,6 +115,7 @@ float FieldIndex(ILuaBase* LUA, int tableIdx, const char* field, int i, float de
 }
 
 void ReleaseWorld() {
+	JoinBakeThread();
 	if (g_sim) {
 		for (auto& s : g_sources) {
 			iplSourceRemove(s, g_sim);
@@ -285,19 +291,28 @@ LUA_FUNCTION(Direct) {
 	return 1;
 }
 
+// Baking runs on a worker thread (seconds on large maps) into a separate probe batch; the
+// main thread swaps it in when BakeStatus() reports it ready. Exceptions are caught.
+static std::thread g_bakeThread;
+static std::atomic<int> g_bakeState{0}; // 0 idle, 1 baking, 2 ready (not yet swapped), 3 error
+static IPLProbeBatch g_bakeBatch = nullptr;
+static std::string g_bakeError;
+static double g_bakeBytes = 0;
+
+static void JoinBake() {
+	if (g_bakeThread.joinable()) g_bakeThread.join();
+}
+
 LUA_FUNCTION(BakePaths) {
 	if (!g_sim) LUA->ThrowError("no world loaded");
 	LUA->CheckType(1, Type::Table);
 	const float radius = (float)LUA->CheckNumber(2) * kUnit;
-	if (g_probes) {
-		iplSimulatorRemoveProbeBatch(g_sim, g_probes);
-		iplSimulatorCommit(g_sim);
-		iplProbeBatchRelease(&g_probes);
-		g_pathsReady = false;
-	}
+	if (g_bakeState == 1) LUA->ThrowError("a bake is already running");
+	JoinBake();
+	if (g_bakeBatch) iplProbeBatchRelease(&g_bakeBatch);
 	// probes are given by Lua (audioprop's probe graph: inside the playable volume). Steam
 	// Audio's own UNIFORMFLOOR generation also puts probes on roofs, seen from above.
-	iplProbeBatchCreate(g_ctx, &g_probes);
+	if (iplProbeBatchCreate(g_ctx, &g_bakeBatch) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplProbeBatchCreate failed");
 	const int np = TableLen(LUA, 1);
 	for (int i = 0; i < np; ++i) {
 		LUA->PushNumber(i + 1);
@@ -306,30 +321,73 @@ LUA_FUNCTION(BakePaths) {
 		sp.center = ToSA(LUA->GetVector(-1));
 		sp.radius = radius;
 		LUA->Pop();
-		iplProbeBatchAddProbe(g_probes, sp);
+		iplProbeBatchAddProbe(g_bakeBatch, sp);
 	}
-	iplProbeBatchCommit(g_probes);
-
-	IPLBakedDataIdentifier id{};
-	id.type = IPL_BAKEDDATATYPE_PATHING;
-	id.variation = IPL_BAKEDDATAVARIATION_DYNAMIC;
-	IPLPathBakeParams bp{};
-	bp.scene = g_scene;
-	bp.probeBatch = g_probes;
-	bp.identifier = id;
-	bp.numSamples = 1;
-	bp.radius = 0.5f;
-	bp.threshold = 0.5f;
-	bp.visRange = 50.0f;
-	bp.pathRange = 100.0f;
-	bp.numThreads = 4;
-	iplPathBakerBake(g_ctx, &bp, NoProgress, nullptr); // 4.8.1: a NULL callback crashes
-	iplSimulatorAddProbeBatch(g_sim, g_probes);
-	iplSimulatorCommit(g_sim);
-	g_pathsReady = np > 0;
+	iplProbeBatchCommit(g_bakeBatch);
+	g_bakeState = 1;
+	g_bakeError.clear();
+	IPLProbeBatch batch = g_bakeBatch;
+	IPLScene scene = g_scene;
+	IPLContext ctx = g_ctx;
+	g_bakeThread = std::thread([batch, scene, ctx]() {
+		try {
+			IPLBakedDataIdentifier id{};
+			id.type = IPL_BAKEDDATATYPE_PATHING;
+			id.variation = IPL_BAKEDDATAVARIATION_DYNAMIC;
+			IPLPathBakeParams bp{};
+			bp.scene = scene;
+			bp.probeBatch = batch;
+			bp.identifier = id;
+			bp.numSamples = 1;
+			bp.radius = 0.5f;
+			bp.threshold = 0.5f;
+			bp.visRange = 50.0f;
+			bp.pathRange = 100.0f;
+			bp.numThreads = 2;
+			iplPathBakerBake(ctx, &bp, NoProgress, nullptr); // 4.8.1: a NULL callback crashes
+			g_bakeBytes = (double)iplProbeBatchGetDataSize(batch, &id);
+			g_bakeState = 2;
+		} catch (const std::exception& e) {
+			g_bakeError = e.what();
+			g_bakeState = 3;
+		} catch (...) {
+			g_bakeError = "unknown C++ exception during the path bake";
+			g_bakeState = 3;
+		}
+	});
 	LUA->PushNumber(np);
-	LUA->PushNumber((double)iplProbeBatchGetDataSize(g_probes, &id));
-	return 2;
+	return 1;
+}
+
+// BakeStatus() -> "idle" | "baking" | "ready", bytes | "error", message
+LUA_FUNCTION(BakeStatus) {
+	const int st = g_bakeState.load();
+	if (st == 2) {
+		JoinBake();
+		if (g_probes) {
+			iplSimulatorRemoveProbeBatch(g_sim, g_probes);
+			iplProbeBatchRelease(&g_probes);
+		}
+		g_probes = g_bakeBatch;
+		g_bakeBatch = nullptr;
+		iplSimulatorAddProbeBatch(g_sim, g_probes);
+		iplSimulatorCommit(g_sim);
+		g_pathsReady = true;
+		g_bakeState = 0;
+		LUA->PushString("ready");
+		LUA->PushNumber(g_bakeBytes);
+		return 2;
+	}
+	if (st == 3) {
+		JoinBake();
+		if (g_bakeBatch) iplProbeBatchRelease(&g_bakeBatch);
+		g_bakeState = 0;
+		LUA->PushString("error");
+		LUA->PushString(g_bakeError.c_str());
+		return 2;
+	}
+	LUA->PushString(st == 1 ? "baking" : "idle");
+	return 1;
 }
 
 LUA_FUNCTION(Paths) {
@@ -542,6 +600,12 @@ LUA_FUNCTION(Shutdown) {
 	return 0;
 }
 
+void JoinBakeThread() {
+	JoinBake();
+	if (g_bakeBatch) iplProbeBatchRelease(&g_bakeBatch);
+	g_bakeState = 0;
+}
+
 GMOD_MODULE_OPEN() {
 	LUA->PushSpecial(SPECIAL_GLOB);
 	LUA->CreateTable();
@@ -557,6 +621,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "BakePaths");
 	LUA->PushCFunction(Paths);
 	LUA->SetField(-2, "Paths");
+	LUA->PushCFunction(BakeStatus);
+	LUA->SetField(-2, "BakeStatus");
 	LUA->PushCFunction(Shutdown);
 	LUA->SetField(-2, "Shutdown");
 	LUA->PushCFunction(AudioStart);
