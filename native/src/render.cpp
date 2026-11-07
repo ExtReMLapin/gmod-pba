@@ -75,6 +75,12 @@ double g_xc[kMaxLag * 2 + 1] = {};    // L/R cross-correlation of the mix (ITD m
 
 // audio-thread scratch buffers
 IPLAudioBuffer g_mono{}, g_mono2{}, g_stereo{};
+// room reverb: every voice is also sent (post EQ, pre HRTF) to a mono bus, processed by Steam
+// Audio's parametric reverb with the times simulated at the listener, added to both ears
+IPLReflectionEffect g_reverb = nullptr;
+IPLAudioBuffer g_send{}, g_rev{};
+float g_rt[3] = {0, 0, 0};
+float g_wet = 0;
 std::vector<float> g_mix(kBlock * 2);
 std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet consumed
 size_t g_fifoPos = 0;
@@ -89,6 +95,7 @@ void ReleaseVoice(Voice& v) {
 // Renders one block of kBlock stereo frames into g_mix (audio thread, lock held).
 void RenderBlock() {
 	std::fill(g_mix.begin(), g_mix.end(), 0.0f);
+	if (g_send.data) std::fill(g_send.data[0], g_send.data[0] + kBlock, 0.0f);
 	for (auto& vp : g_voices) {
 		Voice& v = *vp;
 		if (!v.alive.load()) continue;
@@ -125,6 +132,11 @@ void RenderBlock() {
 			bin_in = &g_mono2;
 		}
 
+		if (g_send.data) {
+			const float* src = bin_in->data[0];
+			float* snd = g_send.data[0];
+			for (int i = 0; i < kBlock; ++i) snd[i] += src[i];
+		}
 		IPLBinauralEffectParams bp{};
 		bp.direction = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 		g_lastDir = bp.direction;
@@ -143,6 +155,21 @@ void RenderBlock() {
 		for (int i = 0; i < kBlock; ++i) {
 			g_mix[i * 2] += L[i];
 			g_mix[i * 2 + 1] += R[i];
+		}
+	}
+	if (g_reverb && g_send.data && g_wet > 0 && g_rt[1] > 0.01f) {
+		IPLReflectionEffectParams rp{};
+		rp.type = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
+		rp.reverbTimes[0] = g_rt[0];
+		rp.reverbTimes[1] = g_rt[1];
+		rp.reverbTimes[2] = g_rt[2];
+		rp.numChannels = 1;
+		rp.irSize = kRate * 2;
+		iplReflectionEffectApply(g_reverb, &rp, &g_send, &g_rev, nullptr);
+		const float* r = g_rev.data[0];
+		for (int i = 0; i < kBlock; ++i) {
+			g_mix[i * 2] += r[i] * g_wet;
+			g_mix[i * 2 + 1] += r[i] * g_wet;
 		}
 	}
 	for (int i = 0; i < kBlock; ++i) {
@@ -190,6 +217,15 @@ std::string Start(IPLContext ctx) {
 	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_mono);
 	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_mono2);
 	iplAudioBufferAllocate(g_ctx, 2, kBlock, &g_stereo);
+	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_send);
+	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_rev);
+	{
+		IPLReflectionEffectSettings rs{};
+		rs.type = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
+		rs.irSize = kRate * 2;
+		rs.numChannels = 1;
+		if (iplReflectionEffectCreate(g_ctx, &as, &rs, &g_reverb) != IPL_STATUS_SUCCESS) g_reverb = nullptr;
+	}
 	g_pool.assign(kMaxVoices, EffectPair{});
 	for (auto& e : g_pool) {
 		IPLDirectEffectSettings ds{1};
@@ -227,6 +263,11 @@ void Stop() {
 		if (e.binaural) iplBinauralEffectRelease(&e.binaural);
 	}
 	g_pool.clear();
+	if (g_reverb) iplReflectionEffectRelease(&g_reverb);
+	if (g_send.data) iplAudioBufferFree(g_ctx, &g_send);
+	if (g_rev.data) iplAudioBufferFree(g_ctx, &g_rev);
+	g_send = {};
+	g_rev = {};
 	if (g_hrtf) {
 		iplAudioBufferFree(g_ctx, &g_mono);
 		iplAudioBufferFree(g_ctx, &g_mono2);
@@ -238,6 +279,12 @@ void Stop() {
 }
 
 bool Running() { return g_devOk; }
+
+void SetReverb(const float rt[3], float wet) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	for (int b = 0; b < 3; ++b) g_rt[b] = std::clamp(rt[b], 0.0f, 5.0f);
+	g_wet = std::clamp(wet, 0.0f, 2.0f);
+}
 
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
 	std::lock_guard<std::mutex> lk(g_mtx);

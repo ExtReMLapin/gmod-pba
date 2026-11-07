@@ -58,6 +58,7 @@ A.CONFIG = {
 	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_audioprop is installed." },
 	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },
 	native_render   = { 0, 0, 1, "cl", "Experimental: the native module plays processed sounds itself (Steam Audio HRTF + 3-band EQ)." },
+	native_reverb   = { 0.3, 0, 2, "cl", "Room reverb level of natively rendered sounds (Steam Audio parametric reverb at the listener)." },
 	native_gain     = { 1, 0, 4, "cl", "Loudness of natively rendered sounds relative to the engine's (tune by ear)." },
 	native_max_probes = { 3000, 100, 20000, "cl", "Steam Audio pathing: max probes baked (the grid is thinned above)." },
 	native_probe_spacing = { 128, 32, 512, "cl", "Steam Audio pathing probe spacing (units)." },

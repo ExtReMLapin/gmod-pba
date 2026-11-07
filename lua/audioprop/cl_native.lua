@@ -229,6 +229,15 @@ end, "audioprop_native")
 
 hook.Add("ShutDown", "audioprop_native", function() N.StopRender() end)
 
+-- room reverb at the listener, re-simulated twice a second
+timer.Create("audioprop_native_reverb", 0.5, 0, function()
+	if not N.render or not audioprop_native or not audioprop_native.RoomReverb then return end
+	local ply = LocalPlayer()
+	if not IsValid(ply) then return end
+	local ok, l, m, h = pcall(audioprop_native.RoomReverb, ply:EyePos(), A.cfg.native_reverb)
+	if ok then N.rt = { l, m, h } end
+end)
+
 hook.Add("InitPostEntity", "audioprop_native", function() timer.Simple(1, N.Start) end)
 if A.nativeLoaded then timer.Simple(0.5, N.Start) end
 A.nativeLoaded = true

@@ -17,6 +17,7 @@ struct VoiceParams {
 std::string Start(IPLContext ctx); // "" on success
 void Stop();
 bool Running();
+void SetReverb(const float reverbTimes[3], float wet);
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir);
 void TestBinaural(IPLVector3 dir, double* eL, double* eR);
 bool HasSound(const std::string& name);

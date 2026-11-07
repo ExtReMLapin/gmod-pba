@@ -48,6 +48,7 @@ IPLStaticMesh g_mesh = nullptr;
 IPLSimulator g_sim = nullptr;
 IPLProbeBatch g_probes = nullptr;
 std::vector<IPLSource> g_sources;
+IPLSource g_reverbSource = nullptr; // placed at the listener: room reverb estimation
 bool g_pathsReady = false;
 
 // Source (x fwd, y left, z up) -> Steam Audio (right-handed, y up, -z ahead)
@@ -122,6 +123,10 @@ void ReleaseWorld() {
 			iplSourceRelease(&s);
 		}
 		g_sources.clear();
+		if (g_reverbSource) {
+			iplSourceRemove(g_reverbSource, g_sim);
+			iplSourceRelease(&g_reverbSource);
+		}
 		if (g_probes) iplSimulatorRemoveProbeBatch(g_sim, g_probes);
 		iplSimulatorCommit(g_sim);
 		iplSimulatorRelease(&g_sim);
@@ -138,8 +143,16 @@ void ReleaseWorld() {
 bool EnsureSimulator() {
 	if (g_sim) return true;
 	IPLSimulationSettings sim{};
-	sim.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING);
+	sim.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING |
+	                                 IPL_SIMULATIONFLAGS_REFLECTIONS);
 	sim.sceneType = IPL_SCENETYPE_DEFAULT;
+	sim.reflectionType = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
+	sim.maxNumRays = 512;
+	sim.numDiffuseSamples = 32;
+	sim.maxDuration = 2.0f;
+	sim.maxNumSources = kMaxSources + 1;
+	sim.numThreads = 2;
+	sim.rayBatchSize = 1;
 	sim.maxNumOcclusionSamples = 32;
 	sim.samplingRate = 48000;
 	sim.frameSize = 1024;
@@ -153,6 +166,11 @@ bool EnsureSimulator() {
 		if (iplSourceCreate(g_sim, &ss, &s) != IPL_STATUS_SUCCESS) return false;
 		iplSourceAdd(s, g_sim);
 		g_sources.push_back(s);
+	}
+	{
+		IPLSourceSettings rs{};
+		rs.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+		if (iplSourceCreate(g_sim, &rs, &g_reverbSource) == IPL_STATUS_SUCCESS) iplSourceAdd(g_reverbSource, g_sim);
 	}
 	iplSimulatorCommit(g_sim);
 	return true;
@@ -593,6 +611,48 @@ LUA_FUNCTION(RenderDebug) {
 	return 3;
 }
 
+// RoomReverb(listenerPos [, wet]) -> rtLow, rtMid, rtHigh (seconds). Simulates reflections for a
+// source at the listener (parametric) and hands the reverb times to the renderer.
+LUA_FUNCTION(RoomReverb) {
+	if (!g_sim || !g_reverbSource) LUA->ThrowError("no world loaded");
+	LUA->CheckType(1, Type::Vector);
+	const float wet = LUA->IsType(2, Type::Number) ? (float)LUA->GetNumber(2) : 0.25f;
+	IPLVector3 L = ToSA(LUA->GetVector(1));
+	IPLSimulationSharedInputs sh{};
+	sh.listener = At(L);
+	sh.numRays = 512; // parametric reverb times only: 512 rays are enough (2048 = 3.4 ms on the main thread)
+	sh.numBounces = 8;
+	sh.duration = 2.0f;
+	sh.order = 1;
+	sh.irradianceMinDistance = 1.0f;
+	iplSimulatorSetSharedInputs(g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
+	IPLSimulationInputs in{};
+	in.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+	in.source = At({L.x, L.y + 0.1f, L.z});
+	in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+	iplSourceSetInputs(g_reverbSource, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
+	bool failed = false;
+	try {
+		iplSimulatorRunReflections(g_sim);
+	} catch (...) {
+		failed = true;
+	}
+	if (failed) LUA->ThrowError("reflection simulation failed");
+	IPLSimulationOutputs out{};
+	iplSourceGetOutputs(g_reverbSource, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
+	// 512 rays give noisy estimates: smooth them over time (the room changes slowly)
+	static float smooth[3] = {-1, -1, -1};
+	float rt[3];
+	for (int b = 0; b < 3; ++b) {
+		const float v = out.reflections.reverbTimes[b];
+		smooth[b] = smooth[b] < 0 ? v : smooth[b] * 0.6f + v * 0.4f;
+		rt[b] = smooth[b];
+	}
+	render::SetReverb(rt, wet);
+	for (int b = 0; b < 3; ++b) LUA->PushNumber(rt[b]);
+	return 3;
+}
+
 LUA_FUNCTION(Shutdown) {
 	render::Stop();
 	ReleaseWorld();
@@ -623,6 +683,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "Paths");
 	LUA->PushCFunction(BakeStatus);
 	LUA->SetField(-2, "BakeStatus");
+	LUA->PushCFunction(RoomReverb);
+	LUA->SetField(-2, "RoomReverb");
 	LUA->PushCFunction(Shutdown);
 	LUA->SetField(-2, "Shutdown");
 	LUA->PushCFunction(AudioStart);
