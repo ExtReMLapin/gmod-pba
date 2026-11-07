@@ -43,8 +43,17 @@ struct Voice {
 	IPLVector3 pos{};
 	float gain = 0, gainCur = -1;
 	float eq[3] = {1, 1, 1};
+	int slot = -1; // index in the effect pool
 	IPLDirectEffect direct = nullptr;
 	IPLBinauralEffect binaural = nullptr;
+};
+
+// Effects are expensive to create (the binaural one sets up its HRTF filters): a pool is
+// created once at Start and recycled (reset) for each new voice.
+struct EffectPair {
+	IPLDirectEffect direct = nullptr;
+	IPLBinauralEffect binaural = nullptr;
+	bool used = false;
 };
 
 IPLContext g_ctx = nullptr;
@@ -54,6 +63,7 @@ bool g_devOk = false;
 std::mutex g_mtx;
 std::unordered_map<std::string, std::shared_ptr<Sound>> g_sounds;
 std::vector<std::unique_ptr<Voice>> g_voices;
+std::vector<EffectPair> g_pool;
 int g_nextId = 1;
 IPLVector3 g_lisPos{}, g_lisAhead{0, 0, -1}, g_lisUp{0, 1, 0};
 float g_master = 1;
@@ -70,8 +80,10 @@ std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet con
 size_t g_fifoPos = 0;
 
 void ReleaseVoice(Voice& v) {
-	if (v.direct) iplDirectEffectRelease(&v.direct);
-	if (v.binaural) iplBinauralEffectRelease(&v.binaural);
+	if (v.slot >= 0 && v.slot < (int)g_pool.size()) g_pool[v.slot].used = false;
+	v.slot = -1;
+	v.direct = nullptr;
+	v.binaural = nullptr;
 }
 
 // Renders one block of kBlock stereo frames into g_mix (audio thread, lock held).
@@ -178,6 +190,14 @@ std::string Start(IPLContext ctx) {
 	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_mono);
 	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_mono2);
 	iplAudioBufferAllocate(g_ctx, 2, kBlock, &g_stereo);
+	g_pool.assign(kMaxVoices, EffectPair{});
+	for (auto& e : g_pool) {
+		IPLDirectEffectSettings ds{1};
+		IPLBinauralEffectSettings bs{g_hrtf};
+		if (iplDirectEffectCreate(g_ctx, &as, &ds, &e.direct) != IPL_STATUS_SUCCESS ||
+		    iplBinauralEffectCreate(g_ctx, &as, &bs, &e.binaural) != IPL_STATUS_SUCCESS)
+			return "effect pool creation failed";
+	}
 	ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
 	cfg.playback.format = ma_format_f32;
 	cfg.playback.channels = 2;
@@ -202,6 +222,11 @@ void Stop() {
 	for (auto& v : g_voices) ReleaseVoice(*v);
 	g_voices.clear();
 	g_sounds.clear();
+	for (auto& e : g_pool) {
+		if (e.direct) iplDirectEffectRelease(&e.direct);
+		if (e.binaural) iplBinauralEffectRelease(&e.binaural);
+	}
+	g_pool.clear();
 	if (g_hrtf) {
 		iplAudioBufferFree(g_ctx, &g_mono);
 		iplAudioBufferFree(g_ctx, &g_mono2);
@@ -305,14 +330,19 @@ int Play(const std::string& name, const VoiceParams& p, bool loop) {
 		g_voices.erase(q);
 	}
 	auto v = std::make_unique<Voice>();
-	IPLAudioSettings as{kRate, kBlock};
-	IPLDirectEffectSettings ds{1};
-	IPLBinauralEffectSettings bs{g_hrtf};
-	if (iplDirectEffectCreate(g_ctx, &as, &ds, &v->direct) != IPL_STATUS_SUCCESS) return 0;
-	if (iplBinauralEffectCreate(g_ctx, &as, &bs, &v->binaural) != IPL_STATUS_SUCCESS) {
-		ReleaseVoice(*v);
-		return 0;
-	}
+	int slot = -1;
+	for (int i = 0; i < (int)g_pool.size(); ++i)
+		if (!g_pool[i].used) {
+			slot = i;
+			break;
+		}
+	if (slot < 0) return 0;
+	g_pool[slot].used = true;
+	v->slot = slot;
+	v->direct = g_pool[slot].direct;
+	v->binaural = g_pool[slot].binaural;
+	iplDirectEffectReset(v->direct);
+	iplBinauralEffectReset(v->binaural);
 	v->id = g_nextId++;
 	v->snd = it->second;
 	v->loop = loop;
