@@ -13,6 +13,8 @@ local KNOWN = {
 	{ id = "sme", name = "Sound Muffling Effect", cvar = "sme_active", overlap = "full", realm = "server" },
 	{ id = "dwr", name = "Dynamic Weapon Reverb", cvar = "cl_dwr_occlusion_rays", overlap = "occlusion", realm = "client" },
 	{ id = "ere", name = "Echo/Reverb Everywhere", cvar = "ere_active", overlap = "none", realm = "client" },
+	{ id = "rsd", name = "Realistic Sound Delay", cvar = "rsd_enabled", overlap = "blocking", realm = "server" },
+	{ id = "mwa", name = "MilSim Weapon Acoustics", cvar = "cl_mwa_enabled", overlap = "weapons", realm = "client" },
 }
 
 function C.Detect()
@@ -32,11 +34,23 @@ function C.Check()
 			MsgN("[audioprop] ", k.name, " detected: it does the same job; turning it off (", k.cvar,
 				" 0). Set audioprop_compat_auto 0 to keep both.")
 			RunConsoleCommand(k.cvar, "0")
+		elseif k.overlap == "blocking" and SERVER and f.cv:GetBool() then
+			MsgN("[audioprop] ", k.name, " detected: it cancels every server sound (EntityEmitSound -> false) ",
+				"and replays them itself, so audioprop never sees them. Use one or the other (", k.cvar, " 0).")
+		elseif k.overlap == "weapons" and CLIENT and f.cv:GetBool() then
+			MsgN("[audioprop] ", k.name, " detected: it renders gunfire itself (direction, delay, occlusion). ",
+				"Both together may double-process weapon sounds.")
 		elseif k.overlap == "occlusion" and CLIENT and f.cv:GetInt() > 0 then
 			MsgN("[audioprop] ", k.name, " detected: its occlusion rays overlap audioprop. Consider ",
 				k.cvar, " 0 (its reverb can stay on).")
 		end
 	end
+end
+
+-- Multiplayer Distant Sounds Fix replaces EmitSound with its own global; our server detour
+-- must wrap what is installed when we load, and must not double its copies.
+if SERVER and MPSNDFIX_EMITSOUND then
+	MsgN("[audioprop] Multiplayer Distant Sounds Fix detected: distant sounds it sends to every player may be heard twice.")
 end
 
 hook.Add("InitPostEntity", "audioprop_compat", function() timer.Simple(3, C.Check) end)
