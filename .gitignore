@@ -3,3 +3,7 @@ third_party_study/
 maps/src/*.prt
 maps/src/*.log
 maps/src/*.lin
+maps/src/*.bsp
+maps/src/*.txt
+test/scenario_results.json
+__pycache__/

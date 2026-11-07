@@ -1,0 +1,2 @@
+*.bsp binary
+*.vmf text eol=lf

@@ -1,0 +1,205 @@
+{
+ "ap_tworooms": {
+  "map": "ap_tworooms",
+  "listener": [
+   256,
+   256,
+   0
+  ],
+  "listener_yaw": 0,
+  "source": [
+   784,
+   256,
+   40
+  ],
+  "doors": {
+   "door1": [
+    520,
+    88,
+    56
+   ]
+  },
+  "wall": {
+   "x": [
+    512,
+    528
+   ],
+   "material": "concrete"
+  }
+ },
+ "ap_noportal": {
+  "map": "ap_noportal",
+  "listener": [
+   256,
+   256,
+   0
+  ],
+  "listener_yaw": 0,
+  "source": [
+   784,
+   256,
+   40
+  ]
+ },
+ "ap_lcorridor": {
+  "map": "ap_lcorridor",
+  "listener": [
+   848,
+   992,
+   0
+  ],
+  "listener_yaw": 270,
+  "source": [
+   192,
+   192,
+   40
+  ]
+ },
+ "ap_twodoors": {
+  "map": "ap_twodoors",
+  "listener": [
+   256,
+   384,
+   0
+  ],
+  "listener_yaw": 0,
+  "source": [
+   784,
+   384,
+   40
+  ],
+  "doors": {
+   "door_s": [
+    520,
+    120,
+    56
+   ],
+   "door_n": [
+    520,
+    648,
+    56
+   ]
+  }
+ },
+ "ap_window": {
+  "map": "ap_window",
+  "listener": [
+   256,
+   256,
+   0
+  ],
+  "listener_yaw": 0,
+  "source": [
+   784,
+   256,
+   40
+  ],
+  "window": [
+   520,
+   392,
+   88
+  ]
+ },
+ "ap_materials": {
+  "map": "ap_materials",
+  "cells": {
+   "concrete": {
+    "listener": [
+     128,
+     128,
+     0
+    ],
+    "source": [
+     128,
+     400,
+     40
+    ],
+    "wall_y": [
+     256,
+     272
+    ]
+   },
+   "brick": {
+    "listener": [
+     400,
+     128,
+     0
+    ],
+    "source": [
+     400,
+     400,
+     40
+    ],
+    "wall_y": [
+     256,
+     272
+    ]
+   },
+   "wood": {
+    "listener": [
+     672,
+     128,
+     0
+    ],
+    "source": [
+     672,
+     400,
+     40
+    ],
+    "wall_y": [
+     256,
+     272
+    ]
+   },
+   "metal": {
+    "listener": [
+     944,
+     128,
+     0
+    ],
+    "source": [
+     944,
+     400,
+     40
+    ],
+    "wall_y": [
+     256,
+     272
+    ]
+   },
+   "glass": {
+    "listener": [
+     1216,
+     128,
+     0
+    ],
+    "source": [
+     1216,
+     400,
+     40
+    ],
+    "wall_y": [
+     256,
+     272
+    ]
+   },
+   "plaster": {
+    "listener": [
+     1488,
+     128,
+     0
+    ],
+    "source": [
+     1488,
+     400,
+     40
+    ],
+    "wall_y": [
+     256,
+     272
+    ]
+   }
+  },
+  "listener_yaw": 90
+ }
+}
