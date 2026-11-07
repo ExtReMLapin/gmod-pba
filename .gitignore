@@ -1,0 +1,5 @@
+third_party_study/
+*.gma
+maps/src/*.prt
+maps/src/*.log
+maps/src/*.lin
