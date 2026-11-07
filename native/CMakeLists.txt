@@ -30,8 +30,9 @@ else()
 	set(MODULE_SUFFIX "linux64")
 endif()
 
-add_library(gmcl_audioprop SHARED src/audioprop_native.cpp)
-target_include_directories(gmcl_audioprop PRIVATE "${GMB_ROOT}")
+set(MA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/deps/miniaudio" CACHE PATH "miniaudio dir")
+add_library(gmcl_audioprop SHARED src/audioprop_native.cpp src/render.cpp)
+target_include_directories(gmcl_audioprop PRIVATE "${GMB_ROOT}" "${MA_ROOT}")
 if(WIN32)
 	# phonon.dll is delay-loaded and loaded explicitly from the module's folder (lua/bin), so a
 	# missing phonon.dll is a clean Lua error instead of a failed require().

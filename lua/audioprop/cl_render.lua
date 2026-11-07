@@ -40,6 +40,15 @@ function A.Azimuth(L, viewYaw, pos)
 end
 
 local function emitVoice(data, v, L)
+	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
+	if A.Native and A.Native.render then
+		local g = (data.Volume or 1) * v.gain
+		if g < 0.001 then return false end
+		if A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch) then
+			v.vol, v.dsp, v.native = g, -1, true
+			return true
+		end
+	end
 	local lvl = data.SoundLevel
 	local d = v.pos:Distance(L)
 	local vol = (data.Volume or 1) * v.gain / AC.EngineGain(math.max(d, 1), lvl)

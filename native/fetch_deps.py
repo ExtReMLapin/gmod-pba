@@ -1,5 +1,5 @@
 """Downloads the native build dependencies into native/deps/ (not versioned):
-Steam Audio SDK 4.8.1 (Apache-2.0) and Facepunch gmod-module-base (development branch).
+Steam Audio SDK 4.8.1 (Apache-2.0), Facepunch gmod-module-base (development branch), miniaudio.
 Usage: python -I native/fetch_deps.py
 """
 import io
@@ -15,6 +15,14 @@ ITEMS = [
     ("gmod-module-base", "https://github.com/Facepunch/gmod-module-base/archive/refs/heads/development.zip"),
 ]
 os.makedirs(DEPS, exist_ok=True)
+# miniaudio (public domain / MIT-0): single header
+MA = os.path.join(DEPS, "miniaudio")
+if not os.path.isdir(MA):
+    os.makedirs(MA)
+    for f in ("miniaudio.h", "LICENSE"):
+        url = "https://raw.githubusercontent.com/mackron/miniaudio/master/" + f
+        print("downloading", url, flush=True)
+        open(os.path.join(MA, f), "wb").write(urllib.request.urlopen(url, timeout=600).read())
 for name, url in ITEMS:
     out = os.path.join(DEPS, name)
     if os.path.isdir(out):

@@ -89,6 +89,7 @@ function N.Start()
 	N.ready = nt > 0
 	MsgN(string.format("[audioprop] native backend: Steam Audio %d, %d triangles, %d materials, %.0f ms",
 		audioprop_native.Version(), nt, #mats, N.loadMs))
+	if N.ready then N.StartRender() end
 	if N.ready and (A.cfg.native_paths or 0) >= 0.5 then
 		-- the probe graph is built in the background: bake once it is there
 		timer.Create("audioprop_native_bake", 1, 120, function()
@@ -128,6 +129,70 @@ function N.Path(S, L)
 	local r = audioprop_native.Paths({ S }, L)
 	return r and r[1]
 end
+
+-- ------------------------------------------------------------------ native rendering
+
+-- 3-band EQ (low / mid / high gain) per low-pass level: same intent as DSP presets 30/31
+N.EQ = { [0] = { 1, 1, 1 }, { 1, 0.7, 0.4 }, { 1, 0.5, 0.2 }, { 0.9, 0.3, 0.08 }, { 0.8, 0.18, 0.03 } }
+N.failed = N.failed or {}
+
+function N.StartRender()
+	N.render = false
+	if not N.ready or (A.cfg.native_render or 0) < 0.5 or not audioprop_native.AudioStart then return end
+	local ok, err = audioprop_native.AudioStart()
+	if not ok then N.err = err MsgN("[audioprop] native audio: ", err) return end
+	N.render = true
+	MsgN("[audioprop] native rendering on (Steam Audio HRTF)")
+end
+
+function N.StopRender()
+	if N.render and audioprop_native then audioprop_native.AudioStop() end
+	N.render = false
+end
+
+local function cleanName(name)
+	return string.lower(string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(]+", ""))
+end
+
+--- Makes sure the module has decoded `name`. Returns true when playable natively.
+function N.EnsureSound(name)
+	local n = cleanName(name)
+	if N.failed[n] then return false end
+	if audioprop_native.HasSound(n) then return true, n end
+	local data = file.Read("sound/" .. n, "GAME")
+	if not data or #data > 8 * 1024 * 1024 then N.failed[n] = true return false end
+	local secs = audioprop_native.LoadSound(n, data)
+	if not secs then N.failed[n] = true return false end
+	return true, n
+end
+
+--- Plays a voice natively. gain: linear, everything included. Returns true on success.
+function N.PlayVoice(name, pos, gain, lp, pitch)
+	if not N.render then return false end
+	local ok, n = N.EnsureSound(name)
+	if not ok then return false end
+	local eq = N.EQ[math.Clamp(lp or 0, 0, 4)]
+	local id = audioprop_native.Play(n, pos, gain * A.cfg.native_gain, eq[1], eq[2], eq[3], pitch or 100, false)
+	return id and id > 0
+end
+
+hook.Add("Think", "audioprop_native_listener", function()
+	if not N.render then return end
+	local ply = LocalPlayer()
+	if not IsValid(ply) then return end
+	local ang = ply:EyeAngles()
+	local master = GetConVar("volume"):GetFloat()
+	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
+	local eL, eR
+	N.live, eL, eR = audioprop_native.SetListener(ply:EyePos(), ang:Forward(), ang:Up(), master)
+	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
+end)
+
+cvars.AddChangeCallback("audioprop_native_render", function(_, _, new)
+	if tonumber(new) == 1 then N.StartRender() else N.StopRender() end
+end, "audioprop_native")
+
+hook.Add("ShutDown", "audioprop_native", function() N.StopRender() end)
 
 hook.Add("InitPostEntity", "audioprop_native", function() timer.Simple(1, N.Start) end)
 if A.nativeLoaded then timer.Simple(0.5, N.Start) end

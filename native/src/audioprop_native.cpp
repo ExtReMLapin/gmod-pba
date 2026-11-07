@@ -28,6 +28,8 @@
 #include "GarrysMod/Lua/Interface.h"
 #include <phonon.h>
 
+#include "render.h"
+
 using namespace GarrysMod::Lua;
 
 namespace {
@@ -407,7 +409,134 @@ LUA_FUNCTION(Paths) {
 	return 1;
 }
 
+// ------------------------------------------------------------------ rendering (render.cpp)
+
+static IPLVector3 DirToSA(const Vector& v) { return {v.x, v.z, -v.y}; }
+
+static render::VoiceParams ReadVoice(ILuaBase* LUA, int first) {
+	render::VoiceParams p;
+	p.pos = ToSA(LUA->GetVector(first));
+	p.gain = (float)LUA->GetNumber(first + 1);
+	p.eq[0] = (float)LUA->GetNumber(first + 2);
+	p.eq[1] = (float)LUA->GetNumber(first + 3);
+	p.eq[2] = (float)LUA->GetNumber(first + 4);
+	p.pitch = LUA->IsType(first + 5, Type::Number) ? (float)LUA->GetNumber(first + 5) : 100.0f;
+	return p;
+}
+
+LUA_FUNCTION(AudioStart) {
+	if (!g_ctx) LUA->ThrowError("audioprop_native.Init() first");
+	std::string err = render::Start(g_ctx);
+	LUA->PushBool(err.empty());
+	if (!err.empty()) {
+		LUA->PushString(err.c_str());
+		return 2;
+	}
+	return 1;
+}
+
+LUA_FUNCTION(AudioStop) {
+	render::Stop();
+	return 0;
+}
+
+LUA_FUNCTION(HasSound) {
+	LUA->PushBool(render::HasSound(LUA->CheckString(1)));
+	return 1;
+}
+
+// LoadSound(name, bytes) -> seconds | nil, err
+LUA_FUNCTION(LoadSound) {
+	const char* name = LUA->CheckString(1);
+	unsigned int len = 0;
+	const char* data = LUA->GetString(2, &len);
+	if (!data || len == 0) LUA->ThrowError("LoadSound: no data");
+	double secs = 0;
+	std::string err = render::LoadSound(name, data, len, &secs);
+	if (!err.empty()) {
+		LUA->PushNil();
+		LUA->PushString(err.c_str());
+		return 2;
+	}
+	LUA->PushNumber(secs);
+	return 1;
+}
+
+// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop]]) -> voice id (0 = failed)
+LUA_FUNCTION(Play) {
+	const char* name = LUA->CheckString(1);
+	LUA->CheckType(2, Type::Vector);
+	render::VoiceParams p = ReadVoice(LUA, 2);
+	const bool loop = LUA->IsType(8, Type::Bool) && LUA->GetBool(8);
+	LUA->PushNumber(render::Play(name, p, loop));
+	return 1;
+}
+
+// Update(id, pos, gain, eqL, eqM, eqH [, pitch]) -> alive
+LUA_FUNCTION(Update) {
+	const int id = (int)LUA->CheckNumber(1);
+	LUA->CheckType(2, Type::Vector);
+	LUA->PushBool(render::Update(id, ReadVoice(LUA, 2)));
+	return 1;
+}
+
+LUA_FUNCTION(StopVoice) {
+	render::StopVoice((int)LUA->CheckNumber(1));
+	return 0;
+}
+
+// SetListener(pos, forward, up, masterVolume) -> live voices
+LUA_FUNCTION(SetListener) {
+	LUA->CheckType(1, Type::Vector);
+	LUA->CheckType(2, Type::Vector);
+	LUA->CheckType(3, Type::Vector);
+	const float master = LUA->IsType(4, Type::Number) ? (float)LUA->GetNumber(4) : 1.0f;
+	double eL = 0, eR = 0;
+	LUA->PushNumber(render::SetListener(ToSA(LUA->GetVector(1)), DirToSA(LUA->GetVector(2)),
+	                                    DirToSA(LUA->GetVector(3)), master, &eL, &eR));
+	LUA->PushNumber(eL);
+	LUA->PushNumber(eR);
+	return 3;
+}
+
+// RelDir(src, listener, forward, up) -> x, y, z : Steam Audio's relative direction (debug)
+LUA_FUNCTION(RelDir) {
+	if (!g_ctx) LUA->ThrowError("Init first");
+	IPLVector3 d = iplCalculateRelativeDirection(g_ctx, ToSA(LUA->GetVector(1)), ToSA(LUA->GetVector(2)),
+	                                             DirToSA(LUA->GetVector(3)), DirToSA(LUA->GetVector(4)));
+	LUA->PushNumber(d.x);
+	LUA->PushNumber(d.y);
+	LUA->PushNumber(d.z);
+	return 3;
+}
+
+// TestBinaural(x, y, z) -> eL, eR  (listener-space direction; debug)
+LUA_FUNCTION(TestBinaural) {
+	double eL = 0, eR = 0;
+	render::TestBinaural({(float)LUA->CheckNumber(1), (float)LUA->CheckNumber(2), (float)LUA->CheckNumber(3)}, &eL, &eR);
+	LUA->PushNumber(eL);
+	LUA->PushNumber(eR);
+	return 2;
+}
+
+// RenderDebug() -> listener (SA), ahead (SA), last binaural direction
+LUA_FUNCTION(RenderDebug) {
+	IPLVector3 l{}, a{}, d{};
+	render::Debug(&l, &a, &d);
+	for (const IPLVector3& v : {l, a, d}) {
+		LUA->CreateTable();
+		LUA->PushNumber(v.x);
+		LUA->SetField(-2, "x");
+		LUA->PushNumber(v.y);
+		LUA->SetField(-2, "y");
+		LUA->PushNumber(v.z);
+		LUA->SetField(-2, "z");
+	}
+	return 3;
+}
+
 LUA_FUNCTION(Shutdown) {
+	render::Stop();
 	ReleaseWorld();
 	if (g_ctx) iplContextRelease(&g_ctx);
 	return 0;
@@ -430,12 +559,35 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "Paths");
 	LUA->PushCFunction(Shutdown);
 	LUA->SetField(-2, "Shutdown");
+	LUA->PushCFunction(AudioStart);
+	LUA->SetField(-2, "AudioStart");
+	LUA->PushCFunction(AudioStop);
+	LUA->SetField(-2, "AudioStop");
+	LUA->PushCFunction(HasSound);
+	LUA->SetField(-2, "HasSound");
+	LUA->PushCFunction(LoadSound);
+	LUA->SetField(-2, "LoadSound");
+	LUA->PushCFunction(Play);
+	LUA->SetField(-2, "Play");
+	LUA->PushCFunction(Update);
+	LUA->SetField(-2, "Update");
+	LUA->PushCFunction(StopVoice);
+	LUA->SetField(-2, "StopVoice");
+	LUA->PushCFunction(SetListener);
+	LUA->SetField(-2, "SetListener");
+	LUA->PushCFunction(RelDir);
+	LUA->SetField(-2, "RelDir");
+	LUA->PushCFunction(TestBinaural);
+	LUA->SetField(-2, "TestBinaural");
+	LUA->PushCFunction(RenderDebug);
+	LUA->SetField(-2, "RenderDebug");
 	LUA->SetField(-2, "audioprop_native");
 	LUA->Pop();
 	return 0;
 }
 
 GMOD_MODULE_CLOSE() {
+	render::Stop();
 	ReleaseWorld();
 	if (g_ctx) iplContextRelease(&g_ctx);
 	return 0;
