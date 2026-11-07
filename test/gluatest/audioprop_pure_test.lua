@@ -188,6 +188,28 @@ return {
 			expect(AC.Headroom(140, 300, 90) > 25).to.beTrue()
 			expect(AC.Headroom(75, 300, 90)).to.equal(0)
 		end },
+		{ name = "FixMissingGeometry: portal without clip verts takes its target brush box (+ entity origin)", func = function()
+			local bsp = synthBsp()
+			bsp.areas[1][1].poly, bsp.areas[2][1].poly = {}, {}
+			bsp.models = { [7] = { mins = Vector(-8, -32, -48), maxs = Vector(8, 32, 48) } }
+			bsp.entities[#bsp.entities + 1] = { classname = "func_brush", targetname = "d1", model = "*7", origin = "100 25 48" }
+			local g = G.Build(bsp)
+			G.FixMissingGeometry(g)
+			local p = g.byKey[1]
+			expect(p.fromTarget).to.beTrue()
+			expect(#p.poly).to.equal(4)
+			expect(near(p.center.x, 100) and near(p.center.y, 25) and near(p.center.z, 48)).to.beTrue()
+			expect(near(math.abs(p.normal.x), 1)).to.beTrue()
+		end },
+		{ name = "FixMissingGeometry: portal with neither verts nor target is dropped", func = function()
+			local bsp = synthBsp()
+			bsp.areas[2][2].poly, bsp.areas[3][1].poly = {}, {}
+			local g = G.Build(bsp)
+			G.FixMissingGeometry(g)
+			expect(g.byKey[2]).to.beNil()
+			expect(#g.portals).to.equal(1)
+			expect(#g.areaPortals[3]).to.equal(0)
+		end },
 		{ name = "SelectVoices: transmission kept within the window, alone when no portal", func = function()
 			local L = Vector(0, 0, 0)
 			local t = { walls = { {} }, lossDb = 40, lp = 4, length = 500, pos = Vector(50, 0, 0) }
