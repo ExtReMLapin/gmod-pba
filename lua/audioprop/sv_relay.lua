@@ -80,6 +80,7 @@ A.stats = A.stats or { seen = 0, relayed = 0, untouched = 0 }
 A.AddHook("EntityEmitSound", function(data)
 	if A.reemitting or A.explicitFilter then return end
 	A.stats.seen = A.stats.seen + 1
+	if A.Loops and A.Loops.Handle(data) then return false end
 	if not A.Eligible(data) then return end
 	local pos = A.SoundPos(data)
 	if not pos then return end

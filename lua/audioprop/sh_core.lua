@@ -21,6 +21,7 @@ function A.InstallHooks(on)
 	if SERVER and A.Doors then
 		if on then A.Doors.Start() else A.Doors.Stop() end
 	end
+	if SERVER and not on and A.Loops and A.Loops.Release then A.Loops.Release() end
 end
 
 function A.Refresh()

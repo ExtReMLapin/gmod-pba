@@ -171,6 +171,29 @@ if want("obs_crowd"):
     r, items, relayed = run("obs_crowd", "gm_flatgrass", wait=3)
     check("O-crowd-untouched", not items and relayed == 0, f"reports={len(items)} relayed={relayed}")
 
+if want("loop_door"):
+    ensure_map("ap_tworooms")
+    lua("server", "local p=player.GetHumans()[1] p:SetPos(Vector(256,256,0)) for _,d in ipairs(ents.FindByName('door1')) do d:Fire('Close') end "
+        "local a=ents.Create('ambient_generic') a:SetKeyValue('message','ambient/alarms/alarm1.wav') a:SetKeyValue('health','10') "
+        "a:SetKeyValue('radius','2000') a:SetKeyValue('spawnflags','16') a:SetPos(Vector(784,256,40)) a:Spawn() a:Activate() AP_AMB=a "
+        "timer.Simple(0.5,function() a:Fire('PlaySound') end)")
+    time.sleep(3.5)
+    q = "local m=next(audioprop.Loops.mirrors) and select(2,next(audioprop.Loops.mirrors)) return m and m.g, m and m.curDsp"
+    closed = call("lua_exec", {"realm": "client", "code": q}).get("values", [])
+    lua("server", "for _,d in ipairs(ents.FindByName('door1')) do d:Fire('Open') end")
+    time.sleep(2.5)
+    opened = call("lua_exec", {"realm": "client", "code": q}).get("values", [])
+    lua("server", "player.GetHumans()[1]:SetPos(Vector(700,256,0))")
+    time.sleep(1.5)
+    same = call("lua_exec", {"realm": "client", "code": q}).get("values", [])
+    lua("server", "AP_AMB:Fire('StopSound')")
+    time.sleep(1)
+    left = lua("client", "return table.Count(audioprop.Loops.mirrors)")
+    lua("server", "AP_AMB:Remove()")
+    ok = (len(closed) == 2 and len(opened) == 2 and len(same) == 2 and closed[0] < opened[0] < 1 and same[0] == 1
+          and same[1] == 0 and left == 0)
+    check("L-loop-door", ok, f"closed={closed} open={opened} same_room={same} mirrors_after_stop={left}")
+
 if want("open_field"):
     r, items, relayed = run("open_field", "gm_flatgrass")
     check("P3-open-field-untouched", not items and relayed == 0, f"reports={len(items)} relayed={relayed}")

@@ -60,6 +60,7 @@ A.CONFIG = {
 	cache_ttl       = { 0.25, 0, 5, "sv", "Seconds a (source cell, listener cell) result stays cached." },
 	hysteresis      = { 0.3, 0, 2, "sv", "Seconds before the voice layout of a repeating source may change." },
 	max_duration    = { 8, 0.5, 60, "sv", "Sounds longer than this (s) are left untouched." },
+	loops           = { 1, 0, 1, "sv", "Take over looping sounds (vehicles, fire, alarms) and muffle them in place on each client." },
 }
 
 A.cv = A.cv or {}
