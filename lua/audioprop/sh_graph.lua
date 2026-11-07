@@ -151,7 +151,9 @@ local function doorRef(g, target)
 			local m = e.model and tonumber(string.match(e.model, "^%*(%d+)$") or "")
 			if m and g.bsp.models and g.bsp.models[m] then
 				local b = g.bsp.models[m]
-				return (b.mins + b.maxs) * 0.5
+				local x, y, z = string.match(e.origin or "", "(%S+)%s+(%S+)%s+(%S+)")
+				local o = x and Vector(tonumber(x), tonumber(y), tonumber(z)) or Vector(0, 0, 0)
+				return (b.mins + b.maxs) * 0.5 + o
 			end
 			if e.origin then
 				local x, y, z = string.match(e.origin, "(%S+)%s+(%S+)%s+(%S+)")
@@ -160,6 +162,70 @@ local function doorRef(g, target)
 		end
 	end
 	return nil
+end
+
+--- Bounds (mins, maxs) of the brush model of the entity named `target`, from the BSP.
+local function entOrigin(e)
+	local x, y, z = string.match(e.origin or "", "(%S+)%s+(%S+)%s+(%S+)")
+	return x and Vector(tonumber(x), tonumber(y), tonumber(z)) or Vector(0, 0, 0)
+end
+
+-- brush model bounds are relative to the entity origin (0 0 0 when it has none)
+local function targetBox(g, target)
+	if not target then return nil end
+	for _, e in ipairs(g.bsp.entities or {}) do
+		if e.targetname == target then
+			local m = e.model and tonumber(string.match(e.model, "^%*(%d+)$") or "")
+			local b = m and g.bsp.models and g.bsp.models[m]
+			if b then
+				local o = entOrigin(e)
+				return b.mins + o, b.maxs + o
+			end
+		end
+	end
+	return nil
+end
+
+--- Portals without clip-portal vertices (some compilers leave the lump empty): geometry
+-- from the brush entity the areaportal targets (func_brush / door filling the opening):
+-- the mid rectangle of its box, across its thinnest axis. Portals with neither are dropped.
+function G.FixMissingGeometry(g)
+	local keep = {}
+	for _, p in ipairs(g.portals) do
+		if #p.poly >= 3 then
+			keep[#keep + 1] = p
+		else
+			local mn, mx = targetBox(g, p.target)
+			if mn then
+				local size = mx - mn
+				local c = (mn + mx) * 0.5
+				local poly
+				if size.x <= size.y and size.x <= size.z then
+					poly = { Vector(c.x, mn.y, mn.z), Vector(c.x, mx.y, mn.z), Vector(c.x, mx.y, mx.z), Vector(c.x, mn.y, mx.z) }
+				elseif size.y <= size.z then
+					poly = { Vector(mn.x, c.y, mn.z), Vector(mx.x, c.y, mn.z), Vector(mx.x, c.y, mx.z), Vector(mn.x, c.y, mx.z) }
+				else
+					poly = { Vector(mn.x, mn.y, c.z), Vector(mx.x, mn.y, c.z), Vector(mx.x, mx.y, c.z), Vector(mn.x, mx.y, c.z) }
+				end
+				p.poly = poly
+				p.center, p.normal, p.radius = polyInfo(poly)
+				p.fromTarget = true
+				keep[#keep + 1] = p
+			else
+				g.dropped = (g.dropped or 0) + 1
+			end
+		end
+	end
+	if #keep ~= #g.portals then
+		local byKey = {}
+		for i, p in ipairs(keep) do p.id = i byKey[p.key] = p end
+		for area, list in pairs(g.areaPortals) do
+			local nl = {}
+			for _, p in ipairs(list) do if byKey[p.key] then nl[#nl + 1] = p end end
+			g.areaPortals[area] = nl
+		end
+		g.portals, g.byKey = keep, byKey
+	end
 end
 
 --- Replaces hull polygons with the real openings (game state: point contents).
@@ -172,7 +238,7 @@ function G.ResolveOpenings(g)
 		table.insert(groups[key], p)
 	end
 	for _, list in pairs(groups) do
-		local comps = G.Openings(list[1])
+		local comps = list[1].fromTarget and {} or G.Openings(list[1])
 		local function apply(p, c)
 			p.hull = p.poly
 			p.poly = c.poly
@@ -224,6 +290,7 @@ function G.Get()
 		return nil
 	end
 	G.current = G.Build(bsp)
+	G.FixMissingGeometry(G.current)
 	G.ResolveOpenings(G.current)
 	G.current.buildTime = SysTime() - t0
 	if A.OnGraphBuilt then A.OnGraphBuilt(G.current) end

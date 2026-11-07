@@ -29,7 +29,9 @@ function BSP.ParseEntities(text, keep)
 			kv[string.lower(k)] = v
 		end
 		local cls = kv.classname or ""
-		if not keep or keep[cls] or string.StartWith(cls, "info_player") then out[#out + 1] = kv end
+		-- also named brush entities (func_brush, doors...): areaportals target them
+		local namedBrush = kv.targetname and kv.model and string.sub(kv.model, 1, 1) == "*"
+		if not keep or keep[cls] or namedBrush or string.StartWith(cls, "info_player") then out[#out + 1] = kv end
 	end
 	return out
 end

@@ -9,3 +9,5 @@ test/scenario_results.json
 __pycache__/
 native/deps/
 native/build/
+maps/gm_bigcity.bsp
+maps/ttt_bigcity.bsp
