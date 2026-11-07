@@ -5,7 +5,27 @@
 
 local A = audioprop
 local NET = "audioprop_snd"
+local NET_ACK = "audioprop_snd_ack"
 util.AddNetworkString(NET)
+util.AddNetworkString(NET_ACK)
+
+-- Sound-name dictionary: a name travels in full until the client acknowledges its id,
+-- then as a 16-bit id (~20-byte messages instead of ~50).
+A.dict = A.dict or { ids = {}, names = {}, n = 0 }
+local function nameId(name)
+	local id = A.dict.ids[name]
+	if not id then
+		A.dict.n = A.dict.n + 1
+		id = A.dict.n
+		A.dict.ids[name], A.dict.names[id] = id, name
+	end
+	return id
+end
+
+net.Receive(NET_ACK, function(_, ply)
+	ply.audioprop_known = ply.audioprop_known or {}
+	for _ = 1, math.min(net.ReadUInt(8), 64) do ply.audioprop_known[net.ReadUInt(16)] = true end
+end)
 
 -- Lua callers passing an explicit recipient filter: leave those sounds alone (we cannot
 -- see the filter from EntityEmitSound and must not widen their audience).
@@ -40,12 +60,14 @@ local function audibleRadius(lvl)
 	return lvl > 50 and 100 * (lvl - 50) or 500
 end
 
-local function writeSound(data, pos)
-	net.WriteString(data.SoundName)
+local function writeSound(data, pos, id, full)
+	net.WriteUInt(id, 16)
+	net.WriteBool(full)
+	if full then net.WriteString(data.SoundName) end
 	net.WriteVector(pos)
 	net.WriteUInt(math.Clamp(math.floor(data.SoundLevel or 75), 0, 511), 9)
 	net.WriteUInt(math.Clamp(math.floor(data.Pitch or 100), 0, 255), 8)
-	net.WriteFloat(data.Volume or 1)
+	net.WriteUInt(math.Clamp(math.Round((data.Volume or 1) * 255), 0, 255), 8)
 	net.WriteInt(data.Channel or CHAN_AUTO, 8)
 	net.WriteUInt(data.Flags or 0, 16)
 	net.WriteUInt(math.Clamp(math.floor(data.DSP or 0), 0, 255), 8)
@@ -93,8 +115,14 @@ A.AddHook("EntityEmitSound", function(data)
 			A.Emit(A.orig.EmitSound, data.SoundName, pos, 0, data.Channel, data.Volume, lvl, data.Flags, data.Pitch, data.DSP, f)
 		end
 	end
+	local id = nameId(data.SoundName)
+	local full = false
+	for _, ply in ipairs(blocked) do
+		if not (ply.audioprop_known and ply.audioprop_known[id]) then full = true break end
+	end
 	net.Start(NET, true) -- unreliable: a lost sound is better than a late one
-	writeSound(data, pos)
+	writeSound(data, pos, id, full)
+	A.stats.bytes = (A.stats.bytes or 0) + net.BytesWritten() * #blocked
 	net.Send(blocked)
 	A.stats.relayed = A.stats.relayed + 1
 	return false

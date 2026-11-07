@@ -10,6 +10,7 @@ A.CONFIG = {
 	cl_enable       = { 1, 0, 1, "cl", "Player preference: process sounds on this client." },
 	debug           = { 0, 0, 2, "cl", "Debug overlay: 1 = graph + active paths, 2 = + text." },
 	report          = { 0, 0, 1, "cl", "Publish computed paths on the mcpagent report channel (dev)." },
+	compat_auto     = { 1, 0, 1, "sv", "Turn off addons that do the same job (Sound Muffling Effect) while audioprop is on." },
 
 	-- path search / selection
 	max_paths       = { 3, 1, 6, "sv", "Portal paths kept per sound (distinct last portals)." },

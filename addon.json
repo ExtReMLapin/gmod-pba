@@ -1,0 +1,19 @@
+{
+	"title": "audioprop - Sound Propagation",
+	"type": "effects",
+	"tags": [ "realism", "fun" ],
+	"ignore": [
+		"*.md",
+		"*.py",
+		"*.sh",
+		"*.vmf",
+		"*.txt",
+		".git*",
+		"LICENSE",
+		"docs/*",
+		"test/*",
+		"maps/*",
+		"third_party_study/*",
+		"lua/audioprop/dev/*"
+	]
+}

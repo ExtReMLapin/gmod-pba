@@ -135,12 +135,35 @@ A.AddHook("EntityEmitSound", function(data)
 end)
 
 -- relayed server sounds: always played by us (the server suppressed the original)
+A.dict = A.dict or {}
+local pendingAcks = {}
+timer.Create("audioprop_ack", 0.2, 0, function()
+	if #pendingAcks == 0 then return end
+	net.Start("audioprop_snd_ack")
+	local n = math.min(#pendingAcks, 64)
+	net.WriteUInt(n, 8)
+	for i = 1, n do net.WriteUInt(table.remove(pendingAcks, 1), 16) end
+	net.SendToServer()
+end)
+
 net.Receive(NET, function()
+	local id, full = net.ReadUInt(16), net.ReadBool()
+	local name
+	if full then
+		name = net.ReadString()
+		if A.dict[id] ~= name then
+			A.dict[id] = name
+			pendingAcks[#pendingAcks + 1] = id
+		end
+	else
+		name = A.dict[id]
+	end
 	local data = {
-		SoundName = net.ReadString(), Pos = net.ReadVector(), SoundLevel = net.ReadUInt(9),
-		Pitch = net.ReadUInt(8), Volume = net.ReadFloat(), Channel = net.ReadInt(8),
+		SoundName = name, Pos = net.ReadVector(), SoundLevel = net.ReadUInt(9),
+		Pitch = net.ReadUInt(8), Volume = net.ReadUInt(8) / 255, Channel = net.ReadInt(8),
 		Flags = net.ReadUInt(16), DSP = net.ReadUInt(8), EntIndex = net.ReadUInt(16),
 	}
+	if not name then return end -- id never received (lost first packets): drop
 	A.stats.relayedIn = A.stats.relayedIn + 1
 	if A.Enabled() and A.Process(data, true) then return end
 	-- not processed (disabled client, clear path...): play it as the engine would have

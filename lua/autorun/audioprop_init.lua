@@ -20,8 +20,11 @@ local files = {
 	{ "audioprop/cl_probes.lua", "cl" },
 	{ "audioprop/cl_render.lua", "cl" },
 	{ "audioprop/cl_debug.lua", "cl" },
-	{ "audioprop/sh_demo.lua", "sh" },
+	{ "audioprop/cl_menu.lua", "cl" },
+	{ "audioprop/sh_compat.lua", "sh" },
 }
+-- test bench (audioprop_demo): present in the repository, excluded from the Workshop package
+if file.Exists("audioprop/dev/sh_demo.lua", "LUA") then files[#files + 1] = { "audioprop/dev/sh_demo.lua", "sh" } end
 
 for _, f in ipairs(files) do
 	local path, realm = f[1], f[2]
