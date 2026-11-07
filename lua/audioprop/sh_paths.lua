@@ -414,17 +414,27 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	else
 		r.clear = false
 		local loss, lp, mid = P.EvalWalls(walls, cfg)
-		-- native backend: volumetric occlusion of the direct line. Near a door frame part of
-		-- the source is still visible: blend the clear part in, for smooth transitions.
+		-- native backend: volumetric occlusion of the direct line by the WORLD (Steam Audio
+		-- knows the map, not the props / doors). Near a door frame part of the source is still
+		-- visible: blend the clear part into the world share of the loss.
 		if CLIENT and A.Native and A.Native.ready then
-			local d = A.Native.Direct(S, L)
-			if d and d.occlusion > 0.01 then
-				local o = math.min(d.occlusion, 1)
-				loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-loss / 20))
-				mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-mid / 20))
-				if o > 0.5 then lp = math.min(lp, 1) end
+			local worldWalls, entWalls = {}, {}
+			for _, w in ipairs(walls) do
+				if w.ent then entWalls[#entWalls + 1] = w else worldWalls[#worldWalls + 1] = w end
 			end
-			r.nativeOcclusion = d and d.occlusion
+			if #worldWalls > 0 then
+				local d = A.Native.Direct(S, L)
+				if d and d.occlusion > 0.01 then
+					local o = math.min(d.occlusion, 1)
+					local wl, wlp, wm = P.EvalWalls(worldWalls, cfg)
+					local el, elp, em = 0, 0, 0
+					if #entWalls > 0 then el, elp, em = P.EvalWalls(entWalls, cfg) end
+					loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-wl / 20)) + el
+					mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-wm / 20)) + em
+					lp = math.max(o > 0.5 and math.min(wlp, 1) or wlp, elp)
+				end
+				r.nativeOcclusion = d and d.occlusion
+			end
 		end
 		local last = walls[#walls]
 		local dir = (L - S):GetNormalized()
