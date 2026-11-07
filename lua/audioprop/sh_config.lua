@@ -55,6 +55,9 @@ A.CONFIG = {
 	-- level of detail
 	lod_dist        = { 6000, 500, 30000, "sv", "Beyond this distance sounds are left untouched." },
 	probe_dist      = { 3000, 0, 30000, "sv", "Beyond this distance no probe path search (transmission only)." },
+	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_audioprop is installed." },
+	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },
+	native_probe_spacing = { 128, 32, 512, "cl", "Steam Audio pathing probe spacing (units)." },
 	frame_budget_ms = { 1, 0.1, 20, "cl", "Path search time per frame; beyond it, sounds fall back to cheaper processing." },
 	min_level       = { 50, 0, 140, "sv", "Sounds with a lower SNDLVL are left untouched." },
 	cache_ttl       = { 0.25, 0, 5, "sv", "Seconds a (source cell, listener cell) result stays cached." },

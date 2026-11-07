@@ -414,6 +414,18 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	else
 		r.clear = false
 		local loss, lp, mid = P.EvalWalls(walls, cfg)
+		-- native backend: volumetric occlusion of the direct line. Near a door frame part of
+		-- the source is still visible: blend the clear part in, for smooth transitions.
+		if CLIENT and A.Native and A.Native.ready then
+			local d = A.Native.Direct(S, L)
+			if d and d.occlusion > 0.01 then
+				local o = math.min(d.occlusion, 1)
+				loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-loss / 20))
+				mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-mid / 20))
+				if o > 0.5 then lp = math.min(lp, 1) end
+			end
+			r.nativeOcclusion = d and d.occlusion
+		end
 		local last = walls[#walls]
 		local dir = (L - S):GetNormalized()
 		local tpos = last.exit + dir * 2
@@ -431,6 +443,20 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				for _, chain in ipairs(P.FindChains(g, S, r.aS, L, r.aL, cfg)) do
 					r.paths[#r.paths + 1] = P.EvalChain(S, L, chain, cfg)
 				end
+			end
+		end
+		-- experimental: Steam Audio baked pathing replaces the probe graph
+		if worldBlocked and #r.paths == 0 and CLIENT and A.Native and A.Native.pathsReady then
+			local np = A.Native.Path(S, L)
+			if np and np.dx and (np.w or 0) > 1e-4 then
+				local dir = Vector(np.dx, np.dy, np.dz)
+				dir:Normalize()
+				local dist = math.min(S:Distance(L), 192)
+				local loss = -AC.GainToDb(math.max(np.em, 1e-4))
+				r.paths[1] = { chain = {}, points = {}, length = S:Distance(L) * 1.2, diffDb = loss, doorDb = 0,
+					lossDb = loss, pos = L + dir * dist, lp = AC.LowpassLevel(-AC.GainToDb(math.max(np.eh, 1e-4)), cfg),
+					native = true }
+				r.viaNative = true
 			end
 		end
 		if worldBlocked and #r.paths == 0 and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist

@@ -7,3 +7,5 @@ maps/src/*.bsp
 maps/src/*.txt
 test/scenario_results.json
 __pycache__/
+native/deps/
+native/build/
