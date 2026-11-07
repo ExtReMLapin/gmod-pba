@@ -14,6 +14,8 @@ local AC = A.AC
 local function stopMirror(m)
 	if m.patch then m.patch:Stop() end
 	m.patch = nil
+	if m.nativeId and audioprop_native then audioprop_native.StopVoice(m.nativeId) end
+	m.nativeId = nil
 	if IsValid(m.anchor) then m.anchor:Remove() end
 	m.anchor = nil
 end
@@ -42,6 +44,35 @@ local function muffle(m, S, L)
 	return math.min(g, 1), AC.DSPForLevel(best.lp)
 end
 
+--- Native rendering of a loop: the module plays it (HRTF + EQ) at its apparent position
+-- (the opening it comes through, or the source itself) with the engine's distance law.
+local function applyNative(m, S, L)
+	local N = A.Native
+	local r = A.Paths.Compute(S, L, m.lvl, nil, m.ent)
+	local pos, gain, lp
+	if r.clear or not r.voices or #r.voices == 0 then
+		pos, gain, lp = S, AC.EngineGain(S:Distance(L), m.lvl), 0
+	else
+		local p = 0
+		for _, v in ipairs(r.voices) do p = p + v.gain * v.gain end
+		pos, gain, lp = r.voices[1].pos, math.sqrt(p), r.voices[1].lp
+	end
+	-- same meters as the patch path (gain relative to the engine's direct law, DSP equivalent)
+	m.g = math.min(gain / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6), 1)
+	m.curDsp = AC.DSPForLevel(lp or 0)
+	gain = gain * m.vol * A.cfg.native_gain
+	local eq = N.EQ[math.Clamp(lp or 0, 0, 4)]
+	if m.nativeId then
+		if not audioprop_native.Update(m.nativeId, pos, gain, eq[1], eq[2], eq[3], m.pitch) then m.nativeId = nil end
+		return
+	end
+	local ok, name = N.EnsureSound(m.name)
+	if not ok then return false end
+	local id = audioprop_native.Play(name, pos, gain, eq[1], eq[2], eq[3], m.pitch, true)
+	m.nativeId = id > 0 and id or nil
+	return m.nativeId ~= nil
+end
+
 local function apply(m, fade)
 	local ent = m.ent
 	if not IsValid(ent) then
@@ -53,6 +84,9 @@ local function apply(m, fade)
 	end
 	local L = LocalPlayer():EyePos()
 	local S = ent == m.anchor and m.pos or ent:WorldSpaceCenter()
+	if A.Native and A.Native.render and not m.patch and A.Enabled() then
+		if applyNative(m, S, L) ~= false then return end
+	end
 	local g, dsp = muffle(m, S, L)
 	if not m.patch then
 		m.patch = CreateSound(ent, m.name)
@@ -91,6 +125,9 @@ net.Receive("audioprop_loop", function()
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	m.vol, m.pitch = vol, pitch
+	if m.nativeId and op == OP_UPDATE then
+		return -- applied at the next tick
+	end
 	if m.patch and op == OP_UPDATE then
 		m.patch:ChangePitch(pitch, 0.1)
 		m.patch:ChangeVolume(vol * (m.g or 1), 0.1)

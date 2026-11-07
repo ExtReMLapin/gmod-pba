@@ -51,6 +51,23 @@ Server (admin, replicated):
 All the other acoustic constants are convars too (`find audioprop_`). Client: `audioprop_cl_enable`,
 `audioprop_debug 1` (draws portals and paths). Menu: Spawn menu > Utilities > audioprop.
 
+## Optional native backend (Steam Audio)
+
+`native/` builds `gmcl_audioprop_win64.dll`, an optional binary module using Valve's Steam Audio.
+It cannot be shipped through the Workshop: copy it with `phonon.dll` (Steam Audio's runtime)
+into `garrysmod/lua/bin`. Without it, audioprop runs in pure Lua as described above.
+
+With the module installed:
+
+- the world (brushes and terrain displacements) is loaded into a Steam Audio scene; occlusion of
+  the direct line becomes volumetric, so transitions around door frames are smooth;
+- `audioprop_native_render 1` (experimental): processed sounds are played by the module itself,
+  with a real 3-band EQ and HRTF binaural rendering (headphones), loops included;
+- `audioprop_native_paths 1` (experimental): Steam Audio's baked pathing replaces the probe graph.
+
+Build: `python native/fetch_deps.py`, then `native/build.bat` (Visual Studio C++ tools, CMake,
+Ninja). Licence of `native/` is pending (see `native/LICENSE`).
+
 ## Known limits
 
 - Sentences (scripted NPC lines such as Combine radio chatter) and sounds with a scheduled start
