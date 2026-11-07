@@ -68,6 +68,22 @@ function N.BuildWorld()
 			end
 		end
 	end
+	-- displacements (terrain): not in GetBrushSurfaces; read from the BSP, one "ground"
+	-- material (thick earth: no transmission)
+	local dv, di = A.BSP.LoadDisplacements(game.GetMap())
+	if dv and #di > 0 then
+		mats[#mats + 1] = { absorption = { 0.15, 0.25, 0.35 }, scattering = 0.3, transmission = { 0.0001, 0.00003, 0.00001 } }
+		local mi = #mats - 1
+		local base = #verts / 3
+		for i = 1, #dv, 3 do
+			verts[#verts + 1], verts[#verts + 2], verts[#verts + 3] = dv[i], dv[i + 1], dv[i + 2]
+			mins.x, mins.y, mins.z = math.min(mins.x, dv[i]), math.min(mins.y, dv[i + 1]), math.min(mins.z, dv[i + 2])
+			maxs.x, maxs.y, maxs.z = math.max(maxs.x, dv[i]), math.max(maxs.y, dv[i + 1]), math.max(maxs.z, dv[i + 2])
+		end
+		for i = 1, #di do tris[#tris + 1] = base + di[i] end
+		for _ = 1, #di / 3 do matIdx[#matIdx + 1] = mi end
+		N.dispTris = #di / 3
+	end
 	return verts, tris, matIdx, mats, mins, maxs
 end
 

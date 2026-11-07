@@ -424,7 +424,10 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			end
 			if #worldWalls > 0 then
 				local d = A.Native.Direct(S, L)
-				if d and d.occlusion > 0.01 then
+				-- only partial visibility is trusted: if Steam Audio sees the line fully clear
+				-- while the engine traces hit the world, its scene lacks that geometry
+				-- (displacements...) and the Lua loss stands
+				if d and d.occlusion > 0.01 and d.occlusion < 0.99 then
 					local o = math.min(d.occlusion, 1)
 					local wl, wlp, wm = P.EvalWalls(worldWalls, cfg)
 					local el, elp, em = 0, 0, 0

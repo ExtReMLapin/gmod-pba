@@ -135,6 +135,94 @@ function BSP.Load(map)
 	return b
 end
 
+--- Displacement surfaces as triangles (terrain): flat vertex list {x,y,z,...} and 0-based
+-- index list. Reads lumps 3 VERTEXES, 7 FACES, 12 EDGES, 13 SURFEDGES, 26 DISPINFO,
+-- 33 DISP_VERTS. Grid = bilinear interpolation of the face corners (starting at
+-- startPosition) + per-vertex offset (vec * dist).
+function BSP.LoadDisplacements(map, swap)
+	local f = file.Open("maps/" .. map .. ".bsp", "rb", "GAME")
+	if not f then return nil, "cannot open" end
+	if f:Read(4) ~= "VBSP" then f:Close() return nil, "not VBSP" end
+	f:ReadLong()
+	local L = lumpInfo(f)
+	for _, i in ipairs({ 3, 7, 12, 13, 26, 33 }) do
+		if L[i].unc ~= 0 and L[i].len > 0 then f:Close() return nil, "compressed lump " .. i end
+	end
+	local ndisp = L[26].len / 176
+	if ndisp == 0 then f:Close() return {}, {} end
+	local function vec() return Vector(f:ReadFloat(), f:ReadFloat(), f:ReadFloat()) end
+	-- dispinfo: startPosition, DispVertStart, power, MapFace
+	local infos = {}
+	for i = 0, ndisp - 1 do
+		f:Seek(L[26].ofs + i * 176)
+		local start = vec()
+		local vstart = f:ReadLong()
+		f:ReadLong() -- DispTriStart
+		local power = f:ReadLong()
+		f:Skip(12) -- minTess, smoothingAngle, contents
+		local face = f:ReadUShort()
+		infos[#infos + 1] = { start = start, vstart = vstart, power = power, face = face }
+	end
+	local verts, idx = {}, {}
+	for _, d in ipairs(infos) do
+		-- face corners
+		f:Seek(L[7].ofs + d.face * 56 + 4)
+		local firstedge, numedges = f:ReadLong(), f:ReadShort()
+		if numedges == 4 then
+			local corners = {}
+			for k = 0, 3 do
+				f:Seek(L[13].ofs + (firstedge + k) * 4)
+				local se = f:ReadLong()
+				f:Seek(L[12].ofs + math.abs(se) * 4)
+				local v0, v1 = f:ReadUShort(), f:ReadUShort()
+				local vi = se >= 0 and v0 or v1
+				f:Seek(L[3].ofs + vi * 12)
+				corners[k + 1] = vec()
+			end
+			-- rotate so that corners[1] is the one closest to startPosition
+			local best, bd = 1, math.huge
+			for k = 1, 4 do
+				local dd = corners[k]:DistToSqr(d.start)
+				if dd < bd then best, bd = k, dd end
+			end
+			local c = {}
+			for k = 0, 3 do c[k + 1] = corners[(best - 1 + k) % 4 + 1] end
+			local size = 2 ^ d.power + 1
+			local base = #verts / 3
+			f:Seek(L[33].ofs + d.vstart * 20)
+			for y = 0, size - 1 do
+				local ty = y / (size - 1)
+				local e0, e1
+				if swap then
+					e0 = c[1] + (c[4] - c[1]) * ty
+					e1 = c[2] + (c[3] - c[2]) * ty
+				else
+					e0 = c[1] + (c[2] - c[1]) * ty
+					e1 = c[4] + (c[3] - c[4]) * ty
+				end
+				for x = 0, size - 1 do
+					local p = e0 + (e1 - e0) * (x / (size - 1))
+					local off = vec()
+					local dist = f:ReadFloat()
+					f:Skip(4) -- alpha
+					p = p + off * dist
+					verts[#verts + 1], verts[#verts + 2], verts[#verts + 3] = p.x, p.y, p.z
+				end
+			end
+			for y = 0, size - 2 do
+				for x = 0, size - 2 do
+					local a = base + y * size + x
+					local b, c2, d2 = a + 1, a + size, a + size + 1
+					idx[#idx + 1], idx[#idx + 2], idx[#idx + 3] = a, c2, b
+					idx[#idx + 1], idx[#idx + 2], idx[#idx + 3] = b, c2, d2
+				end
+			end
+		end
+	end
+	f:Close()
+	return verts, idx
+end
+
 --- Leaf index containing point p.
 function BSP.PointLeaf(b, p)
 	local x, y, z = p.x, p.y, p.z
