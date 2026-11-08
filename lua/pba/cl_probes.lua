@@ -721,18 +721,23 @@ end
 PR.Arrival = arrival
 
 PR.BLEND_LAMBDA = 1 -- length scale of the weights, in probe spacings (routes longer by more fade out)
+PR.BLEND_REACH = 1.5 -- the kernel reaches at least this many times the nearest probe's distance
 PR.BLEND_N = 5 -- probes asked of PR.Visible for a blend (the last one only bounds the others' weights)
 
 --- One path for S from the field f: the arrivals of the probes S sees (`starts`, nearest first, as
 -- PR.Visible gives them), each joined to S and evaluated like any probe path (P.EvalPolyline), then
 -- averaged. Weight of probe i = kernel(distance S - probe) x exp(-(length via i - shortest) / lambda):
 -- - the kernel is (1 - (d / D)^2)^2, zero from D on. D is one spacing (every probe that close is a
---   candidate of PR.Visible), or, when PR.Visible stopped at its maximum (`full`), the distance of the
---   last probe: that probe is the next to leave the set, so probes enter and leave it with weight 0;
+--   candidate of PR.Visible), widened to 1.5 x the nearest probe's distance where probes are sparse
+--   (the nearest always weighs: no gap where the blend would give up), and bounded, when PR.Visible
+--   stopped at its maximum (`full`), by the distance of the last probe: that probe is the next to leave
+--   the set, so probes enter and leave it with weight 0;
 -- - the length term favours the shorter routes (a probe whose route goes round the other way).
 -- Length, losses and shape are averaged; the apparent position is the average direction seen from L,
 -- at the average distance. Points (for props on the path) and door lowpass: the heaviest route's.
--- No trace beyond P.EvalPolyline's door checks; nil when no probe carries weight (caller falls back).
+-- Before the widening, S seeing no probe within one spacing fell back to the per-sound path: a switch
+-- of model, 6 dB / 77 degrees in one 4 u step in the pure test. No trace beyond P.EvalPolyline's door
+-- checks; nil only when no probe S sees has a route (caller falls back).
 function PR.FieldBlend(f, S, L, starts, cfg, full)
 	cfg = cfg or A.cfg
 	local n = #starts
@@ -745,6 +750,12 @@ function PR.FieldBlend(f, S, L, starts, cfg, full)
 		local x, y, z = starts[i].pos:Unpack()
 		d[i] = sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2)
 	end
+	local nearest
+	for i = 1, n do
+		if f.cost[starts[i].id] then nearest = i break end
+	end
+	if not nearest then return nil end
+	D = math.max(D, PR.BLEND_REACH * d[nearest])
 	if full then D = math.min(D, d[n]) end
 	local cand, lmin = {}, math.huge
 	for i = 1, n do
@@ -756,6 +767,11 @@ function PR.FieldBlend(f, S, L, starts, cfg, full)
 			cand[#cand + 1] = { a = a, k = (1 - u * u) ^ 2, len = len }
 			if len < lmin then lmin = len end
 		end
+	end
+	if #cand == 0 then -- the nearest probe at the edge of a full list (ties): it alone
+		local a = arrival(f, starts[nearest])
+		cand[1] = { a = a, k = 1, len = 0 }
+		lmin = 0
 	end
 	local lambda, wsum = f.g.spacing * PR.BLEND_LAMBDA, 0
 	for _, c in ipairs(cand) do
