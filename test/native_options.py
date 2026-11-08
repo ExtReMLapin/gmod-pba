@@ -144,11 +144,11 @@ if load("gm_flatgrass"):
     for k, (label, aim) in enumerate((("ground", "Vector(0, 0, -1)"), ("sky", "Vector(0, 0, 1)"), ("ground", "Vector(0, 0, -1)"), ("sky", "Vector(0, 0, 1)"))):
         e = lua("client", f"""local ok, n = pba.Native.EnsureSound('{snd}')
 local P = LocalPlayer():GetPos() + Vector(300, 0, 40)
-pba_native.RenderDebug()
+pba.Native.energyL, pba.Native.energyR = 0, 0 -- final mix energy (reflections included), summed each frame
 pba_native.Echo(n, P, 1, {9000 + k}, 100, 0, {aim}, 0.5)
 return true""")
         time.sleep(2.0)
-        d = lua("client", "local a = pba_native.RenderDebug() return a.y + a.z")
+        d = lua("client", "return (pba.Native.energyL or 0) + (pba.Native.energyR or 0)")
         energy.setdefault(label, []).append(d or 0)
         print(f"  echo aimed at the {label}: energy {d:.4g}", flush=True)
     g, s_ = sum(energy["ground"]) / 2, sum(energy["sky"]) / 2

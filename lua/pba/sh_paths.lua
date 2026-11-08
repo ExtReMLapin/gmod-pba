@@ -426,6 +426,18 @@ local function isClosure(ent)
 end
 P.IsClosure = isClosure
 
+--- True when one of the portal paths goes through the doorway that door entity `ent` fills
+-- (portal linked to a door, leaf touching its opening: hinge side when open, in it when closed).
+local function leafOfPaths(ent, paths)
+	for _, path in ipairs(paths) do
+		for _, p in ipairs(path.chain or {}) do
+			if p.target and ent:NearestPoint(p.center):Distance(p.center) <= (p.radius or 64) then return true end
+		end
+	end
+	return false
+end
+P.LeafOfPaths = leafOfPaths
+
 -- current source entity (never obstructs its own sound)
 local ignoreEnt
 local function traceFilter(ent)
@@ -719,53 +731,70 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		r.clear = true
 	else
 		r.clear = false
-		local loss, lp, mid = P.EvalWalls(walls, cfg)
-		-- native backend: volumetric occlusion of the direct line by the WORLD (Steam Audio
-		-- knows the map, not the props / doors). Near a door frame part of the source is still
-		-- visible: blend the clear part into the world share of the loss.
-		if CLIENT and A.Native and A.Native.ready then
-			local worldWalls, entWalls, water = {}, {}, false
-			for _, w in ipairs(walls) do
-				if w.ent or w.water then entWalls[#entWalls + 1] = w else worldWalls[#worldWalls + 1] = w end
-				water = water or w.water
-			end
-			-- a water surface on the line: Steam Audio's scene has it too (pba_native_water) and
-			-- would count it in its occlusion; the interface keeps pba's own model only
-			if #worldWalls > 0 and not water then
-				local d = A.Native.Direct(S, L)
-				-- only partial visibility is trusted: if Steam Audio sees the line fully clear
-				-- while the engine traces hit the world, its scene lacks that geometry
-				-- (displacements...) and the Lua loss stands
-				if d and d.occlusion > 0.01 and d.occlusion < 0.99 then
-					local o = math.min(d.occlusion, 1)
-					local wl, wlp, wm = P.EvalWalls(worldWalls, cfg, true)
-					local el, elp, em = 0, 0, 0
-					if #entWalls > 0 then el, elp, em = P.EvalWalls(entWalls, cfg, true) end
-					loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-wl / 20)) + el
-					mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-wm / 20)) + em
-					lp = math.max(o > 0.5 and math.min(wlp, 1) or wlp, elp)
-				end
-				r.nativeOcclusion = d and d.occlusion
-			end
-		end
-		local last = walls[#walls]
-		local dir = (L - S):GetNormalized()
-		local tpos = last.exit + dir * 2
-		r.trans = { walls = walls, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
 		local g = A.Graph.Get()
 		r.paths = {}
 		-- portals and probes describe the world geometry only: use them only when the world
-		-- itself blocks the direct line (not when a prop, a door leaf... does)
-		local worldBlocked = false
-		for _, w in ipairs(walls) do if not w.ent and not w.water then worldBlocked = true break end end
+		-- itself blocks the direct line (not when a prop... does). A door leaf belongs to its
+		-- doorway: crossing it also looks for the portal paths, whose door state models the leaf
+		local worldBlocked, leafBlocked = false, false
+		local oneModel = (cfg.door_leaf_portal or 1) >= 0.5
+		for _, w in ipairs(walls) do
+			if not w.ent and not w.water then worldBlocked = true end
+			if oneModel and w.ent and OPENABLE[w.ent:GetClass()] then leafBlocked = true end
+		end
 		r.worldBlocked = worldBlocked
-		if g and worldBlocked then
+		if g and (worldBlocked or leafBlocked) then
 			r.aS, r.aL = A.Graph.Area(g, S), A.Graph.Area(g, L)
 			if r.aS ~= 0 and r.aL ~= 0 and r.aS ~= r.aL then
 				for _, chain in ipairs(P.FindChains(g, S, r.aS, L, r.aL, cfg)) do
 					r.paths[#r.paths + 1] = P.EvalChain(S, L, chain, cfg)
 				end
 			end
+		end
+		-- a leaf whose doorway a portal path goes through is modelled by that portal (state, gap,
+		-- closed loss): not a second time as a wall (closed) or as an object (open)
+		local tw = walls
+		if leafBlocked and #r.paths > 0 then
+			tw = {}
+			for _, w in ipairs(walls) do
+				if not (w.ent and OPENABLE[w.ent:GetClass()] and leafOfPaths(w.ent, r.paths)) then tw[#tw + 1] = w end
+			end
+			r.leafByPortal = #tw < #walls
+		end
+		if #tw > 0 then
+			local loss, lp, mid = P.EvalWalls(tw, cfg)
+			-- native backend: volumetric occlusion of the direct line by the WORLD (Steam Audio
+			-- knows the map, not the props / doors). Near a door frame part of the source is still
+			-- visible: blend the clear part into the world share of the loss.
+			if CLIENT and A.Native and A.Native.ready then
+				local worldWalls, entWalls, water = {}, {}, false
+				for _, w in ipairs(tw) do
+					if w.ent or w.water then entWalls[#entWalls + 1] = w else worldWalls[#worldWalls + 1] = w end
+					water = water or w.water
+				end
+				-- a water surface on the line: Steam Audio's scene has it too (pba_native_water) and
+				-- would count it in its occlusion; the interface keeps pba's own model only
+				if #worldWalls > 0 and not water then
+					local d = A.Native.Direct(S, L)
+					-- only partial visibility is trusted: if Steam Audio sees the line fully clear
+					-- while the engine traces hit the world, its scene lacks that geometry
+					-- (displacements...) and the Lua loss stands
+					if d and d.occlusion > 0.01 and d.occlusion < 0.99 then
+						local o = math.min(d.occlusion, 1)
+						local wl, wlp, wm = P.EvalWalls(worldWalls, cfg, true)
+						local el, elp, em = 0, 0, 0
+						if #entWalls > 0 then el, elp, em = P.EvalWalls(entWalls, cfg, true) end
+						loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-wl / 20)) + el
+						mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-wm / 20)) + em
+						lp = math.max(o > 0.5 and math.min(wlp, 1) or wlp, elp)
+					end
+					r.nativeOcclusion = d and d.occlusion
+				end
+			end
+			local last = tw[#tw]
+			local dir = (L - S):GetNormalized()
+			local tpos = last.exit + dir * 2
+			r.trans = { walls = tw, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
 		end
 		-- experimental: Steam Audio baked pathing replaces the probe graph
 		if worldBlocked and #r.paths == 0 and CLIENT and A.Native and A.Native.pathsReady then

@@ -38,6 +38,12 @@ def py(script, *args, timeout=1500):
                        text=True, encoding="utf-8", timeout=timeout)
     return (p.stdout + p.stderr)[-2500:]
 
+def door(action):
+    """pba_demo boombox room: mode C, door opened or closed (the sweep waits for its state)."""
+    call("lua_exec", {"realm": "server", "code": "pba.DemoMap.SetMode(3) ents.FindByName('pba_boombox_door')[1]:Fire('%s') return true" % action})
+    time.sleep(3)
+    return "ok"
+
 results = []
 def step(i, n, label, fn):
     print(f'##progress step={i}/{n} label="Battery" msg="{label}"', flush=True)
@@ -94,6 +100,12 @@ steps = [
     ("portal_sweep tworooms", lambda: job("client", "portal_sweep.lua")),
     ("water_ogg gm_construct", lambda: (load("gm_construct", 1), native_on(True), make_ogg(), job("client", "water_ogg.lua"), drop_ogg())[3]),
     ("paths_numeric_equiv pba_demo", lambda: (load("pba_demo", 1), job("client", "paths_numeric_equiv.lua"))[1]),
+    # door leaf crossed by the line = its doorway (one model): no jump at the leaf / wall boundary
+    ("door_sweep open", lambda: (load("pba_demo"), door("Open"), job("client", "door_sweep.lua"))[2]),
+    ("door_sweep closed", lambda: (door("Close"), job("client", "door_sweep.lua"))[1]),
+    ("reverb_rt", lambda: py("reverb_rt.py")),
+    ("native_water", lambda: py("native_water.py")),
+    ("native_options", lambda: py("native_options.py")),
 ]
 for i, (label, fn) in enumerate(steps, 1):
     step(i, len(steps), label, fn)
