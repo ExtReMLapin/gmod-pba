@@ -134,6 +134,9 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 		A.RelayStop(data.Entity, data.SoundName)
 		return
 	end
+	-- a sentence: carried by its name (returning nil below leaves the engine's own table untouched)
+	local sentence = data.SoundName == "invalid.wav" and (A.cfg.sentences or 0) >= 0.5 and (data.OriginalSoundName or "") ~= ""
+	if sentence then data.SoundName = "!" .. data.OriginalSoundName end
 	if not A.Eligible(data) then return end
 	local pos = A.SoundPos(data)
 	if not pos then return end
@@ -181,6 +184,12 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if #blocked == 0 then
 		A.stats.untouched = A.stats.untouched + 1
 		return
+	end
+	-- a sentence cannot be re-emitted to some players only (EmitSentence takes no filter): the clear
+	-- listeners get the relay too, and their client plays it unchanged
+	if sentence and #clear > 0 then
+		for _, p in ipairs(clear) do blocked[#blocked + 1] = p end
+		clear = {}
 	end
 
 	-- suppress, then re-emit unchanged for clear listeners and relay for the others

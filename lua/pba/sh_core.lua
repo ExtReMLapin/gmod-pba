@@ -85,6 +85,8 @@ function A.InstallHooks(on)
 		if on then A.Doors.Start() else A.Doors.Stop() end
 	end
 	if SERVER and not on and A.Loops and A.Loops.Release then A.Loops.Release() end
+	-- ambiences started at map load, before the hooks: taken over now (next tick, entities ready)
+	if SERVER and on and A.Loops and A.Loops.AdoptAmbients then timer.Simple(0, A.Loops.AdoptAmbients) end
 end
 
 function A.Refresh()
@@ -111,12 +113,52 @@ end
 
 -- ------------------------------------------------------------------ sound file properties
 
+--- The file behind a sound name: the leading sound characters (soundscript prefixes such as
+-- "*" stream, "^" distance variant, ")" spatial stereo, "#" dry mix, "}" fast pitch...) removed,
+-- case kept. The engine skips any number of them (SDK soundchars.h, PSkipSoundChars). Every lookup
+-- by file goes through it: SoundDuration fails on a prefixed name (wiki, Global.SoundDuration).
+function A.SoundFile(name)
+	return (string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(}]+", ""))
+end
+
+--- The name without the dry-mix character "#" (sound characters kept otherwise): the engine runs no
+-- DSP on a "#" sound, so pba's muffling preset would be ignored. Same file, same other characters.
+function A.WithoutDryMix(name)
+	name = name or ""
+	local n = #name - #A.SoundFile(name)
+	if n == 0 then return name end
+	local pre = string.sub(name, 1, n)
+	if not string.find(pre, "#", 1, true) then return name end
+	return string.gsub(pre, "#", "") .. string.sub(name, n + 1)
+end
+
+--- Duration of a sound name (s), looked up on its file: nil or 0 when unknown (sentence, missing
+-- file, VBR mp3).
+function A.SoundDuration(name)
+	if A.IsSentence(name) then return SentenceDuration(string.sub(name, 2)) end
+	return SoundDuration(A.SoundFile(name))
+end
+
+--- Sentences (scripts/sentences.txt: Combine radio, metrocops...) reach EntityEmitSound as
+-- "invalid.wav" with their name in OriginalSoundName; pba carries them as "!NAME" (the engine's
+-- sentence character) and plays them with EmitSentence.
+function A.IsSentence(name) return string.byte(name or "", 1) == 33 end
+
+--- Plays a sound name the engine way: EmitSentence for a sentence, EmitSound otherwise.
+function A.EmitAt(name, pos, idx, chan, vol, lvl, flags, pitch, dsp)
+	if A.IsSentence(name) then
+		A.Emit(EmitSentence, string.sub(name, 2), pos, idx, chan, vol, lvl, flags, pitch, dsp)
+	else
+		A.Emit(EmitSound, name, pos, idx, chan, vol, lvl, flags, pitch, dsp)
+	end
+end
+
 A.loopCache = A.loopCache or {}
 
 --- True if a .wav file carries loop points (cue/smpl chunk): re-emitting it as a one-shot
 -- would never stop, so such sounds are left to the engine.
 function A.IsLooping(name)
-	name = string.lower(string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(]+", ""))
+	name = string.lower(A.SoundFile(name))
 	local c = A.loopCache[name]
 	if c ~= nil then return c end
 	local loop = false
@@ -162,7 +204,7 @@ function A.Eligible(data)
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
 	if data.Channel == CHAN_STATIC and A.IsLooping(data.SoundName) then return false end
 	if A.IsLooping(data.SoundName) then return false end
-	local dur = SoundDuration(data.SoundName) or 0
+	local dur = A.SoundDuration(data.SoundName) or 0
 	if dur > A.cfg.max_duration then return false end
 	return true
 end

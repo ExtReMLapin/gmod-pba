@@ -97,6 +97,21 @@ local function saMaterial(surf, cfg, model)
 	}
 end
 
+--- A face of a grate, fence or grille brush (CONTENTS_GRATE, on either side of the face): sound
+-- crosses it, and Steam Audio would bounce its reverb rays on it as on a wall (a fenced yard heard
+-- as a closed room): left out of the scene, as pba's own traces leave grates out.
+function N.IsGrateSurface(s)
+	local v = s:GetVertices()
+	if #v < 3 then return false end
+	local c = Vector()
+	for _, p in ipairs(v) do c:Add(p) end
+	c:Div(#v)
+	local n = (v[2] - v[1]):Cross(v[3] - v[1])
+	if n:LengthSqr() < 1e-6 then return false end
+	n:Normalize()
+	return bit.band(bit.bor(util.PointContents(c + n * 0.5), util.PointContents(c - n * 0.5)), CONTENTS_GRATE) ~= 0
+end
+
 --- Triangulated world (fan per brush surface) + material list. Returns verts, tris, matIdx, mats, mins, maxs.
 function N.BuildWorld()
 	local verts, tris, matIdx, mats, matOf = {}, {}, {}, {}, {}
@@ -107,7 +122,7 @@ function N.BuildWorld()
 		local name = m and m:GetName() or ""
 		if N.Yield then N.Yield() end
 		local water = s:IsWater()
-		if not s:IsSky() and (withWater or not water) and not skipMaterial(name) then
+		if not s:IsSky() and (withWater or not water) and not skipMaterial(name) and not N.IsGrateSurface(s) then
 			local surf = water and "pba_water" or (m and m:GetString("$surfaceprop") or "default")
 			local mi = matOf[surf]
 			if not mi then
@@ -347,7 +362,7 @@ function N.StopRender()
 end
 
 local function cleanName(name)
-	return string.lower(string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(]+", ""))
+	return string.lower(A.SoundFile(name))
 end
 
 --- Makes sure the module has decoded `name`. Returns true, cleanName when playable natively;
@@ -404,6 +419,11 @@ function N.Directivity(ent, L)
 	local d = (L - owner:EyePos()):GetNormalized()
 	return math.max((1 - w) + w * fwd:Dot(d), 0.05)
 end
+
+-- A microphone's speaker copy (SND_SPEAKER: Breencast jumbotrons, TVs): the engine runs it through
+-- its speaker DSP preset; the module plays the bare file, so a small loudspeaker's band (bass and
+-- treble cut, low / mid / high gains) stands for it.
+N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds }.
@@ -546,11 +566,15 @@ local function boxMesh(mn, mx)
 end
 
 N.BoxMesh = boxMesh
+local MOVED_NEAR2 = 1024 * 1024 -- units: dynamic objects whose motion re-evaluates the continuous sounds
 
 function N.SyncDoors()
 	if not N.ready or not pba_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
 	local seen, nProps = {}, 0
 	local wantProps = (A.cfg.native_props or 0) >= 0.5
+	-- a door, mover or large prop that moved near the listener changes paths and occlusion: the
+	-- continuous sounds re-evaluate (reeval_adaptive; P.ReevalDue watches the world version)
+	local L, moved = A.ListenerPos(), false
 	for id in pairs(N.doors) do if N.doors[id].prop then nProps = nProps + 1 end end
 	for _, e in ipairs(ents.GetAll()) do
 		local cls = e:GetClass()
@@ -599,6 +623,7 @@ function N.SyncDoors()
 				local p, a = e:GetPos(), e:GetAngles()
 				if not d.p or d.p ~= p or d.a ~= a then
 					pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
+					if d.p and L and p:DistToSqr(L) < MOVED_NEAR2 then moved = true end
 					d.p, d.a = p, a
 				end
 			end
@@ -612,6 +637,7 @@ function N.SyncDoors()
 	end
 	-- the module only commits when something changed (and retries itself after a running bake)
 	pba_native.DynamicCommit()
+	if moved and A.Paths then A.Paths.InvalidateCache() end
 end
 timer.Create("pba_native_doors", 0.1, 0, function() N.SyncDoors() end)
 

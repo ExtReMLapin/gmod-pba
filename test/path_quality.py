@@ -19,7 +19,7 @@ REF_THROUGH_DOORS = "--ref-through-doors" in sys.argv[2:]  # the old reference (
 SETS = [a[len("--set="):] for a in sys.argv[2:] if a.startswith("--set=")]  # e.g. --set=pba_probe_bridge_max=0
 MAPS = [a for a in sys.argv[2:] if not a.startswith("--")] or ["pba_demo", "gm_construct", "d1_town_01"]
 PAIRS = 30
-# thresholds (share of pairs): None = report only. Set from the baseline, see docs/JOURNAL.md.
+# thresholds (share of pairs): None = report only. Set from the baseline.
 MAX_OVER6 = next((float(a.split("=")[1]) for a in sys.argv[2:] if a.startswith("--max-over6=")), None)
 MAX_UNDER6 = next((float(a.split("=")[1]) for a in sys.argv[2:] if a.startswith("--max-under6=")), None)  # PBA too loud
 MAX_SILENT = 0.07  # warm, regression guard (0.033-0.067 today: street-to-rooftop bends in open air, target of the edge graph)

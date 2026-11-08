@@ -51,7 +51,9 @@ pba.DemoGen = {
 		},
 		doors = {
 			door = "pba_direction_door"
-		}
+		},
+		doorway = { -3232, 512, 0, -3184, 528, 108 },
+		crate_cover = { -3234, -3194 }
 	}, {
 		id = "window",
 		boxes = { { -2928, 0, 0, -2416, 512, 256 } },
@@ -190,6 +192,16 @@ pba.DemoGen = {
 		door_y = { 232, 280 },
 		door_h = 108
 	}, {
+		id = "detour",
+		boxes = { { 6256, -320, 0, 6640, -32, 192 }, { 6256, -640, 0, 6640, -384, 192 }, { 6144, -640, 0, 6240, -32, 128 }, { 6144, -752, 0, 6752, -656, 128 }, { 6656, -640, 0, 6752, -384, 128 } },
+		listen = { 6448, -176, 0 },
+		yaw = 270,
+		panel = { 6508, -220, 36 },
+		panel_yaw = 143.7,
+		sources = {
+			music = "pba_detour_src"
+		}
+	}, {
 		id = "exit",
 		boxes = { { 6544, 0, 0, 7056, 512, 192 } },
 		listen = { 6672, 256, 0 },
@@ -197,6 +209,6 @@ pba.DemoGen = {
 		panel = { 6716, 316, 36 },
 		panel_yaw = -126.3
 	} },
-	portals = 35,
-	doors = 32
+	portals = 40,
+	doors = 33
 }

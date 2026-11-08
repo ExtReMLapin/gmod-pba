@@ -12,6 +12,7 @@ local NET = "pba_loop"
 util.AddNetworkString(NET)
 
 LP.active = LP.active or {} -- key -> { ent, idx, chan, name, vol, pitch, lvl, flags, dsp, pos, subs = {ply=true} }
+LP.released = LP.released or {} -- loops handed back to the engine while pba is off: taken again when it comes back
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 
@@ -31,6 +32,7 @@ local function send(op, l, plys)
 		net.WriteUInt(math.Clamp(math.floor(l.lvl), 0, 511), 9)
 		net.WriteUInt(math.Clamp(math.floor(l.dsp or 0), 0, 255), 8)
 		net.WriteBool(l.once or false)
+		net.WriteBool(l.speaker or false)
 	end
 	net.Send(plys)
 end
@@ -55,7 +57,7 @@ function LP.IsLong(data)
 	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
 	local st = data.SoundTime or 0
 	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
-	local dur = SoundDuration(data.SoundName) or 0
+	local dur = A.SoundDuration(data.SoundName) or 0
 	return dur > A.cfg.max_duration and dur <= 1800, dur
 end
 
@@ -63,6 +65,9 @@ end
 -- channel than the start). Returns true when one was running.
 function LP.Stop(idx, name)
 	local found = false
+	for k, x in pairs(LP.released) do
+		if x.idx == idx and (name == nil or name == "" or x.name == name) then LP.released[k] = nil end
+	end
 	for k, x in pairs(LP.active) do
 		if x.idx == idx and (name == nil or name == "" or x.name == name) then
 			local plys = {}
@@ -105,12 +110,26 @@ function LP.Handle(data)
 	if not l then
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {} }
 		if once then l.once, l.endT = true, CurTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
+		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...) and model doors:
+		-- their C++ stops the loop with a StopSound that never reaches Lua; the mirror stops with the
+		-- motion. Brush models only ("*N"): a prop_dynamic is MOVETYPE_PUSH too, and a still machine
+		-- or radio plays its loop for good
+		l.mover = IsValid(e) and e:GetMoveType() == MOVETYPE_PUSH
+			and (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating") or nil
 		LP.active[key] = l
 	end
+	l.t = CurTime()
 	if not update or bit.band(flags, SND_CHANGE_VOL) ~= 0 then l.vol = data.Volume or 1 end
 	if not update or bit.band(flags, SND_CHANGE_PITCH) ~= 0 then l.pitch = data.Pitch or 100 end
 	if not update then
 		l.lvl, l.dsp = data.SoundLevel or 75, data.DSP or 0
+		-- a microphone's speaker copy (Breencast on a jumbotron): the engine filters it by its SND_SPEAKER
+		-- flag, which a mirror (CSoundPatch) cannot carry: the speaker preset becomes the mirror's DSP
+		l.speaker = bit.band(flags, SND_SPEAKER or 64) ~= 0 or nil
+		if l.dsp == 0 and l.speaker then
+			local c = GetConVar("dsp_speaker")
+			l.dsp = c and c:GetInt() or 0
+		end
 		l.pos = data.Pos or (IsValid(e) and e:WorldSpaceCenter()) or Vector()
 	end
 	local plys = {}
@@ -124,10 +143,17 @@ function LP.Handle(data)
 	return true
 end
 
+--- A moving brush at rest (no linear nor angular velocity): its movement loop is over.
+function LP.MoverStill(e)
+	return e:GetVelocity():LengthSqr() < 1 and e:GetLocalAngularVelocity():IsZero()
+end
+
 -- (un)subscribe players moving in / out of range, drop loops of removed entities
 timer.Create("pba_loops", 0.5, 0, function()
 	for key, l in pairs(LP.active) do
-		if l.idx ~= 0 and not IsValid(l.ent) then
+		if l.mover and IsValid(l.ent) and CurTime() - l.t > 0.4 and LP.MoverStill(l.ent) then
+			LP.Stop(l.idx, l.name)
+		elseif l.idx ~= 0 and not IsValid(l.ent) then
 			-- entity removed (a rocket that exploded...): its sounds stopped without any STOP
 			-- event; the clients' mirrors must stop too
 			local plys = {}
@@ -150,6 +176,48 @@ timer.Create("pba_loops", 0.5, 0, function()
 	end
 end)
 
+--- Wave of a sound name (a sound script: its first wave).
+local function waveOf(name)
+	local props = name ~= "" and name:sub(1, 1) ~= "!" and sound.GetProperties(name)
+	if not props then return name end
+	local w = props.sound
+	return istable(w) and (w[1] or "") or w or name
+end
+
+--- Looping ambient_generic already playing when pba's hooks went in: started in Activate() at
+-- map load, before InitPostEntity, they never reached the hook and stayed vanilla (through every
+-- wall). Restarted through their own inputs, so the hook takes them over. Idempotent: an ambient
+-- already mirrored is left alone. Returns how many were restarted.
+function LP.AdoptAmbients()
+	if A.cfg.loops < 0.5 or not A.hooksInstalled then return 0 end
+	-- loops handed back to the engine when pba was turned off: the engine's copy stops, the mirror
+	-- starts again (the engine never says which loops it plays, so pba keeps the list itself)
+	for key, l in pairs(LP.released) do
+		LP.released[key] = nil
+		if IsValid(l.ent) and not (l.mover and LP.MoverStill(l.ent)) then
+			A.orig.EntStopSound(l.ent, l.name)
+			LP.Handle({ Entity = l.ent, SoundName = l.name, Channel = l.chan, Volume = l.vol, Pitch = l.pitch,
+				SoundLevel = l.lvl, DSP = l.dsp, Flags = 0 })
+		end
+	end
+	local mirrored = {}
+	for _, l in pairs(LP.active) do if IsValid(l.ent) then mirrored[l.ent] = true end end
+	local n = 0
+	for _, e in ipairs(ents.FindByClass("ambient_generic")) do
+		local src = e:GetInternalVariable("m_hSoundSource")
+		if e:GetInternalVariable("m_fActive") and bit.band(e:GetSpawnFlags(), 1) == 0 -- not "play everywhere"
+			and not mirrored[e] and not (IsValid(src) and mirrored[src]) then
+			local wav = waveOf(e:GetInternalVariable("message") or "")
+			if wav ~= "" and wav:sub(1, 1) ~= "!" and A.IsLooping(wav) then
+				e:Input("StopSound")
+				e:Input("PlaySound")
+				n = n + 1
+			end
+		end
+	end
+	return n
+end
+
 --- Turning pba off: hand the running loops back to the engine.
 function LP.Release()
 	for key, l in pairs(LP.active) do
@@ -158,6 +226,7 @@ function LP.Release()
 		send(OP_STOP, l, plys)
 		if IsValid(l.ent) then
 			A.Emit(A.orig.EntEmitSound, l.ent, l.name, l.lvl, l.pitch, l.vol, l.chan, 0, l.dsp)
+			if not l.once then l.subs = {} LP.released[key] = l end
 		end
 		LP.active[key] = nil
 	end

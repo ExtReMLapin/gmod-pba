@@ -10,15 +10,17 @@ local A = pba
 local PR = {}
 A.Probes = PR
 
-local CACHE_VERSION = 5
+local CACHE_VERSION = 6 -- 6: links cross grates
 local MAX_PROBES = 30000
 local DIRS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 
 local function worldOnly() return false end
+-- links cross grates, fences, grilles (CONTENTS_GRATE: "bullets/sight pass through"): sound does too
+local LINK_MASK = bit.band(MASK_SOLID_BRUSHONLY, bit.bnot(CONTENTS_GRATE))
 -- the hot traces reuse their input and result tables (`output`): a new result table per trace was
 -- most of the ~166 KB of garbage per path computation, whose collection made 8-20 ms spikes
 local segOut = {}
-local segTr = { mask = MASK_SOLID_BRUSHONLY, filter = worldOnly, output = segOut }
+local segTr = { mask = LINK_MASK, filter = worldOnly, output = segOut }
 local function clearSeg(a, b)
 	segTr.start, segTr.endpos = a, b
 	util.TraceLine(segTr)
@@ -374,7 +376,7 @@ end
 -- shortcuts must keep a margin: a hull trace, so a path never grazes a door frame
 local HULL_MIN, HULL_MAX = Vector(-4, -4, -4), Vector(4, 4, 4)
 local fatOut = {}
-local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = MASK_SOLID_BRUSHONLY, filter = worldOnly, output = fatOut }
+local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = LINK_MASK, filter = worldOnly, output = fatOut }
 local function clearFat(a, b)
 	fatTr.start, fatTr.endpos = a, b
 	util.TraceHull(fatTr)
@@ -587,7 +589,9 @@ local function pulledPaths(g, S, L, k, cfg, starts)
 		if res then return res end
 	end
 	-- not solved in time: the listener field answers at once (its best route; the k-path search, with
-	-- the alternative routes, goes on in the background)
+	-- the alternative routes, goes on in the background). PR.provisional tells P.Compute the answer
+	-- will change once the search is solved (a continuous sound then re-evaluates at its next turn).
+	PR.provisional = true
 	local f = fieldUsable(g, L, cfg)
 	if f then return fieldPaths(f, starts, S) end
 	return {}
@@ -813,6 +817,110 @@ function PR.FieldBlend(f, S, L, starts, cfg, full)
 	return out
 end
 
+-- Whether the triangle u, v, w is free of the world, its edges u-v and u-w known clear: the new edge v-w,
+-- then a fan of rays from the vertex opposite its shortest edge to points along that edge, every FAN_STEP
+-- units (an obstacle inside the triangle, touching none of its edges, cuts a ray).
+local FAN_STEP, FAN_MAX = 16, 32
+local function triangleFree(u, v, w)
+	if v:DistToSqr(w) < 1 then return true end
+	if not clearSeg(v, w) then return false end
+	local x, y, apex = v, w, u
+	local e = v:DistToSqr(w)
+	local e1, e2 = u:DistToSqr(v), u:DistToSqr(w)
+	if e1 < e then x, y, apex, e = u, v, w, e1 end
+	if e2 < e then x, y, apex, e = u, w, v, e2 end
+	local n = math.Clamp(math.ceil(math.sqrt(e) / FAN_STEP), 1, FAN_MAX)
+	local d = y - x
+	for k = 1, n - 1 do
+		if not clearSeg(apex, x + d * (k / n)) then return false end
+	end
+	return true
+end
+
+--- Whether two routes from S to L (polylines a, b) are one physical route: one slides onto the other
+-- without crossing the world (homotopic in the open volume). The loop a, then b backwards, is cut into
+-- triangles (a zipper over the vertices of both, which sit on the edges of the openings once tightened);
+-- the routes are one when every triangle is free. A wall, pillar or post between two openings fills
+-- some triangle whatever the zipper; two copies of one route through one opening (reached from
+-- neighbouring probes, tightened to bends on either side of the wall, or a detour in the same room) close
+-- over free triangles. Thin traces; a doubt (no free zipper) keeps both routes.
+function PR.SameRoute(a, b)
+	local na, nb = #a, #b
+	if na == nb then
+		local same = true
+		for i = 1, na do
+			if a[i]:DistToSqr(b[i]) > 1 then same = false break end
+		end
+		if same then return true end
+	end
+	-- arc length fractions of the vertices: the zipper advances the chain that is behind
+	local fa, fb = { 0 }, { 0 }
+	for i = 2, na do fa[i] = fa[i - 1] + a[i - 1]:Distance(a[i]) end
+	for i = 2, nb do fb[i] = fb[i - 1] + b[i - 1]:Distance(b[i]) end
+	-- depth-first over the states (i, j) = rung a[i] - b[j], from (1, 1) (S - S) to (na, nb) (L - L). The
+	-- stack holds moves not tried yet (a triangle is traced only when its move is taken); a state is entered
+	-- once, a move that failed may succeed from another state
+	local seen, stack = {}, {}
+	local function push(i, j)
+		local ta = i < na and fa[i + 1] / math.max(fa[na], 1e-9)
+		local tb = j < nb and fb[j + 1] / math.max(fb[nb], 1e-9)
+		-- pushed last = tried first: the chain that is behind advances first
+		if ta and tb and ta < tb then
+			stack[#stack + 1] = { i, j, i, j + 1 }
+			stack[#stack + 1] = { i, j, i + 1, j }
+		else
+			if ta then stack[#stack + 1] = { i, j, i + 1, j } end
+			if tb then stack[#stack + 1] = { i, j, i, j + 1 } end
+		end
+	end
+	push(1, 1)
+	while #stack > 0 do
+		local m = table.remove(stack)
+		local i, j, ni, nj = m[1], m[2], m[3], m[4]
+		local key = ni * 1024 + nj
+		if not seen[key] then
+			local ok
+			if ni > i then ok = triangleFree(a[i], a[ni], b[j]) else ok = triangleFree(b[j], b[nj], a[i]) end
+			if ok then
+				if ni == na and nj == nb then return true end
+				seen[key] = true
+				push(ni, nj)
+			end
+		end
+	end
+	return false
+end
+
+--- Evaluated probe paths from S to L, one per physical route: the copies of a route (PR.SameRoute) are
+-- dropped, the best of them (highest level) kept. Copies of one route through one opening each carried
+-- the full energy and summed up to +3 dB (two copies), +4.8 dB (three). Best first.
+function PR.DistinctRoutes(S, L, paths)
+	local level = A.Paths.PathLevel
+	local list = {}
+	for i, p in ipairs(paths) do
+		local pts = { S }
+		for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+		pts[#pts + 1] = L
+		list[i] = { p = p, pts = pts, lvl = level(p.length, p.lossDb, 75), i = i }
+	end
+	table.sort(list, function(x, y)
+		if x.lvl ~= y.lvl then return x.lvl > y.lvl end
+		return x.i < y.i
+	end)
+	local kept, out = {}, {}
+	for _, e in ipairs(list) do
+		local dup = false
+		for _, k in ipairs(kept) do
+			if PR.SameRoute(k.pts, e.pts) then dup = true break end
+		end
+		if not dup then
+			kept[#kept + 1] = e
+			out[#out + 1] = e.p
+		end
+	end
+	return out
+end
+
 function PR.Paths(S, L, k, cfg)
 	cfg = cfg or A.cfg
 	local g = PR.current
@@ -848,16 +956,14 @@ function PR.Paths(S, L, k, cfg)
 		local pulled = attach(inner, S, L)
 		if #pulled >= 3 then
 			local p = A.Paths.EvalPolyline(pulled, cfg)
-			-- distinct apparent positions only
-			local dup = false
-			for _, q in ipairs(out) do if q.pos:Distance(p.pos) < g.spacing then dup = true end end
-			if not dup then
-				p.probe = true
-				out[#out + 1] = p
-			end
+			p.probe = true
+			out[#out + 1] = p
 		end
 	end
-	return out
+	-- one physical route once (the field's starts and the k-path search find copies of one route), not
+	-- one per apparent position: copies tightened to bends either side of a wall are a spacing apart, and
+	-- two doorways closer than a spacing are two routes
+	return PR.DistinctRoutes(S, L, out)
 end
 
 hook.Add("InitPostEntity", "pba_probes", function() timer.Simple(2, function() if A.Enabled() then PR.Start() end end) end)

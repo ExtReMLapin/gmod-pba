@@ -17,7 +17,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # works under python -I too
-from gen_maps import Map, box, NODRAW, ORIGIN, PORTAL  # noqa: F401  (shared VMF helpers)
+from gen_maps import Map, box, subtract, NODRAW, ORIGIN, PORTAL  # noqa: F401  (shared VMF helpers)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LUA_OUT = os.path.join(HERE, "..", "..", "lua", "pba", "demo", "sh_rooms_gen.lua")
@@ -67,6 +67,20 @@ class Demo(Map):
         self.rooms = []
         self.n_portals = 0
         self.n_doors = 0
+
+    def vmf(self, skyname="sky_day01_01"):
+        """Each brush is cut by the holes it overlaps only. gen_maps.subtract also cuts a brush along
+        the coordinates of holes far away from it (same solid, 2 to 3 times more brushes here)."""
+        def overlaps(b, h):
+            return all(b[a] < h[a + 3] and h[a] < b[a + 3] for a in range(3))
+        world, holes = self.world, self.holes
+        self.world = [(piece, w[1], w[2] if len(w) == 3 else 16) for w in world
+                      for piece in subtract(w[0], [h for h in holes if overlaps(w[0], h)])]
+        self.holes = []
+        try:
+            return super().vmf(skyname)
+        finally:
+            self.world, self.holes = world, holes
 
     # -------------------------------------------------------------- helpers
     def wbox(self, b, tex, lms=16):
@@ -214,8 +228,13 @@ def build():
     m.ydoor("pba_direction_door", X + 400, 512)
     m.pedestal(X + 256, 784)
     m.prop("pba_direction_src", RADIO, X + 256, 784, 40, yaw=270)
+    # crate_cover: x range a stack of crates covers in front of the doorway (Lua, "crates" button):
+    # the strip the ajar leaf (20 degrees) covers as P.Aperture measures it (traces 12 u either side
+    # of the portal plane hit the leaf up to ~38 u from the hinge), so both leave the same gap at
+    # the far jamb and should sound alike
     m.add_room("direction", [(X, 0, 0, X + 512, 512, 192)], (X + 256, 256, 0), 90,
-               sources={"radio": "pba_direction_src"}, doors={"door": "pba_direction_door"})
+               sources={"radio": "pba_direction_src"}, doors={"door": "pba_direction_door"},
+               doorway=[X + 400, 512, 0, X + 448, 528, DOOR_H], crate_cover=[X + 398, X + 438])
     X = next_room(X + 512)
 
     # ---------------------------------------------------------------- 4 window (high, on the left)
@@ -363,7 +382,53 @@ def build():
                sources={"speaker": "pba_reverb_src"}, door_y=list(DOOR_Y), door_h=DOOR_H)
     X = next_room(X + 768)
 
-    # ---------------------------------------------------------------- 14 exit
+    # ---------------------------------------------------------------- 14 the long detour (length / angle guard)
+    # A side branch south of the airlock 13 -> exit (nothing else moves): a side door in the
+    # airlock's south wall, a passage, then a listening room (north) and a source room (south)
+    # with a thick concrete wall between them. The only opening between the two rooms is a
+    # corridor round the source room: west lane, south lane, east lane, one open areaportal at
+    # every corner (the portal model bends only at portals). Straight line ~340 u, corridor
+    # ~1 900 u (3.7x the 512 u floor of pba_path_guard_near), total bend ~360 degrees.
+    C = X - 96                      # airlock centre (its interior is x C-80..C+80)
+    W = 96                          # corridor lane width
+    DX0, DX1 = C - 192, C + 192     # both rooms
+    LTOP, LBOT = -32, -320          # listening room (y), north of the wall
+    TW = 64                         # thick wall
+    STOP, SBOT = LBOT - TW, LBOT - TW - 256   # source room (y), south of the wall
+    m.ydoor("pba_detour_door", C - 24, SAS_Y[0] - 16, returndelay=4)
+    # passage from the airlock: bounded by the walls of rooms 13 and exit and by the airlock
+    m.space(C - 80, -16, 0, C + 80, SAS_Y[0] - 16, 128, wall=DEV,
+            walls={"x0": None, "x1": None, "y0": None, "y1": None}, floor=CONC_FLOOR, ceil=DEV, light=False)
+    m.light(C, 80, 100, "200 220 255", 80)
+    m.hole(C - 80, LTOP, 0, C + 80, LTOP + 16, 128)
+    m.space(DX0, LBOT, 0, DX1, LTOP, 192, wall=DEV, walls={"y0": None}, floor=CONC_FLOOR, ceil=DEV)
+    m.wbox((DX0 - 16, STOP, 0, DX1 + 16, LBOT, 192), CONC_THICK)
+    m.space(DX0, SBOT, 0, DX1, STOP, 192, wall=CONC, walls={"y1": None}, floor=CONC_FLOOR,
+            ceil=CONC_CEIL, light=False)
+    m.light(C, (SBOT + STOP) / 2, 168, "255 200 150", 120)
+    # lanes (128 high); the south lane's north wall continues the source room's south wall
+    m.space(DX0 - 16 - W, SBOT, 0, DX0 - 16, LTOP, 128, wall=CONC, walls={"x1": None, "y0": None},
+            floor=CONC_FLOOR, ceil=CONC_CEIL, light=False)
+    m.space(DX0 - 16 - W, SBOT - 16 - W, 0, DX1 + 16 + W, SBOT - 16, 128, wall=CONC, floor=CONC_FLOOR,
+            ceil=CONC_CEIL, light=False)
+    m.space(DX1 + 16, SBOT, 0, DX1 + 16 + W, STOP, 128, wall=CONC, walls={"x0": None, "y0": None},
+            floor=CONC_FLOOR, ceil=CONC_CEIL, light=False)
+    for (lx, ly) in ((DX0 - 16 - W / 2, LTOP - 96), (DX0 - 16 - W / 2, (LTOP + SBOT) / 2),
+                     (DX0 - 16 - W / 2, SBOT - 16 - W / 2), (C, SBOT - 16 - W / 2),
+                     (DX1 + 16 + W / 2, SBOT - 16 - W / 2), (DX1 + 16 + W / 2, (SBOT + STOP) / 2)):
+        m.light(lx, ly, 104, bright=70)
+    m.portal((DX0 - 16, LTOP - 112, 0, DX0, LTOP - 16, 112), start_open=True)               # room -> west lane
+    m.portal((DX0 - 16 - W, SBOT - 16, 0, DX0 - 16, SBOT, 112), start_open=True)           # west -> south lane
+    m.portal((DX1 + 16, SBOT - 16, 0, DX1 + 16 + W, SBOT, 112), start_open=True)           # south -> east lane
+    m.portal((DX1, STOP - 144, 0, DX1 + 16, STOP - 48, 112), start_open=True)              # east lane -> source
+    m.prop("pba_detour_src", SPEAKER, C, (SBOT + STOP) / 2, 15, yaw=90)
+    m.add_room("detour", [(DX0, LBOT, 0, DX1, LTOP, 192), (DX0, SBOT, 0, DX1, STOP, 192),
+                          (DX0 - 16 - W, SBOT, 0, DX0 - 16, LTOP, 128),
+                          (DX0 - 16 - W, SBOT - 16 - W, 0, DX1 + 16 + W, SBOT - 16, 128),
+                          (DX1 + 16, SBOT, 0, DX1 + 16 + W, STOP, 128)],
+               (C, (LTOP + LBOT) / 2, 0), 270, sources={"music": "pba_detour_src"})
+
+    # ---------------------------------------------------------------- 15 exit
     m.space(X, 0, 0, X + 512, 512, 192, wall=DEV, floor=CONC_FLOOR, ceil=DEV)
     m.add_room("exit", [(X, 0, 0, X + 512, 512, 192)], (X + 128, 256, 0), 0)
 

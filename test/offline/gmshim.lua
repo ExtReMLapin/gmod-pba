@@ -72,6 +72,7 @@ function string.StartWith(s, p) return s:sub(1, #p) == p end
 pba = { Doors = { byEnt = {}, entState = {} } }
 -- for cl_probes.lua (probe graph): traces see nothing unless a test stubs them
 MASK_SOLID_BRUSHONLY, MASK_SOLID, CONTENTS_SOLID = 16395, 33570827, 1
+CONTENTS_GRATE, CONTENTS_WATER = 8, 32
 hook = { Add = function() end, Remove = function() end }
 function V:Unpack() return self.x, self.y, self.z end
 function SysTime() return os.clock() end
@@ -80,3 +81,12 @@ function FrameNumber() return 1 end
 util.TraceLine = function(t) local o = t.output or {} o.Hit, o.Fraction, o.StartSolid = false, 1, false return o end
 util.TraceHull = util.TraceLine
 util.PointContents = function() return 0 end
+-- for sh_core.lua (sound eligibility): sound files are absent unless a test stubs them
+SND_CHANGE_VOL, SND_CHANGE_PITCH, SND_STOP = 1, 2, 4
+CHAN_AUTO, CHAN_WEAPON, CHAN_VOICE, CHAN_ITEM, CHAN_BODY, CHAN_STATIC = 0, 1, 2, 3, 4, 6
+function CurTime() return os.clock() end
+function string.EndsWith(s, e) return e == "" or s:sub(-#e) == e end
+concommand = { Add = function() end }
+file = { Open = function() return nil end, Exists = function() return false end }
+game = { GetMap = function() return "" end }
+function SoundDuration() return 0 end

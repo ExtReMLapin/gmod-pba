@@ -2,12 +2,13 @@
 Reads the server URL and headers from Claude Code's config (~/.claude.json, or CLAUDE_JSON).
 Usage: python -I test/mcp.py list
        python -I test/mcp.py call <tool> '<json args>' [maxchars]     ('@file' = JSON args read from a file)
-MCP_INSTANCE=<id> targets one game when several run (instances_list)."""
+MCP_INSTANCE=<id> targets one game when several run (instances_list).
+MCP_PROJECT=<folder> picks the Claude Code project whose "gmod" MCP server is used."""
 import json
 import os, sys, urllib.request
 
 CFG = json.load(open(os.environ.get("CLAUDE_JSON") or os.path.expanduser("~/.claude.json"), encoding="utf-8"))
-SRV = CFG["projects"]["D:/SteamLibrary/steamapps/common/GarrysMod"]["mcpServers"]["gmod"]
+SRV = CFG["projects"][os.environ.get("MCP_PROJECT", "D:/SteamLibrary/steamapps/common/GarrysMod")]["mcpServers"]["gmod"]
 URL = SRV["url"]
 HDR = dict(SRV.get("headers", {}))
 HDR.update({"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})

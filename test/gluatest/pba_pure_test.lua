@@ -75,6 +75,73 @@ local function wallWithHole(x0, x1)
 		{ Vector(x0, 64, 112), Vector(x1, 112, 300) }, { Vector(-1000, -1000, -100), Vector(2000, 2000, 0) } }
 end
 
+-- Probe scene: two rooms as in pba_noportal (A x 0..512, B x 528..1040, y 0..512, z 0..192), the wall
+-- between them pierced by `holes` ({ y0, y1, top }), plus `extra` boxes. For the duration of fn(g) only
+-- (restored even on error): line and hull traces and PointContents see these boxes, A.cfg takes `over`,
+-- and the probe module works on its own graph g (flood-filled from room A), field, queue and cache.
+local function withProbeRooms(holes, extra, over, fn)
+	local PR = A.Probes
+	local BIG = 4000
+	local boxes = { { Vector(-BIG, -BIG, -BIG), Vector(BIG, BIG, 0) }, { Vector(-BIG, -BIG, 192), Vector(BIG, BIG, BIG) },
+		{ Vector(-BIG, -BIG, -BIG), Vector(0, BIG, BIG) }, { Vector(1040, -BIG, -BIG), Vector(BIG, BIG, BIG) },
+		{ Vector(-BIG, -BIG, -BIG), Vector(BIG, 0, BIG) }, { Vector(-BIG, 512, -BIG), Vector(BIG, BIG, BIG) } }
+	local y = -8
+	for _, h in ipairs(holes) do
+		boxes[#boxes + 1] = { Vector(512, y, -8), Vector(528, h[1], 200) }
+		boxes[#boxes + 1] = { Vector(512, h[1] - 8, h[3]), Vector(528, h[2] + 8, 200) } -- lintel, overlapping
+		y = h[2]
+	end
+	boxes[#boxes + 1] = { Vector(512, y, -8), Vector(528, 520, 200) }
+	for _, b in ipairs(extra or {}) do boxes[#boxes + 1] = b end
+	local function inside(p)
+		for _, b in ipairs(boxes) do
+			if p.x > b[1].x and p.y > b[1].y and p.z > b[1].z and p.x < b[2].x and p.y < b[2].y and p.z < b[2].z then return true end
+		end
+		return false
+	end
+	local function trace(t, pad)
+		local out = t.output or {}
+		local best
+		if not t.ignoreworld then
+			local d = Vector(pad, pad, pad)
+			for _, b in ipairs(boxes) do
+				local t0, t1 = segBox(t.start, t.endpos, b[1] - d, b[2] + d)
+				if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+			end
+		end
+		out.Hit, out.HitWorld, out.Fraction, out.Entity = best ~= nil, best ~= nil, best or 1, nil
+		out.StartSolid = best == 0 and inside(t.start)
+		out.HitPos = t.start + (t.endpos - t.start) * (best or 1)
+		return out
+	end
+	local saved = { util.TraceLine, util.TraceHull, util.PointContents }
+	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold" }
+	local savedPR, savedCfg = {}, {}
+	for _, k in ipairs(state) do savedPR[k] = PR[k] end
+	for k, v in pairs(over or {}) do savedCfg[k] = A.cfg[k] A.cfg[k] = v end
+	util.TraceLine = function(t) return trace(t, 0) end
+	util.TraceHull = function(t) return trace(t, t.maxs and t.maxs.x or 0) end
+	util.PointContents = function(p) return inside(p) and CONTENTS_SOLID or 0 end
+	local ok, err = pcall(function()
+		PR.queue, PR.pathCache, PR.pathCacheN, PR.inlineFrame, PR.field, PR.fieldHold = {}, {}, 0, nil, nil, nil
+		local g = PR.BuildCo({ Vector(256, 256, 49) }, 128)
+		PR.Prepare(g)
+		PR.current = g
+		fn(g)
+	end)
+	util.TraceLine, util.TraceHull, util.PointContents = saved[1], saved[2], saved[3]
+	for _, k in ipairs(state) do PR[k] = savedPR[k] end
+	for k in pairs(over or {}) do A.cfg[k] = savedCfg[k] end
+	if not ok then error(err, 0) end
+end
+-- every segment of a polyline clear of the scene (a test route must be a real route)
+local function routeClear(pts)
+	for i = 1, #pts - 1 do
+		if not A.Probes.ClearSeg(pts[i], pts[i + 1]) then return false end
+	end
+	return true
+end
+
 -- synthetic BSP: three areas in a row, portals 1 (areas 1|2, plane x=100) and 2 (areas 2|3, x=200)
 local function rect(x, y0, y1, z0, z1)
 	return { Vector(x, y0, z0), Vector(x, y0, z1), Vector(x, y1, z1), Vector(x, y1, z0) }
@@ -118,7 +185,9 @@ local function withProbeScene(fn)
 	for _, k in ipairs({ "probe_field", "probe_inline_ms", "probe_field_blend" }) do savedCfg[k] = A.cfg[k] end
 	local function tr(t, pad)
 		local out = t.output or {}
-		out.Hit = t.mask == MASK_SOLID_BRUSHONLY and probeHit(t.start, t.endpos, pad) or false
+		-- probe traces: brush-only, with or without grates (links cross grates)
+		local brushOnly = t.mask == MASK_SOLID_BRUSHONLY or t.mask == bit.band(MASK_SOLID_BRUSHONLY, bit.bnot(CONTENTS_GRATE))
+		out.Hit = brushOnly and probeHit(t.start, t.endpos, pad) or false
 		out.Fraction, out.StartSolid = out.Hit and 0.5 or 1, false
 		return out
 	end
@@ -231,7 +300,7 @@ return {
 			expect(AC.Diffraction(100000, 500, 20)).to.equal(20)
 			expect(AC.Diffraction(50, 1000, 40) > AC.Diffraction(50, 500, 40)).to.beTrue()
 		end },
-		{ name = "Diffraction: angle table (2 m arms) matches ETAT_DE_L_ART", func = function()
+		{ name = "Diffraction: angle table (2 m arms) matches the reference values", func = function()
 			local arm = 2 / 0.01905
 			local function at(deg)
 				local th = math.rad(deg)
@@ -637,7 +706,7 @@ return {
 			local both = P.SelectVoices(L, { p }, t, 75, CFG)
 			expect(#both).to.equal(1) -- 40 dB below: outside the 20 dB window
 		end },
-		-- length / angle guard (ETAT_DE_L_ART_LUA.md 1.2): an implausible detour fades progressively
+		-- length / angle guard: an implausible detour fades progressively
 		{ name = "PathShape: straight-line length and total bend of a path", func = function()
 			local S, L = Vector(0, 0, 0), Vector(100, 100, 0)
 			local d, b = P.PathShape(S, { Vector(100, 0, 0) }, L)
@@ -893,7 +962,9 @@ return {
 				expect(dDb < 1).to.beTrue()
 				-- off: the previous answer, unchanged
 				local oDir, _, oDb = probeSweep(0)
-				expect(oDir > 60 and oDb > 5).to.beTrue()
+				-- off: the direction still jumps (77 deg); its level step (10.3 dB) went with main's route
+				-- dedupe (PR.SameRoute: 0.78 dB), so only the direction is the blend's own gain now
+				expect(oDir > 60).to.beTrue()
 			end)
 		end },
 		{ name = "Probe field blend: one probe alone carries the weight = the previous answer (S on a probe: same length, loss and apparent position)", func = function()
@@ -1118,6 +1189,258 @@ return {
 			end
 			expect(flips(0)).to.equal(20)
 			expect(flips(1.5)).to.equal(0)
+		end },
+		-- SoundDuration "will not work with sound files prepended with a sound character" (wiki,
+		-- Global.SoundDuration): every lookup by file goes through A.SoundFile, one definition of the prefix.
+		{ name = "SoundFile: strips the leading sound characters only, keeps the case", func = function()
+			for c in string.gmatch("*^)(#@<>!?~$&%+`}", ".") do
+				expect(A.SoundFile(c .. "music/HL2_song.wav")).to.equal("music/HL2_song.wav")
+			end
+			expect(A.SoundFile("^)#weapons/ar2/fire1.wav")).to.equal("weapons/ar2/fire1.wav")
+			expect(A.SoundFile("ambient/levels/citadel/x(1).wav")).to.equal("ambient/levels/citadel/x(1).wav")
+			expect(A.SoundFile("!COMBINE_PAIN0")).to.equal("COMBINE_PAIN0") -- sentence: not a file, SoundDuration gives 0 anyway
+			expect(A.SoundFile("")).to.equal("")
+			expect(A.SoundFile(nil)).to.equal("")
+			expect(A.SoundFile("*")).to.equal("")
+			expect(select("#", A.SoundFile("*a.wav"))).to.equal(1) -- not gsub's count as a second value
+		end },
+		-- the engine runs no DSP on a "#" (dry mix) sound: a muffled copy drops the "#" only
+		{ name = "WithoutDryMix: drops the # among the leading sound characters only", func = function()
+			expect(A.WithoutDryMix("#music/a.wav")).to.equal("music/a.wav")
+			expect(A.WithoutDryMix("*#music/a.wav")).to.equal("*music/a.wav")
+			expect(A.WithoutDryMix("^)#weapons/x.wav")).to.equal("^)weapons/x.wav")
+			expect(A.WithoutDryMix("^weapons/x.wav")).to.equal("^weapons/x.wav")
+			expect(A.WithoutDryMix("music/a#b.wav")).to.equal("music/a#b.wav")
+			expect(A.WithoutDryMix("")).to.equal("")
+			expect(select("#", A.WithoutDryMix("#a.wav"))).to.equal(1)
+		end },
+		{ name = "SoundDuration: looked up on the bare file name; a prefixed long sound is not eligible as a short one", func = function()
+			local saved, asked = _G.SoundDuration, {} -- the global, not the suite's sandbox
+			_G.SoundDuration = function(n) asked[#asked + 1] = n return n == "music/pba_long.wav" and 60 or 0 end
+			local ok, err = pcall(function()
+				expect(A.SoundDuration("^)music/pba_long.wav")).to.equal(60)
+				expect(asked[#asked]).to.equal("music/pba_long.wav")
+				local d = { SoundName = "*music/pba_long.wav", SoundLevel = 75, Channel = CHAN_AUTO, Flags = 0, Volume = 1, Pitch = 100 }
+				expect(A.Eligible(d)).to.equal(false) -- 60 s > max_duration: followed as a long sound, not replayed as a short one
+				d.SoundName = "music/pba_long.wav"
+				expect(A.Eligible(d)).to.equal(false)
+				d.SoundName = "*music/pba_short.wav"
+				expect(A.Eligible(d)).to.equal(true)
+			end)
+			_G.SoundDuration = saved
+			if not ok then error(err, 0) end
+		end },
+		{ name = "IsLooping: same file name model (prefix stripped, then lower case for the cache)", func = function()
+			A.IsLooping("*)PBA_Test/No_Such.wav")
+			local hit = A.loopCache["pba_test/no_such.wav"]
+			A.loopCache["pba_test/no_such.wav"] = nil
+			expect(hit).to.equal(false)
+		end },
+		{ name = "ReevalDue: a still loop and listener are re-evaluated only by the slow fallback (reeval_max_s)", func = function()
+			expect(P.ReevalDue ~= nil).to.beTrue()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			expect(P.ReevalDue(st, S, L, 10, cfg)).to.beTrue() -- first evaluation
+			expect(P.ReevalDue(st, S, L, 10.25, cfg)).to.equal(false)
+			expect(P.ReevalDue(st, S + Vector(7, 0, 0), L, 10.5, cfg)).to.equal(false) -- below reeval_move
+			expect(P.ReevalDue(st, S, L + Vector(0, 0, 7), 10.75, cfg)).to.equal(false)
+			expect(P.ReevalDue(st, S, L, 11, cfg)).to.beTrue() -- fallback: props pushed into a path send no event
+			expect(P.ReevalDue(st, S, L, 11.25, cfg)).to.equal(false)
+			expect(st.n).to.equal(2) -- evaluations counted (game test)
+		end },
+		{ name = "ReevalDue: the source or the listener moving more than reeval_move since the LAST evaluation re-evaluates", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			P.ReevalDue(st, S, L, 0, cfg)
+			expect(P.ReevalDue(st, S + Vector(9, 0, 0), L, 0.25, cfg)).to.beTrue()
+			S = S + Vector(9, 0, 0)
+			expect(P.ReevalDue(st, S, L + Vector(0, 9, 0), 0.5, cfg)).to.beTrue()
+			L = L + Vector(0, 9, 0)
+			-- a slow drift adds up against the last evaluation, not step by step
+			expect(P.ReevalDue(st, S, L + Vector(0, 5, 0), 0.75, cfg)).to.equal(false)
+			expect(P.ReevalDue(st, S, L + Vector(0, 10, 0), 1.0, cfg)).to.beTrue()
+		end },
+		{ name = "ReevalDue: a world change (door state, map, settings: anything calling InvalidateCache) re-evaluates", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			P.ReevalDue(st, S, L, 0, cfg)
+			expect(P.ReevalDue(st, S, L, 0.25, cfg)).to.equal(false)
+			P.InvalidateCache() -- what the client's door tracking does on every door message (sh_doors D.Apply)
+			expect(P.ReevalDue(st, S, L, 0.5, cfg)).to.beTrue()
+			expect(P.ReevalDue(st, S, L, 0.75, cfg)).to.equal(false) -- once
+			st.force = true -- provisional result (probe search running), owner volume change...
+			expect(P.ReevalDue(st, S, L, 1.0, cfg)).to.beTrue()
+			expect(P.ReevalDue(st, S, L, 1.25, cfg)).to.equal(false)
+		end },
+		{ name = "ReevalDue: never twice within half an update_interval, whatever changed", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 0.1, update_interval = 1 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			P.ReevalDue(st, S, L, 0, cfg)
+			P.InvalidateCache()
+			st.force = true
+			expect(P.ReevalDue(st, S + Vector(500, 0, 0), L, 0.4, cfg)).to.equal(false)
+			expect(P.ReevalDue(st, S + Vector(500, 0, 0), L, 1.0, cfg)).to.beTrue()
+		end },
+		{ name = "ReevalDue: reeval_adaptive 0 re-evaluates at every call (former behaviour)", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 0, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			for i = 0, 8 do expect(P.ReevalDue(st, S, L, i * 0.25, cfg)).to.beTrue() end
+		end },
+		{ name = "Compute: a result whose probe search is unfinished (frame budget spent, search queued) is provisional", func = function()
+			local savedWalls, savedGet, PR = P.Walls, A.Graph.Get, A.Probes
+			local savedPaths, savedBudget = PR.Paths, A.FrameBudgetExceeded
+			local over, queued = false, false
+			P.Walls = function(a, b)
+				local e, x = a + (b - a) * 0.45, a + (b - a) * 0.55
+				return { { t = 0.45, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" } }
+			end
+			A.Graph.Get = function() return nil end
+			PR.Paths = function() PR.provisional = queued or nil return {} end
+			A.FrameBudgetExceeded = function() return over end
+			local cfg = setmetatable({ probes = 1, probe_dist = 1e6, path_props = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local S, L = Vector(0, 0, 0), Vector(300, 0, 0)
+				P.InvalidateCache()
+				expect(P.Compute(S, L, 75, cfg).provisional).to.beNil() -- search done: final
+				over = true P.InvalidateCache()
+				expect(P.Compute(S, L, 75, cfg).provisional).to.beTrue()
+				over, queued = false, true P.InvalidateCache()
+				expect(P.Compute(S, L, 75, cfg).provisional).to.beTrue()
+			end)
+			P.Walls, A.Graph.Get, PR.Paths, A.FrameBudgetExceeded = savedWalls, savedGet, savedPaths, savedBudget
+			PR.provisional = nil
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Follow: a one-shot is followed when it still plays min_left after its first update", func = function()
+			expect(P.FollowWorth(3.4, 0.25, 0.5)).to.beTrue()       -- the courtyard radio line
+			expect(P.FollowWorth(0.6, 0.25, 0.5)).to.equal(false)   -- a gunshot: over before it would matter
+			expect(P.FollowWorth(0.75, 0.25, 0.5)).to.beTrue()
+			expect(P.FollowWorth(2.4, 2, 0.5)).to.equal(false)      -- slow updates: only longer sounds
+		end },
+		{ name = "Follow: bounded set; nearly ended sounds give their slot first, then the one ending soonest", func = function()
+			local now = 100
+			expect(P.FollowSlot({}, now, 0, now + 3, 0.5)).to.beNil()
+			expect(P.FollowSlot({}, now, 2, now + 3, 0.5)).to.equal(1)
+			local recs = { { tEnd = now + 2 }, { tEnd = now + 5 } }
+			expect(P.FollowSlot(recs, now, 3, now + 3, 0.5)).to.equal(3)
+			expect(P.FollowSlot(recs, now, 2, now + 3, 0.5)).to.equal(1)    -- full: the one ending soonest
+			expect(P.FollowSlot(recs, now, 2, now + 1.5, 0.5)).to.beNil()   -- ... only for a sound playing longer
+			recs[2].tEnd = now + 0.3                                         -- nearly over: no longer followed
+			expect(P.FollowSlot(recs, now, 3, now + 1.5, 0.5)).to.equal(2)
+		end },
+		{ name = "Follow: path -> clear sight, the dominant voice moves to the source with all the power, the other fades", func = function()
+			local L, S = Vector(0, 0, 0), Vector(300, 0, 0)
+			local t = P.FollowAssign(L, { Vector(100, 100, 0), Vector(100, -100, 0) }, { { pos = S, gain = 0.5, lp = 0, len = 300 } })
+			expect(#t).to.equal(2)
+			expect(t[1].pos:Distance(S) < 1e-6).to.beTrue()
+			expect(near(t[1].gain, 0.5)).to.beTrue()
+			expect(t[1].lp).to.equal(0)
+			expect(t[1].len).to.equal(300)
+			expect(t[2]).to.equal(false)
+		end },
+		{ name = "Follow: voices keep their direction (no swap across the head), extra new voices add their power", func = function()
+			local L = Vector(0, 0, 0)
+			local front, left, right, back = Vector(200, 0, 0), Vector(0, 200, 0), Vector(0, -200, 0), Vector(-200, 0, 0)
+			-- heard: front (dominant), left, right; new, by level: front, right, left
+			local t = P.FollowAssign(L, { front, left, right },
+				{ { pos = front, gain = 0.4 }, { pos = right + Vector(0, 0, 10), gain = 0.3 }, { pos = left, gain = 0.2 } })
+			expect(t[1].pos:Distance(front) < 1e-6).to.beTrue()
+			expect(t[2].pos:Distance(left) < 1e-6).to.beTrue()
+			expect(t[3].pos:Distance(right) < 11).to.beTrue()
+			-- one voice heard, three now: it carries their total power, from the dominant one
+			local t1 = P.FollowAssign(L, { front },
+				{ { pos = front, gain = 0.4, lp = 2 }, { pos = left, gain = 0.3 }, { pos = back, gain = 0.2 } })
+			expect(#t1).to.equal(1)
+			expect(near(t1[1].gain, math.sqrt(0.16 + 0.09 + 0.04))).to.beTrue()
+			expect(t1[1].lp).to.equal(2)
+			-- two heard, three new: the third adds to the voice closest in direction (left), power kept
+			local t2 = P.FollowAssign(L, { front, left },
+				{ { pos = front, gain = 0.4 }, { pos = left, gain = 0.3 }, { pos = Vector(-10, 200, 0), gain = 0.2 } })
+			expect(near(t2[1].gain, 0.4)).to.beTrue()
+			expect(near(t2[2].gain, math.sqrt(0.09 + 0.04))).to.beTrue()
+			-- nothing heard any more: nothing to drive
+			expect(#P.FollowAssign(L, {}, { { pos = front, gain = 1 } })).to.equal(0)
+		end },
+		{ name = "Probe routes: one opening is heard once (field and k-path routes from neighbouring probes), at the level of the best", func = function()
+			-- pba_noportal measured offline: 14 % of the sources behind the wall got 2 or 3 routes through the one
+			-- hole (the same route reached from neighbouring probes, last bends 128 u apart on either side of the
+			-- wall), summed up to +2.9 dB over the best
+			local L = Vector(256, 256, 64)
+			local function sweep(over)
+				local n, multi, worst = 0, 0, 0
+				withProbeRooms({ { 64, 112, 112 } }, nil, over, function(g)
+					A.Probes.field = A.Probes.BuildField(g, L)
+					local cfg = setmetatable({ probe_bridge_max = 0 }, { __index = CFG })
+					for _, x in ipairs({ 600, 900 }) do for y = 24, 488, 8 do
+						local S = Vector(x, y, 40)
+						if not A.Probes.ClearSeg(S, L) then
+							local ps = A.Probes.Paths(S, L, 3, cfg)
+							n = n + 1
+							if #ps > 1 then multi = multi + 1 end
+							if #ps > 0 then
+								local vs = P.SelectVoices(L, ps, nil, 75, cfg)
+								local best, pw = -math.huge, 0
+								for _, p in ipairs(ps) do best = math.max(best, p.level) end
+								for _, v in ipairs(vs) do pw = pw + v.gain ^ 2 end
+								worst = math.max(worst, AC.GainToDb(math.sqrt(pw)) - best)
+							end
+						end
+					end end
+				end)
+				return n, multi, worst
+			end
+			for _, over in ipairs({ { probe_field = 1, probe_inline_ms = 0 }, -- the listener field alone
+				{ probe_field = 0, probe_inline_ms = 1000, probe_inline_frame_ms = 1e9 } }) do -- the k-path search alone
+				local n, multi, worst = sweep(over)
+				expect(n > 100).to.beTrue()
+				expect(multi).to.equal(0)
+				expect(worst < 0.1).to.beTrue()
+			end
+		end },
+		{ name = "Probe routes: of two routes through one opening the best is kept, whatever the order", func = function()
+			local S, L = Vector(900, 264, 40), Vector(256, 256, 64)
+			withProbeRooms({ { 64, 112, 112 } }, nil, nil, function()
+				-- as tightened from two neighbouring probes on pba_noportal: last bend before or after the wall
+				local a, b = { S, Vector(576, 67, 64), L }, { S, Vector(448, 70, 64), L }
+				expect(routeClear(a) and routeClear(b)).to.beTrue()
+				local pa, pb = P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG)
+				local best = P.PathLevel(pa.length, pa.lossDb, 75) >= P.PathLevel(pb.length, pb.lossDb, 75) and pa or pb
+				for _, order in ipairs({ { pa, pb }, { pb, pa } }) do
+					local kept = A.Probes.DistinctRoutes(S, L, order)
+					expect(#kept).to.equal(1)
+					expect(kept[1] == best).to.beTrue()
+				end
+			end)
+		end },
+		{ name = "Probe routes: distinct openings stay distinct (far doorways: two voices; close doorways, a post)", func = function()
+			-- far apart: two voices
+			local S, L = Vector(900, 256, 40), Vector(256, 256, 64)
+			withProbeRooms({ { 64, 112, 112 }, { 400, 448, 112 } }, nil, nil, function()
+				local a = { S, Vector(536, 100, 60), Vector(504, 100, 60), L }
+				local b = { S, Vector(536, 412, 60), Vector(504, 412, 60), L }
+				expect(routeClear(a) and routeClear(b) and not A.Probes.ClearSeg(S, L)).to.beTrue()
+				local kept = A.Probes.DistinctRoutes(S, L, { P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG) })
+				expect(#kept).to.equal(2)
+				expect(#P.SelectVoices(L, kept, nil, 75, CFG)).to.equal(2)
+			end)
+			-- two doorways 32 u apart, source and listener symmetric: the routes cross the wall at the same point of
+			-- their length, last bends 48 u apart (the former filter, last bends < one probe spacing apart, merged them)
+			S, L = Vector(900, 264, 40), Vector(256, 264, 64)
+			withProbeRooms({ { 200, 248, 112 }, { 280, 328, 112 } }, nil, nil, function()
+				local a = { S, Vector(536, 240, 60), Vector(504, 240, 60), L }
+				local b = { S, Vector(536, 288, 60), Vector(504, 288, 60), L }
+				expect(routeClear(a) and routeClear(b) and not A.Probes.ClearSeg(S, L)).to.beTrue()
+				expect(#A.Probes.DistinctRoutes(S, L, { P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG) })).to.equal(2)
+			end)
+			-- one doorway, a post in front of it: the two sides of the post are two routes
+			S, L = Vector(900, 256, 40), Vector(256, 256, 64)
+			withProbeRooms({ { 232, 280, 112 } }, { { Vector(700, 240, -8), Vector(732, 272, 200) } }, nil, function()
+				local a = { S, Vector(716, 230, 40), L }
+				local b = { S, Vector(716, 282, 40), L }
+				expect(routeClear(a) and routeClear(b) and not A.Probes.ClearSeg(S, L)).to.beTrue()
+				expect(#A.Probes.DistinctRoutes(S, L, { P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG) })).to.equal(2)
+			end)
 		end },
 	},
 }

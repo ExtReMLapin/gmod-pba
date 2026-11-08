@@ -1,11 +1,11 @@
 // BASS streams of other addons (sound.PlayURL / sound.PlayFile, "3d" channels): a 3-band EQ is
 // attached to the channel as a BASS DSP, so a radio behind a wall really sounds muffled (the
 // position and the level are handled in Lua, cl_streams.lua). Nothing in the game's memory is
-// patched: the BASS handle of an IGModAudioChannel is read at a fixed offset (docs/
-// SITREP_STREAMS.md, facts from gmod_audio.dll) only after strict validation, and the BASS
+// patched: the BASS handle of an IGModAudioChannel is read at a fixed offset (a
+// fact observed in gmod_audio.dll, no decompiled code) only after strict validation, and the BASS
 // functions are resolved from the bass.dll the game already loaded, with prototypes from the
 // public BASS 2.4 documentation (un4seen). Any failed check: nothing is done.
-// Licence: Apache-2.0 (decision pending, see docs/JOURNAL.md).
+// Licence: MIT (see native/LICENSE).
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX

@@ -201,6 +201,49 @@ local function placeObstacle(r, kind)
 	st.props[#st.props + 1] = e
 end
 
+-- ------------------------------------------------------------------ crates in a doorway (room 3)
+-- A thin panel (a loose door leaf) in the plane of the open doorway, over the strip that the ajar
+-- leaf covers (r.crate_cover, from the generator): same gap left, so it should sound like the ajar
+-- door. A thin panel, not crates: 40 u deep crates turn the 10 u gap into a long slot that the radio
+-- does not see (measured: ajar door 9.9 dB, crates 20.4 dB, no free part left for the direct sound).
+-- Doorway in a y-normal wall (r.doorway); the panel overlaps into the wall beyond cov[1].
+
+local PANEL = "models/props_c17/door01_left.mdl"
+
+local function placeCrates(r, st)
+	clearProps(st)
+	local dw, cov = r.doorway, r.crate_cover
+	if not (dw and cov) then return end
+	local e = ents.Create("prop_physics")
+	if not IsValid(e) then return end
+	e:SetModel(PANEL)
+	e:SetPos(Vector((cov[1] + cov[2]) / 2, (dw[2] + dw[5]) / 2, dw[3] + 60))
+	e:Spawn()
+	e:SetAngles(Angle(0, 270, 0)) -- after Spawn (set before, it did not hold): width along x
+	local phys = e:GetPhysicsObject()
+	if IsValid(phys) then phys:EnableMotion(false) end
+	e.pba_demo = true
+	st.props[#st.props + 1] = e
+	-- right edge where the ajar leaf's gap starts: PBA measures the 40 u portal (x -3232..-3192) with
+	-- the leaf at 20 degrees leaving its last ~9 u free (aperture [11.1, 20] in portal coordinates),
+	-- i.e. cov[2] - 8 (the generator's estimate); centred in the wall's thickness, on the floor
+	local mn, mx = e:WorldSpaceAABB()
+	local p = e:GetPos()
+	e:SetPos(p + Vector(cov[2] - 8 - mx.x, (dw[2] + dw[5]) / 2 - (mn.y + mx.y) / 2, dw[3] - mn.z))
+end
+
+--- Opens a door wide from any state (an ajar door is closed first, as setDoor does for "half").
+-- Returns the delay (s) before it starts opening.
+local function openWide(e)
+	if not IsValid(e) then return 0 end
+	local f = doorFraction(e)
+	local delay = (f > 0.05 and f < 0.95) and 1.0 or 0
+	if delay > 0 then e:Fire("Close") end
+	e:Fire("SetRotationDistance", "90", delay)
+	e:Fire("Open", "", delay + 0.1)
+	return delay
+end
+
 -- the demo props stay where they are: no physgun / gravity gun pick-up
 hook.Add("PhysgunPickup", "pba_demo", function(_, e) if e.pba_demo then return false end end)
 hook.Add("GravGunPickupAllowed", "pba_demo", function(_, e) if e.pba_demo then return false end end)
@@ -253,8 +296,18 @@ for k, mode in pairs({ open = "open", half = "half", closed = "close" }) do
 	H.direction[k] = function(r, st)
 		st.sel.door = k
 		sendSel(r, "door", k)
+		clearProps(st)
 		setDoor(doorEnt(r, "door"), mode)
 	end
+end
+-- door wide open, then crates over the strip the ajar leaf covers, once the leaf has swung away
+-- (90 degrees at 120 degrees/s), on the other side of the wall
+H.direction.crates = function(r, st)
+	st.sel.door = "crates"
+	sendSel(r, "door", "crates")
+	clearProps(st)
+	local delay = openWide(doorEnt(r, "door"))
+	timer.Simple(delay + 1.2, function() if st.sel.door == "crates" then placeCrates(r, st) end end)
 end
 
 H.window = {
@@ -365,6 +418,18 @@ for _, k in ipairs({ "tile", "concrete", "wood", "metal", "foam" }) do
 		st.sel.mat = k
 		sendSel(r, "mat", k)
 		timer.Simple(0.4, function() H.reverb.knock(r) end)
+	end
+end
+
+-- the length / angle guard is applied by each client in the room (cl_demo, DM.ApplyGuard): paths
+-- are computed on the client; the server only keeps and sends the selection
+H.detour = {
+	music = function(r, st, ply, force) toggleLoop(r, src(r, "music"), "detour", force) end,
+}
+for _, k in ipairs({ "guard_on", "guard_off" }) do
+	H.detour[k] = function(r, st)
+		st.sel.guard = k
+		sendSel(r, "guard", k)
 	end
 end
 

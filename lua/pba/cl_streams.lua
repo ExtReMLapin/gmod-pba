@@ -9,7 +9,7 @@
 --   * with the native module, a 3-band EQ is attached to the channel as a BASS DSP: the radio
 --     behind a wall is really muffled (cl_native: pba_native.StreamFilter).
 -- Everything is in pcall with a fallback to the original call; pba_streams 0 restores the
--- owners' values and the original methods. See docs/SITREP_STREAMS.md.
+-- owners' values and the original methods.
 
 local A = pba
 local AC = A.AC
@@ -128,6 +128,7 @@ function meta:SetVolume(v)
 	local r = ST.chans[self]
 	if not r or not enabled() then return O.SetVolume(self, v) end
 	r.vol = v
+	if r.nativeId and r.reeval then r.reeval.force = true end -- the native gain follows at its next turn
 	local ok = pcall(applyVol, self, r)
 	if not ok then return O.SetVolume(self, v) end
 end
@@ -164,6 +165,7 @@ local function evaluate(ch, r, L)
 	end
 	r.hyst = r.hyst or {}
 	local res = A.Paths.Stable(r.hyst, A.Paths.Compute(S, L, 75, nil, r.emitter or nil))
+	if res.provisional and r.reeval then r.reeval.force = true end -- probe search still running
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len = nil, 1, { 1, 1, 1 }, 1, 0, nil
@@ -254,6 +256,15 @@ hook.Add("Think", "pba_streams_ramp", A.PerfTimed("streams_ramp", function()
 	end
 end))
 
+--- Adaptive re-evaluation (reeval_adaptive, P.ReevalDue): false while the stream, the listener and
+-- the world did not change since its last evaluation (it keeps its values). A rendering switch
+-- (native voice to start or to stop) is applied at once.
+local function reevalDue(r, L)
+	if (r.nativeId ~= nil) ~= (nativeMode(r) and true or false) then return true end
+	r.reeval = r.reeval or {}
+	return A.Paths.ReevalDue(r.reeval, r.pos, L, RealTime())
+end
+
 local function release(ch, r)
 	nativeStop(ch, r)
 	dropRamp(r)
@@ -278,6 +289,8 @@ timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, A.PerfTimed("strea
 		elseif not on then
 			-- a native voice must stop too: the owner keeps setting the BASS volume back, both would play
 			if r.apparent or (r.g or 1) ~= 1 or r.filtered or r.nativeId then release(ch, r) end
+		elseif r.pos and not reevalDue(r, L) then
+			n = n + 1 -- unchanged: keeps its values (and its ramp, if one is still running)
 		elseif r.pos then
 			n = n + 1
 			-- clear sight since the last ramp ended: its end follows the owner's position up to now

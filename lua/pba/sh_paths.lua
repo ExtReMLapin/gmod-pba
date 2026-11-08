@@ -547,13 +547,17 @@ end
 -- closure per filter were garbage on every path computation (GC spikes). A new HitPos Vector is still
 -- made by each trace, so keeping tr.HitPos is safe.
 local wallOut, insideOut, backOut, detOut = {}, {}, {}, {}
-local wallTr = { mask = MASK_SOLID, filter = traceFilter, output = wallOut }
-local insideTr = { mask = MASK_SOLID_BRUSHONLY, filter = traceFilter, output = insideOut }
+-- grates, fences, grilles (CONTENTS_GRATE: "bullets/sight pass through") are no wall for sound either:
+-- left out of the wall traces (their texture may declare "metal" or "concrete": 30 dB on d1_canals_01),
+-- so a wall a grate is mounted on keeps its own loss
+local NO_GRATE = bit.bnot(CONTENTS_GRATE)
+local wallTr = { mask = bit.band(MASK_SOLID, NO_GRATE), filter = traceFilter, output = wallOut }
+local insideTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = traceFilter, output = insideOut }
 local backEnt
 local function onlyBackEnt(e) return e == backEnt end
 local backTr = { mask = MASK_SOLID, filter = onlyBackEnt, output = backOut }
 local function noEnt() return false end
-local detTr = { mask = MASK_SOLID_BRUSHONLY, filter = noEnt, output = detOut }
+local detTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = detOut }
 local function detClear(a, b)
 	detTr.start, detTr.endpos = a, b
 	util.TraceLine(detTr)
@@ -781,7 +785,7 @@ local function guardRamp(x, x0)
 	return t * t * (3 - 2 * t)
 end
 
---- Length / angle guard (pure, ETAT_DE_L_ART_LUA.md 1.2): extra loss (dB) of an implausible path.
+--- Length / angle guard (pure): extra loss (dB) of an implausible path.
 -- A path much longer than the straight line (a detour round the other end of the map), or winding
 -- by a large total angle, is not where most of the sound comes from (walls, routes not modelled):
 -- games cap or fade such paths (Wwise diffraction tapering, Rainbow Six Siege path cost). Beyond
@@ -1038,6 +1042,89 @@ function P.RampTo(state, now, dur, L, g, e1, e2, e3, pos, pitch)
 	P.Retarget(state, g, e1, e2, e3, pos, pitch)
 end
 
+-- ------------------------------------------------------------------ one-shots followed while they play
+
+--- A one-shot (shorter than max_duration) has its path computed once, at emission: a voice beside an
+-- obstacle stayed there while the listener walked round it into clear sight. Those still playing are
+-- re-evaluated like loops (oneshot_follow, cl_render.lua). Worth it when the sound still plays
+-- minLeft seconds after its first re-evaluation (dur: seconds it plays, pitch and delay included).
+function P.FollowWorth(dur, interval, minLeft)
+	return dur >= (interval or 0.25) + (minLeft or 0.5)
+end
+
+--- Slot of a new followed one-shot ending at tEnd among `recs` (each with .tEnd), `cap` at most: a
+-- record with less than minLeft to play is no longer followed and gives its slot first; then a free
+-- slot; then the record ending soonest, if it ends before the new one. Returns the index to (re)use,
+-- or nil: the new sound is not followed (it plays as computed at emission, as before).
+function P.FollowSlot(recs, now, cap, tEnd, minLeft)
+	if (cap or 0) < 1 then return nil end
+	local soon, soonEnd
+	for i, rec in ipairs(recs) do
+		if rec.tEnd - now < minLeft then return i end
+		if not soonEnd or rec.tEnd < soonEnd then soon, soonEnd = i, rec.tEnd end
+	end
+	if #recs < cap then return #recs + 1 end
+	if soonEnd and soonEnd < tEnd then return soon end
+	return nil
+end
+
+--- New targets of the voices of a followed one-shot. olds: apparent positions of its voices still
+-- playing, the first one the dominant; voices: the new selection (P.Stable keeps the dominant first).
+-- A playing voice can be moved, made louder or quieter, but not split, and a new one cannot start
+-- midway: the new voices map onto the ones heard. The dominant goes to the dominant, each other voice
+-- to the free new voice closest in direction (no swap across the head); a voice left without one
+-- fades out (a path becoming clear sight: one voice, from the source); a new voice left over adds its
+-- power to the voice closest in direction (no energy lost or counted twice). Returns, per old voice,
+-- { pos, gain, lp, len, sh } (position, low-pass, length of its first new voice; gain = power sum),
+-- or false: fade it out.
+function P.FollowAssign(L, olds, voices)
+	local out, n, k = {}, #olds, #voices
+	if n == 0 then return out end
+	local function dir(p)
+		local d = p - L
+		local l = d:Length()
+		return l > 1e-6 and d * (1 / l) or d
+	end
+	local groups, used = {}, {}
+	for i = 1, n do groups[i] = {} end
+	if k > 0 then groups[1][1], used[1] = 1, true end
+	for i = 2, n do
+		local di, best, bj = dir(olds[i]), -math.huge, nil
+		for j = 2, k do
+			if not used[j] then
+				local c = di:Dot(dir(voices[j].pos))
+				if c > best then best, bj = c, j end
+			end
+		end
+		if bj then groups[i][1], used[bj] = bj, true end
+	end
+	for j = 2, k do
+		if not used[j] then
+			local dj, best, bi = dir(voices[j].pos), -math.huge, 1
+			for i = 1, n do
+				local g = groups[i][1]
+				if g then
+					local c = dj:Dot(dir(voices[g].pos))
+					if c > best then best, bi = c, i end
+				end
+			end
+			groups[bi][#groups[bi] + 1] = j
+		end
+	end
+	for i = 1, n do
+		local g = groups[i]
+		if #g == 0 then
+			out[i] = false
+		else
+			local p = 0
+			for _, j in ipairs(g) do p = p + voices[j].gain * voices[j].gain end
+			local v = voices[g[1]]
+			out[i] = { pos = v.pos, gain = math.sqrt(p), lp = v.lp or 0, len = v.len, sh = v.sh }
+		end
+	end
+	return out
+end
+
 -- ------------------------------------------------------------------ top level
 
 P.cache = P.cache or {}
@@ -1046,6 +1133,33 @@ P.cacheGen = P.cacheGen or 0
 function P.InvalidateCache()
 	P.cache = {}
 	P.cacheGen = P.cacheGen + 1
+end
+
+--- Adaptive re-evaluation of a continuous sound (loop, long sound, radio: reeval_adaptive). Its path
+-- only changes when the source or the listener moves, or when the world model changes: P.cacheGen,
+-- bumped by everything that calls P.InvalidateCache (door states, map, probe graph, native scene,
+-- settings). True when the sound must be re-evaluated now, and then stamps `state` (a table the
+-- caller keeps per sound). Re-evaluated when the source or the listener moved more than reeval_move
+-- since the last evaluation, the world changed, state.force is set (provisional result, owner volume
+-- change...), or reeval_max_s elapsed (a prop pushed into a path sends no event); never twice within
+-- half an update_interval (the callers' own rate is one interval). reeval_adaptive 0: always true.
+function P.ReevalDue(state, S, L, now, cfg)
+	cfg = cfg or A.cfg
+	local t = state.t
+	if t and (cfg.reeval_adaptive or 0) >= 0.5 then
+		if now - t < 0.5 * math.max(cfg.update_interval or 0.25, 0.05) then return false end
+		if not state.force and state.gen == P.cacheGen and now - t < (cfg.reeval_max_s or 1) then
+			local mv = cfg.reeval_move or 8
+			local mv2 = mv * mv
+			local dx, dy, dz = S.x - state.sx, S.y - state.sy, S.z - state.sz
+			local ex, ey, ez = L.x - state.lx, L.y - state.ly, L.z - state.lz
+			if dx * dx + dy * dy + dz * dz <= mv2 and ex * ex + ey * ey + ez * ez <= mv2 then return false end
+		end
+	end
+	-- numbers, not the vectors: an owner may move the same Vector object in place
+	state.t, state.gen, state.force, state.n = now, P.cacheGen, nil, (state.n or 0) + 1
+	state.sx, state.sy, state.sz, state.lx, state.ly, state.lz = S.x, S.y, S.z, L.x, L.y, L.z
+	return true
 end
 
 local function q(v) return math.floor(v.x / 32) .. "," .. math.floor(v.y / 32) .. "," .. math.floor(v.z / 32) end
@@ -1407,10 +1521,16 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				r.viaNative = true
 			end
 		end
-		if worldBlocked and #r.paths == 0 and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist
-			and not (A.FrameBudgetExceeded and A.FrameBudgetExceeded()) then
-			r.paths = A.Probes.Paths(S, L, cfg.max_paths, cfg)
-			r.viaProbes = #r.paths > 0
+		if worldBlocked and #r.paths == 0 and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+			if A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
+				r.provisional = true -- searched later: a continuous sound re-evaluates at its next turn
+			else
+				A.Probes.provisional = nil
+				r.paths = A.Probes.Paths(S, L, cfg.max_paths, cfg)
+				r.viaProbes = #r.paths > 0
+				-- the search goes on in the background (answered by the listener field or nothing yet)
+				r.provisional = A.Probes.provisional or nil
+			end
 		end
 		if (cfg.path_props or 1) >= 0.5 then
 			for _, p in ipairs(r.paths) do

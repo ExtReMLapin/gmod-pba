@@ -17,3 +17,15 @@ test/perf_crowd_last.json
 test/jit_report_last.json
 test/paths_golden_ref.txt
 test/offline/pylib/
+# Private working notes: kept on disk, never published.
+# Research, journal, test matrix, upstream drafts (all in French).
+docs/
+# Instructions for the coding agent.
+CLAUDE.md
+# Local editor settings (absolute paths of this machine).
+.vscode/
+# Phase 0 coverage study scripts (one-off research, see the private notes).
+test/phase0/
+
+# Release builds (tools/make_release.py)
+dist/
