@@ -112,6 +112,32 @@ def alloc_per_compute():
             print(f"  path computation: {v['kb']:.0f} KB garbage, {v['ms']:.2f} ms without GC (mean of {v['n']})", flush=True)
             return v
     return None
+
+
+def stages():
+    """--stages: time and garbage per function of the path computation (perf_stages.lua), JIT on/off."""
+    pos = lua("server", "local t = {} for _, e in ipairs(PBA_CROWD or {}) do local p = e:WorldSpaceCenter() t[#t+1] = {p.x, p.y, p.z} end return t") or []
+    lua("client", "PBA_STAGES_ARGS = util.JSONToTable([==[%s]==]) return true" % json.dumps({"srcs": pos, "reps": 3}))
+    call("lua_exec", {"realm": "client", "code": open(os.path.join(HERE, "perf_stages.lua"), encoding="utf-8").read()})
+    time.sleep(3)
+    v = None
+    for _ in range(30):
+        v = lua("client", "return PBA_STAGES")
+        if v:
+            break
+        time.sleep(0.5)
+    if not v:
+        print("  stages: not measured", flush=True)
+        return None
+    print(f"  JIT on {v['computeOn']:.3f} ms / off {v.get('computeOff', 0):.3f} ms per computation; listener field "
+          f"on {v.get('fieldOn', 0):.1f} ms / off {v.get('fieldOff', 0):.1f} ms, {v.get('fieldKb', 0):.0f} KB", flush=True)
+    print(f"  per computation, wrapped: {v['totalKb']:.1f} KB {v.get('error', '')}", flush=True)
+    print(f"  {'function':24s} {'calls':>7s} {'ms incl':>8s} {'ms excl':>8s} {'KB incl':>8s} {'KB excl':>8s}", flush=True)
+    for r in sorted(v["rows"], key=lambda r: -r["msx"]):
+        print(f"  {r['name']:24s} {r['calls']:7.2f} {r['ms']:8.3f} {r['msx']:8.3f} {r['kb']:8.2f} {r['kbx']:8.2f}", flush=True)
+    return v
+
+
 RENDERS = [a.split("=", 1)[1] for a in sys.argv[2:] if a.startswith("--render=")] or ["lua", "native"]
 
 
@@ -153,6 +179,7 @@ def measure(render):
 
 results = {r: measure(r) for r in RENDERS}
 alloc = alloc_per_compute()
+stage = stages() if "--stages" in sys.argv[2:] else None
 fails = []
 if not alloc:
     fails.append("allocation not measured")
@@ -170,7 +197,7 @@ for r, res in results.items():
         fails.append(f"{r}: no loop work measured")
 
 call("lua_job", {"realm": "server", "code": code, "args": {"stop": True}, "timeout_s": 30})
-out = {"map": MAP, "n": N, "scene": scene, "results": results, "alloc": alloc}
+out = {"map": MAP, "n": N, "scene": scene, "results": results, "alloc": alloc, "stages": stage}
 json.dump(out, open(os.path.join(HERE, "perf_crowd_last.json"), "w"), indent=1)
 if CHECK:
     print("FAIL: " + "; ".join(fails) if fails else "PASS", flush=True)
