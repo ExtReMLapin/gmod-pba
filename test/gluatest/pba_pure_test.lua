@@ -184,6 +184,35 @@ return {
 			expect(AC.Diffraction(box, 500, 20) > 12).to.beTrue()
 			expect(P.DetourDelta(Vector(200, 0, 40), L, Vector(180, -20, 0), Vector(220, 20, 60))).to.equal(math.huge)
 		end },
+		{ name = "DetourDelta: any orientation (sound along the box's thin axis, source above an object)", func = function()
+			-- slab 112 x 52, 21 thick, the sound crossing its thickness (local z axis), hitting
+			-- 33 units off-centre: the way round is the nearest edge, not zero
+			local S, L = Vector(33, 5, -120), Vector(33, 5, 120)
+			local slab = P.DetourDelta(S, L, Vector(-56, -26, -10.5), Vector(56, 26, 10.5))
+			expect(slab > 3).to.beTrue() -- the old horizontal-only version gave ~0.8 here
+			-- closer to the slab, the detour (and the shadow) grows
+			local close = P.DetourDelta(Vector(33, 5, -40), Vector(33, 5, 40), Vector(-56, -26, -10.5), Vector(56, 26, 10.5))
+			expect(close > 8).to.beTrue()
+			expect(AC.Diffraction(close, 500, 20) > 4).to.beTrue()
+			-- a source right above a crate, listener right below: round the side
+			local above = P.DetourDelta(Vector(0, 0, 200), Vector(0, 0, -200), Vector(-30, -30, -30), Vector(30, 30, 30))
+			expect(above > 3).to.beTrue()
+			-- horizontal case unchanged: the container still shadows, the can still does not
+			local can = P.DetourDelta(Vector(0, 0, 40), Vector(400, 0, 40), Vector(196, -3, 34), Vector(204, 3, 46))
+			expect(can < 2).to.beTrue()
+		end },
+		{ name = "EvalWalls: objects alone in the way are capped (reflections round them), doors are not", func = function()
+			local cfg = setmetatable({ prop_max_db = 18 }, { __index = pba.cfg })
+			local fakeProp = { GetClass = function() return "prop_physics" end }
+			local walls = { { mat = MAT_CONCRETE, surf = "concrete", thickness = 60, ent = fakeProp, detour = math.huge } }
+			local loss = P.EvalWalls(walls, cfg)
+			expect(loss <= 18 + 1e-6).to.beTrue()
+			local fakeDoor = { GetClass = function() return "prop_door_rotating" end }
+			local door = P.EvalWalls({ { mat = MAT_CONCRETE, surf = "concrete", thickness = 60, ent = fakeDoor } }, cfg)
+			expect(door > 18).to.beTrue()
+			local world = P.EvalWalls({ { mat = MAT_CONCRETE, surf = "concrete", thickness = 60 } }, cfg)
+			expect(world > 18).to.beTrue()
+		end },
 		{ name = "Headroom: a 140 dB source keeps tens of dB, a 75 dB one none", func = function()
 			expect(AC.Headroom(140, 300, 90) > 25).to.beTrue()
 			expect(AC.Headroom(75, 300, 90)).to.equal(0)

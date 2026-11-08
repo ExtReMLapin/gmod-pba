@@ -204,13 +204,15 @@ function P.Walls(S, L, maxWalls, srcEnt)
 		local w = { entry = entry, exit = exit, thickness = entry:Distance(exit), mat = tr.MatType, surf = surf,
 			surfIdx = tr.SurfaceProps, ent = hitEnt }
 		if hitEnt and not DOOR_CLASSES[hitEnt:GetClass()] then
-			local mn, mx = hitEnt:WorldSpaceAABB()
-			-- grow the box a little so detour points sit just outside the object
-			mn, mx = mn - Vector(2, 2, 2), mx + Vector(2, 2, 2)
-			w.detour = P.DetourDelta(S, L, mn, mx, function(e)
+			-- detour round the object's ORIENTED box, in its local frame (a tilted slab keeps
+			-- the size of a slab; its world AABB would be huge and could even contain S)
+			local mn, mx = hitEnt:OBBMins() - Vector(2, 2, 2), hitEnt:OBBMaxs() + Vector(2, 2, 2)
+			local lS, lL = hitEnt:WorldToLocal(S), hitEnt:WorldToLocal(L)
+			w.detour = P.DetourDelta(lS, lL, mn, mx, function(e)
+				local we = hitEnt:LocalToWorld(e)
 				local f = function() return false end
-				return not util.TraceLine({ start = S, endpos = e, mask = MASK_SOLID_BRUSHONLY, filter = f }).Hit
-					and not util.TraceLine({ start = e, endpos = L, mask = MASK_SOLID_BRUSHONLY, filter = f }).Hit
+				return not util.TraceLine({ start = S, endpos = we, mask = MASK_SOLID_BRUSHONLY, filter = f }).Hit
+					and not util.TraceLine({ start = we, endpos = L, mask = MASK_SOLID_BRUSHONLY, filter = f }).Hit
 			end)
 		end
 		walls[#walls + 1] = w
@@ -237,45 +239,55 @@ function P.Walls(S, L, maxWalls, srcEnt)
 	return walls
 end
 
---- Smallest path difference (units) for going around a finite obstacle (world AABB
--- mins/maxs) between S and L: over the top, under, or round either side. `valid(e)`
--- (optional) rejects detour points blocked by the world (object on the floor, against a
--- wall). math.huge when no way round.
+--- Smallest path difference (units) for going around a finite box obstacle (mins/maxs, in
+-- the frame of S and L: the object's local frame for an oriented box) between S and L.
+-- Candidates: for each box axis, its component perpendicular to S-L gives two directions
+-- (either side); from the point of the S-L line closest to the box centre, go just past the
+-- box along them. Works for any orientation (a tilted slab, a source above or below).
+-- `valid(e)` (optional) rejects detour points blocked by the world (object on the floor,
+-- against a wall). math.huge when no way round.
+local AXES = { Vector(1, 0, 0), Vector(0, 1, 0), Vector(0, 0, 1) }
 function P.DetourDelta(S, L, mins, maxs, valid)
 	-- source or listener enclosed by the obstacle: no way round it
 	if S:WithinAABox(mins, maxs) or L:WithinAABox(mins, maxs) then return math.huge end
 	local dir = L - S
-	local len2 = math.max(dir:LengthSqr(), 1e-6)
+	local len = dir:Length()
+	if len < 1e-3 then return math.huge end
+	local d = dir / len
 	local c = (mins + maxs) * 0.5
-	-- point of the S-L line closest to the obstacle centre: detours are taken there
-	local t = math.Clamp((c - S):Dot(dir) / len2, 0, 1)
-	local P0 = S + dir * t
-	local side = Vector(-dir.y, dir.x, 0)
-	if side:LengthSqr() < 1e-6 then side = Vector(1, 0, 0) end
-	side:Normalize()
 	local ext = maxs - mins
-	local halfSide = math.abs(side.x) * ext.x / 2 + math.abs(side.y) * ext.y / 2
-	local sc = (c - P0):Dot(side)
-	local cands = {
-		Vector(P0.x, P0.y, maxs.z),        -- over
-		Vector(P0.x, P0.y, mins.z),        -- under (raised / floating object)
-		P0 + side * (sc + halfSide),       -- round one side
-		P0 + side * (sc - halfSide),       -- round the other
-	}
-	local d0 = S:Distance(L)
+	-- point of the S-L line closest to the obstacle centre: detours are taken there
+	local t = math.Clamp((c - S):Dot(d) / len, 0, 1)
+	local P0 = S + dir * t
 	local best = math.huge
-	for _, e in ipairs(cands) do
-		if not valid or valid(e) then
-			best = math.min(best, S:Distance(e) + e:Distance(L) - d0)
+	for _, a in ipairs(AXES) do
+		local u = a - d * a:Dot(d)
+		if u:LengthSqr() > 1e-4 then
+			u:Normalize()
+			-- half extent of the box along u, and the box centre's offset along u from P0
+			local h = math.abs(u.x) * ext.x / 2 + math.abs(u.y) * ext.y / 2 + math.abs(u.z) * ext.z / 2
+			local sc = (c - P0):Dot(u)
+			for _, k in ipairs({ sc + h, sc - h }) do
+				local e = P0 + u * k
+				if not valid or valid(e) then
+					best = math.min(best, S:Distance(e) + e:Distance(L) - len)
+				end
+			end
 		end
 	end
 	return math.max(best, 0)
 end
 
 --- Transmission summary of a wall list (pure).
-function P.EvalWalls(walls, cfg)
+function P.EvalWalls(walls, cfg, noCap)
 	cfg = cfg or A.cfg
 	local loss, mid, lp = 0, 0, 0
+	-- only movable objects between S and L (no map wall, door or water): they share the same
+	-- space, and the room / ground reflections reach the listener round them
+	local propsOnly = #walls > 0
+	for _, w in ipairs(walls) do
+		if not w.ent or w.water or DOOR_CLASSES[w.ent:GetClass()] then propsOnly = false break end
+	end
 	for _, w in ipairs(walls) do
 		local db, l = AC.WallLoss(w.mat, w.surf, w.thickness)
 		local dd
@@ -297,6 +309,7 @@ function P.EvalWalls(walls, cfg)
 		-- the transmitted part is rendered low-passed: low-frequency loss (table - bonus);
 		-- the diffracted part (round a prop) keeps its own loss
 		local through = math.max(db * cfg.trans_scale - cfg.trans_lf_bonus, 0)
+		local transDb = through -- through the object only, before combining with the detour
 		local midDb = db * cfg.trans_scale
 		if dd then
 			through = math.min(through, AC.PowerSumDb({ through, dd }))
@@ -305,7 +318,14 @@ function P.EvalWalls(walls, cfg)
 		w.lossDb = through
 		loss = loss + through
 		mid = mid + midDb
-		lp = math.max(lp, (dd and dd < through) and math.min(l, AC.LowpassLevel(dd, cfg)) or l)
+		-- mostly diffracted round the object: muffled like the diffraction, not like the material
+		lp = math.max(lp, (dd and dd < transDb) and math.min(l, AC.LowpassLevel(dd, cfg)) or l)
+	end
+	local cap = cfg.prop_max_db or 18
+	if propsOnly and not noCap and loss > cap then
+		-- the reflected sound dominates: capped loss, muffled like that level of loss
+		loss, mid = cap, math.min(mid, cap + cfg.trans_lf_bonus)
+		lp = math.min(lp, AC.LowpassLevel(cap, cfg))
 	end
 	return math.min(loss, cfg.trans_max), lp, math.min(mid, cfg.trans_max)
 end
@@ -449,9 +469,9 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				-- (displacements...) and the Lua loss stands
 				if d and d.occlusion > 0.01 and d.occlusion < 0.99 then
 					local o = math.min(d.occlusion, 1)
-					local wl, wlp, wm = P.EvalWalls(worldWalls, cfg)
+					local wl, wlp, wm = P.EvalWalls(worldWalls, cfg, true)
 					local el, elp, em = 0, 0, 0
-					if #entWalls > 0 then el, elp, em = P.EvalWalls(entWalls, cfg) end
+					if #entWalls > 0 then el, elp, em = P.EvalWalls(entWalls, cfg, true) end
 					loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-wl / 20)) + el
 					mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-wm / 20)) + em
 					lp = math.max(o > 0.5 and math.min(wlp, 1) or wlp, elp)
