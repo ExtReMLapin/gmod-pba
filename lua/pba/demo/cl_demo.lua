@@ -170,10 +170,16 @@ function DM.StartStream(r)
 		local play = string.match(path, "^https?://") and sound.PlayURL or sound.PlayFile
 		-- noblock: the whole file is fetched, so that the channel can loop (an http stream is
 		-- block-streamed otherwise and EnableLooping errors)
-		play(path, "3d noplay noblock", function(ch)
+		play(path, "3d noplay noblock", function(ch, errId, errName)
 			if DM.streamTok ~= tok then if IsValid(ch) then ch:Stop() end return end
 			if not IsValid(ch) then
-				if path == own then chat.AddText(Color(255, 150, 140), "[PBA demo] pba_demo_music: cannot play \"" .. own .. "\"") end
+				-- never fall back silently: say what failed and what plays instead
+				local why = tostring(errName or errId or "?")
+				if path == own then
+					chat.AddText(Color(255, 150, 140), "[PBA demo] pba_demo_music: cannot play \"" .. own .. "\" (" .. why .. ")")
+				elseif path == DM.STREAM_URL then
+					chat.AddText(Color(255, 150, 140), "[PBA demo] the boombox music could not be fetched (" .. why .. "): playing the HL2 track instead. Turn the radio off and on to retry.")
+				end
 				return try(i + 1)
 			end
 			ch:SetPos(p)
