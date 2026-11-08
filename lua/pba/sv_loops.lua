@@ -38,7 +38,16 @@ end
 local function inRange(l, ply)
 	local pos = IsValid(l.ent) and l.ent:WorldSpaceCenter() or l.pos
 	local r = radiusFor(l.lvl)
-	return ply:EyePos():DistToSqr(pos) <= r * r
+	return A.PlayerEar(ply):DistToSqr(pos) <= r * r
+end
+
+--- Physics friction / scrape loops (driven by the physics engine's own envelope).
+local PHYS_PATTERNS = { "scrape", "friction", "_roll", "rolling", "_slide" }
+function LP.IsPhysicsLoop(name)
+	local n = string.lower(name or "")
+	if not string.find(n, "physics/", 1, true) then return false end
+	for _, p in ipairs(PHYS_PATTERNS) do if string.find(n, p, 1, true) then return true end end
+	return false
 end
 
 --- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
@@ -58,6 +67,9 @@ function LP.Handle(data)
 	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
 	local l = LP.active[key]
 	local flags = data.Flags or 0
+	-- engine-driven physics loops (scraping / rolling friction): their envelope lives in the physics
+	-- engine; leave them to it
+	if not l and LP.IsPhysicsLoop(data.SoundName) then return false end
 	local once, dur = false, 0
 	if not l and not A.IsLooping(data.SoundName) then
 		once, dur = LP.IsLong(data)
@@ -66,6 +78,12 @@ function LP.Handle(data)
 
 	-- stop events carry no sound level: test them first
 	if bit.band(flags, SND_STOP) ~= 0 then
+		if not l then
+			-- a stop may come on another channel than the start: same entity and same name is enough
+			for k, x in pairs(LP.active) do
+				if x.idx == idx and x.name == data.SoundName then l, key = x, k break end
+			end
+		end
 		if l then
 			local plys = {}
 			for p in pairs(l.subs) do if IsValid(p) then plys[#plys + 1] = p end end

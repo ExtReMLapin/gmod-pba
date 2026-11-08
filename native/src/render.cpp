@@ -123,6 +123,7 @@ IPLAmbisonicsDecodeEffect g_decode = nullptr;
 Reflection g_room;                 // reverb at the listener, fed by every voice (send bus = g_room.in)
 Reflection g_echo[kEchoSlots];     // per-source reflections
 float g_wetRoom = 0, g_wetEcho = 0;
+bool g_paused = false;
 float g_uw = 0, g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: target, current mix, LP states
 float g_roomRt[3] = {0, 0, 0}; // under g_mtx
 std::vector<float> g_mix(kBlock * 2);
@@ -354,6 +355,10 @@ void RenderBlock() {
 void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 	float* o = (float*)out;
 	std::lock_guard<std::mutex> lk(g_mtx);
+	if (g_paused) { // nothing advances while the game is paused
+		std::memset(o, 0, (size_t)frames * 2 * sizeof(float));
+		return;
+	}
 	ma_uint32 done = 0;
 	while (done < frames) {
 		if (g_fifoPos >= g_fifo.size()) {
@@ -532,6 +537,11 @@ std::string HrtfInfo() { return g_hrtfInfo; }
 void SetOutputMode(int mode) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	g_outMode = mode == 1 ? 1 : 0;
+}
+
+void SetPaused(bool paused) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_paused = paused;
 }
 
 void SetUnderwater(float amount) {
@@ -757,8 +767,13 @@ bool Update(int id, const VoiceParams& p) {
 
 void StopVoice(int id) {
 	std::lock_guard<std::mutex> lk(g_mtx);
+	// fade out over one block (gain smoothing) instead of a hard cut: no click
 	for (auto& v : g_voices)
-		if (v->id == id) v->alive = false;
+		if (v->id == id) {
+			v->dying = true;
+			v->gain = 0;
+			if (v->gainCur < 0) v->alive = false; // never rendered yet
+		}
 }
 
 int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, double* eL, double* eR) {

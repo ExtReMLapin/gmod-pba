@@ -16,7 +16,7 @@ A.stats = A.stats or { processed = 0, vanilla = 0, voices = 0, relayedIn = 0, dr
 local function listenerPos()
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return nil end
-	return ply:EyePos(), ply:EyeAngles()
+	return A.ListenerPos()
 end
 
 local function activeCount(now)
@@ -47,13 +47,89 @@ local function voiceDelay(v, L)
 	return (v.len or v.pos:Distance(L)) / SPEED
 end
 
-local function emitVoice(data, v, L, src)
+-- ------------------------------------------------------------------ copies of one source
+-- The engine stops the previous sound of an entity on the same channel when a new one starts
+-- (an NPC line, a weapon), and StopSound stops a sound by name. Copies re-emitted by pba are
+-- tracked per (entity, channel): engine copies are played by small invisible anchors (one per
+-- voice) on the original channel, so the engine applies those rules itself; native voices are
+-- stopped explicitly. Unassigned channels (CHAN_AUTO / CHAN_STATIC) never replace.
+A.copies = A.copies or {} -- "idx:chan" -> { idx, chan, anchors = { slot -> ent }, native = { { id, name } }, t }
+local function replaces(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+
+local function sourceIndex(data)
+	local idx = data.EntIndex
+	if (not idx or idx == 0) and IsValid(data.Entity) and not data.Entity:IsWorld() then idx = data.Entity:EntIndex() end
+	return (idx and idx > 0) and idx or nil
+end
+
+--- Copy set of a sound's source; a new sound on a replacing channel cuts the previous copies.
+local function beginCopies(data)
+	local idx = sourceIndex(data)
+	local chan = data.Channel or CHAN_AUTO
+	if not idx or not replaces(chan) then return nil end
+	local key = idx .. ":" .. chan
+	local c = A.copies[key]
+	if not c then
+		c = { idx = idx, chan = chan, anchors = {}, native = {} }
+		A.copies[key] = c
+	end
+	c.t = RealTime()
+	for _, n in ipairs(c.native) do if pba_native then pba_native.StopVoice(n[1]) end end
+	c.native = {}
+	for _, a in pairs(c.anchors) do
+		if IsValid(a) and a.pbaName then a:StopSound(a.pbaName) a.pbaName = nil end
+	end
+	return c
+end
+
+local function anchorFor(c, slot)
+	local a = c.anchors[slot]
+	if IsValid(a) then return a end
+	a = ClientsideModel("models/hunter/blocks/cube025x025x025.mdl", RENDERGROUP_OTHER)
+	if not IsValid(a) then return nil end
+	a:SetNoDraw(true)
+	c.anchors[slot] = a
+	return a
+end
+
+--- Stops the copies of `name` (all names if empty) re-emitted for entity idx.
+function A.StopCopies(idx, name)
+	name = name or ""
+	for _, c in pairs(A.copies) do
+		if c.idx == idx then
+			for _, a in pairs(c.anchors) do
+				if IsValid(a) and a.pbaName and (name == "" or a.pbaName == name) then a:StopSound(a.pbaName) a.pbaName = nil end
+			end
+			for i = #c.native, 1, -1 do
+				if name == "" or c.native[i][2] == name then
+					if pba_native then pba_native.StopVoice(c.native[i][1]) end
+					table.remove(c.native, i)
+				end
+			end
+		end
+	end
+end
+
+-- idle copy sets: anchors removed after 30 s
+timer.Create("pba_copies_gc", 5, 0, function()
+	local now = RealTime()
+	for key, c in pairs(A.copies) do
+		if now - (c.t or 0) > 30 then
+			for _, a in pairs(c.anchors) do if IsValid(a) then a:Remove() end end
+			A.copies[key] = nil
+		end
+	end
+end)
+
+local function emitVoice(data, v, L, src, copies, slot)
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
 	if A.Native and A.Native.render then
 		local g = (data.Volume or 1) * v.gain * A.Native.Directivity(src, L)
 		if g < 0.001 then return false end
-		if A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = voiceDelay(v, L) }) then
+		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = voiceDelay(v, L) })
+		if id then
 			v.vol, v.dsp, v.native = g, -1, true
+			if copies then copies.native[#copies.native + 1] = { id, data.SoundName } end
 			return true
 		end
 	end
@@ -66,12 +142,19 @@ local function emitVoice(data, v, L, src)
 	if dsp == 0 then dsp = data.DSP or 0 end
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
 	local delay = voiceDelay(v, L)
-	if delay >= 0.02 then
-		local name, pos, pitch = data.SoundName, v.pos, data.Pitch or 100
-		timer.Simple(delay, function() A.Emit(EmitSound, name, pos, -1, CHAN_AUTO, vol, lvl, flags, pitch, dsp) end)
-	else
-		A.Emit(EmitSound, data.SoundName, v.pos, -1, CHAN_AUTO, vol, lvl, flags, data.Pitch or 100, dsp)
+	local name, pos, pitch = data.SoundName, v.pos, data.Pitch or 100
+	local anchor = copies and anchorFor(copies, slot or 1)
+	local function play()
+		if anchor then
+			if not IsValid(anchor) then return end
+			anchor:SetPos(pos)
+			anchor.pbaName = name
+			A.Emit(anchor.EmitSound, anchor, name, lvl, pitch, vol, copies.chan, flags, dsp)
+		else
+			A.Emit(EmitSound, name, pos, -1, CHAN_AUTO, vol, lvl, flags, pitch, dsp)
+		end
 	end
+	if delay >= 0.02 then timer.Simple(delay, play) else play() end
 	v.vol, v.dsp = vol, dsp
 	return true
 end
@@ -106,10 +189,11 @@ function A.Process(data, relayed)
 	local now = RealTime()
 	local dur = math.max(SoundDuration(data.SoundName) or 0.5, 0.1)
 	local budget = A.cfg.max_active - activeCount(now)
+	local copies = beginCopies(data)
 	local emitted = 0
 	for i, v in ipairs(r.voices) do
 		if i > 1 and emitted >= budget then A.stats.dropped = A.stats.dropped + 1 break end
-		if emitVoice(data, v, L, IsValid(src) and src or nil) then
+		if emitVoice(data, v, L, IsValid(src) and src or nil, copies, i) then
 			emitted = emitted + 1
 			A.active[#A.active + 1] = now + dur
 		end
@@ -159,6 +243,12 @@ end
 
 A.AddHook("EntityEmitSound", function(data)
 	if A.reemitting then return end
+	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
+		-- a client-side StopSound: our copies of that sound stop too (the engine stops its own)
+		local idx = sourceIndex(data)
+		if idx then A.StopCopies(idx, data.SoundName) end
+		return
+	end
 	if not A.Eligible(data) then return end
 	local pos = A.SoundPos(data)
 	if not pos then return end
@@ -213,4 +303,17 @@ net.Receive(NET, function()
 		A.Emit(EmitSound, data.SoundName, data.Pos, IsValid(e) and data.EntIndex or 0, data.Channel, data.Volume,
 			data.SoundLevel, data.Flags, data.Pitch, data.DSP)
 	end
+end)
+
+-- server-side StopSound on a relayed sound: stop our copies
+net.Receive("pba_snd_stop", function()
+	local idx, name = net.ReadUInt(16), net.ReadString()
+	A.StopCopies(idx, name)
+end)
+
+-- entity removed on the client (not a full network update): its copies stop with it
+hook.Add("EntityRemoved", "pba_copies_removed", function(e, fullUpdate)
+	if fullUpdate then return end
+	local idx = e:EntIndex()
+	if idx > 0 then A.StopCopies(idx, "") end
 end)

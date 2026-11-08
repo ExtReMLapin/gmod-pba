@@ -8,6 +8,10 @@ local NET = "pba_snd"
 local NET_ACK = "pba_snd_ack"
 util.AddNetworkString(NET)
 util.AddNetworkString(NET_ACK)
+util.AddNetworkString("pba_snd_stop")
+
+-- who received relayed copies of an entity's sounds recently: they must hear its StopSound too
+A.recentTo = A.recentTo or {} -- entindex -> { [ply] = time }
 
 -- Sound-name dictionary: a name travels in full until the client acknowledges its id,
 -- then as a 16-bit id (~20-byte messages instead of ~50).
@@ -82,6 +86,26 @@ A.AddHook("EntityEmitSound", function(data)
 	if A.reemitting or A.explicitFilter then return end
 	A.stats.seen = A.stats.seen + 1
 	if A.Loops and A.Loops.Handle(data) then return false end
+	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
+		-- StopSound on a one-shot: the engine stops the original; clients that got a relayed
+		-- copy of this entity's sounds stop theirs
+		local e = data.Entity
+		local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
+		local r = idx > 0 and A.recentTo[idx]
+		if r then
+			local plys, now = {}, CurTime()
+			for p, t in pairs(r) do
+				if IsValid(p) and now - t < 30 then plys[#plys + 1] = p else r[p] = nil end
+			end
+			if #plys > 0 then
+				net.Start("pba_snd_stop")
+				net.WriteUInt(idx, 16)
+				net.WriteString(data.SoundName or "")
+				net.Send(plys)
+			end
+		end
+		return
+	end
 	if not A.Eligible(data) then return end
 	local pos = A.SoundPos(data)
 	if not pos then return end
@@ -96,7 +120,7 @@ A.AddHook("EntityEmitSound", function(data)
 	-- even with a clear line: their module plays the sound instead of the engine
 	for _, ply in ipairs(player.GetHumans()) do
 		if ply ~= predicted then
-			local eye = ply:EyePos()
+			local eye = A.PlayerEar(ply)
 			if eye:DistToSqr(pos) <= radius * radius then
 				if A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1 then
 					blocked[#blocked + 1] = ply
@@ -146,10 +170,32 @@ A.AddHook("EntityEmitSound", function(data)
 	for _, ply in ipairs(blocked) do
 		if not (ply.pba_known and ply.pba_known[id]) then full = true break end
 	end
+	local e = data.Entity
+	if IsValid(e) and not e:IsWorld() then
+		local r = A.recentTo[e:EntIndex()] or {}
+		A.recentTo[e:EntIndex()] = r
+		local now = CurTime()
+		for _, p in ipairs(blocked) do r[p] = now end
+	end
 	net.Start(NET, true) -- unreliable: a lost sound is better than a late one
 	writeSound(data, pos, id, full)
 	A.stats.bytes = (A.stats.bytes or 0) + net.BytesWritten() * #blocked
 	net.Send(blocked)
 	A.stats.relayed = A.stats.relayed + 1
 	return false
+end)
+
+-- entity removed: the engine stops its sounds; clients that got relayed copies stop theirs
+hook.Add("EntityRemoved", "pba_relay_removed", function(e)
+	local idx = e:EntIndex()
+	local r = idx > 0 and A.recentTo[idx]
+	if not r then return end
+	A.recentTo[idx] = nil
+	local plys, now = {}, CurTime()
+	for p, t in pairs(r) do if IsValid(p) and now - t < 30 then plys[#plys + 1] = p end end
+	if #plys == 0 then return end
+	net.Start("pba_snd_stop")
+	net.WriteUInt(idx, 16)
+	net.WriteString("")
+	net.Send(plys)
 end)

@@ -128,7 +128,8 @@ end
 timer.Create("pba_streams", 0.25, 0, function()
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
-	local L = ply:EyePos()
+	local L = A.ListenerPos()
+	if not L then return end
 	local on = enabled()
 	local n = 0
 	for ch, r in pairs(ST.chans) do

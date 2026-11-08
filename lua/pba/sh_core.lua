@@ -99,6 +99,29 @@ function A.Eligible(data)
 	return true
 end
 
+--- Where the local player HEARS from: the rendered view (third person, vehicle camera, camera
+-- tool, spectating, death cam), like the engine; the player's eyes as a fallback.
+if CLIENT then
+	A.view = A.view or {}
+	hook.Add("RenderScene", "pba_view", function(origin, angles)
+		A.view.pos, A.view.ang, A.view.t = origin, angles, RealTime()
+	end)
+	function A.ListenerPos()
+		local v = A.view
+		if v.pos and RealTime() - (v.t or 0) < 0.5 then return v.pos, v.ang end
+		local ply = LocalPlayer()
+		if IsValid(ply) then return ply:EyePos(), ply:EyeAngles() end
+		return nil
+	end
+end
+
+--- Server side: where a player hears from (his view entity when he looks through a camera).
+function A.PlayerEar(ply)
+	local ve = ply.GetViewEntity and ply:GetViewEntity()
+	if IsValid(ve) and ve ~= ply then return ve:EyePos() end
+	return ply:EyePos()
+end
+
 --- The demo map (pba_demo*): debug overlay and HUD indicator switch on by themselves there.
 function A.IsDemoMap() return string.StartWith(game.GetMap() or "", "pba_demo") end
 

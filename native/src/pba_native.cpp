@@ -1065,6 +1065,12 @@ LUA_FUNCTION(StreamCollect) {
 	return 1;
 }
 
+// SetPaused(bool): the game is paused (single player menu)
+LUA_FUNCTION(SetPaused) {
+	render::SetPaused(LUA->GetBool(1));
+	return 0;
+}
+
 // SetUnderwater(amount 0..1): low-pass on the native mix while the listener's head is in water
 LUA_FUNCTION(SetUnderwater) {
 	render::SetUnderwater((float)LUA->CheckNumber(1));
@@ -1295,6 +1301,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "StreamFilter");
 	LUA->PushCFunction(StreamCollect);
 	LUA->SetField(-2, "StreamCollect");
+	LUA->PushCFunction(SetPaused);
+	LUA->SetField(-2, "SetPaused");
 	LUA->SetField(-2, "pba_native");
 	LUA->Pop();
 	return 0;

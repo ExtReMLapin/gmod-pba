@@ -97,7 +97,8 @@ local function apply(m, fade)
 		ent = anchorFor(m)
 		if not ent then return end
 	end
-	local L = LocalPlayer():EyePos()
+	local L = A.ListenerPos()
+	if not L then return end
 	local S = ent == m.anchor and m.pos or ent:WorldSpaceCenter()
 	if A.Native and A.Native.render and not m.patch and A.Enabled() then
 		if applyNative(m, S, L) ~= false then return end

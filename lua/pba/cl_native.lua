@@ -351,7 +351,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 		opt.follow.pitch = pitch or 100
 		N.follow[id] = opt.follow
 	end
-	return id and id > 0
+	return id and id > 0 and id or false
 end
 
 -- Doppler shift between a moving source and listener: f' = f (c + vL.u) / (c - vS.u), u = unit
@@ -394,6 +394,8 @@ function N.UpdateFollowers(L)
 	for id, f in pairs(N.follow) do
 		local e = f.ent
 		if not IsValid(e) then
+			-- the entity is gone: the engine would stop its sound, so do we
+			pba_native.StopVoice(id)
 			N.follow[id] = nil
 		else
 			local S = A.SoundPos({ Entity = e })
@@ -543,9 +545,17 @@ hook.Add("Think", "pba_native_listener", function()
 	local master = GetConVar("volume"):GetFloat()
 	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
 	local eL, eR
-	local L = ply:EyePos()
+	local L, vang = A.ListenerPos()
+	L = L or ply:EyePos()
+	ang = vang or ang
 	N.live, eL, eR = pba_native.SetListener(L, ang:Forward(), ang:Up(), master)
 	N.UpdateFollowers(L)
+	-- single player menu: the engine pauses its sounds; the module's voices freeze too
+	local paused = game.SinglePlayer() and gui.IsGameUIVisible() or false
+	if paused ~= N.paused and pba_native.SetPaused then
+		N.paused = paused
+		pba_native.SetPaused(paused)
+	end
 	-- head under water: the engine applies its own water DSP to the sounds it plays; same for ours
 	local uw = A.cfg.water >= 0.5 and bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
 	if uw ~= N.underwater and pba_native.SetUnderwater then
