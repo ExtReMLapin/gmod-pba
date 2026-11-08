@@ -46,7 +46,8 @@ jobs:
           id: ${{ secrets.WORKSHOP_ID }}
           username: ${{ secrets.STEAM_USERNAME }}
           vdf: ${{ secrets.STEAM_VDF }}
-          # the release notes are Markdown: the action converts them to Steam BBCode
-          markdown-changelog: ${{ github.event.release.body }}
+          # the release notes, as the Workshop change note (the v1 tag of the action has no
+          # markdown-changelog input yet: it was ignored and the note left empty)
+          changelog: ${{ github.event.release.body }}
           # the action reads `folder` (its README still says `dir`, which it ignores)
           folder: ./
