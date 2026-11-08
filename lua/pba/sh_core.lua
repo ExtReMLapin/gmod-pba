@@ -121,6 +121,17 @@ function A.SoundFile(name)
 	return (string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(}]+", ""))
 end
 
+--- The name without the dry-mix character "#" (sound characters kept otherwise): the engine runs no
+-- DSP on a "#" sound, so pba's muffling preset would be ignored. Same file, same other characters.
+function A.WithoutDryMix(name)
+	name = name or ""
+	local n = #name - #A.SoundFile(name)
+	if n == 0 then return name end
+	local pre = string.sub(name, 1, n)
+	if not string.find(pre, "#", 1, true) then return name end
+	return string.gsub(pre, "#", "") .. string.sub(name, n + 1)
+end
+
 --- Duration of a sound name (s), looked up on its file: nil or 0 when unknown (sentence, missing
 -- file, VBR mp3).
 function A.SoundDuration(name)

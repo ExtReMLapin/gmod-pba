@@ -81,6 +81,7 @@ local function applyNative(m, S, L)
 	m.curDsp = AC.DSPForLevel(lp or 0)
 	gain = gain * m.vol * A.cfg.native_gain
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
+	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
 	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
 	if m.nativeId then
 		if (A.cfg.continuous_ramp or 0) >= 0.5 then
@@ -237,10 +238,11 @@ net.Receive("pba_loop", function()
 	local name, idx, pos = net.ReadString(), net.ReadUInt(16), net.ReadVector()
 	local vol, pitch, lvl, dsp = net.ReadUInt(8) / 255, net.ReadUInt(8), net.ReadUInt(9), net.ReadUInt(8)
 	local once = net.ReadBool()
+	local speaker = net.ReadBool()
 	local m = LP.mirrors[key]
 	if op == OP_START and m then stopMirror(m) m = nil end
 	if not m then
-		m = { key = key, name = name, idx = idx, pos = pos, lvl = lvl, dsp = dsp, once = once }
+		m = { key = key, name = name, idx = idx, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
 		LP.mirrors[key] = m
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
@@ -273,6 +275,7 @@ function LP.FollowNative(L)
 				local S = ent:WorldSpaceCenter()
 				local d = S:Distance(L)
 				local el, em, eh = N.VoiceEQ(0, d)
+				if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
 				local g, pitch = AC.EngineGain(d, m.lvl) * m.vol * A.cfg.native_gain, m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL)
 				if ramp then
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity

@@ -157,6 +157,9 @@ steps = [
     # special sounds: grates and fences (CONTENTS_GRATE) cost no wall loss, do not cut probe links and
     # stay out of the Steam Audio scene (12 grates of d1_canals_01)
     ("grate_loss d1_canals_01", lambda: (load("d1_canals_01"), job("client", "grate_loss.lua", 60))[1]),
+    # HL2 Breencast: microphone -> jumbotron speaker copies (SND_SPEAKER); a long line followed as a mirror
+    # keeps the speaker filter (dsp_speaker as the mirror's DSP)
+    ("breencast_speaker d1_trainstation_01", lambda: (load("d1_trainstation_01"), job("server", "breencast_speaker.lua", 60))[1]),
     # special sounds: looping ambient_generic already playing at map load (before the hooks) taken over
     ("ambient_start d1_town_01", lambda: (fresh("d1_town_01"), job("server", "ambient_start.lua", 30))[1]),
     # path quality against an independent single-bend reference (maps without areaportals: probes)

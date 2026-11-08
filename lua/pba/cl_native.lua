@@ -420,6 +420,11 @@ function N.Directivity(ent, L)
 	return math.max((1 - w) + w * fwd:Dot(d), 0.05)
 end
 
+-- A microphone's speaker copy (SND_SPEAKER: Breencast jumbotrons, TVs): the engine runs it through
+-- its speaker DSP preset; the module plays the bare file, so a small loudspeaker's band (bass and
+-- treble cut, low / mid / high gains) stands for it.
+N.SPEAKER_EQ = { 0.25, 1, 0.35 }
+
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds }.
 -- Returns true on success.

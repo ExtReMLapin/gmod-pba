@@ -1020,6 +1020,16 @@ return {
 			expect(A.SoundFile("*")).to.equal("")
 			expect(select("#", A.SoundFile("*a.wav"))).to.equal(1) -- not gsub's count as a second value
 		end },
+		-- the engine runs no DSP on a "#" (dry mix) sound: a muffled copy drops the "#" only
+		{ name = "WithoutDryMix: drops the # among the leading sound characters only", func = function()
+			expect(A.WithoutDryMix("#music/a.wav")).to.equal("music/a.wav")
+			expect(A.WithoutDryMix("*#music/a.wav")).to.equal("*music/a.wav")
+			expect(A.WithoutDryMix("^)#weapons/x.wav")).to.equal("^)weapons/x.wav")
+			expect(A.WithoutDryMix("^weapons/x.wav")).to.equal("^weapons/x.wav")
+			expect(A.WithoutDryMix("music/a#b.wav")).to.equal("music/a#b.wav")
+			expect(A.WithoutDryMix("")).to.equal("")
+			expect(select("#", A.WithoutDryMix("#a.wav"))).to.equal(1)
+		end },
 		{ name = "SoundDuration: looked up on the bare file name; a prefixed long sound is not eligible as a short one", func = function()
 			local saved, asked = _G.SoundDuration, {} -- the global, not the suite's sandbox
 			_G.SoundDuration = function(n) asked[#asked + 1] = n return n == "music/pba_long.wav" and 60 or 0 end

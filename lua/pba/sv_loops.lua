@@ -32,6 +32,7 @@ local function send(op, l, plys)
 		net.WriteUInt(math.Clamp(math.floor(l.lvl), 0, 511), 9)
 		net.WriteUInt(math.Clamp(math.floor(l.dsp or 0), 0, 255), 8)
 		net.WriteBool(l.once or false)
+		net.WriteBool(l.speaker or false)
 	end
 	net.Send(plys)
 end
@@ -122,6 +123,13 @@ function LP.Handle(data)
 	if not update or bit.band(flags, SND_CHANGE_PITCH) ~= 0 then l.pitch = data.Pitch or 100 end
 	if not update then
 		l.lvl, l.dsp = data.SoundLevel or 75, data.DSP or 0
+		-- a microphone's speaker copy (Breencast on a jumbotron): the engine filters it by its SND_SPEAKER
+		-- flag, which a mirror (CSoundPatch) cannot carry: the speaker preset becomes the mirror's DSP
+		l.speaker = bit.band(flags, SND_SPEAKER or 64) ~= 0 or nil
+		if l.dsp == 0 and l.speaker then
+			local c = GetConVar("dsp_speaker")
+			l.dsp = c and c:GetInt() or 0
+		end
 		l.pos = data.Pos or (IsValid(e) and e:WorldSpaceCenter()) or Vector()
 	end
 	local plys = {}

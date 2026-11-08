@@ -123,7 +123,7 @@ function A.StopCopies(idx, name)
 	for _, c in pairs(A.copies) do
 		if c.idx == idx then
 			for _, a in pairs(c.anchors) do
-				if IsValid(a) and a.pbaName and (name == "" or a.pbaName == name) then a:StopSound(a.pbaName) a.pbaName = nil end
+				if IsValid(a) and a.pbaName and (name == "" or a.pbaName == name or a.pbaName == A.WithoutDryMix(name)) then a:StopSound(a.pbaName) a.pbaName = nil end
 			end
 			for i = #c.native, 1, -1 do
 				if name == "" or c.native[i][2] == name then
@@ -178,7 +178,8 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 		local g = (data.Volume or 1) * v.gain * A.Native.Directivity(src, L)
 		if g < 0.001 then return false end
 		local delay = voiceDelay(v, L)
-		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay })
+		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
+		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
 			if copies then copies.native[#copies.native + 1] = { id, data.SoundName } end
@@ -195,6 +196,8 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
 	local delay = voiceDelay(v, L)
 	local name, pos, pitch = data.SoundName, v.pos, data.Pitch or 100
+	-- a muffled "#" (dry mix) sound: the engine would skip the preset, the sound would stay clear
+	if dsp ~= 0 then name = A.WithoutDryMix(name) end
 	local sentence = A.IsSentence(name)
 	-- a sentence plays at a position (EmitSentence): no anchor, so not followed
 	local anchor = not sentence and copies and anchorFor(copies, slot or 1)
@@ -206,6 +209,7 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 		h.seq = (anchor.pbaSeqNext or 0) + 1
 		anchor.pbaSeqNext = h.seq
 		h.a, h.chan, h.dsp, h.pool = anchor, chan, dsp, not copies
+		h.name = name -- the name it plays (a muffled "#" sound drops its "#"): its later SND_CHANGE_VOL use it
 	end
 	h.t0 = RealTime() + (delay >= 0.02 and delay or 0)
 	local function emit()
@@ -276,7 +280,7 @@ local function dropRec(rec)
 				A.Native.follow[fv.id] = fv.nfollow -- clear sight of an entity: back to the per-frame follower
 			end
 		elseif fv.fading then
-			stopAnchor(fv, rec.name)
+			stopAnchor(fv, fv.name or rec.name)
 		end
 	end
 end
@@ -357,7 +361,7 @@ local function applyVoice(rec, fv, now, L)
 		local s = fv.sent or g
 		if rec.wav and now < fv.tEnd - MIN_LEFT and g > 0 and g ~= s
 			and (not fv.ramp.pending or math.abs(g - s) > 0.06 * math.max(g, s)) then
-			A.Emit(a.EmitSound, a, rec.name, rec.lvl, rec.pitch, g, fv.chan, SND_CHANGE_VOL, fv.dsp)
+			A.Emit(a.EmitSound, a, fv.name or rec.name, rec.lvl, rec.pitch, g, fv.chan, SND_CHANGE_VOL, fv.dsp)
 			fv.sent = g
 		end
 	end
@@ -366,7 +370,7 @@ local function applyVoice(rec, fv, now, L)
 			pba_native.StopVoice(fv.id)
 			OS.native[fv.id] = nil
 		else
-			stopAnchor(fv, rec.name)
+			stopAnchor(fv, fv.name or rec.name)
 		end
 		fv.dead = true
 	end
@@ -427,7 +431,7 @@ hook.Add("Think", "pba_oneshots", A.PerfTimed("oneshots", function()
 			if not fv.dead and fv.a then
 				-- an anchor whose copy was cut (new sound on its channel, StopSound) or never started
 				if fv.started then
-					if not anchorAlive(fv, rec.name) then fv.dead = true end
+					if not anchorAlive(fv, fv.name or rec.name) then fv.dead = true end
 				elseif now > fv.t0 + 1 then
 					fv.dead = true
 				end
@@ -477,7 +481,8 @@ function A.Process(data, relayed)
 			-- PlayVoice only (no engine fallback here: the caller plays the original if this fails)
 			local follow = IsValid(src) and not src:IsWorld() and { ent = src, vol = data.Volume or 1, lvl = lvl } or nil
 			local delay = voiceDelay({ len = d, pos = S }, L)
-			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow })
+			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
+			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
 				-- followed while it plays: walking behind a wall must muffle it too
