@@ -29,6 +29,8 @@ A.CONFIG = {
 	diff_freq       = { 500, 125, 4000, "sv", "Reference frequency (Hz) for diffraction loss." },
 	diff_max_edge   = { 20, 0, 40, "sv", "Max diffraction loss per portal (dB)." },
 	diff_max_total  = { 30, 0, 60, "sv", "Max diffraction loss per path (dB)." },
+	portal_diffuse_db = { 8, 0, 60, "sv", "Reverberant sound leaking through an opening: dB below the direct sound, added in power to the edge diffraction (a room's diffuse field leaves through an open door in every direction, unfiltered). 60 = edge diffraction only." },
+	portal_diffuse_lp = { 1, 0, 4, "sv", "Max lowpass level of a path whose openings are all open: the diffuse part keeps the treble. 4 = no cap." },
 
 	-- transmission
 	trans_scale     = { 1, 0, 3, "sv", "Multiplier on the material transmission losses." },

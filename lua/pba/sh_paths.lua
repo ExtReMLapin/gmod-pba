@@ -41,6 +41,7 @@ function P.EvalChain(S, L, chain, cfg)
 	cfg = cfg or A.cfg
 	local pts = P.RelaxPoints(S, L, chain)
 	local len, diff, loss = 0, 0, 0
+	local allOpen = true
 	local prev = S
 	for i, p in ipairs(chain) do
 		local pt = pts[i]
@@ -48,10 +49,15 @@ function P.EvalChain(S, L, chain, cfg)
 		len = len + prev:Distance(pt)
 		local delta = prev:Distance(pt) + pt:Distance(nxt) - prev:Distance(nxt)
 		local d = AC.Diffraction(delta, cfg.diff_freq, cfg.diff_max_edge)
+		-- the source room's diffuse field also leaves through the opening, in every direction and
+		-- unfiltered: power sum with the edge diffraction (never more loss than the diffuse part)
+		local fd = cfg.portal_diffuse_db or 60
+		if fd < 60 then d = -10 * math.log10(10 ^ (-d / 10) + 10 ^ (-fd / 10)) end
 		diff = diff + d
 		-- open part diffracts around the frame; closed part radiates from the door leaf
 		-- itself (transmission only, no diffraction). Mixed by sqrt(opening), as DoorGain.
 		local sf = math.sqrt(math.Clamp(p.open or 1, 0, 1))
+		if sf < 0.99 then allOpen = false end
 		local g = sf * 10 ^ (-d / 20) + (1 - sf) * 10 ^ (-(p.closedDb or cfg.door_closed_db) / 20)
 		loss = loss - AC.GainToDb(g)
 		prev = pt
@@ -59,8 +65,11 @@ function P.EvalChain(S, L, chain, cfg)
 	len = len + prev:Distance(L)
 	diff = math.min(diff, cfg.diff_max_total)
 	loss = math.min(loss, cfg.diff_max_total + cfg.door_closed_db * #chain)
+	local lp = AC.LowpassLevel(loss, cfg)
+	-- every opening wide open: the diffuse part carries the treble through
+	if allOpen then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
 	return { chain = chain, points = pts, length = len, diffDb = diff, doorDb = loss - diff, lossDb = loss,
-		pos = pts[#pts], lp = AC.LowpassLevel(loss, cfg) }
+		pos = pts[#pts], lp = lp }
 end
 
 --- Door loss (dB) of the door entities crossed by segment a -> b (game state).

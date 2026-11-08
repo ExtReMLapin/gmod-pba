@@ -29,6 +29,7 @@ CFG.max_paths, CFG.max_depth, CFG.merge, CFG.max_voices = 3, 8, 1, 3
 CFG.reject_db, CFG.split_db, CFG.split_angle, CFG.trans_window_db = 12, 6, 60, 20
 CFG.diff_freq, CFG.diff_max_edge, CFG.diff_max_total = 500, 20, 30
 CFG.door_closed_db, CFG.trans_scale, CFG.trans_max = 28, 1, 70
+CFG.portal_diffuse_db, CFG.portal_diffuse_lp = 60, 4 -- edge diffraction only (the diffuse leak has its own case)
 CFG.lp1_db, CFG.lp2_db, CFG.lp3_db, CFG.lp4_db = 2, 6, 11, 16
 CFG.dsp_lp1, CFG.dsp_lp2, CFG.dsp_lp3, CFG.dsp_lp4 = 30, 30, 31, 31
 
@@ -162,6 +163,23 @@ return {
 			-- closed: two portals, the closed one radiates its transmission (28 dB) without diffraction
 			expect(closed.lossDb > open.lossDb + 10).to.beTrue()
 			expect(closed.lossDb < open.lossDb + 28).to.beTrue()
+		end },
+		{ name = "EvalChain: diffuse leak through a wide-open opening caps loss and lowpass", func = function()
+			local g = G.Build(synthBsp())
+			g.byKey[1].open, g.byKey[2].open = 1, 1
+			-- sharp bend round both openings: strong edge diffraction
+			local S, L = Vector(90, -200, 50), Vector(210, 350, 50)
+			local edge = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, CFG)
+			local c2 = table.Copy(CFG)
+			c2.portal_diffuse_db, c2.portal_diffuse_lp = 8, 1
+			local leak = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, c2)
+			expect(leak.lossDb < edge.lossDb).to.beTrue()
+			expect(leak.lossDb <= 2 * 8 + 1e-6).to.beTrue() -- at most the diffuse part per opening
+			expect(leak.lp <= 1).to.beTrue()
+			-- a closed opening: no lowpass cap (the leaf transmits, muffled)
+			g.byKey[1].open = 0
+			local closed = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, c2)
+			expect(closed.lp > 1).to.beTrue()
 		end },
 		{ name = "SelectVoices: weak paths rejected, far-apart strong paths split", func = function()
 			local L = Vector(0, 0, 0)
