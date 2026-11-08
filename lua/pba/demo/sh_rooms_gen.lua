@@ -159,7 +159,7 @@ pba.DemoGen = {
 		},
 		train = {
 			start = { 4528, -1280, 72 },
-			end = { 4528, 1792, 72 },
+			["end"] = { 4528, 1792, 72 },
 			speed = 1100
 		},
 		rider = "pba_train_rider"

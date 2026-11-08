@@ -17,7 +17,9 @@ end
 function A.DebugLevel()
 	if not A.DebugAllowed() then return 0 end
 	local lvl = A.cfg.debug or 0
-	if lvl < 1 and A.IsDemoMap and A.IsDemoMap() then lvl = 1 end
+	if A.IsDemoMap and A.IsDemoMap() then
+		lvl = A.demoDebugLevel or math.max(lvl, 1) -- the demo's own button (in memory) wins there
+	end
 	return lvl
 end
 

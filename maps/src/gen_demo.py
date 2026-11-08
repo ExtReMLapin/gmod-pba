@@ -347,11 +347,15 @@ def build():
     return m
 
 
+LUA_KEYWORDS = {"and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
+                "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"}
+
+
 def lua_value(v, ind=""):
     if isinstance(v, dict):
         items = []
         for k in v:
-            key = k if k.isidentifier() else '["%s"]' % k
+            key = k if k.isidentifier() and k not in LUA_KEYWORDS else '["%s"]' % k
             items.append("%s\t%s = %s" % (ind, key, lua_value(v[k], ind + "\t")))
         return "{\n" + ",\n".join(items) + "\n" + ind + "}"
     if isinstance(v, (list, tuple)):
