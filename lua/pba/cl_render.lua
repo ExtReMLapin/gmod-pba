@@ -9,7 +9,7 @@ local NET = "pba_snd"
 
 A.active = A.active or {}      -- list of { t_end, gain } for the voice budget
 A.perf = A.perf or { sum = 0, n = 0, maxCall = 0, maxFrame = 0, frames = 0, cur = 0 }
-function A.ResetPerf() A.perf = { sum = 0, n = 0, maxCall = 0, maxFrame = 0, frames = 0, cur = 0 } end
+function A.ResetPerf() A.perf = { sum = 0, n = 0, maxCall = 0, maxFrame = 0, frames = 0, cur = 0 } A.perfTimers = {} end
 A.stats = A.stats or { processed = 0, vanilla = 0, voices = 0, relayedIn = 0, dropped = 0 }
 
 local function listenerPos()

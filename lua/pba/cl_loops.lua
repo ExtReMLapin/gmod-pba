@@ -241,7 +241,7 @@ function LP.FollowNative(L)
 	end
 end
 
-timer.Create("pba_loops_cl", A.cfg.update_interval or 0.25, 0, function()
+timer.Create("pba_loops_cl", A.cfg.update_interval or 0.25, 0, A.PerfTimed("loops", function()
 	if not IsValid(LocalPlayer()) then return end
 	for key, m in pairs(LP.mirrors) do
 		if m.done then
@@ -253,4 +253,4 @@ timer.Create("pba_loops_cl", A.cfg.update_interval or 0.25, 0, function()
 		end
 		apply(m)
 	end
-end)
+end))

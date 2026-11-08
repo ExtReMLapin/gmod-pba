@@ -5,6 +5,20 @@
 local A = pba
 
 A.hooks = A.hooks or {} -- event -> fn, registered by sv_relay / cl_render under id "pba"
+
+-- periodic work (loop and stream timers): total, calls and worst call per key, for the perf bench
+-- (A.ResetPerf clears it on the client)
+A.perfTimers = A.perfTimers or {}
+function A.PerfTimed(key, fn)
+	return function(...)
+		local t0 = SysTime()
+		fn(...)
+		local ms = (SysTime() - t0) * 1000
+		local t = A.perfTimers[key]
+		if not t then t = { sum = 0, n = 0, max = 0 } A.perfTimers[key] = t end
+		t.sum, t.n, t.max = t.sum + ms, t.n + 1, math.max(t.max, ms)
+	end
+end
 A.reemitting = false
 
 --- Registers a hook managed by the master switch.

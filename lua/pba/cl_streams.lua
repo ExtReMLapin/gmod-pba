@@ -203,7 +203,7 @@ local function release(ch, r)
 	if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) r.filtered = nil end
 end
 
-timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, function()
+timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, A.PerfTimed("streams", function()
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
 	local L = A.ListenerPos()
@@ -241,4 +241,4 @@ timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, function()
 	end
 	ST.count = n
 	if pba_native and pba_native.StreamCollect then pcall(pba_native.StreamCollect) end
-end)
+end))

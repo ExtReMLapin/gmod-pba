@@ -5,9 +5,9 @@ repeated one-shots), then measures over SECS seconds:
   - client cost per hook function of Think and EntityEmitSound (perf_hook_cost: PBA's own entries);
   - pba.perf (one-shot processing: mean per call, max per call, max per frame), counters.
 Prints the numbers; no thresholds yet (set them from this baseline before each optimisation).
-Known gaps (to do): loops and streams run in timers (pba_loops_cl, pba_streams), not hooks, so
-perf_hook_cost misses them: instrument them like pba.perf; an unfocused game runs at ~20 fps, which
-hides the frame-time overhead (measure with the window focused, or from pba's own counters).
+Loops and streams run in timers (pba_loops_cl, pba_streams), not hooks: perf_hook_cost misses them,
+pba.perfTimers (A.PerfTimed) measures them. Known gap: an unfocused game runs at ~20 fps, which hides
+the frame-time overhead (measure with the window focused, or from pba's own counters).
 Usage: python -I -u perf_crowd.py <mcp.py> [map] [n] [secs]
 """
 import json
@@ -79,6 +79,7 @@ off = frames("PBA off")
 call("console_exec", {"realm": "server", "cmd": "pba_enable 1"})
 time.sleep(2)
 lua("client", "pba.ResetPerf() pba.stats.processed = 0 return true")
+t_reset = time.time()
 on = frames("PBA on")
 hooks = {}
 for ev in ("Think", "EntityEmitSound"):
@@ -89,8 +90,11 @@ for ev in ("Think", "EntityEmitSound"):
         total += float(e.get("total_ms") or e.get("cumulative_ms") or 0)
         print(f"  {ev:16s} {e.get('name') or e.get('id')}: {json.dumps({k: e[k] for k in e if k not in ('name', 'id')})}", flush=True)
     print(f"  {ev}: PBA total {total:.1f} ms over {SECS:.0f} s = {total / SECS:.2f} ms/s", flush=True)
-perf = lua("client", "local p = pba.perf return { calls = p.n, meanCall = p.n > 0 and p.sum / p.n or 0, maxCall = p.maxCall, maxFrame = p.maxFrame, frames = p.frames, processed = pba.stats.processed, queue = table.Count(pba.Probes and pba.Probes.queue or {}), fieldReady = pba.Probes and pba.Probes.field ~= nil }")
+perf = lua("client", "local p = pba.perf return { calls = p.n, meanCall = p.n > 0 and p.sum / p.n or 0, maxCall = p.maxCall, maxFrame = p.maxFrame, frames = p.frames, processed = pba.stats.processed, queue = table.Count(pba.Probes and pba.Probes.queue or {}), fieldReady = pba.Probes and pba.Probes.field ~= nil, timers = pba.perfTimers }")
 print(f"  one-shots (pba.perf): {json.dumps(perf)}", flush=True)
+for k, t in ((perf or {}).get("timers") or {}).items():  # loops / streams timers (A.PerfTimed)
+    print(f"  timer {k}: {t['n']} runs, mean {t['sum'] / max(t['n'], 1):.2f} ms, max {t['max']:.2f} ms, "
+          f"{t['sum'] / (time.time() - t_reset):.2f} ms/s", flush=True)
 on2 = frames("PBA on (after)")
 over = (on.get("frametime_avg_ms", 0) + on2.get("frametime_avg_ms", 0)) / 2 - off.get("frametime_avg_ms", 0)
 print(f"overhead: {over:+.2f} ms per frame on average (PBA on vs off, same scene)", flush=True)

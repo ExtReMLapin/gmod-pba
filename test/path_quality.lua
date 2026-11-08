@@ -8,7 +8,8 @@
 -- Reference: the shortest single-bend path S -> q -> L, q found by brute force (random points in the
 -- box around S and L, then refined near the best), both segments clear. Its level = engine distance
 -- law over its length minus PBA's own diffraction formula (P.EvalPolyline): same physics, independent
--- search. Pairs with no single-bend path are counted apart (multi-bend, out of the reference's scope).
+-- search. Its segments avoid the world and the door entities (open or closed: the leaf is an obstacle).
+-- Pairs with no single-bend path are counted apart (multi-bend, out of the reference's scope).
 -- Metrics on the kept pairs, excess = reference level - PBA level (dB, > 0: PBA too muffled):
 --   over6: share of pairs with excess > 6 dB (too muffled), under6: excess < -6 dB (too loud), best: the
 --   lowest excess, median: median excess, silent: share where PBA has
@@ -23,6 +24,41 @@ local g = A.Probes.current
 local nodes = g.nodes
 math.randomseed(SEED)
 local function clear(a, b) return not util.TraceLine({ start = a, endpos = b, mask = MASK_SOLID_BRUSHONLY }).Hit end
+-- the reference's segments: the world AND the doors (a brush-only trace goes through a closed door:
+-- the reference then counted the leaf's loss plus a bend that the sound through a door does not take,
+-- up to 17 dB below PBA on pba_demo). Paths through a door leaf are PBA's portal model, not this search.
+-- A door out of the client's PVS is dormant (traces go through it): the areaportals not fully open
+-- block the reference too (segment through the portal polygon), from the door state PBA keeps.
+local DOORS = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
+local closedPortals = {}
+for _, p in ipairs((A.Graph.Get() or {}).portals or {}) do
+	if (p.open or 1) < 0.99 and p.poly and #p.poly >= 3 then closedPortals[#closedPortals + 1] = p end
+end
+local function throughPortal(a, b, p)
+	local n = p.normal
+	local da, db = (a - p.center):Dot(n), (b - p.center):Dot(n)
+	if da * db > 0 then return false end
+	local h = a + (b - a) * (da / (da - db))
+	-- inside the polygon grown by 8 u (a thin trace slips through the seam between the portal and
+	-- the wall around it): signed distance to every edge, same orientation
+	local poly = p.poly
+	local area = 0
+	for i = 1, #poly do area = area + (poly[i % #poly + 1] - poly[i]):Cross(p.center - poly[i]):Dot(n) end
+	local orient = area >= 0 and 1 or -1
+	for i = 1, #poly do
+		local e1, e2 = poly[i], poly[i % #poly + 1]
+		local e = e2 - e1
+		if e:Length() > 1e-3 and orient * e:Cross(h - e1):Dot(n) / e:Length() < -8 then return false end
+	end
+	return true
+end
+local function refClear(a, b)
+	if args.ref_through_doors then return clear(a, b) end
+	if util.TraceLine({ start = a, endpos = b, mask = MASK_SOLID,
+		filter = function(e) return e:IsWorld() or DOORS[e:GetClass()] or false end }).Hit then return false end
+	for _, p in ipairs(closedPortals) do if throughPortal(a, b, p) then return false end end
+	return true
+end
 local function rnd(a, b) return a + (b - a) * math.random() end
 
 local function reference(S, L)
@@ -33,7 +69,7 @@ local function reference(S, L)
 	for k = 1, 1500 do
 		local q = Vector(rnd(mn.x, mx.x), rnd(mn.y, mx.y), rnd(mn.z, mx.z))
 		local len = S:Distance(q) + q:Distance(L)
-		if (not bl or len < bl) and clear(S, q) and clear(q, L) then best, bl = q, len end
+		if (not bl or len < bl) and refClear(S, q) and refClear(q, L) then best, bl = q, len end
 		if k % 100 == 0 then job:step() end
 	end
 	if not best then return nil end
@@ -41,7 +77,7 @@ local function reference(S, L)
 		for _ = 1, 20 do
 			local q = best + VectorRand() * r
 			local len = S:Distance(q) + q:Distance(L)
-			if len < bl and clear(S, q) and clear(q, L) then best, bl = q, len end
+			if len < bl and refClear(S, q) and refClear(q, L) then best, bl = q, len end
 		end
 		job:step()
 	end
@@ -99,7 +135,7 @@ while #rows < N and tries < N * 400 do
 					while next(A.Probes.queue or {}) and SysTime() - t0 < 3 do job:frames(1) end
 					local warm, warmSilent = unhooked(level)
 					rows[#rows + 1] = { excess = refLevel - warm, silent = warmSilent, cold = refLevel - cold,
-						coldSilent = coldSilent, refLen = rp.length, direct = d, S = a, L = b, q = ref[2] }
+						coldSilent = coldSilent, refLen = rp.length, refDb = refLevel, direct = d, S = a, L = b, q = ref[2] }
 				end
 			end
 		end
@@ -125,7 +161,12 @@ end
 local n = #rows
 local out = { map = game.GetMap(), pairs = n, skipped = skipped, warm = stats("excess", "silent"), cold = stats("cold", "coldSilent") }
 if args.details then
-	table.sort(rows, function(x, y) return math.max(x.excess, x.cold) > math.max(y.excess, y.cold) end)
+	-- details "under": the loudest-vs-reference pairs first (PBA too loud), with every voice
+	if args.details == "under" then
+		table.sort(rows, function(x, y) return math.min(x.excess, x.cold) < math.min(y.excess, y.cold) end)
+	else
+		table.sort(rows, function(x, y) return math.max(x.excess, x.cold) > math.max(y.excess, y.cold) end)
+	end
 	out.worst5 = {}
 	for i = 1, math.min(5, #rows) do
 		local r = rows[i]
@@ -135,10 +176,27 @@ if args.details then
 			refLen = math.Round(r.refLen), direct = math.Round(r.direct), starts = #starts, goals = #goals, probePaths = #ps,
 			pathLen = ps[1] and math.Round(ps[1].length), pathLoss = ps[1] and math.Round(ps[1].lossDb, 1),
 			sameStartGoal = starts[1] and goals[1] and starts[1].id == goals[1].id or false }
+		do -- every voice PBA picks for this pair
+			P.InvalidateCache()
+			local res = P.Compute(r.S, r.L, 75)
+			local vs = {}
+			for _, v in ipairs(res.voices or {}) do
+				local ms = {}
+				for _, p in ipairs(v.members or {}) do
+					ms[#ms + 1] = string.format("len %d loss %.1f raw %.1f pts %d%s%s", p.length or -1, p.lossDb or -1, p.rawLossDb or -1, p.points and #p.points or 0,
+						p.bridge and " bridge" or "", p.portals and (" portals " .. #p.portals) or "")
+				end
+				vs[#vs + 1] = { kind = v.kind, db = math.Round(AC.GainToDb(v.gain), 1), len = v.len and math.Round(v.len), lp = v.lp, members = ms }
+			end
+			out.worst5[i].voices = vs
+			out.worst5[i].refDb = math.Round(r.refDb, 1)
+			out.worst5[i].viaProbes = res.viaProbes or false
+		end
 	end
 end
 local w = out.warm
 out.pass = n >= math.floor(N / 2) and w.over6 ~= nil and (args.max_over6 == nil or w.over6 <= args.max_over6)
+	and (args.max_under6 == nil or w.under6 <= args.max_under6)
 	and (args.max_silent == nil or w.silent <= args.max_silent)
 	and (args.max_cold_silent == nil or out.cold.silent <= args.max_cold_silent)
 	and (args.max_cold_extra_silent == nil or out.cold.silent <= w.silent + args.max_cold_extra_silent)
