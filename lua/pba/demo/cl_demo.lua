@@ -143,13 +143,25 @@ function DM.StopStream()
 	DM.stream, DM.streamRoom = nil, nil
 end
 
+DM.musicCvar = DM.musicCvar or CreateClientConVar("pba_demo_music", "", true, false,
+	"Demo map, boombox room: your own music instead of the HL2 track (data/... or sound/... file, or an http(s) URL). Stays on your computer.")
+
 function DM.StartStream(r)
 	DM.StopStream()
 	local tok = DM.streamTok
 	DM.streamRoom = r
 	local p = r.stream_pos and Vector(r.stream_pos[1], r.stream_pos[2], r.stream_pos[3]) or r.listenPos
-	sound.PlayFile(DM.STREAM, "3d noplay", function(ch)
-		if not IsValid(ch) then return end
+	-- the player's own music (a file they own, never shipped): pba_demo_music "data/music.mp3",
+	-- "sound/..." or an http(s) URL; empty = the HL2 track
+	local own = string.Trim(DM.musicCvar:GetString())
+	local play = sound.PlayFile
+	local path = own ~= "" and own or DM.STREAM
+	if string.match(path, "^https?://") then play = sound.PlayURL end
+	play(path, "3d noplay", function(ch)
+		if not IsValid(ch) then
+			if own ~= "" then chat.AddText(Color(255, 150, 140), "[PBA demo] pba_demo_music: cannot play \"" .. own .. "\"") end
+			return
+		end
 		if DM.streamTok ~= tok then ch:Stop() return end
 		ch:SetPos(p)
 		ch:Set3DFadeDistance(250, 10000)
