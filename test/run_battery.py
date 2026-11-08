@@ -151,6 +151,8 @@ steps = [
     # Limits None (report only) until the first in-game baseline; --check fails on too few walks.
     # gm_construct first: path_quality field only ends on it (one load less); pba_demo: portal paths
     ("path_perceptual", lambda: py("path_perceptual.py", "--check", "--pairs=15", "gm_construct", "pba_demo")),
+    # continuous sounds re-evaluated only on change (pba_reeval_adaptive): still cost, listener move, door
+    ("reeval_adaptive", lambda: py("reeval_adaptive.py")),
 ]
 # --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
 # before merging into main or a release

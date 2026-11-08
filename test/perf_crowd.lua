@@ -1,7 +1,7 @@
 -- Load scene for the perf bench (server lua_job): N emitters around the player, all OUT OF SIGHT of
 -- the listener (a trace from the eye hits the world), half looping ambiences, half one-shots repeated
 -- every 0.4-1.2 s. They keep playing after the job returns (timers); job.args.stop removes them.
--- args: { n = 40, radius = 1500, seed = 7, stop = false }
+-- args: { n = 40, radius = 1500, seed = 7, stop = false, loopsOnly = false (every emitter a loop) }
 local args = job.args or {}
 local function stop()
 	for _, e in ipairs(PBA_CROWD or {}) do
@@ -52,7 +52,7 @@ while placed < n and tries < n * 200 do
 			if IsValid(ph) then ph:EnableMotion(false) end
 			e:SetNoDraw(true)
 			PBA_CROWD[#PBA_CROWD + 1] = e
-			if placed % 2 == 1 and #LOOPS > 0 then
+			if (placed % 2 == 1 or args.loopsOnly) and #LOOPS > 0 then
 				e.pbaLoop = LOOPS[math.random(#LOOPS)]
 				e:EmitSound(e.pbaLoop, 75)
 				loops = loops + 1

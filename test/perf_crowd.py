@@ -95,6 +95,10 @@ MAX_LOOPS_MS_PER_S = 35.0
 # (a table per heap entry, pairs() and a Vector call per edge: interpreted, the JIT could not compile it)
 MAX_FIELD_MS = 10.0
 MAX_FIELD_KB = 500.0
+# still listener and still loops (this bench never moves them): with pba_reeval_adaptive (default 1) a
+# loop is re-evaluated only by the reeval_max_s fallback (1 s) instead of every update_interval (0.25 s).
+# Baseline before (2026-11-09, after the tendage cache): 19.5 ms/s; expected ~5 ms/s (19.5 x 0.25 / 1).
+MAX_LOOPS_MS_PER_S_STILL = 8.0
 
 ALLOC_LUA = """PBA_ALLOC = nil
 timer.Simple(0, function()
@@ -220,6 +224,8 @@ for r, res in results.items():
         per_s = t["sum"] / res["elapsed"]
         if per_s > MAX_LOOPS_MS_PER_S:
             fails.append(f"{r}: loops {per_s:.1f} ms/s > {MAX_LOOPS_MS_PER_S}")
+        if per_s > MAX_LOOPS_MS_PER_S_STILL:
+            fails.append(f"{r}: still loops {per_s:.1f} ms/s > {MAX_LOOPS_MS_PER_S_STILL} (pba_reeval_adaptive)")
         if mean > MAX_LOOPS_MEAN_MS:
             fails.append(f"{r}: loops mean {mean:.2f} ms > {MAX_LOOPS_MEAN_MS}")
     elif N >= 2:
