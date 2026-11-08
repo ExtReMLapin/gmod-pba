@@ -133,6 +133,59 @@ class Check(unittest.TestCase):
         self.assertEqual(len(fails), 1)
 
 
+def job_result():
+    """A raw result as path_perceptual.lua returns it: 2 source walks (one with a lost measure), 1
+    listener walk, 3 reciprocity pairs (one lost)."""
+    def smp(c, w, d, s=None, err=False):
+        x = {"c": c, "w": w, "d": d, "s": s or d, "k": "portal"}
+        if err:
+            x["err"] = True
+        return x
+    return {
+        "pairs": 3, "seconds": 12, "skipped": {"visible": 4, "nowalkS": 1, "nowalkL": 2},
+        "walksS": [
+            {"S": "0 0 12", "L": "500 0 12", "dir": "1 0 0", "s": [
+                smp(-30, -30, yaw(0)), smp(-31, -30.5, yaw(1)), smp(-36, -33.5, yaw(60), yaw(2))]},
+            {"S": "9 9 9", "L": "1 1 1", "dir": "0 1 0", "s": [smp(-20, -20, yaw(0)), smp(-240, -240, None, err=True)]},
+        ],
+        "walksL": [
+            {"S": "0 0 12", "L": "500 0 12", "dir": "0 1 0", "s": [smp(-40, -40, yaw(0)), smp(-40.2, -40.1, yaw(3))]},
+        ],
+        "recip": [
+            {"S": "a", "L": "b", "ab": smp(-30, -30, yaw(0)), "ba": smp(-33, -31.5, yaw(0))},
+            {"S": "c", "L": "d", "ab": smp(-30, -30, yaw(0)), "ba": smp(-30, -30.5, yaw(0))},
+            {"S": "e", "L": "f", "ab": smp(-30, -30, yaw(0)), "ba": smp(-240, -240, None, err=True)},
+        ],
+    }
+
+
+class Summarize(unittest.TestCase):
+    def test_groups_from_a_raw_job_result(self):
+        out, rec = M.summarize(job_result())
+        self.assertEqual(out["S_walks"], 1)  # the walk with a lost measure is dropped
+        self.assertEqual(out["L_walks"], 1)
+        self.assertEqual(out["errors"], 2)
+        self.assertEqual(out["S_warm"]["steps"], 2)
+        self.assertAlmostEqual(out["S_warm"]["worst"], 3.0, places=6)  # -30.5 -> -33.5
+        self.assertAlmostEqual(out["S_cold"]["worst"], 5.0, places=6)  # -31 -> -36
+        self.assertAlmostEqual(out["S_warm"]["dir_worst"], 59.0, places=4)  # raw dominant voice
+        self.assertAlmostEqual(out["S_stable"]["dir_worst"], 1.0, places=4)  # through P.Stable
+        self.assertNotIn("worst", out["S_stable"])  # direction only
+        self.assertEqual(out["recip_warm"]["n"], 2)
+        self.assertAlmostEqual(out["recip_warm"]["worst"], 1.5, places=6)
+        self.assertAlmostEqual(out["recip_cold"]["worst"], 3.0, places=6)
+        self.assertEqual(len(rec), 2)
+
+    def test_details_point_at_the_worst_places(self):
+        v = job_result()
+        out, rec = M.summarize(v)
+        d = M.details(v, out, rec)
+        self.assertEqual(d["S_level"]["step"], 1)
+        self.assertEqual(d["S_level"]["to"]["w"], -33.5)
+        self.assertEqual(d["S_dir"]["step"], 0)  # stable direction: 1 degree, first step
+        self.assertEqual(d["recip"]["S"], "a")
+
+
 if __name__ == "__main__":
     r = unittest.main(argv=[sys.argv[0]], exit=False, verbosity=1).result
     print("PASS" if r.wasSuccessful() else "FAIL")

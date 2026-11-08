@@ -96,3 +96,51 @@ def check(metrics, limits):
         elif v > mx:
             fails.append(f"{group}.{name} = {v} > {mx}")
     return fails
+
+
+def _ok(sample):
+    return not sample.get("err")
+
+
+def summarize(v):
+    """Metrics of one map's raw job result (path_perceptual.lua). A walk or a reciprocity pair with a
+    measure that did not come back (err) is dropped and counted in `errors`. Returns (metrics, kept
+    reciprocity pairs)."""
+    out = {"pairs": v.get("pairs"), "skipped": v.get("skipped"), "seconds": v.get("seconds")}
+    errors = 0
+    for who in ("S", "L"):
+        walks = []
+        for w in v.get("walks" + who) or []:
+            if all(_ok(s) for s in w["s"]):
+                walks.append(w["s"])
+            else:
+                errors += 1
+        out[who + "_walks"] = len(walks)
+        out[who + "_warm"] = step_metrics(walks, key="w", dir_key="d")
+        out[who + "_cold"] = step_metrics(walks, key="c", dir_key="d")
+        st = step_metrics(walks, key="w", dir_key="s")
+        out[who + "_stable"] = {k: st[k] for k in st if k.startswith("dir_")}
+    rec = [r for r in v.get("recip") or [] if _ok(r["ab"]) and _ok(r["ba"])]
+    errors += len(v.get("recip") or []) - len(rec)
+    out["recip_warm"] = reciprocity_metrics([(r["ab"]["w"], r["ba"]["w"]) for r in rec])
+    out["recip_cold"] = reciprocity_metrics([(r["ab"]["c"], r["ba"]["c"]) for r in rec])
+    out["errors"] = errors
+    return out, rec
+
+
+def details(v, out, rec):
+    """Where the worst warm level step, the worst stable direction jump and the worst warm reciprocity
+    gap are: walk start S / L, heading, step index, the two samples."""
+    d = {}
+    for who in ("S", "L"):
+        walks = [w for w in v.get("walks" + who) or [] if all(_ok(s) for s in w["s"])]
+        for name, grp, key in (("level", who + "_warm", "worst_at"), ("dir", who + "_stable", "dir_worst_at")):
+            at = out[grp].get(key)
+            if at:
+                w = walks[at[0]]
+                d[f"{who}_{name}"] = {"S": w["S"], "L": w["L"], "dir": w["dir"], "step": at[1],
+                                      "from": w["s"][at[1]], "to": w["s"][at[1] + 1]}
+    at = out["recip_warm"].get("worst_at")
+    if at is not None:
+        d["recip"] = rec[at]
+    return d
