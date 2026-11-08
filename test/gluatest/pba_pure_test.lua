@@ -241,15 +241,25 @@ return {
 			local can = P.DetourDelta(Vector(0, 0, 40), Vector(400, 0, 40), Vector(196, -3, 34), Vector(204, 3, 46))
 			expect(can < 2).to.beTrue()
 		end },
-		{ name = "EvalWalls: objects alone in the way are capped (reflections round them), doors are not", func = function()
+		{ name = "EvalWalls: objects alone in the way are capped (reflections round them), closed doors are not, open doors are", func = function()
 			local cfg = setmetatable({ prop_max_db = 18 }, { __index = pba.cfg })
 			local fakeProp = { GetClass = function() return "prop_physics" end }
 			local walls = { { mat = MAT_CONCRETE, surf = "concrete", thickness = 60, ent = fakeProp, detour = math.huge } }
 			local loss = P.EvalWalls(walls, cfg)
 			expect(loss <= 18 + 1e-6).to.beTrue()
-			local fakeDoor = { GetClass = function() return "prop_door_rotating" end }
+			-- a CLOSED door (or one whose state is unknown) closes an opening: not capped
+			local fakeDoor = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
+			local D = pba.Doors
+			local states = CLIENT and D.byEnt or D.entState
+			local saved = states[9999]
+			states[9999] = { frac = 0 }
 			local door = P.EvalWalls({ { mat = MAT_CONCRETE, surf = "concrete", thickness = 60, ent = fakeDoor } }, cfg)
 			expect(door > 18).to.beTrue()
+			-- an OPEN door's leaf is a panel in the room: an object like the others, capped
+			states[9999] = { frac = 1 }
+			local open = P.EvalWalls({ { mat = MAT_CONCRETE, surf = "concrete", thickness = 60, ent = fakeDoor, detour = math.huge } }, cfg)
+			states[9999] = saved
+			expect(open <= 18 + 1e-6).to.beTrue()
 			local world = P.EvalWalls({ { mat = MAT_CONCRETE, surf = "concrete", thickness = 60 } }, cfg)
 			expect(world > 18).to.beTrue()
 		end },

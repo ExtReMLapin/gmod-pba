@@ -408,6 +408,24 @@ local DOOR_CLASSES = { prop_door_rotating = true, func_door = true, func_door_ro
 local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, prop_physics_override = true,
 	prop_dynamic = true, prop_dynamic_override = true, func_physbox = true, func_breakable_surf = true }
 
+-- A door entity closes an opening only while it is CLOSED. Open or ajar, its leaf is a panel standing
+-- in the room: sound goes round it and the room's reflections reach behind it, like any object.
+-- (Treating every door as a wall made a listener hiding behind an open leaf hear a muffled sound.)
+local OPENABLE = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
+local function isClosure(ent)
+	local cls = ent:GetClass()
+	if not DOOR_CLASSES[cls] then return false end
+	if not OPENABLE[cls] then return true end -- func_brush, func_wall...: part of the structure
+	local D = A.Doors
+	local st
+	if D then
+		if CLIENT then st = D.byEnt and D.byEnt[ent:EntIndex()] else st = D.entState and D.entState[ent:EntIndex()] end
+	end
+	if not st then return true end -- state unknown: as before
+	return (st.frac or 0) < 0.02
+end
+P.IsClosure = isClosure
+
 -- current source entity (never obstructs its own sound)
 local ignoreEnt
 local function traceFilter(ent)
@@ -451,7 +469,7 @@ function P.Walls(S, L, maxWalls, srcEnt)
 		end
 		local w = { entry = entry, exit = exit, thickness = entry:Distance(exit), mat = tr.MatType, surf = surf,
 			surfIdx = tr.SurfaceProps, ent = hitEnt }
-		if hitEnt and not DOOR_CLASSES[hitEnt:GetClass()] then
+		if hitEnt and not isClosure(hitEnt) then
 			-- detour round the object's ORIENTED box, in its local frame (a tilted slab keeps
 			-- the size of a slab; its world AABB would be huge and could even contain S)
 			local mn, mx = hitEnt:OBBMins() - Vector(2, 2, 2), hitEnt:OBBMaxs() + Vector(2, 2, 2)
@@ -534,12 +552,12 @@ function P.EvalWalls(walls, cfg, noCap)
 	-- space, and the room / ground reflections reach the listener round them
 	local propsOnly = #walls > 0
 	for _, w in ipairs(walls) do
-		if not w.ent or w.water or DOOR_CLASSES[w.ent:GetClass()] then propsOnly = false break end
+		if not w.ent or w.water or isClosure(w.ent) then propsOnly = false break end
 	end
 	for _, w in ipairs(walls) do
 		local db, l = AC.WallLoss(w.mat, w.surf, w.thickness)
 		local dd
-		if w.ent and not DOOR_CLASSES[w.ent:GetClass()] then
+		if w.ent and not isClosure(w.ent) then
 			-- props: hollow models (sheet metal, panels...) follow the mass law on the
 			-- surfaceprop's own thickness when it declares one
 			local data = w.surfIdx and util.GetSurfaceData(w.surfIdx)
