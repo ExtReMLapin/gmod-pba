@@ -163,9 +163,69 @@ function P.Aperture(p)
 	return ap
 end
 
+-- free intervals common to two sorted lists of intervals
+local function cutIntervals(a, b)
+	local out, i, j = {}, 1, 1
+	while i <= #a and j <= #b do
+		local lo, hi = math.max(a[i][1], b[j][1]), math.min(a[i][2], b[j][2])
+		if hi > lo then out[#out + 1] = { lo, hi } end
+		if a[i][2] < b[j][2] then i = i + 1 else j = j + 1 end
+	end
+	return out
+end
+
+--- Share (0..1) of the opening that an aperture leaves free.
+local function apertureArea(ap)
+	local w = ap.w1 - ap.w0
+	local function len(ivs) local s = 0 for _, iv in ipairs(ivs) do s = s + iv[2] - iv[1] end return s / w end
+	if not ap.rows then return len(ap.intervals) end
+	local s = 0
+	for _, row in ipairs(ap.rows) do s = s + (row[2] - row[1]) * len(row.intervals) end
+	return s / (ap.h1 - ap.h0)
+end
+P.ApertureArea = apertureArea
+
+--- Aperture of an opening masked by objects, from a grid of samples (pure): xs (column bounds
+-- along the width axis wax, from w0 to w1) and ys (row bounds along vax, from h0 to h1) in
+-- coordinates from the portal centre; blocked[j][i] true when the cell (column i, row j) is
+-- masked. Free intervals per row, as AC.ApertureRatio wants them.
+function P.GridAperture(wax, vax, xs, ys, blocked)
+	local rows = {}
+	for j = 1, #ys - 1 do
+		local ivs, cur = {}, nil
+		for i = 1, #xs - 1 do
+			if blocked[j][i] then
+				cur = nil
+			elseif cur then
+				cur[2] = xs[i + 1]
+			else
+				cur = { xs[i], xs[i + 1] }
+				ivs[#ivs + 1] = cur
+			end
+		end
+		rows[j] = { ys[j], ys[j + 1], intervals = ivs }
+	end
+	local ap = { w0 = xs[1], w1 = xs[#xs], h0 = ys[1], h1 = ys[#ys], wax = wax, vax = vax, rows = rows }
+	ap.area = apertureArea(ap)
+	return ap
+end
+
+--- A door leaf's aperture (free intervals over the whole height) further masked by an object.
+local function intersectAperture(leaf, mask)
+	local rows = {}
+	for j, row in ipairs(mask.rows) do rows[j] = { row[1], row[2], intervals = cutIntervals(row.intervals, leaf.intervals) } end
+	local ap = { w0 = mask.w0, w1 = mask.w1, h0 = mask.h0, h1 = mask.h1, wax = mask.wax, vax = mask.vax, rows = rows }
+	ap.area = apertureArea(ap)
+	return ap
+end
+
 --- Evaluates a portal chain: length, diffraction, door losses, apparent position.
 -- Pure for fully open / closed portals; a partly open door reads its measured aperture.
-function P.EvalChain(S, L, chain, cfg)
+-- masks[i] (optional): objects masking part of the i-th opening ({ ap = aperture they leave,
+-- g = amplitude passing them, through and round, lp = their lowpass level }, see portalMasked). A
+-- masked opening is the same object as a partly open door: the direct sound through the free part
+-- (Fresnel), the diffuse sound through the free area, the rest through what covers the opening.
+function P.EvalChain(S, L, chain, cfg, masks)
 	cfg = cfg or A.cfg
 	local pts = P.RelaxPoints(S, L, chain)
 	local len, diff, loss = 0, 0, 0
@@ -180,45 +240,68 @@ function P.EvalChain(S, L, chain, cfg)
 		local delta = prev:Distance(pt) + pt:Distance(nxt) - prev:Distance(nxt)
 		local dEdge = AC.Diffraction(delta, cfg.diff_freq, cfg.diff_max_edge)
 		local open = math.Clamp(p.open or 1, 0, 1)
+		local m = masks and masks[i]
 		-- direct part: diffraction round the doorway, times the share of the Fresnel zone that
 		-- the actual gap lets through (1 wide open, 0 closed)
 		-- diffuse part: the source room's diffuse field leaves through the free AREA (power law)
-		-- leaf: transmits over the area it covers, like the straight trace through it
-		local area, rRef, rLow, rHigh = 1, 1, 1, 1
+		-- leaf (and masking object): transmits over the area it covers, like the straight trace through it
+		local area, leafArea, s = 1, 1, 1 -- s: share of a gap that was not measured (amplitude)
+		local ap
 		if open <= 0.01 then
-			area, rRef, rLow, rHigh = 0, 0, 0, 0
-		elseif open < 0.99 then
-			local ap = (cfg.door_aperture or 1) >= 0.5 and P.Aperture(p) or {}
-			if ap.wax then
-				area = ap.area
-				local hit = planeHit(prev, nxt, p.center, p.normal)
-				local u0 = (hit - p.center):Dot(ap.wax)
-				local d1, d2 = prev:Distance(hit), hit:Distance(nxt)
-				rRef = AC.SlitBand(ap.intervals, ap.w0, ap.w1, u0, d1, d2, cfg.diff_freq)
-				rLow = AC.SlitBand(ap.intervals, ap.w0, ap.w1, u0, d1, d2, 250)
-				rHigh = AC.SlitBand(ap.intervals, ap.w0, ap.w1, u0, d1, d2, 4000)
-			else
-				area = open
-				rRef, rLow, rHigh = math.sqrt(open), math.sqrt(open), math.sqrt(open)
+			area, leafArea, s = 0, 0, 0
+		else
+			if open < 0.99 then
+				local lap = (cfg.door_aperture or 1) >= 0.5 and P.Aperture(p) or {}
+				if lap.wax then ap, area, leafArea = lap, lap.area, lap.area else area, leafArea, s = open, open, math.sqrt(open) end
+			end
+			if m then
+				if ap and ap.intervals then ap = intersectAperture(ap, m.ap) area = ap.area
+				else ap = m.ap area = leafArea * m.ap.area end
 			end
 		end
-		if area < 0.99 then allOpen = false end
+		-- free area for the diffuse sound: an object covers the opening's plane (m.dArea), which is not
+		-- the part the source sees past it (ap, the direct sound); a leaf covers both alike
+		local dArea = area
+		if m and leafArea > 0 then dArea = leafArea * (m.dArea or m.ap.area) end
+		local rRef, rLow, rHigh = s, s, s
+		if ap then
+			local hit = planeHit(prev, nxt, p.center, p.normal)
+			local dh = hit - p.center
+			local u0, v0 = dh:Dot(ap.wax), ap.vax and dh:Dot(ap.vax) or 0
+			local d1, d2 = prev:Distance(hit), hit:Distance(nxt)
+			rRef = s * AC.ApertureBand(ap, u0, v0, d1, d2, cfg.diff_freq)
+			rLow = s * AC.ApertureBand(ap, u0, v0, d1, d2, 250)
+			rHigh = s * AC.ApertureBand(ap, u0, v0, d1, d2, 4000)
+		end
+		if area < 0.99 or dArea < 0.99 then allOpen = false end
 		local gEdge = 10 ^ (-dEdge / 20)
 		local gDiffuse = fd < 60 and 10 ^ (-fd / 20) or 0
 		local gDirect = gEdge * rRef
-		local go = math.sqrt(gDirect * gDirect + gDiffuse * gDiffuse * area)
-		local gc = math.sqrt(1 - area) * 10 ^ (-AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg) / 20)
-		local g = math.sqrt(go * go + gc * gc)
+		local go = math.sqrt(gDirect * gDirect + gDiffuse * gDiffuse * dArea)
+		local gc = math.sqrt(1 - leafArea) * 10 ^ (-AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg) / 20)
+		local gFree = math.sqrt(gEdge * gEdge + gDiffuse * gDiffuse) -- the doorway itself, wide open
+		-- masking objects stand before (or after) the opening: what passes through them (m.g; the way
+		-- round them is the free part, counted once) still has to go through the doorway: the direct
+		-- share they block with its edge diffraction, the diffuse share they cover with its leak. A
+		-- masked opening is never louder than a free one. A leaf IS the opening: it radiates its
+		-- transmission itself (gc).
+		local gm = m and m.g * math.sqrt(gEdge * gEdge * math.max(leafArea - area, 0)
+			+ gDiffuse * gDiffuse * math.max(leafArea - dArea, 0)) or 0
+		local g = math.sqrt(go * go + gc * gc + gm * gm)
 		-- diffDb = the doorway itself wide open (edge diffraction + diffuse leak); doorDb = loss - diffDb is
 		-- what the door's state adds (gap, leaf), as before the aperture model
-		diff = diff - AC.GainToDb(math.sqrt(gEdge * gEdge + gDiffuse * gDiffuse))
-		if gc > go then
+		diff = diff - AC.GainToDb(gFree)
+		if gc > math.max(go, gm) then
 			leafLp = math.max(leafLp, p.closedLp or 3)
 		else
 			-- spectrum of the open part: the doorway's diffraction (with the diffuse leak), and the
-			-- gap's own tilt when it passes the lows better than the highs
-			openDiff = openDiff - AC.GainToDb(math.sqrt(gEdge * gEdge + gDiffuse * gDiffuse))
-			if rHigh > 0 and rLow > rHigh then tiltLp = math.max(tiltLp, AC.LowpassLevel(AC.GainToDb(rLow / rHigh) , cfg)) end
+			-- gap's own tilt when it passes the lows better than the highs, or the masking objects'
+			openDiff = openDiff - AC.GainToDb(gFree)
+			if gm > go then
+				leafLp = math.max(leafLp, m.lp)
+			elseif rHigh > 0 and rLow > rHigh then
+				tiltLp = math.max(tiltLp, AC.LowpassLevel(AC.GainToDb(rLow / rHigh) , cfg))
+			end
 		end
 		loss = loss - AC.GainToDb(math.max(g, 1e-6))
 		prev = pt
@@ -513,6 +596,11 @@ function P.Walls(S, L, maxWalls, srcEnt)
 		end
 		local w = { entry = entry, exit = exit, thickness = entry:Distance(exit), mat = tr.MatType, surf = surf,
 			surfIdx = tr.SurfaceProps, ent = hitEnt }
+		if hitEnt then
+			local ext = hitEnt:OBBMaxs() - hitEnt:OBBMins()
+			w.minExtent = math.min(ext.x, ext.y, ext.z) -- panel or closed volume (P.EvalWalls)
+			w.fromInside = tr.StartSolid or nil -- the ray starts inside it: one sheet crossed
+		end
 		if hitEnt and not isClosure(hitEnt) then
 			-- detour round the object's ORIENTED box, in its local frame (a tilted slab keeps
 			-- the size of a slab; its world AABB would be huge and could even contain S)
@@ -586,8 +674,12 @@ function P.DetourDelta(S, L, mins, maxs, valid)
 	return math.max(best, 0)
 end
 
---- Transmission summary of a wall list (pure).
-function P.EvalWalls(walls, cfg, noCap)
+--- Transmission summary of a wall list (pure). noCap: no prop_max_db cap (reflections round the
+-- objects); noDetour: through the objects only, not round them.
+-- units (30 cm): a prop whose thinnest box side is larger is a closed volume, not a panel (a door model
+-- is ~12 u thick with its handles)
+local HOLLOW_MIN = 16
+function P.EvalWalls(walls, cfg, noCap, noDetour)
 	cfg = cfg or A.cfg
 	local loss, mid, lp = 0, 0, 0
 	-- only movable objects between S and L (no map wall, door or water): they share the same
@@ -601,15 +693,23 @@ function P.EvalWalls(walls, cfg, noCap)
 		local dd
 		if w.ent and not isClosure(w.ent) then
 			-- props: hollow models (sheet metal, panels...) follow the mass law on the
-			-- surfaceprop's own thickness when it declares one
+			-- surfaceprop's own thickness when it declares one. A closed hollow volume (vending
+			-- machine, car, container: every side of its box thicker than a panel) is crossed through
+			-- two of its sheets, whatever the chord: a double wall over the depth crossed. A panel
+			-- (thin box) is one sheet.
 			local data = w.surfIdx and util.GetSurfaceData(w.surfIdx)
 			if data and (data.thickness or 0) > 0 then
-				db = math.min(db, AC.MassLaw(data.density, data.thickness, 500))
+				-- both sheets crossed: the ray enters and leaves the volume (not from or to inside it)
+				if (w.minExtent or 0) > HOLLOW_MIN and not w.fromInside and w.thickness > 2 * data.thickness / 0.75 then
+					db = math.min(db, AC.DoubleWall(data.density, data.thickness, w.thickness, 500))
+				else
+					db = math.min(db, AC.MassLaw(data.density, data.thickness, 500))
+				end
 			end
 			-- a prop is finite: sound also bends around it. Combine (power sum) the
 			-- transmission through it with the diffraction over / round it. A small object
 			-- (can, crate) gives a tiny detour, hence ~0 dB: it barely shadows.
-			if w.detour and w.detour < math.huge then
+			if w.detour and w.detour < math.huge and not noDetour then
 				dd = AC.Diffraction(w.detour, cfg.diff_freq, cfg.diff_max_edge)
 				w.diffDb = dd
 			end
@@ -905,15 +1005,94 @@ local function q(v) return math.floor(v.x / 32) .. "," .. math.floor(v.y / 32) .
 -- P.EvalWalls: detour around the object, capped by prop_max_db); doors are left to the portal state,
 -- the emitter never obstructs its own sound.
 -- Portal paths: the relaxed point sits on an edge of a zero-thickness portal plane, so a single ray
--- slips past an object pushed against the doorway (through the jamb). The share f of the opening the
--- object masks is measured instead (15 samples over the opening, rays before and after it) and the
--- direct part becomes (1 - f) + f * g, g = what passes the object. Probe paths: segment traces.
+-- slips past an object pushed against the doorway (through the jamb). What the objects mask is measured
+-- instead, over the opening (15 samples, plus a ring of probes along its edges, the edges between
+-- masked and free parts then located by bisection), twice, because the two parts of the sound through
+-- an opening do not see the same thing:
+--   * the direct sound: the part of the opening the source and the listener see past the objects
+--     (rays before and after it). A ray the WORLD blocks (the jamb of a deep doorway) does not see
+--     that point at all: the sound reaches it round the jamb, through the doorway, so the point is
+--     masked if an object covers the doorway there (as below), not "free" behind the wall;
+--   * the diffuse sound of the room: the part of the opening's plane the objects cover, seen along
+--     its normal (fully up to COVER_NEAR from the plane, fading to nothing at COVER_FAR).
+-- The opening is then evaluated like a partly open door (P.EvalChain with masks): the same object, one
+-- model. The way round the objects is that free part, counted once: what passes the covered part is
+-- their own transmission only. pba_path_props_slit 0: the former amplitude law (1 - f) + f * g on the
+-- masked share f. Probe paths: segment traces.
 local PORTAL_GRID = { 5, 3 }
+local MASK_REFINE = 3 -- bisection steps per edge: 1/8 of a sample spacing
+local COVER_NEAR, COVER_FAR = 24, 64
 local function objectsOn(a, b, srcEnt, cfg, out)
 	for _, w in ipairs(P.Walls(a, b, cfg.trans_max_walls, srcEnt)) do
 		if w.ent and not OPENABLE[w.ent:GetClass()] then out[#out + 1] = w end
 	end
 	return out
+end
+-- objects on a -> b appended to out; true when the world (not water) blocks a -> b
+local function legOn(a, b, srcEnt, cfg, out)
+	local world = false
+	for _, w in ipairs(P.Walls(a, b, cfg.trans_max_walls, srcEnt)) do
+		if w.ent then
+			if not OPENABLE[w.ent:GetClass()] then out[#out + 1] = w end
+		elseif not w.water then
+			world = true
+		end
+	end
+	return world
+end
+-- cheap tests of one point of the opening (no detour): against the objects already found, and
+-- coverage of the plane by any obstacle along its normal
+local maskSet, maskOut, covOut = {}, {}, {}
+local function inMaskSet(e) return maskSet[e] == true end
+local maskTr = { mask = MASK_SOLID, ignoreworld = true, filter = inMaskSet, output = maskOut }
+local function objHit(a, b)
+	maskTr.start, maskTr.endpos = a, b
+	util.TraceLine(maskTr)
+	return maskOut.Hit
+end
+local function coverFilter(e) return traceFilter(e) and not OPENABLE[e:GetClass()] end
+local covTr = { mask = MASK_SOLID, ignoreworld = true, filter = coverFilter, output = covOut }
+local function coverAt(q, dir)
+	covTr.start, covTr.endpos = q, q + dir * COVER_FAR
+	util.TraceLine(covTr)
+	if not covOut.Hit then return 0 end
+	local dist = covOut.StartSolid and 0 or covOut.Fraction * COVER_FAR
+	return math.Clamp((COVER_FAR - dist) / (COVER_FAR - COVER_NEAR), 0, 1)
+end
+-- boundaries between differing cells of a grid (state[j][i]) at positions eu (columns) / ev (rows),
+-- located by bisection with test(u, v); midpoints elsewhere
+local function gridEdges(state, eu, ev, u0, u1, v0, v1, test)
+	local function edge(a, b, was, f)
+		for _ = 1, MASK_REFINE do
+			local mid = (a + b) / 2
+			if f(mid) == was then a = mid else b = mid end
+		end
+		return (a + b) / 2
+	end
+	local xs, ys = { u0 }, { v0 }
+	for i = 1, #eu - 1 do
+		local x = (eu[i] + eu[i + 1]) / 2
+		for j = 1, #ev do
+			if state[j][i] ~= state[j][i + 1] then
+				x = edge(eu[i], eu[i + 1], state[j][i], function(u) return test(u, ev[j]) end)
+				break
+			end
+		end
+		xs[i + 1] = x
+	end
+	xs[#eu + 1] = u1
+	for j = 1, #ev - 1 do
+		local y = (ev[j] + ev[j + 1]) / 2
+		for i = 1, #eu do
+			if state[j][i] ~= state[j + 1][i] then
+				y = edge(ev[j], ev[j + 1], state[j][i], function(v) return test(eu[i], v) end)
+				break
+			end
+		end
+		ys[j + 1] = y
+	end
+	ys[#ev + 1] = v1
+	return xs, ys
 end
 local function portalMasked(portal, prev, nxt, srcEnt, cfg)
 	local n = portal.normal
@@ -928,36 +1107,145 @@ local function portalMasked(portal, prev, nxt, srcEnt, cfg)
 		v0, v1 = math.min(v0, d:Dot(vax)), math.max(v1, d:Dot(vax))
 	end
 	if u0 > u1 then return nil end
-	local blocked, total, objs = 0, 0, {}
-	for i = 1, PORTAL_GRID[1] do
-		for j = 1, PORTAL_GRID[2] do
-			local q = portal.center + wax * (u0 + (u1 - u0) * (0.05 + 0.9 * (i - 0.5) / PORTAL_GRID[1]))
-				+ vax * (v0 + (v1 - v0) * (0.05 + 0.9 * (j - 0.5) / PORTAL_GRID[2]))
-			local k = #objs
-			objectsOn(prev, q, srcEnt, cfg, objs)
-			objectsOn(q, nxt, srcEnt, cfg, objs)
+	local NU, NV = PORTAL_GRID[1], PORTAL_GRID[2]
+	local su, sv = {}, {}
+	for i = 1, NU do su[i] = u0 + (u1 - u0) * (0.05 + 0.9 * (i - 0.5) / NU) end
+	for j = 1, NV do sv[j] = v0 + (v1 - v0) * (0.05 + 0.9 * (j - 0.5) / NV) end
+	local function at(u, v) return portal.center + wax * u + vax * v end
+	-- normal pointing to prev's side, and to nxt's side
+	local toPrev = (prev - portal.center):Dot(n) >= 0 and n or -n
+	local toNxt = -toPrev
+	local blocked, total, objs, legs = 0, 0, {}, {}
+	for j = 1, NV do legs[j] = {} end
+	for i = 1, NU do
+		for j = 1, NV do
+			local q = at(su[i], sv[j])
+			local o1, o2 = {}, {}
+			local w1 = legOn(prev, q, srcEnt, cfg, o1)
+			local w2 = legOn(q, nxt, srcEnt, cfg, o2)
+			for _, w in ipairs(o1) do objs[#objs + 1] = w end
+			for _, w in ipairs(o2) do objs[#objs + 1] = w end
 			total = total + 1
-			if #objs > k then blocked = blocked + 1 end
+			if #o1 + #o2 > 0 then blocked = blocked + 1 end
+			legs[j][i] = { q = q, o1 = o1, w1 = w1, o2 = o2, w2 = w2 }
 		end
 	end
 	if blocked == 0 then return nil end
-	-- what passes the object: the first sample's objects, as on the straight line
-	local seen, uniq = {}, {}
-	for _, w in ipairs(objs) do if not seen[w.ent] then seen[w.ent] = true uniq[#uniq + 1] = w end end
-	local loss, lp = P.EvalWalls(uniq, cfg)
 	local f = blocked / total
-	return -AC.GainToDb((1 - f) + f * 10 ^ (-loss / 20)), f >= 0.5 and lp or 0
+	if (cfg.path_props_slit or 1) < 0.5 then
+		-- former law: what passes the object, as on the straight line (the objects of every sample)
+		local seen, uniq = {}, {}
+		for _, w in ipairs(objs) do if not seen[w.ent] then seen[w.ent] = true uniq[#uniq + 1] = w end end
+		local loss, lp = P.EvalWalls(uniq, cfg)
+		return { f = f, g = 10 ^ (-loss / 20), lp = lp }
+	end
+	ignoreEnt = srcEnt -- coverFilter (traceFilter) never counts the emitter
+	for k in pairs(maskSet) do maskSet[k] = nil end
+	for _, w in ipairs(objs) do maskSet[w.ent] = true end
+	-- direct sound at q: a leg the world leaves clear is masked by an object on it; a leg the world
+	-- blocks reaches q round the jamb: masked if an object covers the doorway there on that side
+	local function leg(a, b, q, dir)
+		if detClear(a, b) then return objHit(a, b) end
+		return coverAt(q, dir) > 0
+	end
+	local function directAt(q) return leg(prev, q, q, toPrev) or leg(q, nxt, q, toNxt) end
+	local function coverBoth(q) return math.max(coverAt(q, toPrev), coverAt(q, toNxt)) end
+	-- the 15 samples, then what passes the objects over the masked samples: their own transmission
+	-- (the way round them is the free part, counted once), averaged in power
+	local D, C = {}, {}
+	for j = 1, NV + 2 do D[j], C[j] = {}, {} end
+	local pw, nw, best, lp = 0, 0, -1, 0
+	for i = 1, NU do
+		for j = 1, NV do
+			local s = legs[j][i]
+			local m1 = (s.w1 and coverAt(s.q, toPrev) > 0) or (not s.w1 and #s.o1 > 0)
+			local m2 = (s.w2 and coverAt(s.q, toNxt) > 0) or (not s.w2 and #s.o2 > 0)
+			D[j + 1][i + 1] = m1 or m2
+			C[j + 1][i + 1] = coverBoth(s.q)
+			local mine, seen = {}, {} -- an object across the plane is hit before and after it: once
+			for _, list in ipairs({ m1 and s.o1 or {}, m2 and s.o2 or {} }) do
+				for _, w in ipairs(list) do
+					if not seen[w.ent] then seen[w.ent] = true mine[#mine + 1] = w end
+				end
+			end
+			if #mine > 0 then
+				local loss, l = P.EvalWalls(mine, cfg, true, true)
+				local e = 10 ^ (-loss / 10)
+				pw, nw = pw + e, nw + 1
+				if e > best then best, lp = e, l end
+			end
+		end
+	end
+	-- the samples sit at 14 % .. 86 % of the width and 20 % .. 80 % of the height: a ring of probes
+	-- just inside the edges (tested where the next sample is masked / covered) finds a free strip
+	-- between them and the edges (above an object lower than the opening)
+	local eu, ev = { u0 + (u1 - u0) * 0.01 }, { v0 + (v1 - v0) * 0.01 }
+	for i = 1, NU do eu[i + 1] = su[i] end
+	for j = 1, NV do ev[j + 1] = sv[j] end
+	eu[NU + 2], ev[NV + 2] = u1 - (u1 - u0) * 0.01, v1 - (v1 - v0) * 0.01
+	for j = 1, NV + 2 do
+		for i = 1, NU + 2 do
+			if D[j][i] == nil then
+				local ii, jj = math.Clamp(i, 2, NU + 1), math.Clamp(j, 2, NV + 1)
+				local q = at(eu[i], ev[j])
+				D[j][i] = D[jj][ii] and directAt(q) or false
+				C[j][i] = C[jj][ii] > 0 and coverBoth(q) or 0
+			end
+		end
+	end
+	local xs, ys = gridEdges(D, eu, ev, u0, u1, v0, v1, function(u, v) return directAt(at(u, v)) end)
+	local covered = {}
+	for j = 1, NV + 2 do
+		covered[j] = {}
+		for i = 1, NU + 2 do covered[j][i] = C[j][i] > 0 end
+	end
+	local cx, cy = gridEdges(covered, eu, ev, u0, u1, v0, v1, function(u, v) return coverBoth(at(u, v)) > 0 end)
+	local free = 0
+	for j = 1, NV + 2 do
+		for i = 1, NU + 2 do free = free + (cx[i + 1] - cx[i]) * (cy[j + 1] - cy[j]) * (1 - C[j][i]) end
+	end
+	for k in pairs(maskSet) do maskSet[k] = nil end
+	if nw == 0 then lp = 4 end -- masked only round the jamb, nothing traversed: opaque
+	return { f = f, g = nw > 0 and math.sqrt(pw / nw) or 0, lp = lp, ap = P.GridAperture(wax, vax, xs, ys, D),
+		dArea = free / ((u1 - u0) * (v1 - v0)) }
 end
+P.PortalMasked = portalMasked -- tests
+
+--- Loss (dB) and lowpass level that objects masking openings of portal path p add (pure).
+-- masks[i]: what masks the i-th portal of p.chain (nil = nothing): ap = aperture they leave
+-- (P.GridAperture), f = share of the samples masked, g = amplitude passing the objects, lp = their
+-- lowpass level. The masked chain is evaluated again like partly open doors; path_props_slit 0:
+-- the former amplitude law, (1 - f) + f g per opening.
+function P.MaskedDb(p, S, L, masks, cfg)
+	cfg = cfg or A.cfg
+	if (cfg.path_props_slit or 1) >= 0.5 then
+		local r = P.EvalChain(S, L, p.chain, cfg, masks)
+		return math.max(r.lossDb - p.lossDb, 0), r.lp
+	end
+	local add, lp = 0, 0
+	for i = 1, #p.chain do
+		local m = masks[i]
+		if m then
+			add = add - AC.GainToDb((1 - m.f) + m.f * m.g)
+			lp = math.max(lp, m.f >= 0.5 and m.lp or 0)
+		end
+	end
+	return add, lp
+end
+
 local function pathProps(p, S, L, cfg, srcEnt)
 	local pts = { S }
 	for _, q in ipairs(p.points) do pts[#pts + 1] = q end
 	pts[#pts + 1] = L
 	local add, lpAdd = 0, 0
 	if p.chain and #p.chain > 0 then
+		local masks, any = {}, false
 		for i, portal in ipairs(p.chain) do
-			local dl, dlp = portalMasked(portal, pts[i], pts[i + 2] or L, srcEnt, cfg)
-			if dl then add, lpAdd = add + dl, math.max(lpAdd, dlp) end
+			masks[i] = portalMasked(portal, pts[i], pts[i + 2] or L, srcEnt, cfg)
+			any = any or masks[i] ~= nil
 		end
+		if not any then return end
+		add, lpAdd = P.MaskedDb(p, S, L, masks, cfg)
 	else
 		local objs = {}
 		for i = 1, #pts - 1 do objectsOn(pts[i], pts[i + 1], srcEnt, cfg, objs) end
