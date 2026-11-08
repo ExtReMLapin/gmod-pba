@@ -173,7 +173,8 @@ end
 -- seq = emission number on it, chan } (both followable), or {} (a copy at a fixed position).
 local function emitVoice(data, v, L, src, copies, slot, play)
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
-	if A.Native and A.Native.render then
+	-- (a sentence is a sequence of words played by the engine: never by the module)
+	if A.Native and A.Native.render and not A.IsSentence(data.SoundName) then
 		local g = (data.Volume or 1) * v.gain * A.Native.Directivity(src, L)
 		if g < 0.001 then return false end
 		local delay = voiceDelay(v, L)
@@ -194,9 +195,11 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
 	local delay = voiceDelay(v, L)
 	local name, pos, pitch = data.SoundName, v.pos, data.Pitch or 100
-	local anchor = copies and anchorFor(copies, slot or 1)
+	local sentence = A.IsSentence(name)
+	-- a sentence plays at a position (EmitSentence): no anchor, so not followed
+	local anchor = not sentence and copies and anchorFor(copies, slot or 1)
 	-- a followed copy on an unassigned channel gets an anchor of its own (CHAN_AUTO, as before)
-	if not anchor and not copies and play then anchor = poolAnchor(RealTime() + delay + play) end
+	if not anchor and not sentence and not copies and play then anchor = poolAnchor(RealTime() + delay + play) end
 	local chan = copies and copies.chan or CHAN_AUTO
 	local h = {}
 	if anchor then
@@ -213,7 +216,7 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 			A.Emit(anchor.EmitSound, anchor, name, lvl, pitch, vol, chan, flags, dsp)
 			h.started = true
 		else
-			A.Emit(EmitSound, name, pos, -1, CHAN_AUTO, vol, lvl, flags, pitch, dsp)
+			A.EmitAt(name, pos, -1, CHAN_AUTO, vol, lvl, flags, pitch, dsp)
 		end
 	end
 	if delay >= 0.02 then timer.Simple(delay, emit) else emit() end
@@ -468,7 +471,7 @@ function A.Process(data, relayed)
 	A.DebugNote(nil, S, L, r, data.SoundName, A.Native and A.Native.render and "native" or "sound")
 	if r.clear or not r.voices or #r.voices == 0 then
 		-- "everything native": a clear sound is played by the module at its real position
-		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 then
+		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 and not A.IsSentence(data.SoundName) then
 			local d = S:Distance(L)
 			local g = (data.Volume or 1) * AC.EngineGain(math.max(d, 1), lvl) * A.Native.Directivity(IsValid(src) and src or nil, L)
 			-- PlayVoice only (no engine fallback here: the caller plays the original if this fails)
@@ -611,10 +614,10 @@ net.Receive(NET, function()
 	if A.Enabled() and A.Process(data, true) then return end
 	-- not processed (disabled client, clear path...): play it as the engine would have
 	local e = Entity(data.EntIndex)
-	if IsValid(e) and not e:IsWorld() and data.Channel ~= CHAN_AUTO then
+	if IsValid(e) and not e:IsWorld() and data.Channel ~= CHAN_AUTO and not A.IsSentence(data.SoundName) then
 		A.Emit(e.EmitSound, e, data.SoundName, data.SoundLevel, data.Pitch, data.Volume, data.Channel, data.Flags, data.DSP)
 	else
-		A.Emit(EmitSound, data.SoundName, data.Pos, IsValid(e) and data.EntIndex or 0, data.Channel, data.Volume,
+		A.EmitAt(data.SoundName, data.Pos, IsValid(e) and data.EntIndex or 0, data.Channel, data.Volume,
 			data.SoundLevel, data.Flags, data.Pitch, data.DSP)
 	end
 end)

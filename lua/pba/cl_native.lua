@@ -97,6 +97,21 @@ local function saMaterial(surf, cfg, model)
 	}
 end
 
+--- A face of a grate, fence or grille brush (CONTENTS_GRATE, on either side of the face): sound
+-- crosses it, and Steam Audio would bounce its reverb rays on it as on a wall (a fenced yard heard
+-- as a closed room): left out of the scene, as pba's own traces leave grates out.
+function N.IsGrateSurface(s)
+	local v = s:GetVertices()
+	if #v < 3 then return false end
+	local c = Vector()
+	for _, p in ipairs(v) do c:Add(p) end
+	c:Div(#v)
+	local n = (v[2] - v[1]):Cross(v[3] - v[1])
+	if n:LengthSqr() < 1e-6 then return false end
+	n:Normalize()
+	return bit.band(bit.bor(util.PointContents(c + n * 0.5), util.PointContents(c - n * 0.5)), CONTENTS_GRATE) ~= 0
+end
+
 --- Triangulated world (fan per brush surface) + material list. Returns verts, tris, matIdx, mats, mins, maxs.
 function N.BuildWorld()
 	local verts, tris, matIdx, mats, matOf = {}, {}, {}, {}, {}
@@ -107,7 +122,7 @@ function N.BuildWorld()
 		local name = m and m:GetName() or ""
 		if N.Yield then N.Yield() end
 		local water = s:IsWater()
-		if not s:IsSky() and (withWater or not water) and not skipMaterial(name) then
+		if not s:IsSky() and (withWater or not water) and not skipMaterial(name) and not N.IsGrateSurface(s) then
 			local surf = water and "pba_water" or (m and m:GetString("$surfaceprop") or "default")
 			local mi = matOf[surf]
 			if not mi then

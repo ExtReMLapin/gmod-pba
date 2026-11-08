@@ -72,6 +72,7 @@ function string.StartWith(s, p) return s:sub(1, #p) == p end
 pba = { Doors = { byEnt = {}, entState = {} } }
 -- for cl_probes.lua (probe graph): traces see nothing unless a test stubs them
 MASK_SOLID_BRUSHONLY, MASK_SOLID, CONTENTS_SOLID = 16395, 33570827, 1
+CONTENTS_GRATE, CONTENTS_WATER = 8, 32
 hook = { Add = function() end, Remove = function() end }
 function V:Unpack() return self.x, self.y, self.z end
 function SysTime() return os.clock() end

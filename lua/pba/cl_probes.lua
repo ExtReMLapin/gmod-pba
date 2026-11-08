@@ -10,15 +10,17 @@ local A = pba
 local PR = {}
 A.Probes = PR
 
-local CACHE_VERSION = 5
+local CACHE_VERSION = 6 -- 6: links cross grates
 local MAX_PROBES = 30000
 local DIRS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 
 local function worldOnly() return false end
+-- links cross grates, fences, grilles (CONTENTS_GRATE: "bullets/sight pass through"): sound does too
+local LINK_MASK = bit.band(MASK_SOLID_BRUSHONLY, bit.bnot(CONTENTS_GRATE))
 -- the hot traces reuse their input and result tables (`output`): a new result table per trace was
 -- most of the ~166 KB of garbage per path computation, whose collection made 8-20 ms spikes
 local segOut = {}
-local segTr = { mask = MASK_SOLID_BRUSHONLY, filter = worldOnly, output = segOut }
+local segTr = { mask = LINK_MASK, filter = worldOnly, output = segOut }
 local function clearSeg(a, b)
 	segTr.start, segTr.endpos = a, b
 	util.TraceLine(segTr)
@@ -374,7 +376,7 @@ end
 -- shortcuts must keep a margin: a hull trace, so a path never grazes a door frame
 local HULL_MIN, HULL_MAX = Vector(-4, -4, -4), Vector(4, 4, 4)
 local fatOut = {}
-local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = MASK_SOLID_BRUSHONLY, filter = worldOnly, output = fatOut }
+local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = LINK_MASK, filter = worldOnly, output = fatOut }
 local function clearFat(a, b)
 	fatTr.start, fatTr.endpos = a, b
 	util.TraceHull(fatTr)

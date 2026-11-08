@@ -118,6 +118,9 @@ steps = [
     ("predicted_fire", lambda: py("predicted_fire.py")),
     ("lifecycle", lambda: py("lifecycle.py")),
     ("bot_gunfire", lambda: (load("pba_tworooms"), job("server", "bot_gunfire.lua"))[1]),
+    # special sounds: a sentence (metrocop radio) behind a wall is relayed and played muffled by the
+    # client (EmitSentence), not left to the engine through the wall; pba_sentences 0: not relayed
+    ("sentence_relay", lambda: [job("server", "sentence_relay.lua", 30), job("client", "sentence_client.lua", 10)]),
     ("loop_removed", lambda: job("server", "loop_removed.lua")),
     ("native_doors", lambda: (native_on(True), job("client", "native_doors.lua"))[1]),
     ("native_features", lambda: job("client", "native_features.lua")),
@@ -146,6 +149,9 @@ steps = [
     ("path_obstruction", lambda: py("path_obstruction.py")),
     # one model for a partly blocked opening: a prop covering part of a doorway = a leaf covering the same part
     ("mask_equivalence", lambda: py("mask_equivalence.py")),
+    # special sounds: grates and fences (CONTENTS_GRATE) cost no wall loss, do not cut probe links and
+    # stay out of the Steam Audio scene (12 grates of d1_canals_01)
+    ("grate_loss d1_canals_01", lambda: (load("d1_canals_01"), job("client", "grate_loss.lua", 60))[1]),
     # special sounds: looping ambient_generic already playing at map load (before the hooks) taken over
     ("ambient_start d1_town_01", lambda: (fresh("d1_town_01"), job("server", "ambient_start.lua", 30))[1]),
     # path quality against an independent single-bend reference (maps without areaportals: probes)

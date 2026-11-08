@@ -547,13 +547,17 @@ end
 -- closure per filter were garbage on every path computation (GC spikes). A new HitPos Vector is still
 -- made by each trace, so keeping tr.HitPos is safe.
 local wallOut, insideOut, backOut, detOut = {}, {}, {}, {}
-local wallTr = { mask = MASK_SOLID, filter = traceFilter, output = wallOut }
-local insideTr = { mask = MASK_SOLID_BRUSHONLY, filter = traceFilter, output = insideOut }
+-- grates, fences, grilles (CONTENTS_GRATE: "bullets/sight pass through") are no wall for sound either:
+-- left out of the wall traces (their texture may declare "metal" or "concrete": 30 dB on d1_canals_01),
+-- so a wall a grate is mounted on keeps its own loss
+local NO_GRATE = bit.bnot(CONTENTS_GRATE)
+local wallTr = { mask = bit.band(MASK_SOLID, NO_GRATE), filter = traceFilter, output = wallOut }
+local insideTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = traceFilter, output = insideOut }
 local backEnt
 local function onlyBackEnt(e) return e == backEnt end
 local backTr = { mask = MASK_SOLID, filter = onlyBackEnt, output = backOut }
 local function noEnt() return false end
-local detTr = { mask = MASK_SOLID_BRUSHONLY, filter = noEnt, output = detOut }
+local detTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = detOut }
 local function detClear(a, b)
 	detTr.start, detTr.endpos = a, b
 	util.TraceLine(detTr)

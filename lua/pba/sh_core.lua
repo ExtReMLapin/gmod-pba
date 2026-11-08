@@ -124,7 +124,22 @@ end
 --- Duration of a sound name (s), looked up on its file: nil or 0 when unknown (sentence, missing
 -- file, VBR mp3).
 function A.SoundDuration(name)
+	if A.IsSentence(name) then return SentenceDuration(string.sub(name, 2)) end
 	return SoundDuration(A.SoundFile(name))
+end
+
+--- Sentences (scripts/sentences.txt: Combine radio, metrocops...) reach EntityEmitSound as
+-- "invalid.wav" with their name in OriginalSoundName; pba carries them as "!NAME" (the engine's
+-- sentence character) and plays them with EmitSentence.
+function A.IsSentence(name) return string.byte(name or "", 1) == 33 end
+
+--- Plays a sound name the engine way: EmitSentence for a sentence, EmitSound otherwise.
+function A.EmitAt(name, pos, idx, chan, vol, lvl, flags, pitch, dsp)
+	if A.IsSentence(name) then
+		A.Emit(EmitSentence, string.sub(name, 2), pos, idx, chan, vol, lvl, flags, pitch, dsp)
+	else
+		A.Emit(EmitSound, name, pos, idx, chan, vol, lvl, flags, pitch, dsp)
+	end
 end
 
 A.loopCache = A.loopCache or {}
