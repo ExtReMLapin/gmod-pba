@@ -5,6 +5,76 @@ local AC, G, P = A.AC, A.Graph, A.Paths
 
 local function near(a, b, tol) return math.abs(a - b) <= (tol or 1e-3) end
 
+-- A synthetic scene of boxes for P.PortalMasked: the world (list of { mins, maxs }) and one prop box
+-- passing `through` dB. util.TraceLine and P.Walls are replaced by segment-box tests for the duration
+-- of fn() only (restored even on error). Traces with ignoreworld see the prop, the others the world.
+local function segBox(a, b, mn, mx)
+	local t0, t1 = 0, 1
+	for _, k in ipairs({ "x", "y", "z" }) do
+		local d = b[k] - a[k]
+		if math.abs(d) < 1e-9 then
+			if a[k] < mn[k] or a[k] > mx[k] then return nil end
+		else
+			local u, v = (mn[k] - a[k]) / d, (mx[k] - a[k]) / d
+			if u > v then u, v = v, u end
+			t0, t1 = math.max(t0, u), math.min(t1, v)
+			if t0 > t1 then return nil end
+		end
+	end
+	return t0, t1
+end
+local function withScene(world, prop, through, fn)
+	local ent = { GetClass = function() return "prop_physics" end, EntIndex = function() return 9998 end }
+	local function worldHit(a, b)
+		local best
+		for _, w in ipairs(world) do
+			local t0, t1 = segBox(a, b, w[1], w[2])
+			if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+		end
+		return best
+	end
+	local saved, savedWalls = util.TraceLine, P.Walls
+	AC.SURF_TABLE.pba_test_prop = { 1, through + 10, 0, through + 10, through + 10, 3, fixed = true }
+	util.TraceLine = function(t)
+		local out = t.output or {}
+		local f
+		if t.ignoreworld then f = segBox(t.start, t.endpos, prop[1], prop[2]) else f = worldHit(t.start, t.endpos) end
+		out.Hit, out.Fraction = f ~= nil, f or 1
+		out.StartSolid = f == 0 and t.start:WithinAABox(prop[1], prop[2]) or false
+		out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
+		return out
+	end
+	P.Walls = function(a, b)
+		local walls = {}
+		local wf = worldHit(a, b)
+		if wf then walls[#walls + 1] = { t = wf, entry = a + (b - a) * wf } end
+		local t0, t1 = segBox(a, b, prop[1], prop[2])
+		if t0 then
+			local entry, exit = a + (b - a) * t0, a + (b - a) * t1
+			local ext = prop[2] - prop[1]
+			walls[#walls + 1] = { t = t0, entry = entry, exit = exit, thickness = entry:Distance(exit), mat = MAT_METAL,
+				surf = "pba_test_prop", ent = ent, minExtent = math.min(ext.x, ext.y, ext.z),
+				detour = P.DetourDelta(a, b, prop[1] - Vector(2, 2, 2), prop[2] + Vector(2, 2, 2), function(e)
+					return e.z > 0 and not worldHit(a, e) and not worldHit(e, b) end) }
+		end
+		table.sort(walls, function(x, y) return x.t < y.t end)
+		return walls
+	end
+	local ok, err = pcall(fn)
+	util.TraceLine, P.Walls = saved, savedWalls
+	AC.SURF_TABLE.pba_test_prop = nil
+	if not ok then error(err, 0) end
+end
+-- pba_tworooms as measured in game: portal at x = 512 (listener face of a 16 u wall), y 72..112, z 8..112
+local function tworoomsDoorway()
+	return { poly = { Vector(512, 72, 8), Vector(512, 72, 112), Vector(512, 112, 112), Vector(512, 112, 8) },
+		center = Vector(512, 92, 60), normal = Vector(-1, 0, 0), open = 1, closedDb = 28, closedLp = 3 }
+end
+local function wallWithHole(x0, x1)
+	return { { Vector(x0, -1000, -100), Vector(x1, 64, 300) }, { Vector(x0, 112, -100), Vector(x1, 1000, 300) },
+		{ Vector(x0, 64, 112), Vector(x1, 112, 300) }, { Vector(-1000, -1000, -100), Vector(2000, 2000, 0) } }
+end
+
 -- synthetic BSP: three areas in a row, portals 1 (areas 1|2, plane x=100) and 2 (areas 2|3, x=200)
 local function rect(x, y0, y1, z0, z1)
 	return { Vector(x, y0, z0), Vector(x, y0, z1), Vector(x, y1, z1), Vector(x, y1, z0) }
@@ -304,6 +374,46 @@ return {
 			local inMasked = AC.ApertureBand(lap, 0, 37, 100, 120, 500)
 			expect(inMasked < inFree).to.beTrue()
 			expect(inFree < 1).to.beTrue()
+		end },
+		{ name = "PortalMasked: a vending machine against a deep doorway (path_obstruction A): no free strip seen through the jamb, the diffuse leak through the 15 % it leaves free; loses >= 7 dB", func = function()
+			local cfg = table.Copy(pba.cfg)
+			cfg.path_props_slit = 1
+			local S, L = Vector(784, 256, 40), Vector(256, 256, 64)
+			local base = P.EvalChain(S, L, { tworoomsDoorway() }, cfg)
+			local m, add
+			-- machine as measured in game (AABB), two sheets: 30 dB through it
+			withScene(wallWithHole(512, 528), { Vector(526, 63.7, 0), Vector(569, 116.4, 96.6) }, 30, function()
+				m = P.PortalMasked(tworoomsDoorway(), S, L, nil, cfg)
+			end)
+			add = P.MaskedDb(base, S, L, { m }, cfg)
+			local direct, diffuse = m.ap.area, m.dArea or m.ap.area
+			if not (add >= 7 and direct <= 0.03 and diffuse >= 0.10 and diffuse <= 0.20) then
+				error(string.format("drop %.2f dB (want >= 7); free for the direct sound %.3f (want <= 0.03), for the diffuse sound %.3f (want 0.10..0.20, the strip above the machine is 0.148)",
+					add, direct, diffuse))
+			end
+		end },
+		{ name = "PortalMasked: the way over an object's top edge is counted once (opaque object 10 u before the opening, lower than it: within 1 dB of the free strip alone)", func = function()
+			local cfg = table.Copy(pba.cfg)
+			cfg.path_props_slit = 1
+			local S, L = Vector(784, 256, 40), Vector(256, 256, 64)
+			local base = P.EvalChain(S, L, { tworoomsDoorway() }, cfg)
+			-- 8 u deep doorway (x 512..520), opaque slab x 522..540 covering it up to z = 80
+			local m
+			withScene(wallWithHole(512, 520), { Vector(522, 60, 0), Vector(540, 120, 80) }, 60, function()
+				m = P.PortalMasked(tworoomsDoorway(), S, L, nil, cfg)
+			end)
+			local add = P.MaskedDb(base, S, L, { m }, cfg)
+			-- reference: S sees the opening above z = 40 + 40 * 272 / 244 = 84.6 (over the slab's front
+			-- top edge); the slab covers the plane up to z = 80; nothing passes through it
+			local zs = 40 + 40 * 272 / 244
+			local wax, vax = Vector(0, 1, 0), Vector(0, 0, -1)
+			local ideal = { f = 1, g = 0, lp = 3, dArea = 32 / 104,
+				ap = P.GridAperture(wax, vax, { -20, 20 }, { -52, -(zs - 60), 52 }, { { false }, { true } }) }
+			local ref = P.MaskedDb(base, S, L, { ideal }, cfg)
+			if math.abs(add - ref) > 1 then
+				error(string.format("drop %.2f dB, the free strip alone %.2f dB (direct %.3f, diffuse %.3f, through %.1f dB)",
+					add, ref, m.ap.area, m.dArea or m.ap.area, -20 * math.log10(math.max(m.g, 1e-9))))
+			end
 		end },
 		{ name = "EvalWalls: a hollow prop crossed through has two sheets (vending machine >= the props cap); a thin panel keeps one sheet", func = function()
 			-- hollow surfaceprop: aluminium-like sheet, 0.05 in (one sheet: ~17.7 dB at 500 Hz, ~7.7 dB rendered)
