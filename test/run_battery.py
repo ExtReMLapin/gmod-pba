@@ -1,9 +1,9 @@
 """Full PBA test battery, sequential (about 15 min; the game changes maps). Prints one ##progress line
 per step and a summary. Usage: python -I -u run_battery.py <path to mcp.py>. Needs ffmpeg on PATH."""
 import json, os, subprocess, sys, time
-HERE = os.path.dirname(os.path.abspath(__file__))
-MCP = os.path.join(HERE, "mcp.py")
-TEST = r"D:\dev\audioprop\test"
+TEST = os.path.dirname(os.path.abspath(__file__))
+MCP = sys.argv[1]  # path to the gmod-mcp client (mcp.py)
+GAME = r"D:\SteamLibrary\steamapps\common\GarrysMod\garrysmod"
 sys.path.insert(0, TEST)
 
 def call(tool, args, mx=200000, timeout=600):
