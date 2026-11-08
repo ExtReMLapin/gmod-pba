@@ -9,6 +9,10 @@ sound.PlayFile("sound/music/hl2_song20_submix0.mp3", "3d noblock", function(c, e
 job:wait(function() return ch ~= nil or res.err ~= nil end, 10)
 if not IsValid(ch) then return { fail = "no channel", err = res.err } end
 local src = Vector(784, 256, 40)
+-- engine rendering for the BASS part (filter); the native part switches it on itself
+local savedRender = pba.cfg.native_render
+RunConsoleCommand("pba_native_render", "0")
+job:sleep(1)
 ch:Set3DFadeDistance(200, 0)
 ch:SetVolume(0.8)
 ch:Play()
@@ -62,7 +66,6 @@ res.ratioFlat = hiLoRatio(2)
 RunConsoleCommand("pba_streams_filter", "1")
 -- native rendering of the stream (N2): BASS muted, the module plays the captured audio
 if pba.Native.ready and pba_native.PlayStream then
-	local wasRender = pba.cfg.native_render
 	RunConsoleCommand("pba_native_render", "1")
 	job:sleep(1.2)
 	local N = pba.Native
@@ -76,7 +79,7 @@ if pba.Native.ready and pba_native.PlayStream then
 		levelForVisualisers = lvlBefore,             -- GetLevel ignores the channel volume
 		error = pba.Streams.lastNativeError,
 	}
-	RunConsoleCommand("pba_native_render", tostring(wasRender))
+	RunConsoleCommand("pba_native_render", "0")
 	job:sleep(1)
 	res.native.afterOff = { voice = r.nativeId, bassVolume = pba.Streams.orig.GetVolume(ch) }
 end
@@ -87,6 +90,7 @@ res.offG = r and r.g
 res.offApparent = r and r.apparent ~= nil
 RunConsoleCommand("pba_streams", "1")
 hook.Remove("Think", "ap_streams_owner")
+RunConsoleCommand("pba_native_render", tostring(savedRender))
 ch:Stop()
 res.pass = res.tracked and res.getPos == tostring(src) and math.abs(res.getVolume - 0.8) < 1e-3 and res.apparent ~= nil
 	and res.g < 0.9 and (not pba.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9

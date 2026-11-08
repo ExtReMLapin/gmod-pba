@@ -237,35 +237,27 @@ std::string Filter(void* obj, unsigned freq, bool is3D, float gl, float gm, floa
 	const DWORD h = HandleOf(obj, freq, is3D, &info);
 	if (!h) return "channel handle not validated";
 	std::lock_guard<std::mutex> lk(g_mtx);
-	auto it = g_fx.find(h);
-	if (it == g_fx.end()) {
-		auto fx = std::make_unique<Fx>();
-		fx->handle = h;
-		fx->chans = info.chans ? info.chans : 1;
-		fx->freq = info.freq ? info.freq : 44100;
-		fx->aL = 1.0f - std::exp(-2.0f * 3.14159265f * 300.0f / fx->freq);
-		fx->aH = 1.0f - std::exp(-2.0f * 3.14159265f * 3000.0f / fx->freq);
-		fx->floatDspConfig = pGetConfig(BASS_CONFIG_FLOATDSP);
-		fx->channelFlags = info.flags;
+	// the record may already exist without a filter (created by a capture): attach it then
+	Fx* f = RecordOf(h, info);
+	if (!f->dsp) {
 		if (pSetDSPEx) {
 			// explicit float data: no guess about the format (the global FLOATDSP setting can be
-			// changed by other modules, e.g. gm_bass3)
-			fx->format = 0;
-			fx->dsp = pSetDSPEx(h, &Dsp, fx.get(), 0, BASS_DSP_FLOAT);
-			fx->viaEx = fx->dsp != 0;
+			// changed by other modules, e.g. gm_bass3; it even reads -1 = error in GMod)
+			f->format = 0;
+			f->dsp = pSetDSPEx(h, &Dsp, f, 0, BASS_DSP_FLOAT);
+			f->viaEx = f->dsp != 0;
 		}
-		if (!fx->dsp) {
+		if (!f->dsp) {
 			const DWORD fdsp = pGetConfig(BASS_CONFIG_FLOATDSP);
 			const bool floatDsp = fdsp != 0 && fdsp != (DWORD)-1;
-			fx->format = (floatDsp || (info.flags & BASS_SAMPLE_FLOAT)) ? 0 : (info.flags & BASS_SAMPLE_8BITS) ? 2 : 1;
-			fx->dsp = pSetDSP(h, &Dsp, fx.get(), 0);
+			f->format = (floatDsp || (info.flags & BASS_SAMPLE_FLOAT)) ? 0 : (info.flags & BASS_SAMPLE_8BITS) ? 2 : 1;
+			f->dsp = pSetDSP(h, &Dsp, f, 0);
 		}
-		if (!fx->dsp) return "BASS_ChannelSetDSP failed";
-		it = g_fx.emplace(h, std::move(fx)).first;
+		if (!f->dsp) return "BASS_ChannelSetDSP failed";
 	}
-	it->second->g[0] = gl;
-	it->second->g[1] = gm;
-	it->second->g[2] = gh;
+	f->g[0] = gl;
+	f->g[1] = gm;
+	f->g[2] = gh;
 	return "";
 #else
 	return "windows only";
@@ -286,9 +278,9 @@ std::string Info(void* obj, unsigned freq, bool is3D) {
 		snprintf(buf, sizeof buf, "no filter; chans=%lu freq=%lu flags=0x%lx floatdsp_now=%ld", info.chans, info.freq, info.flags, (long)cfg);
 	} else {
 		const Fx& f = *it->second;
-		snprintf(buf, sizeof buf, "filter via %s, format=%s; chans=%lu freq=%lu flags_at_attach=0x%lx floatdsp_at_attach=%ld floatdsp_now=%ld",
-		         f.viaEx ? "SetDSPEx(FLOAT)" : "SetDSP", f.format == 0 ? "float" : f.format == 1 ? "int16" : "uint8",
-		         f.chans, f.freq, f.channelFlags, (long)f.floatDspConfig, (long)cfg);
+		snprintf(buf, sizeof buf, "%s via %s, format=%s; chans=%lu freq=%lu flags_at_attach=0x%lx floatdsp_at_attach=%ld floatdsp_now=%ld capture=%s",
+		         f.dsp ? "filter" : "no filter (capture only)", f.viaEx ? "SetDSPEx(FLOAT)" : "SetDSP", f.format == 0 ? "float" : f.format == 1 ? "int16" : "uint8",
+		         f.chans, f.freq, f.channelFlags, (long)f.floatDspConfig, (long)cfg, f.capDsp ? "on" : "off");
 	}
 	return buf;
 #else

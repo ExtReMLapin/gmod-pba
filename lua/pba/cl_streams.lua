@@ -194,7 +194,12 @@ timer.Create("pba_streams", 0.25, 0, function()
 			if r.apparent or (r.g or 1) ~= 1 or r.filtered then release(ch, r) end
 		elseif r.pos then
 			n = n + 1
-			local ok = pcall(evaluate, ch, r, L)
+			local ok, err = pcall(evaluate, ch, r, L)
+			if not ok and ST.lastEvalError ~= err then
+				-- never swallow silently: keep it for diagnostics and say it once
+				ST.lastEvalError = err
+				ErrorNoHalt("[PBA] stream evaluation failed: " .. tostring(err) .. "\n")
+			end
 			if ok then
 				if nativeMode(r) then
 					if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) end
