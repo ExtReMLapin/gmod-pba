@@ -155,6 +155,8 @@ steps = [
     # special sounds: a moving brush's loop (func_door noise1) is stopped by the engine's C++, never
     # seen by Lua: the server mirror must stop with the motion
     ("brush_loop_stop pba_demo", lambda: job("server", "brush_loop_stop.lua", 60)),
+    # diffuse model, room 14: the long corridor is heard diffuse (tunnel reverb preset) and a few dB lower, not faded out
+    ("diffuse_detour pba_demo", lambda: job("client", "diffuse_detour.lua", 30)),
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
     ("reverb_rt", lambda: py("reverb_rt.py")),
     ("native_options", lambda: py("native_options.py")),

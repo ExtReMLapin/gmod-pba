@@ -827,36 +827,40 @@ function P.PathShape(S, pts, L)
 	return S:Distance(L), bend
 end
 
--- 0 below x0, 1 from 2 * x0, smoothstep in between (continuous level and slope: no pop)
-local function guardRamp(x, x0)
+-- 0 below x0, 1 from x1, smoothstep in between (continuous level and slope: no pop)
+local function ramp(x, x0, x1)
 	if x <= x0 then return 0 end
-	local t = (x - x0) / x0
+	local t = (x - x0) / (x1 - x0)
 	if t >= 1 then return 1 end
 	return t * t * (3 - 2 * t)
 end
 
---- Length / angle guard (pure): extra loss (dB) of an implausible path.
--- A path much longer than the straight line (a detour round the other end of the map), or winding
--- by a large total angle, is not where most of the sound comes from (walls, routes not modelled):
--- games cap or fade such paths (Wwise diffraction tapering, Rainbow Six Siege path cost). Beyond
--- about 180 degrees the diffraction cap (diff_max_total) also stops counting the extra corners.
--- Progressive, never a cut: each criterion ramps from its onset to twice it, the sum is capped at
--- path_guard_db. The straight line counts as at least path_guard_near long (a source just behind a
--- wall heard through the door round it is a normal, room-scale detour). Paths without a known shape
--- (Steam Audio baked paths) are left alone.
-function P.PathGuardDb(p, cfg)
+--- Diffuse model (pure). A path much longer than the straight line, or winding round many corners (a
+-- long corridor), does not bring its sound as one clean wavefront: every corner and wall scatters it,
+-- and the walls absorb some at every bounce. Heard as a reverberant, blurred sound, there but hard to
+-- understand. Returns the diffuse share of the path's energy (0 .. diffuse_max: ramps with the length
+-- ratio, 2x -> 4.5x the straight line, and with the total bend, 180 -> 540 degrees) and the walls'
+-- absorption (dB): one bounce every diffuse_width units of extra length, each losing diffuse_absorb of
+-- the energy. The straight line counts as at least diffuse_near long (a source just behind a wall
+-- heard through the door round it is a normal, room-scale detour). Paths without a known shape
+-- (Steam Audio baked paths) stay clean. Replaces the length / angle guard, which faded such paths out.
+function P.PathDiffuse(p, cfg)
 	cfg = cfg or A.cfg
-	local maxDb = cfg.path_guard_db or 0
-	if maxDb <= 0 or not p.direct or not p.length then return 0 end
-	local ratio = p.length / math.max(p.direct, cfg.path_guard_near or 512, 1)
-	local f = guardRamp(ratio, cfg.path_guard_ratio or 2) + guardRamp(p.bendDeg or 0, cfg.path_guard_angle or 180)
-	return maxDb * math.min(f, 1)
+	if (cfg.diffuse or 0) < 0.5 or not p.direct or not p.length then return 0, 0 end
+	local straight = math.max(p.direct, cfg.diffuse_near or 512, 1)
+	local fl = ramp(p.length / straight, 2, 4.5)
+	local fb = ramp(p.bendDeg or 0, 180, 540)
+	local share = (1 - (1 - fl) * (1 - fb)) * (cfg.diffuse_max or 0.85)
+	local bounce = -10 * math.log10(1 - math.Clamp(cfg.diffuse_absorb or 0.1, 0, 0.99))
+	local excess = math.max(p.length - straight, 0)
+	local absorb = math.min(excess / math.max(cfg.diffuse_width or 128, 16) * bounce, cfg.diffuse_max_db or 20)
+	return share, absorb
 end
 
 --- Builds the voice list from evaluated portal paths and the transmission path (pure).
 -- Each voice: { pos, gain (linear target gain at the listener), lp, kind, members }.
--- Every path's level is formed here (portal, probe, bridge, baked): the length / angle guard is
--- applied here once, for all of them (p.guardDb, part of p.lossDb; p.rawLossDb stays without it).
+-- Every path's level is formed here (portal, probe, bridge, baked): the diffuse model is applied here
+-- once, for all of them (p.diffuse; p.absorbDb part of p.lossDb, p.rawLossDb stays without it).
 -- direct (optional): straight-line distance source - listener (else the transmission's length or
 -- the paths' own `direct`): the voices together never exceed the free field at that distance.
 function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
@@ -864,8 +868,8 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	-- loud sources keep their headroom above the engine's full scale (see AC.Headroom)
 	for _, p in ipairs(paths) do
 		p.rawLossDb = p.rawLossDb or p.lossDb
-		p.guardDb = P.PathGuardDb(p, cfg)
-		p.lossDb = math.max(p.rawLossDb + p.guardDb - AC.Headroom(sndlvl, p.length, cfg.fullscale_db), 0)
+		p.diffuse, p.absorbDb = P.PathDiffuse(p, cfg)
+		p.lossDb = math.max(p.rawLossDb + p.absorbDb - AC.Headroom(sndlvl, p.length, cfg.fullscale_db), 0)
 	end
 	if trans then
 		trans.rawLossDb = trans.rawLossDb or trans.lossDb
@@ -910,7 +914,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 
 	-- position / gain / low-pass of each portal voice (energy-weighted)
 	for _, v in ipairs(voices) do
-		local sum, pw, lpw, dbw = Vector(0, 0, 0), 0, 0, 0
+		local sum, pw, lpw, dbw, dfw = Vector(0, 0, 0), 0, 0, 0, 0
 		local dom = v.members[1]
 		for _, p in ipairs(v.members) do
 			local g = AC.EngineGain(p.length, sndlvl) * 10 ^ (-p.lossDb / 20)
@@ -918,6 +922,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 			sum:Add(dirOf(p) * w)
 			pw = pw + w
 			lpw = lpw + p.lp * w
+			dfw = dfw + (p.diffuse or 0) * w
 			dbw = dbw and p.lpDb and dbw + p.lpDb * w or nil
 		end
 		v.gain = math.sqrt(pw)
@@ -928,6 +933,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 			v.pos = dom.pos
 		end
 		v.lp = math.Round(lpw / math.max(pw, 1e-12))
+		v.diffuse = dfw / math.max(pw, 1e-12) -- energy-weighted diffuse share of the voice
 		v.lpDb = dbw and dbw / math.max(pw, 1e-12) -- loss behind the level, when every member has one
 		v.level = AC.GainToDb(v.gain)
 		v.len = dom.length -- path length (propagation delay, air absorption)

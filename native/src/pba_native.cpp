@@ -16,7 +16,7 @@
 //   SavePaths() -> bytes | nil ; LoadPaths(bytes) -> numProbes | false, err   (disk cache)
 //   Paths(sources, listener) -> array of { el, em, eh, w, sh1..3, dx, dy, dz } (eq + arrival field)
 //   Rendering (render.cpp): AudioStart([sofaBytes]), AudioStop(), HasSound(name),
-//     LoadSound(name, bytes), Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh]),
+//     LoadSound(name, bytes), Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse]),
 //     Update(id, ...), StopVoice(id), SetListener(pos, fwd, up, master), SetOutputMode(0|1),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table
@@ -1191,13 +1191,15 @@ static render::VoiceParams ReadVoice(ILuaBase* LUA, int first) {
 	return p;
 }
 
-// optional trailing arguments of Play: delay (seconds), sh {w, sh1, sh2, sh3} (baked path field)
+// optional trailing arguments of Play: delay (seconds), sh {w, sh1, sh2, sh3} (baked path field),
+// diffuse share (0..1)
 static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	if (LUA->IsType(first, Type::Number)) p.delay = (float)LUA->GetNumber(first);
 	if (LUA->IsType(first + 1, Type::Table)) {
 		for (int i = 0; i < 4; ++i) p.sh[i] = (float)TableNumber(LUA, first + 1, i + 1);
 		p.hasSH = true;
 	}
+	if (LUA->IsType(first + 2, Type::Number)) p.diffuse = (float)LUA->GetNumber(first + 2);
 }
 
 // AudioStart([sofaBytes]) -> true | false, err
@@ -1256,7 +1258,7 @@ LUA_FUNCTION(LoadSound) {
 	return 1;
 }
 
-// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh]]]]) -> voice id (0 = failed)
+// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse]]]]]) -> voice id (0 = failed)
 LUA_FUNCTION(Play) {
 	const char* name = LUA->CheckString(1);
 	LUA->CheckType(2, Type::Vector);
@@ -1554,10 +1556,13 @@ LUA_FUNCTION(Stats) {
 }
 
 // Update(id, pos, gain, eqL, eqM, eqH [, pitch]) -> alive
+// Update(id, pos, gain, eqL, eqM, eqH [, pitch [, diffuse]])
 LUA_FUNCTION(Update) {
 	const int id = (int)LUA->CheckNumber(1);
 	LUA->CheckType(2, Type::Vector);
-	LUA->PushBool(render::Update(id, ReadVoice(LUA, 2)));
+	render::VoiceParams p = ReadVoice(LUA, 2);
+	p.diffuse = LUA->IsType(8, Type::Number) ? (float)LUA->GetNumber(8) : -1.0f; // -1: keep the voice's
+	LUA->PushBool(render::Update(id, p));
 	return 1;
 }
 

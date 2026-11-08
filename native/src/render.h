@@ -21,6 +21,9 @@ struct VoiceParams {
 	float delay = 0;     // start delay (seconds): propagation time
 	bool hasSH = false;  // baked path: rendered through IPLPathEffect with these coefficients
 	float sh[4] = {0, 0, 0, 0};
+	// share of the energy arriving diffuse (long winding path: scattered at every corner and wall):
+	// 0 = a clean wavefront; towards 1 less direct sound, more room reverb send, blurred direction
+	float diffuse = 0;
 };
 
 // sofa / sofaSize: optional SOFA HRTF file contents (nullptr = Steam Audio's default HRTF)

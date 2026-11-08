@@ -421,15 +421,15 @@ for _, k in ipairs({ "tile", "concrete", "wood", "metal", "foam" }) do
 	end
 end
 
--- the length / angle guard is applied by each client in the room (cl_demo, DM.ApplyGuard): paths
--- are computed on the client; the server only keeps and sends the selection
+-- the diffuse model is switched by each client in the room (cl_demo, DM.ApplyDiffuse): paths are
+-- computed on the client; the server only keeps and sends the selection
 H.detour = {
 	music = function(r, st, ply, force) toggleLoop(r, src(r, "music"), "detour", force) end,
 }
-for _, k in ipairs({ "guard_on", "guard_off" }) do
+for _, k in ipairs({ "diffuse_on", "diffuse_off" }) do
 	H.detour[k] = function(r, st)
-		st.sel.guard = k
-		sendSel(r, "guard", k)
+		st.sel.diffuse = k
+		sendSel(r, "diffuse", k)
 	end
 end
 

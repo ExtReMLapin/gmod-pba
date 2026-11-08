@@ -92,12 +92,13 @@ local function muffle(m, S, L)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	if r.clear or not r.voices or #r.voices == 0 then return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
-	local p, best = 0, r.voices[1]
-	for _, v in ipairs(r.voices) do p = p + v.gain * v.gain end
+	local p, best, dp = 0, r.voices[1], 0
+	for _, v in ipairs(r.voices) do p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain end
+	local diffuse = dp / math.max(p, 1e-12)
 	local g = math.sqrt(p) / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6)
 	-- the sound's own preset (radio, speaker) is kept (pba_keep_dsp): muffled by volume only
 	if (A.cfg.keep_dsp or 1) >= 0.5 and (m.dsp or 0) ~= 0 then return math.min(g, 1), m.dsp end
-	return math.min(g, 1), AC.DSPForLevel(best.lp)
+	return math.min(g, 1), AC.DSPForVoice(best.lp, diffuse)
 end
 
 --- Native rendering of a loop: the module plays it (HRTF + EQ) at its apparent position
@@ -110,14 +111,16 @@ local function applyNative(m, S, L)
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
 	if m.clearPath then
 		pos, gain, lp = S, AC.EngineGain(S:Distance(L), m.lvl), 0
+		m.diffuse = 0
 	else
-		local p = 0
-		for _, v in ipairs(r.voices) do p = p + v.gain * v.gain end
+		local p, dp = 0, 0
+		for _, v in ipairs(r.voices) do p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain end
 		pos, gain, lp = r.voices[1].pos, math.sqrt(p), r.voices[1].lp
+		m.diffuse = dp / math.max(p, 1e-12) -- diffuse share (long winding path): the module blurs and reverbs it
 	end
 	-- same meters as the patch path (gain relative to the engine's direct law, DSP equivalent)
 	m.g = math.min(gain / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6), 1)
-	m.curDsp = AC.DSPForLevel(lp or 0)
+	m.curDsp = AC.DSPForVoice(lp or 0, m.diffuse)
 	gain = gain * m.vol * A.cfg.native_gain
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
 	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
@@ -133,7 +136,7 @@ local function applyNative(m, S, L)
 		else
 			m.ramp = nil
 		end
-		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch) then m.nativeId = nil end
+		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0) then m.nativeId = nil end
 		return
 	end
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
@@ -142,7 +145,7 @@ local function applyNative(m, S, L)
 		if why == "pending" then return nil end -- decoding: wait for it (no engine fallback meanwhile)
 		return false
 	end
-	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once)
+	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0)
 	m.started = true
 	m.nativeId = id > 0 and id or nil
 	-- a new voice starts at its target: the next ramp starts from there

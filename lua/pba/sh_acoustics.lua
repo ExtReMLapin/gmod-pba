@@ -151,6 +151,17 @@ function AC.DSPForLevel(level, cfg)
 	return floor(cfg["dsp_lp" .. min(level, 4)] or 0)
 end
 
+--- Engine preset of a voice (one preset per sound): from diffuse_dsp_at, a diffuse voice (long winding
+-- path) gets the engine's own "tunnel, diffuse" reverb (117 HUGE DULL when muffled, 116 SMALL BRIGHT
+-- otherwise) instead of the plain low-pass: heard as a smeared, reverberant sound.
+function AC.DSPForVoice(level, diffuse, cfg)
+	cfg = cfg or A.cfg
+	if (cfg.diffuse or 0) >= 0.5 and (diffuse or 0) >= (cfg.diffuse_dsp_at or 0.4) then
+		return level >= 2 and 117 or 116
+	end
+	return AC.DSPForLevel(level, cfg)
+end
+
 --- Hysteresis on the low-pass level of a CONTINUOUS sound (lp_hyst_db). Near a threshold lp*_db the
 -- loss of a loop moves by a fraction of a dB as the listener steps, and its level (engine DSP preset,
 -- native EQ) flipped back and forth. `level`: the level just computed; `db`: the loss that set it

@@ -192,7 +192,8 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 		if g < 0.001 then return false end
 		local delay = voiceDelay(v, L)
 		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
-		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk })
+		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk,
+			diffuse = v.diffuse })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
 			if copies then copies.native[#copies.native + 1] = { id, data.SoundName } end
@@ -205,7 +206,7 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 	local vol = (data.Volume or 1) * v.gain / AC.EngineGain(math.max(d, 1), lvl)
 	vol = math.min(vol, 1)
 	if vol < 0.01 then return false end
-	local dsp = AC.DSPForLevel(v.lp)
+	local dsp = AC.DSPForVoice(v.lp, v.diffuse)
 	-- the sound's own preset (a radio or speaker effect) is part of the sound: kept, muffled by volume
 	if dsp == 0 or ((A.cfg.keep_dsp or 1) >= 0.5 and (data.DSP or 0) ~= 0) then dsp = data.DSP or 0 end
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
@@ -564,7 +565,7 @@ function A.Process(data, relayed)
 			for _, c in ipairs(p.chain) do keys[#keys + 1] = c.key end
 			ps[#ps + 1] = { portals = keys, length = math.Round(p.length), diff_db = math.Round(p.diffDb, 1),
 				door_db = math.Round(p.doorDb, 1), level_db = math.Round(p.level or 0, 1),
-				guard_db = math.Round(p.guardDb or 0, 1), ratio = p.direct and math.Round(p.length / math.max(p.direct, 1), 2),
+				absorb_db = math.Round(p.absorbDb or 0, 1), diffuse = math.Round(p.diffuse or 0, 2), ratio = p.direct and math.Round(p.length / math.max(p.direct, 1), 2),
 				bend = p.bendDeg and math.Round(p.bendDeg), az = math.Round(A.Azimuth(L, ang.y, p.pos), 1) }
 		end
 		A.Report("paths", { name = data.SoundName, relayed = relayed, aS = r.aS, aL = r.aL, voices = vs, paths = ps,

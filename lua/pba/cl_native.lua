@@ -426,7 +426,8 @@ end
 N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
--- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds }.
+-- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds, diffuse = share
+-- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction) }.
 -- Returns true on success.
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
@@ -436,7 +437,8 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local l, m, h = N.VoiceEQ(lp, opt.len)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and opt.sh or nil
-	local id = pba_native.Play(n, pos, gain * A.cfg.native_gain, l, m, h, pitch or 100, false, opt.delay or 0, sh)
+	local id = pba_native.Play(n, pos, gain * A.cfg.native_gain, l, m, h, pitch or 100, false, opt.delay or 0, sh,
+		opt.diffuse or 0)
 	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100

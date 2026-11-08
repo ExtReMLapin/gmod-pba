@@ -1,6 +1,6 @@
 -- Path quality bench (client lua_job, any map with a probe graph). Measures how far PBA's chosen
 -- level is from an independent reference, to anticipate and then check the gains of path features
--- (path-length guard, edge graph). Prints metrics; pass/fail thresholds are given by the runner
+-- (diffuse model, edge graph). Prints metrics; pass/fail thresholds are given by the runner
 -- (job.args.max_over6, job.args.max_silent) once a baseline is known.
 --
 -- Pairs: two random probes 300-1200 u apart that do not see each other, the line crossing the WORLD
@@ -14,9 +14,9 @@
 --   over6: share of pairs with excess > 6 dB (too muffled), under6: excess < -6 dB (too loud), best: the
 --   lowest excess, median: median excess, silent: share where PBA has
 --   no path at all (transmission only) although the reference found one.
--- Long detours (length / angle guard, pba_path_guard_db): `detours` on the kept pairs and `multibend` on up
+-- Long detours (diffuse model, pba_diffuse: corridor absorption): `detours` on the kept pairs and `multibend` on up
 -- to N pairs without a single-bend reference: long2 = share whose path heard most is > 2 x the straight
--- line, guarded = share faded by > 1 dB, guard_db = mean fade, and the multibend pairs' silences.
+-- line, absorbed = share absorbed by > 1 dB, absorb_db = mean absorption, and the multibend pairs' silences.
 -- Each pair is measured COLD (first evaluation: what a one-shot sound gets, probe paths not solved
 -- yet are queued for a background solve) and WARM (after that solve: what a loop gets).
 local A, P, AC = pba, pba.Paths, pba.AC
@@ -115,11 +115,11 @@ while #rows < N and tries < N * 400 do
 						if v.kind ~= "transmission" then silent = false end
 					end
 					-- the path heard most (loudest member of the first voice): its length / straight line
-					-- and the length / angle guard it got (pba_path_guard_db)
+					-- and the corridor absorption it got (diffuse model, pba_diffuse)
 					local v1 = r.voices and r.voices[1]
 					local dom = v1 and v1.kind ~= "transmission" and v1.members and v1.members[1]
 					local ratio = dom and dom.direct and dom.length / math.max(dom.direct, 1)
-					return 10 * math.log10(math.max(pw, 1e-12)), silent, ratio, dom and dom.guardDb or 0
+					return 10 * math.log10(math.max(pw, 1e-12)), silent, ratio, dom and dom.absorbDb or 0
 				end
 				-- outside the job's debug hook (it turns LuaJIT off): the immediate probe search has a
 				-- time budget, and must be measured at the game's real speed
@@ -132,7 +132,7 @@ while #rows < N and tries < N * 400 do
 				if not ref then
 					skipped.multibend = skipped.multibend + 1
 					-- no single-bend reference: where long detours live. PBA's chosen path is still measured
-					-- (share of long detours and the guard they get), at most N of them
+					-- (share of long detours and the absorption they get), at most N of them
 					if #multi < N then
 						if A.Probes.BuildFieldNow then unhooked(function() A.Probes.BuildFieldNow(b) end) end
 						local _, mSilent, mRatio, mGuard = unhooked(level)
@@ -140,7 +140,7 @@ while #rows < N and tries < N * 400 do
 					end
 				else
 					local rp = P.EvalPolyline(ref, A.cfg)
-					-- same physics as PBA, guard included (0 in practice: a single bend inside the S-L box
+					-- same physics as PBA, absorption included (0 in practice: a single bend inside the S-L box
 					-- is at most 1.63 x the straight line and bends less than 180 degrees)
 					local refLevel = AC.GainToDb(AC.EngineGain(rp.length, 75)) - (rp.lossDb or 0) - P.PathGuardDb(rp, A.cfg)
 					-- the listener-centred probe field (when present) is built around L, as if the player
@@ -177,21 +177,21 @@ local function stats(field, silentField)
 		p90 = math.Round(ex[math.ceil(n * 0.9)], 1), worst = math.Round(ex[n], 1) }
 end
 -- long detours: share of pairs whose path heard most is more than 2 x the straight line (long2), share
--- faded by more than 1 dB by the length / angle guard (guarded) and the mean fade (guard_db)
+-- absorbed by more than 1 dB by the diffuse model (absorbed) and the mean absorption (absorb_db)
 local function detours(list)
-	local n, long2, guarded, sum = #list, 0, 0, 0
+	local n, long2, absorbed, sum = #list, 0, 0, 0
 	if n == 0 then return { n = 0 } end
 	for _, r in ipairs(list) do
 		if r.ratio and r.ratio > 2 then long2 = long2 + 1 end
-		if (r.guard or 0) > 1 then guarded = guarded + 1 end
+		if (r.guard or 0) > 1 then absorbed = absorbed + 1 end
 		sum = sum + (r.guard or 0)
 	end
-	return { n = n, long2 = math.Round(long2 / n, 3), guarded = math.Round(guarded / n, 3), guard_db = math.Round(sum / n, 2) }
+	return { n = n, long2 = math.Round(long2 / n, 3), absorbed = math.Round(absorbed / n, 3), absorb_db = math.Round(sum / n, 2) }
 end
 local n = #rows
 local out = { map = game.GetMap(), pairs = n, skipped = skipped, warm = stats("excess", "silent"), cold = stats("cold", "coldSilent"),
 	detours = detours(rows), multibend = detours(multi) }
-do -- silences among the multi-bend pairs (no reference there, but a guard must not add any)
+do -- silences among the multi-bend pairs (no reference there, but the diffuse model must not add any)
 	local s = 0
 	for _, r in ipairs(multi) do if r.silent then s = s + 1 end end
 	out.multibend.silent = #multi > 0 and math.Round(s / #multi, 3) or nil
@@ -219,8 +219,8 @@ if args.details then
 			for _, v in ipairs(res.voices or {}) do
 				local ms = {}
 				for _, p in ipairs(v.members or {}) do
-					ms[#ms + 1] = string.format("len %d loss %.1f raw %.1f guard %.1f ratio %.2f bend %d pts %d%s%s", p.length or -1, p.lossDb or -1, p.rawLossDb or -1,
-						p.guardDb or 0, p.direct and p.length / math.max(p.direct, 1) or -1, p.bendDeg or -1, p.points and #p.points or 0,
+					ms[#ms + 1] = string.format("len %d loss %.1f raw %.1f absorb %.1f ratio %.2f bend %d pts %d%s%s", p.length or -1, p.lossDb or -1, p.rawLossDb or -1,
+						p.absorbDb or 0, p.direct and p.length / math.max(p.direct, 1) or -1, p.bendDeg or -1, p.points and #p.points or 0,
 						p.bridge and " bridge" or "", p.portals and (" portals " .. #p.portals) or "")
 				end
 				vs[#vs + 1] = { kind = v.kind, db = math.Round(AC.GainToDb(v.gain), 1), len = v.len and math.Round(v.len), lp = v.lp, members = ms }

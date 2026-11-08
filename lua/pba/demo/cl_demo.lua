@@ -97,28 +97,27 @@ net.Receive(NET_MODE, function()
 	DM.ApplyNative()
 end)
 
--- room 14: the length / angle guard follows the room's selection, in memory, only while this
--- player is in the room (paths are computed on the client). Leaving the room, Reset or another
--- map gives the setting back. "On" is the server's setting, or 12 dB if the server has it off.
-function DM.ApplyGuard()
+-- room 14: the diffuse model follows the room's selection, in memory, only while this player is in
+-- the room (paths are computed on the client). Leaving the room, Reset or another map gives the
+-- setting back.
+function DM.ApplyDiffuse()
 	local r = DM.byId.detour
 	local want
 	if r and DM.room == r then
-		local sel = DM.sel.detour and DM.sel.detour.guard
-		local cv = A.cv and A.cv.path_guard_db
-		local base = cv and cv:GetFloat() or A.CONFIG.path_guard_db[1]
-		if sel == "guard_off" then want = 0 elseif base <= 0 then want = 12 end
+		local sel = DM.sel.detour and DM.sel.detour.diffuse
+		want = sel == "diffuse_off" and 0 or 1
 	end
-	if want ~= DM.guardOverride then
-		DM.guardOverride = want
-		A.SetOverride("path_guard_db", want)
+	if want ~= DM.diffuseOverride then
+		DM.diffuseOverride = want
+		A.SetOverride("diffuse", want)
+		if A.Paths then A.Paths.InvalidateCache() end
 	end
 end
 
 timer.Create("pba_demo_cl", 0.5, 0, function()
 	refreshLang()
 	DM.ApplyNative()
-	DM.ApplyGuard()
+	DM.ApplyDiffuse()
 	if DM.helloDone and DM.NativeAvailable() ~= DM.sentNative then sendNative() end
 end)
 
@@ -144,7 +143,7 @@ net.Receive(NET_STATE, function()
 	if not r then return end
 	DM.sel[r.id] = DM.sel[r.id] or {}
 	DM.sel[r.id][group] = id
-	DM.ApplyGuard()
+	DM.ApplyDiffuse()
 end)
 
 net.Receive(NET_EMIT, function()
@@ -603,7 +602,7 @@ hook.Add("Think", "pba_demo", function()
 			DM.cardRoom = r
 		end
 		if DM.streamRoom and r and r ~= DM.streamRoom then DM.StopStream() end
-		DM.ApplyGuard()
+		DM.ApplyDiffuse()
 	end
 	DM.UpdateHover(ply)
 	animateDecor(ply:EyePos())

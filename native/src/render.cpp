@@ -83,6 +83,7 @@ struct Voice {
 	float eq[3] = {1, 1, 1};
 	bool hasSH = false;
 	float sh[4] = {0, 0, 0, 0};
+	float diffuse = 0; // see VoiceParams::diffuse
 	int slot = -1;     // index in the effect pool
 	int pathSlot = -1; // index in the path effect pool
 	int echoSlot = -1; // reflections-only voice
@@ -315,6 +316,11 @@ void RenderBlock() {
 
 		const float* sendSrc = m;
 		float sendGain = 1;
+		// diffuse energy (long winding path): the direct part gives way to the room reverb send, and
+		// its direction blurs (binaural spatial blend); the total energy is kept
+		const float dif = v.diffuse;
+		const float directGain = std::sqrt(std::max(1.0f - dif, 0.0f));
+		const float sendBoost = 1.0f + 4.0f * dif;
 		if (v.hasSH && v.pathSlot >= 0) {
 			IPLPathEffectParams pp{};
 			for (int b = 0; b < 3; ++b) pp.eqCoeffs[b] = v.eq[b];
@@ -325,7 +331,7 @@ void RenderBlock() {
 			pp.listener = lis;
 			pp.normalizeEQ = IPL_FALSE;
 			iplPathEffectApply(g_pathPool[v.pathSlot].fx, &pp, &g_mono, &g_stereo);
-			sendGain = v.eq[1];
+			sendGain = v.eq[1] * sendBoost;
 		} else {
 			IPLAudioBuffer* bin_in = &g_mono;
 			if (v.eq[0] < 0.999f || v.eq[1] < 0.999f || v.eq[2] < 0.999f) {
@@ -338,13 +344,14 @@ void RenderBlock() {
 				bin_in = &g_mono2;
 			}
 			sendSrc = bin_in->data[0];
+			sendGain = sendBoost;
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
 			if (g_outMode == 0) {
 				IPLBinauralEffectParams bp{};
 				bp.direction = dir;
 				bp.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
-				bp.spatialBlend = 1.0f;
+				bp.spatialBlend = 1.0f - 0.8f * dif; // diffuse: the direction blurs towards the centre
 				bp.hrtf = g_hrtf;
 				iplBinauralEffectApply(g_pool[v.slot].binaural, &bp, bin_in, &g_stereo);
 			} else {
@@ -363,10 +370,10 @@ void RenderBlock() {
 		const float* R = g_stereo.data[1];
 		g_dbgVoices++;
 		for (int i = 0; i < kBlock; ++i) {
-			g_dbgL += (double)L[i] * L[i];
-			g_dbgR += (double)R[i] * R[i];
-			g_mix[i * 2] += L[i];
-			g_mix[i * 2 + 1] += R[i];
+			g_dbgL += (double)L[i] * L[i] * directGain * directGain;
+			g_dbgR += (double)R[i] * R[i] * directGain * directGain;
+			g_mix[i * 2] += L[i] * directGain;
+			g_mix[i * 2 + 1] += R[i] * directGain;
 		}
 	}
 
@@ -781,6 +788,7 @@ static void SetVoice(Voice& v, const VoiceParams& p) {
 	v.rate = std::clamp(p.pitch / 100.0f, 0.05f, 4.0f);
 	std::copy(p.eq, p.eq + 3, v.eq);
 	if (p.hasSH) std::copy(p.sh, p.sh + 4, v.sh);
+	if (p.diffuse >= 0) v.diffuse = std::clamp(p.diffuse, 0.0f, 1.0f); // < 0: unchanged (Update without it)
 }
 
 int Play(const std::string& name, const VoiceParams& p, bool loop) {
