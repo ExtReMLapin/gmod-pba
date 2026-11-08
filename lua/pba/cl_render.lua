@@ -192,7 +192,8 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 	vol = math.min(vol, 1)
 	if vol < 0.01 then return false end
 	local dsp = AC.DSPForLevel(v.lp)
-	if dsp == 0 then dsp = data.DSP or 0 end
+	-- the sound's own preset (a radio or speaker effect) is part of the sound: kept, muffled by volume
+	if dsp == 0 or ((A.cfg.keep_dsp or 1) >= 0.5 and (data.DSP or 0) ~= 0) then dsp = data.DSP or 0 end
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
 	local delay = voiceDelay(v, L)
 	local name, pos, pitch = data.SoundName, v.pos, data.Pitch or 100
@@ -559,6 +560,33 @@ function A.Process(data, relayed)
 	return true
 end
 
+-- Soundscape ambience (C_SoundscapeSystem "playrandom", "position random"): emitted on the world,
+-- CHAN_STATIC, usually SNDLVL_140db, 36 u around the ear. Not a source in the room: left to the engine
+-- (else muffled behind a wall the random point landed behind: 5 of 16 directions near a wall on
+-- d1_town_01, and echoed as a "140 dB" source). Fixed-position soundscape sounds (far) stay pba's.
+local SCAPE_RADIUS = 64
+local scapeWaves, scapeMap
+local function soundscapeWave(name)
+	if scapeMap ~= game.GetMap() then
+		scapeMap, scapeWaves = game.GetMap(), {}
+		local files = { "scripts/soundscapes_" .. scapeMap .. ".txt" }
+		for f in string.gmatch(file.Read("scripts/soundscapes_manifest.txt", "GAME") or "", '"file"%s+"([^"]+)"') do files[#files + 1] = f end
+		for _, f in ipairs(files) do
+			for w in string.gmatch(file.Read(f, "GAME") or "", '"wave"%s+"([^"]+)"') do
+				scapeWaves[string.lower((string.gsub(A.SoundFile(w), "\\", "/")))] = true
+			end
+		end
+	end
+	return scapeWaves[string.lower((string.gsub(A.SoundFile(name), "\\", "/")))] or false
+end
+function A.IsSoundscapeRandom(data, pos)
+	if data.Channel ~= CHAN_STATIC or (A.cfg.soundscape_engine or 1) < 0.5 then return false end
+	local e = data.Entity
+	if not (e and e.IsWorld and e:IsWorld()) then return false end
+	local L = A.ListenerPos()
+	return L ~= nil and pos:DistToSqr(L) <= SCAPE_RADIUS * SCAPE_RADIUS and soundscapeWave(data.SoundName)
+end
+
 -- (fallback: a partial autorefresh may reload this file before sh_core)
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
 	if A.reemitting then return end
@@ -574,6 +602,8 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if not A.Eligible(data) then return end
 	local pos = A.SoundPos(data)
 	if not pos then return end
+	-- soundscape ambience around the ear: the engine's own (before the echoes)
+	if A.IsSoundscapeRandom(data, pos) then return end
 	-- echoes (native reflections) for loud sounds, whoever plays the direct sound
 	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos) end
 	local ply = LocalPlayer()
@@ -608,7 +638,7 @@ net.Receive(NET, function()
 	end
 	local data = {
 		SoundName = name, Pos = net.ReadVector(), SoundLevel = net.ReadUInt(9),
-		Pitch = net.ReadUInt(8), Volume = net.ReadUInt(8) / 255, Channel = net.ReadInt(8),
+		Pitch = net.ReadUInt(8), Volume = net.ReadUInt(8) / 255, Channel = net.ReadInt(10),
 		Flags = net.ReadUInt(16), DSP = net.ReadUInt(8), EntIndex = net.ReadUInt(16),
 	}
 	if not name then return end -- id never received (lost first packets): drop
@@ -625,6 +655,13 @@ net.Receive(NET, function()
 		A.EmitAt(data.SoundName, data.Pos, IsValid(e) and data.EntIndex or 0, data.Channel, data.Volume,
 			data.SoundLevel, data.Flags, data.Pitch, data.DSP)
 	end
+end)
+
+-- caption of a suppressed server sound (sv_relay sendCaption); nothing shown with closecaption 0
+net.Receive("pba_caption", function()
+	local tok, dur = net.ReadString(), net.ReadFloat()
+	local txt = language.GetPhrase(tok)
+	if txt and txt ~= tok then gui.AddCaption(txt, dur > 0 and dur or 2, false) end
 end)
 
 -- client-side StopSound (predicted weapons...): our copies of that entity's sound stop too

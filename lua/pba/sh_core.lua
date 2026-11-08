@@ -95,6 +95,10 @@ end
 
 function A.OnConfigChanged(name)
 	if name == "enable" or name == "cl_enable" then A.Refresh() end
+	-- loops switched off: their mirrors go back to the engine; on again: taken over again
+	if name == "loops" and SERVER and A.Loops and A.hooksInstalled then
+		if (A.cfg.loops or 0) < 0.5 then A.Loops.Release() else timer.Simple(0, A.Loops.AdoptAmbients) end
+	end
 	if name == "update_interval" and CLIENT then
 		for _, t in ipairs({ "pba_streams" }) do
 			if timer.Exists(t) then timer.Adjust(t, A.cfg.update_interval) end
@@ -205,7 +209,8 @@ function A.Eligible(data)
 	if data.Channel == CHAN_STATIC and A.IsLooping(data.SoundName) then return false end
 	if A.IsLooping(data.SoundName) then return false end
 	local dur = A.SoundDuration(data.SoundName) or 0
-	if dur > A.cfg.max_duration then return false end
+	-- (a sentence is relayed whatever its length: it cannot be followed as a long sound anyway)
+	if dur > A.cfg.max_duration and not A.IsSentence(data.SoundName) then return false end
 	return true
 end
 

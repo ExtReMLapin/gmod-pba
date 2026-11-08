@@ -9,6 +9,18 @@ local NET_ACK = "pba_snd_ack"
 util.AddNetworkString(NET)
 util.AddNetworkString(NET_ACK)
 util.AddNetworkString("pba_snd_stop")
+util.AddNetworkString("pba_caption")
+
+-- The engine captions a sound script when it emits the ORIGINAL; suppressed (relayed, or the .wav
+-- re-emitted for clear listeners, which has no caption token), its caption is sent on its own.
+local function sendCaption(data, plys)
+	local tok = data.OriginalSoundName
+	if #plys == 0 or not tok or tok == "" or tok == data.SoundName or not sound.GetProperties(tok) then return end
+	net.Start("pba_caption")
+	net.WriteString(tok)
+	net.WriteFloat(A.SoundDuration(data.SoundName) or 0)
+	net.Send(plys)
+end
 
 -- who received relayed copies of an entity's sounds recently: they must hear its StopSound too
 A.recentTo = A.recentTo or {} -- entindex -> { [ply] = time }
@@ -82,7 +94,7 @@ local function writeSound(data, pos, id, full, echoOnly)
 	net.WriteUInt(math.Clamp(math.floor(data.SoundLevel or 75), 0, 511), 9)
 	net.WriteUInt(math.Clamp(math.floor(data.Pitch or 100), 0, 255), 8)
 	net.WriteUInt(math.Clamp(math.Round((data.Volume or 1) * 255), 0, 255), 8)
-	net.WriteInt(data.Channel or CHAN_AUTO, 8)
+	net.WriteInt(data.Channel or CHAN_AUTO, 10) -- CHAN_REPLACE (-1) to user channels (up to 255)
 	net.WriteUInt(data.Flags or 0, 16)
 	net.WriteUInt(math.Clamp(math.floor(data.DSP or 0), 0, 255), 8)
 	local e = data.Entity
@@ -215,6 +227,10 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 		local now = CurTime()
 		for _, p in ipairs(blocked) do r[p] = now end
 	end
+	local told = {}
+	for _, p in ipairs(blocked) do told[#told + 1] = p end
+	for _, p in ipairs(clear) do told[#told + 1] = p end
+	sendCaption(data, told)
 	net.Start(NET, true) -- unreliable: a lost sound is better than a late one
 	writeSound(data, pos, id, full)
 	A.stats.bytes = (A.stats.bytes or 0) + net.BytesWritten() * #blocked

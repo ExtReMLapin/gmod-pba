@@ -1,0 +1,50 @@
+# Publishing a GitHub release (tag vX.Y.Z) builds the release zip and attaches it to the release, then
+# uploads the addon to the Steam Workshop (PBA Light).
+#
+# One-time setup (repository Settings > Secrets and variables > Actions):
+#   secrets  STEAM_USERNAME  Steam account that owns the Workshop item
+#            STEAM_VDF       base64 of SteamCMD's config/config.vdf after one interactive login
+#                            (steamcmd +login <user> +quit, Steam Guard code typed once), see
+#                            https://github.com/gmod-workshop/workshop-upload
+#            WORKSHOP_ID     id of the Workshop item (from its URL, after the first manual upload)
+#   variable WORKSHOP_UPLOAD = true   switches the Workshop job on (off until the item exists)
+#
+# The native module (gmcl_pba_win64.dll + phonon.dll) is built and attached by hand (Windows, see
+# README "Native module").
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the release zip
+        run: python tools/make_release.py --version="${GITHUB_REF_NAME}" --out=dist
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.zip --clobber
+
+  workshop:
+    if: ${{ vars.WORKSHOP_UPLOAD == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # addon.json "ignore" keeps tests, tools, docs, native sources and test maps out of the .gma
+      - uses: gmod-workshop/workshop-upload@v1
+        with:
+          id: ${{ secrets.WORKSHOP_ID }}
+          username: ${{ secrets.STEAM_USERNAME }}
+          vdf: ${{ secrets.STEAM_VDF }}
+          changelog: ${{ github.event.release.body }}
+          dir: ./

@@ -80,7 +80,38 @@ function LP.Stop(idx, name)
 	return found
 end
 
+-- The entity's own movement sound, by class (Source SDK datadesc): func_door / func_plat / func_train
+-- noise1, func_tracktrain MoveSound, func_rotating message, prop_door_rotating soundmoveoverride,
+-- func_movelinear StartSound, momentary_rot_button sounds.
+local MOVE_KEYS = { "m_NoiseMoving", "m_iszSoundMove", "m_NoiseRunning", "m_SoundMoving", "m_soundStart", "m_sNoise" }
+
+--- True when `name` is the movement sound of entity e (sound scripts resolved to their wave): only
+-- that sound stops with the motion. Another loop played from the entity (an ambient_generic whose
+-- SourceEntityName is a still train: train_idle on d1_trainstation_01) keeps playing.
+function LP.IsMoveSound(e, name)
+	local f = string.lower(A.SoundFile(name or ""))
+	for _, k in ipairs(MOVE_KEYS) do
+		local v = e:GetInternalVariable(k)
+		if isstring(v) and v ~= "" then
+			local props = sound.GetProperties(v)
+			local w = props and props.sound or v
+			if istable(w) then
+				for _, x in ipairs(w) do if string.lower(A.SoundFile(x)) == f then return true end end
+			elseif string.lower(A.SoundFile(w)) == f then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
+local CHARGERS = { item_suitcharger = true, item_healthcharger = true, func_recharge = true, func_healthcharger = true }
+
+LP.capped = LP.capped or {} -- loops left to the engine by the pba_loops_max cap (their later changes too)
+
+local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+
 function LP.Handle(data)
 	if A.cfg.loops < 0.5 then return false end
 	local e = data.Entity
@@ -91,6 +122,23 @@ function LP.Handle(data)
 	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
 	local l = LP.active[key]
 	local flags = data.Flags or 0
+	-- SND_STOP_LOOPING ("stop all looping sounds on the entity") comes on any name (common/null.wav)
+	if bit.band(flags, SND_STOP_LOOPING or 32) ~= 0 and idx ~= 0 then
+		LP.Stop(idx, nil)
+		return false
+	end
+	-- a new sound on a replacing channel (CHAN_VOICE...) cuts what that channel played, a followed long
+	-- line included (the engine replaces it; the mirror must go too)
+	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 and replacing(data.Channel) then
+		for k, x in pairs(LP.active) do
+			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.Stop(idx, x.name) end
+		end
+	end
+	-- left to the engine by the cap: its changes stay the engine's too (else a mirror doubles it)
+	if LP.capped[key] then
+		if bit.band(flags, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then LP.capped[key] = nil end
+		return false
+	end
 	-- engine-driven physics loops (scraping / rolling friction): their envelope lives in the physics
 	-- engine; leave them to it
 	if not l and LP.IsPhysicsLoop(data.SoundName) then return false end
@@ -100,12 +148,15 @@ function LP.Handle(data)
 		if not once then return false end
 	end
 
-	-- stop events carry no sound level: test them first
-	if bit.band(flags, SND_STOP) ~= 0 then
+	-- stop events carry no sound level: test them first (SND_STOP_LOOPING ends a loop the same way)
+	if bit.band(flags, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then
 		return LP.Stop(idx, data.SoundName)
 	end
 	if not l and (data.SoundLevel or 75) <= 0 then return false end -- 2D loops: leave to the engine
-	if not l and table.Count(LP.active) >= (A.cfg.loops_max or 64) then return false end -- cap: left to the engine
+	if not l and table.Count(LP.active) >= (A.cfg.loops_max or 64) then -- cap: left to the engine
+		LP.capped[key] = true
+		return false
+	end
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	if not l then
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {} }
@@ -115,7 +166,8 @@ function LP.Handle(data)
 		-- motion. Brush models only ("*N"): a prop_dynamic is MOVETYPE_PUSH too, and a still machine
 		-- or radio plays its loop for good
 		l.mover = IsValid(e) and e:GetMoveType() == MOVETYPE_PUSH
-			and (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating") or nil
+			and (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating")
+			and LP.IsMoveSound(e, data.SoundName) or nil
 		LP.active[key] = l
 	end
 	l.t = CurTime()
@@ -143,6 +195,37 @@ function LP.Handle(data)
 	return true
 end
 
+-- Server CSoundPatch (CreateSound of addons and gamemodes): its Stop / FadeOut never reach
+-- EntityEmitSound while the entity lives on. Patches are registered (weak keys) and both detoured, so
+-- the mirror stops with them. Originals kept only as the engine's C functions (autorefresh safe).
+LP.origCreateSound = LP.origCreateSound or CreateSound
+LP.patchInfo = LP.patchInfo or setmetatable({}, { __mode = "k" })
+function CreateSound(ent, name, filter)
+	local p = LP.origCreateSound(ent, name, filter)
+	if p and IsValid(ent) then LP.patchInfo[p] = { ent = ent, name = name } end
+	return p
+end
+do
+	local PATCH = FindMetaTable("CSoundPatch")
+	LP.origPatch = LP.origPatch or {}
+	for _, k in ipairs({ "Stop", "FadeOut" }) do
+		local f = PATCH[k]
+		if not LP.origPatch[k] and f and debug.getinfo(f, "S").what == "C" then LP.origPatch[k] = f end
+	end
+	local function ended(p)
+		local i = LP.patchInfo[p]
+		if not (i and IsValid(i.ent)) then return end
+		LP.Stop(i.ent:EntIndex(), i.name)
+		-- the mirror carries the wave a sound script resolved to
+		local props = sound.GetProperties(i.name)
+		local w = props and props.sound
+		if isstring(w) then LP.Stop(i.ent:EntIndex(), w)
+		elseif istable(w) then for _, x in ipairs(w) do LP.Stop(i.ent:EntIndex(), x) end end
+	end
+	function PATCH:Stop() LP.origPatch.Stop(self) ended(self) end
+	function PATCH:FadeOut(t) LP.origPatch.FadeOut(self, t) ended(self) end
+end
+
 --- A moving brush at rest (no linear nor angular velocity): its movement loop is over.
 function LP.MoverStill(e)
 	return e:GetVelocity():LengthSqr() < 1 and e:GetLocalAngularVelocity():IsZero()
@@ -152,6 +235,14 @@ end
 timer.Create("pba_loops", 0.5, 0, function()
 	for key, l in pairs(LP.active) do
 		if l.mover and IsValid(l.ent) and CurTime() - l.t > 0.4 and LP.MoverStill(l.ent) then
+			LP.Stop(l.idx, l.name)
+		elseif IsValid(l.ent) and CHARGERS[l.ent:GetClass()] and l.ent:GetInternalVariable("m_iOn") == 0
+			and CurTime() - l.t > 0.5 then
+			-- HL2 chargers: their charging loop ends in C++ when the use stops (m_iOn back to 0)
+			LP.Stop(l.idx, l.name)
+		elseif IsValid(l.ent) and l.ent:IsVehicle() and l.ent.IsEngineStarted and not l.ent:IsEngineStarted()
+			and CurTime() - l.t > 1 then
+			-- a vehicle's engine loops end in C++ when it is switched off (driver out): never seen by Lua
 			LP.Stop(l.idx, l.name)
 		elseif l.idx ~= 0 and not IsValid(l.ent) then
 			-- entity removed (a rocket that exploded...): its sounds stopped without any STOP
@@ -194,7 +285,9 @@ function LP.AdoptAmbients()
 	-- starts again (the engine never says which loops it plays, so pba keeps the list itself)
 	for key, l in pairs(LP.released) do
 		LP.released[key] = nil
-		if IsValid(l.ent) and not (l.mover and LP.MoverStill(l.ent)) then
+		-- (an ambient switched off meanwhile stays off)
+		local off = IsValid(l.ent) and l.ent:GetClass() == "ambient_generic" and not l.ent:GetInternalVariable("m_fActive")
+		if IsValid(l.ent) and not off and not (l.mover and LP.MoverStill(l.ent)) then
 			A.orig.EntStopSound(l.ent, l.name)
 			LP.Handle({ Entity = l.ent, SoundName = l.name, Channel = l.chan, Volume = l.vol, Pitch = l.pitch,
 				SoundLevel = l.lvl, DSP = l.dsp, Flags = 0 })

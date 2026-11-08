@@ -36,7 +36,7 @@ local ok, res = pcall(function()
 	job:sleep(2.5) -- several passes of the 0.5 s loops timer
 	local later = count()
 	return { mirroredStart = start, mirroredLater = later, active = amb:GetInternalVariable("m_fActive"),
-		source = tostring(amb:GetInternalVariable("m_hSoundSource")), doorStill = pba.Loops.MoverStill and pba.Loops.MoverStill(door) }
+		source = tostring((amb:GetInternalVariable("m_hSoundSource"))), doorStill = pba.Loops.MoverStill and pba.Loops.MoverStill(door) }
 end)
 if IsValid(amb) then amb:Fire("StopSound") end
 job:sleep(0.3)

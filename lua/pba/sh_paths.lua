@@ -571,9 +571,8 @@ local function detClear(a, b)
 	return not detOut.Hit
 end
 
---- Walls crossed by the straight line S -> L (game state: traces). Returns a list of
--- { entry, exit, thickness, mat, surf }, mirroring the mcp `trace_through` oracle.
-function P.Walls(S, L, maxWalls, srcEnt)
+--- Walls crossed by the straight line S -> L, traced from S only (see P.Walls).
+local function wallsOneWay(S, L, maxWalls, srcEnt)
 	local walls = {}
 	local dir = (L - S):GetNormalized()
 	local start = S
@@ -648,6 +647,26 @@ function P.Walls(S, L, maxWalls, srcEnt)
 		end
 	end
 	return walls
+end
+
+--- Walls crossed by the straight line S -> L (game state: traces). Returns a list of
+-- { entry, exit, thickness, mat, surf }, ordered from S, mirroring the mcp `trace_through` oracle.
+-- Displacements (terrain) are one-sided for traces: hit from above, crossed from below. Traced from
+-- both ends, the side that meets more walls stands (gm_construct: 3 walls one way, 1 the other, a
+-- 50 dB gap between level(S, L) and level(L, S)).
+function P.Walls(S, L, maxWalls, srcEnt)
+	local w = wallsOneWay(S, L, maxWalls, srcEnt)
+	if #w >= (maxWalls or 6) then return w end
+	local r = wallsOneWay(L, S, maxWalls, srcEnt)
+	if #r <= #w then return w end
+	-- reversed: ordered from S, entry and exit swapped
+	local out = {}
+	for i = #r, 1, -1 do
+		local x = r[i]
+		x.entry, x.exit = x.exit, x.entry
+		out[#out + 1] = x
+	end
+	return out
 end
 
 --- Smallest path difference (units) for going around a finite box obstacle (mins/maxs, in

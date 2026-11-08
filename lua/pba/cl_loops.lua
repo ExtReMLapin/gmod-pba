@@ -95,6 +95,8 @@ local function muffle(m, S, L)
 	local p, best = 0, r.voices[1]
 	for _, v in ipairs(r.voices) do p = p + v.gain * v.gain end
 	local g = math.sqrt(p) / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6)
+	-- the sound's own preset (radio, speaker) is kept (pba_keep_dsp): muffled by volume only
+	if (A.cfg.keep_dsp or 1) >= 0.5 and (m.dsp or 0) ~= 0 then return math.min(g, 1), m.dsp end
 	return math.min(g, 1), AC.DSPForLevel(best.lp)
 end
 

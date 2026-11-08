@@ -1,5 +1,5 @@
 {
-	"title": "Physically Based Audio - Realistic Sound Propagation",
+	"title": "PBA Light - Physically Based Audio (sound through doors, not walls)",
 	"type": "effects",
 	"tags": [ "realism", "fun" ],
 	"ignore": [
@@ -9,6 +9,8 @@
 		"*.vmf",
 		"*.txt",
 		".git*",
+		".github/*",
+		"tools/*",
 		".vscode/*",
 		"LICENSE",
 		"docs/*",

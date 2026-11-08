@@ -125,6 +125,8 @@ steps = [
     ("microphone_order", lambda: job("server", "microphone_order.lua", 20)),
     # a source left inside a wall: moved to the nearest free space (was heard clear through the wall)
     ("source_in_solid", lambda: job("client", "source_in_solid.lua", 15)),
+    # captions of relayed (suppressed) server sounds are sent on their own (were lost)
+    ("caption_check", lambda: py("caption_check.py")),
     # a parked vehicle between source and listener stands in the way like a big prop (was ignored)
     ("vehicle_obstacle", lambda: job("server", "vehicle_obstacle.lua", 15)),
     # lip sync: a citizen speaking behind the glass cell keeps moving his mouth with pba (re-emitted voice)
@@ -170,6 +172,10 @@ steps = [
     ("breencast_speaker d1_trainstation_01", lambda: (load("d1_trainstation_01"), job("server", "breencast_speaker.lua", 60))[1]),
     # special sounds: looping ambient_generic already playing at map load (before the hooks) taken over
     ("ambient_start d1_town_01", lambda: (fresh("d1_town_01"), job("server", "ambient_start.lua", 30))[1]),
+    # soundscape ambience around the ear (random positions) left to the engine: not muffled nor echoed
+    ("soundscape_check d1_town_01", lambda: job("client", "soundscape_check.lua", 90)),
+    # displacements are one-sided for traces: the same walls from both ends
+    ("walls_symmetric gm_construct", lambda: (load("gm_construct"), job("client", "walls_symmetric.lua", 20))[1]),
     # path quality against an independent single-bend reference (maps without areaportals: probes)
     ("path_quality", lambda: py("path_quality.py", "--check", "d1_town_01", "gm_construct")),
     # the path SEARCH through pba_demo's doorways (doors opened) against the single-bend reference, same
@@ -189,6 +195,15 @@ steps = [
     # continuous sounds re-evaluated only on change (pba_reeval_adaptive): still cost, listener move, door
     ("reeval_adaptive", lambda: py("reeval_adaptive.py")),
 ]
+# special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
+sys.path.insert(0, os.path.join(TEST, "special"))
+from steps import STEPS as SPECIAL  # noqa: E402
+def _special(m, mp, realm, f, t, fr):
+    return lambda: ((fresh(m, mp) if fr else load(m, mp)), job(realm, os.path.join("special", f), t))[1]
+special_steps = [(label, _special(m, mp, realm, f, t, fr)) for (label, m, mp, realm, f, t, fr) in SPECIAL]
+steps += special_steps
+if "--special" in sys.argv[2:]:
+    steps = special_steps
 # --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
 # before merging into main or a release
 QUICK = {"load pba_tworooms", "GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire",

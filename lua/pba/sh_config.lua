@@ -121,6 +121,8 @@ A.CONFIG = {
 	-- safety limits ("just in case"): what happens beyond each is a graceful fallback to the engine
 	relay_rate      = { 80, 5, 1000, "sv", "Max relayed sounds per second to one player (token bucket, burst 1 s). Beyond it the player gets the original sound (vanilla) instead of a relay." },
 	loops_max       = { 64, 4, 512, "sv", "Max loops / long sounds followed by the server at once. Beyond it new ones are left to the engine." },
+	soundscape_engine = { 1, 0, 1, "cl", "Soundscape ambience played around the ear (random positions within 64 u) is left to the engine: not muffled nor echoed." },
+	keep_dsp        = { 1, 0, 1, "cl", "A sound with its own DSP preset (radio, loudspeaker effect) keeps it when muffled (then muffled by volume only); 0 = pba's muffling preset replaces it." },
 	loops_client    = { 1, 0, 1, "cl", "Take over looping sounds born on this client (CreateSound of addons: vehicle engines, client-side machines) and muffle them in place." },
 	loops_max_cl    = { 32, 4, 256, "cl", "Max long sounds born on this client (client-side radios) followed at once. Beyond it they are left to the engine." },
 	streams_max     = { 16, 1, 128, "cl", "Max 3D radios of other addons (BASS) processed at once. Beyond it they play untouched." },

@@ -190,11 +190,12 @@ same job as PBA and is switched off automatically (`pba_compat_auto`).
 
 ## Known limits
 
-- Sentences (scripted NPC lines such as Combine radio chatter) and sounds with a scheduled start
-  time are left vanilla.
+- Sounds with a scheduled start time are left vanilla. Sentences (Combine radio chatter, NPC lines
+  from `sentences.txt`) are relayed and muffled (`pba_sentences`), but without lip sync on the muffled
+  copy, and are not followed while they play.
 - 2D sounds (`surface.PlaySound`, UI) are not spatial and are not touched.
-- A relayed one-shot stays where it started: it does not follow a moving entity (loops, long
-  sounds and, with the native module, every sound do).
+- Short sounds are followed while they play only up to `pba_oneshot_follow_max` at once; beyond that
+  a copy stays where it started.
 - Sounds from other addons sent with an explicit recipient filter are left alone.
 - Voice chat is not processed.
 - Maps whose BSP lumps are compressed (rare in GMod) fall back to wall muffling only.
@@ -226,5 +227,7 @@ same job as PBA and is switched off automatically (`pba_compat_auto`).
 - `pba_demo <scenario>` (repository only, not in the Workshop package) places the listener and a
   repeating source on a test map: the bench behind `test/run_scenarios.py`.
 - `python tools/make_release.py` builds the release zip (see the script's help).
+- Publishing a GitHub release runs `.github/workflows/release.yml`: the zip is attached to the release
+  and, once the Workshop item exists, the addon is uploaded to the Workshop (setup in the workflow's header).
 
 Licence: GPL-3.0-or-later, except `native/` (MIT). See `THIRD_PARTY.md` for attributions.

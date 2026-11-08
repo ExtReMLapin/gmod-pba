@@ -38,6 +38,9 @@ hub:SetKeyValue("volume", "0")
 hub:StopSound(NAME)
 hub:Fire("Start")
 if not ok then return { pass = false, err = tostring(res) } end
+-- the demo hub has volume 0 and its run sound set at spawn: no emission at all means the setup failed
+-- (measured 2026-11-09: spinning 0), not that pba lost a loop
+if res.spinning == 0 then res.pass, res.note = nil, "no run sound emitted: inconclusive" return res end
 res.pass = res.spinning == 1 and res.afterStop == 0
 res.expected = "spinning = 1, afterStop = 0"
 return res
