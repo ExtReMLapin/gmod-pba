@@ -32,11 +32,26 @@ local function anchorFor(m)
 	return a
 end
 
+--- Path result of a mirror (direction / low-pass hysteresis). A provisional result (probe search
+-- still running) forces the next re-evaluation (reeval_adaptive).
+local function pathOf(m, S, L)
+	m.hyst = m.hyst or {}
+	local r = A.Paths.Stable(m.hyst, A.Paths.Compute(S, L, m.lvl, nil, m.ent))
+	if r.provisional and m.reeval then m.reeval.force = true end
+	return r
+end
+
+--- Adaptive re-evaluation (reeval_adaptive, P.ReevalDue): a playing mirror whose source, listener
+-- and world did not change since its last evaluation keeps its values.
+local function reevalDue(m, S, L)
+	m.reeval = m.reeval or {}
+	return A.Paths.ReevalDue(m.reeval, S, L, RealTime())
+end
+
 --- Gain multiplier and DSP of a loop at S for the local listener.
 local function muffle(m, S, L)
 	if not A.Enabled() then return 1, m.dsp end
-	m.hyst = m.hyst or {}
-	local r = A.Paths.Stable(m.hyst, A.Paths.Compute(S, L, m.lvl, nil, m.ent))
+	local r = pathOf(m, S, L)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	if r.clear or not r.voices or #r.voices == 0 then return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
@@ -50,8 +65,7 @@ end
 -- (the opening it comes through, or the source itself) with the engine's distance law.
 local function applyNative(m, S, L)
 	local N = A.Native
-	m.hyst = m.hyst or {}
-	local r = A.Paths.Stable(m.hyst, A.Paths.Compute(S, L, m.lvl, nil, m.ent))
+	local r = pathOf(m, S, L)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	local pos, gain, lp
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
@@ -127,6 +141,10 @@ local function apply(m, fade)
 		m.nativeId = nil
 		if m.once then m.done = true return end -- a long one-shot cannot resume midway
 	end
+	if (m.patch or m.nativeId) and not reevalDue(m, S, L) then
+		if m.patch and m.once and not m.patch:IsPlaying() then m.done = true end
+		return
+	end
 	if nativeOn and not m.patch then
 		if applyNative(m, S, L) ~= false then return end
 	end
@@ -188,6 +206,7 @@ function LP.HandleClient(data)
 		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end
 		if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then m.pitch = data.Pitch or m.pitch end
 		if m.patch then m.patch:ChangeVolume(m.vol * (m.g or 1), 0.1) m.patch:ChangePitch(m.pitch, 0.1) end
+		if m.nativeId and m.reeval then m.reeval.force = true end -- applied at its next turn
 		return true
 	end
 	if replacing(chan) then LP.StopClient(idx, chan) end
@@ -227,6 +246,7 @@ net.Receive("pba_loop", function()
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	m.vol, m.pitch = vol, pitch
 	if m.nativeId and op == OP_UPDATE then
+		if m.reeval then m.reeval.force = true end
 		return -- applied at the next tick
 	end
 	if m.patch and op == OP_UPDATE then
