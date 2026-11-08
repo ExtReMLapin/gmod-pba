@@ -98,6 +98,8 @@ def pure():
 steps = [
     ("load pba_tworooms", lambda: load("pba_tworooms") or "ok"),
     ("GLuaTest pure suite", pure),
+    # metrics of the perceptual bench (Python, no game): full battery only
+    ("perceptual metrics (pure)", lambda: py("test_perceptual.py")),
     ("menu_fit", lambda: job("client", "menu_fit.lua")),
     # engine rendering: with "everything native" the server relays every sound to this client and the
     # "untouched" scenarios cannot hold (by design)
@@ -144,6 +146,11 @@ steps = [
     # the listener field alone (no immediate search): no cold silence beyond the warm ones
     ("path_quality field only", lambda: py("path_quality.py", "--check", "--no-gap", "--set=pba_probe_inline_ms=0",
                                            "d1_town_01", "gm_construct")),
+    # what a player can hear (docs/ETAT_DE_L_ART_RECHERCHE.md 6.4, 9): level steps > 1 dB (JND) and
+    # direction jumps when the source or the listener walks 16 u steps, level(S, L) vs level(L, S).
+    # Limits None (report only) until the first in-game baseline; --check fails on too few walks.
+    # gm_construct first: path_quality field only ends on it (one load less); pba_demo: portal paths
+    ("path_perceptual", lambda: py("path_perceptual.py", "--check", "--pairs=15", "gm_construct", "pba_demo")),
 ]
 # --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
 # before merging into main or a release
