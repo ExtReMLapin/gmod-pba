@@ -19,6 +19,7 @@ local files = {
 	{ "audioprop/sv_relay.lua", "sv" },
 	{ "audioprop/sv_loops.lua", "sv" },
 	{ "audioprop/cl_loops.lua", "cl" },
+	{ "audioprop/cl_streams.lua", "cl" },
 	{ "audioprop/cl_probes.lua", "cl" },
 	{ "audioprop/cl_native.lua", "cl" },
 	{ "audioprop/cl_render.lua", "cl" },

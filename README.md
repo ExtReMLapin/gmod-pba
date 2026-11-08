@@ -79,6 +79,10 @@ With the module installed:
   played by the module (HRTF, reverb); the server relays them to that client only
   (`audioprop_native_relay`, admin).
 
+- radios and music players of other addons (`sound.PlayURL` / `PlayFile` 3D channels) are
+  heard through openings and attenuated by walls (transparent detour, `audioprop_streams`);
+  with the module they are also really muffled (`audioprop_streams_filter`, BASS DSP EQ).
+
 Every option is a client preference in Spawn menu > Utilities > audioprop > Steam Audio (native).
 Server admins can forbid the native backend with `audioprop_allow_native 0`. Long sounds (music,
 speeches, beyond `audioprop_max_duration`) are followed like loops (`audioprop_long_sounds`).

@@ -45,6 +45,7 @@
 #include <phonon.h>
 
 #include "render.h"
+#include "streams.h"
 
 using namespace GarrysMod::Lua;
 
@@ -1026,6 +1027,44 @@ LUA_FUNCTION(Echo) {
 	return 2;
 }
 
+// StreamFilter(channel, eqL, eqM, eqH) -> true | false, reason : 3-band EQ on the BASS channel of
+// an IGModAudioChannel (sound.PlayURL / PlayFile of any addon), see streams.cpp
+LUA_FUNCTION(StreamFilter) {
+	void* obj = LUA->GetUserType<void>(1, Type::SoundHandle);
+	if (!obj) LUA->ThrowError("StreamFilter: IGModAudioChannel expected");
+	const float gl = (float)LUA->CheckNumber(2), gm = (float)LUA->CheckNumber(3), gh = (float)LUA->CheckNumber(4);
+	// expected sampling rate and 3D flag, read through the channel's own Lua methods
+	unsigned freq = 0;
+	bool is3D = true;
+	LUA->Push(1);
+	LUA->GetField(-1, "GetSamplingRate");
+	if (LUA->IsType(-1, Type::Function)) {
+		LUA->Push(-2);
+		LUA->Call(1, 1);
+		freq = (unsigned)LUA->GetNumber(-1);
+	}
+	LUA->Pop();
+	LUA->GetField(-1, "Is3D");
+	if (LUA->IsType(-1, Type::Function)) {
+		LUA->Push(-2);
+		LUA->Call(1, 1);
+		is3D = LUA->GetBool(-1);
+	}
+	LUA->Pop(2);
+	const std::string err = streams::Filter(obj, freq, is3D, gl, gm, gh);
+	LUA->PushBool(err.empty());
+	if (!err.empty()) {
+		LUA->PushString(err.c_str());
+		return 2;
+	}
+	return 1;
+}
+
+LUA_FUNCTION(StreamCollect) {
+	LUA->PushNumber(streams::Collect());
+	return 1;
+}
+
 // SetUnderwater(amount 0..1): low-pass on the native mix while the listener's head is in water
 LUA_FUNCTION(SetUnderwater) {
 	render::SetUnderwater((float)LUA->CheckNumber(1));
@@ -1170,6 +1209,7 @@ LUA_FUNCTION(RoomReverb) {
 }
 
 LUA_FUNCTION(Shutdown) {
+	streams::Shutdown();
 	render::Stop();
 	ReleaseWorld();
 	if (g_ctx) iplContextRelease(&g_ctx);
@@ -1251,12 +1291,17 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SoundPending");
 	LUA->PushCFunction(SetUnderwater);
 	LUA->SetField(-2, "SetUnderwater");
+	LUA->PushCFunction(StreamFilter);
+	LUA->SetField(-2, "StreamFilter");
+	LUA->PushCFunction(StreamCollect);
+	LUA->SetField(-2, "StreamCollect");
 	LUA->SetField(-2, "audioprop_native");
 	LUA->Pop();
 	return 0;
 }
 
 GMOD_MODULE_CLOSE() {
+	streams::Shutdown();
 	render::Stop();
 	ReleaseWorld();
 	if (g_ctx) iplContextRelease(&g_ctx);

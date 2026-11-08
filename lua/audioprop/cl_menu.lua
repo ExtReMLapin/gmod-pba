@@ -17,6 +17,8 @@ hook.Add("PopulateToolMenu", "audioprop_menu", function()
 		addSlider(panel, "Path search budget per frame (ms)", "frame_budget_ms", 1)
 		panel:Help("Server status: " .. (A.Enabled() and "on" or "off") .. " (audioprop_enable, admin).")
 		panel:CheckBox("Propagation delay (speed of sound)", "audioprop_delay")
+		panel:CheckBox("Radios / music streams of other addons", "audioprop_streams")
+		panel:CheckBox("Muffle those streams (native module)", "audioprop_streams_filter")
 	end)
 	-- feature set of the optional native backend: every option is a client preference
 	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_native", "#audioprop.menu.native", "", "", function(panel)
