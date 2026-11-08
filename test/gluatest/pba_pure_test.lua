@@ -94,6 +94,100 @@ local function synthBsp()
 	} }
 end
 
+-- Synthetic probe scene for the listener field: a 16 u wall along y = 0 with two 64 u openings
+-- (x -232..-168 and 168..232), one layer of probes (z = 64) on a 128 u grid on both sides, linked
+-- when the straight segment between them is clear. util.TraceLine / TraceHull with the world mask are
+-- replaced by segment-box tests for the duration of fn(g) only (restored even on error); the other
+-- traces (door entities) see nothing. The probe module's shared state (graph, field, caches, queue)
+-- is set aside the same way, so PR.Paths answers from this scene alone.
+local PROBE_WALL = { { Vector(-1000, -8, -1000), Vector(-232, 8, 1000) },
+	{ Vector(-168, -8, -1000), Vector(168, 8, 1000) }, { Vector(232, -8, -1000), Vector(1000, 8, 1000) } }
+local function probeHit(a, b, pad)
+	for _, w in ipairs(PROBE_WALL) do
+		local t0, t1 = segBox(a, b, w[1] - Vector(pad, pad, pad), w[2] + Vector(pad, pad, pad))
+		if t0 and t1 - t0 > 1e-6 then return true end
+	end
+	return false
+end
+local function withProbeScene(fn)
+	local PR = A.Probes
+	local savedTL, savedTH = util.TraceLine, util.TraceHull
+	local keys = { "current", "field", "fieldJob", "fieldHold", "pathCache", "pathCacheN", "queue", "queueN" }
+	local savedPR, savedCfg = {}, {}
+	for _, k in ipairs(keys) do savedPR[k] = PR[k] end
+	for _, k in ipairs({ "probe_field", "probe_inline_ms", "probe_field_blend" }) do savedCfg[k] = A.cfg[k] end
+	local function tr(t, pad)
+		local out = t.output or {}
+		out.Hit = t.mask == MASK_SOLID_BRUSHONLY and probeHit(t.start, t.endpos, pad) or false
+		out.Fraction, out.StartSolid = out.Hit and 0.5 or 1, false
+		return out
+	end
+	util.TraceLine = function(t) return tr(t, 0) end
+	util.TraceHull = function(t) return tr(t, t.maxs and t.maxs.x or 0) end
+	local s = 128
+	local g = { spacing = s, nodes = {}, index = {} }
+	for i = -4, 3 do for j = -3, 2 do
+		local n = { i = i, j = j, k = 0, o = 1, pos = Vector((i + 0.5) * s, (j + 0.5) * s, 64), nb = {} }
+		g.nodes[#g.nodes + 1] = n
+		n.id = #g.nodes
+		g.index[i .. "," .. j .. ",0"] = n.id
+	end end
+	for _, n in ipairs(g.nodes) do
+		for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+			local m = g.index[(n.i + d[1]) .. "," .. (n.j + d[2]) .. ",0"]
+			if m and not probeHit(n.pos, g.nodes[m].pos, 0) then n.nb[m] = true end
+		end
+	end
+	PR.Prepare(g)
+	PR.current, PR.fieldJob, PR.fieldHold, PR.pathCache, PR.pathCacheN, PR.queue, PR.queueN = g, nil, nil, {}, 0, {}, 0
+	local ok, err = pcall(fn, g)
+	util.TraceLine, util.TraceHull = savedTL, savedTH
+	for _, k in ipairs(keys) do PR[k] = savedPR[k] end
+	for k, v in pairs(savedCfg) do A.cfg[k] = v end
+	if not ok then error(err, 0) end
+end
+-- The probe answer for S, the field built at L: the loudest path (length and loss), its azimuth seen
+-- from L (degrees) and its level (dB, loss and spherical spreading). Field only: no A* search.
+local function probeAnswer(S, L, blend)
+	local cfg = table.Copy(A.cfg)
+	cfg.probe_field, cfg.probe_inline_ms, cfg.probe_bridge_max, cfg.probe_field_blend = 1, 0, 0, blend
+	cfg.path_guard_db = 0
+	A.cfg.probe_field, A.cfg.probe_inline_ms, A.cfg.probe_field_blend = 1, 0, blend
+	local best, bestDb
+	for _, p in ipairs(A.Probes.Paths(S, L, 3, cfg)) do
+		local db = -p.lossDb - 20 * math.log10(p.length)
+		if not bestDb or db > bestDb then best, bestDb = p, db end
+	end
+	if not best then return nil end
+	return best, math.deg(math.atan2(best.pos.y - L.y, best.pos.x - L.x)), bestDb
+end
+-- S swept along y = 150 from x = -120 to 120 in 8 u steps (the probes it sees change on the way):
+-- largest step of direction (degrees), length (%) and level (dB) of the loudest probe path.
+local function probeSweep(blend)
+	local L = Vector(40, -300, 64)
+	local dDir, dLen, dDb, sets, blended = 0, 0, 0, 0, true
+	local prev, prevSet
+	A.Probes.field = A.Probes.BuildField(A.Probes.current, L)
+	for x = -120, 120, 8 do
+		local S = Vector(x, 150, 64)
+		local set = {}
+		for _, n in ipairs(A.Probes.Visible(A.Probes.current, S, 3)) do set[#set + 1] = n.id end
+		set = table.concat(set, ",")
+		if prevSet and set ~= prevSet then sets = sets + 1 end
+		prevSet = set
+		local p, az, db = probeAnswer(S, L, blend)
+		if not p then error("no probe path at x = " .. x) end
+		if prev then
+			dDir = math.max(dDir, math.abs(az - prev[2]))
+			dLen = math.max(dLen, math.abs(p.length - prev[1].length) / prev[1].length * 100)
+			dDb = math.max(dDb, math.abs(db - prev[3]))
+		end
+		blended = blended and p.blend ~= nil
+		prev = { p, az, db }
+	end
+	return dDir, dLen, dDb, sets, blended
+end
+
 local CFG = table.Copy(A.cfg)
 CFG.max_paths, CFG.max_depth, CFG.merge, CFG.max_voices = 3, 8, 1, 3
 CFG.reject_db, CFG.split_db, CFG.split_angle, CFG.trans_window_db = 12, 6, 60, 20
@@ -716,6 +810,51 @@ return {
 			expect(s.pending).to.beTrue()
 			expect(P.RampAt(s, 0.25, L)).to.equal(0.5)
 			expect(s.pending).to.equal(false) -- sent once, then nothing until something changes
+		end },
+		{ name = "Probe field blend: S moved 8 u at a time across changes of the probes it sees: steps of direction < 15 deg, length < 2 %, level < 1 dB (one route per probe: 77 deg, 4.4 %, 10.3 dB)", func = function()
+			withProbeScene(function()
+				local dDir, dLen, dDb, sets, blended = probeSweep(1)
+				expect(sets >= 3).to.beTrue() -- the sweep does cross changes of the visible set
+				expect(blended).to.beTrue()
+				expect(dDir < 15).to.beTrue()
+				expect(dLen < 2).to.beTrue()
+				expect(dDb < 1).to.beTrue()
+				-- off: the previous answer, unchanged
+				local oDir, _, oDb = probeSweep(0)
+				expect(oDir > 60 and oDb > 5).to.beTrue()
+			end)
+		end },
+		{ name = "Probe field blend: one probe alone carries the weight = the previous answer (S on a probe: same length, loss and apparent position)", func = function()
+			withProbeScene(function(g)
+				local L = Vector(40, -300, 64)
+				A.Probes.field = A.Probes.BuildField(g, L)
+				local n = g.nodes[g.index["-1,1,0"]] -- (-64, 192): its neighbours are one spacing away
+				local S = Vector(n.pos.x, n.pos.y, n.pos.z)
+				local new = probeAnswer(S, L, 1)
+				local old = probeAnswer(S, L, 0)
+				expect(new.blend).to.equal(1)
+				expect(near(new.length, old.length, 1e-6)).to.beTrue()
+				expect(near(new.lossDb, old.lossDb, 1e-6)).to.beTrue()
+				expect(new.pos:Distance(old.pos) < 1e-6).to.beTrue()
+				-- and directly: a single probe seen = its route joined to S, weight 1
+				local p = A.Probes.FieldBlend(A.Probes.field, S + Vector(8, -8, 0), L, { n }, A.cfg)
+				local pts = { S + Vector(8, -8, 0) }
+				for _, b in ipairs(A.Probes.Arrival(A.Probes.field, n).bends) do pts[#pts + 1] = b end
+				pts[#pts + 1] = L
+				local q = P.EvalPolyline(pts, A.cfg)
+				expect(near(p.length, q.length, 1e-6) and near(p.lossDb, q.lossDb, 1e-6) and p.pos:Distance(q.pos) < 1e-6).to.beTrue()
+			end)
+		end },
+		{ name = "Probe field blend: the last probe of a full PR.Visible list takes no part (it is the next to leave the set); no probe within a spacing = nil (caller falls back)", func = function()
+			withProbeScene(function(g)
+				local L = Vector(40, -300, 64)
+				local f = A.Probes.BuildField(g, L)
+				local a, b, c = g.nodes[g.index["-1,1,0"]], g.nodes[g.index["0,1,0"]], g.nodes[g.index["-1,0,0"]]
+				local S = Vector(-10, 150, 64)
+				expect(A.Probes.FieldBlend(f, S, L, { a, b, c }, A.cfg, true).blend).to.equal(2)
+				expect(A.Probes.FieldBlend(f, S, L, { a, b, c }, A.cfg, false).blend).to.equal(3)
+				expect(A.Probes.FieldBlend(f, Vector(-64, 392, 64), L, { a }, A.cfg)).to.beNil()
+			end)
 		end },
 	},
 }
