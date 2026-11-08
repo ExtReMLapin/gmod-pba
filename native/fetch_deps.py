@@ -23,6 +23,12 @@ if not os.path.isdir(MA):
         url = "https://raw.githubusercontent.com/mackron/miniaudio/master/" + f
         print("downloading", url, flush=True)
         open(os.path.join(MA, f), "wb").write(urllib.request.urlopen(url, timeout=600).read())
+# stb_vorbis (public domain / MIT), shipped in miniaudio's extras: OGG Vorbis decoding
+SV = os.path.join(MA, "stb_vorbis.c")
+if not os.path.isfile(SV):
+    url = "https://raw.githubusercontent.com/mackron/miniaudio/master/extras/stb_vorbis.c"
+    print("downloading", url, flush=True)
+    open(SV, "wb").write(urllib.request.urlopen(url, timeout=600).read())
 for name, url in ITEMS:
     out = os.path.join(DEPS, name)
     if os.path.isdir(out):

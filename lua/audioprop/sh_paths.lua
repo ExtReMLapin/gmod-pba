@@ -217,6 +217,23 @@ function P.Walls(S, L, maxWalls, srcEnt)
 		if exit == L then break end
 		start = exit + dir * 0.5
 	end
+	-- water surface between source and listener: the air / water interface reflects most of the
+	-- sound (one fixed, heavily low-passed "wall"; no detour through the air exists)
+	if A.cfg.water >= 0.5 then
+		local wS = bit.band(util.PointContents(S), CONTENTS_WATER) ~= 0
+		local wL = bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
+		if wS ~= wL then
+			local dry, wet = wS and L or S, wS and S or L
+			local tr = util.TraceLine({ start = dry, endpos = wet, mask = MASK_WATER })
+			local p = tr.Hit and tr.HitPos or (S + L) * 0.5
+			local ws = { entry = p, exit = p, thickness = 0, mat = MAT_SLOSH, surf = "audioprop_water", water = true }
+			-- keep the walls ordered from S
+			local dS = p:DistToSqr(S)
+			local at = #walls + 1
+			for i, w in ipairs(walls) do if w.entry:DistToSqr(S) > dS then at = i break end end
+			table.insert(walls, at, ws)
+		end
+	end
 	return walls
 end
 
@@ -423,7 +440,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if CLIENT and A.Native and A.Native.ready then
 			local worldWalls, entWalls = {}, {}
 			for _, w in ipairs(walls) do
-				if w.ent then entWalls[#entWalls + 1] = w else worldWalls[#worldWalls + 1] = w end
+				if w.ent or w.water then entWalls[#entWalls + 1] = w else worldWalls[#worldWalls + 1] = w end
 			end
 			if #worldWalls > 0 then
 				local d = A.Native.Direct(S, L)
@@ -451,7 +468,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- portals and probes describe the world geometry only: use them only when the world
 		-- itself blocks the direct line (not when a prop, a door leaf... does)
 		local worldBlocked = false
-		for _, w in ipairs(walls) do if not w.ent then worldBlocked = true break end end
+		for _, w in ipairs(walls) do if not w.ent and not w.water then worldBlocked = true break end end
 		r.worldBlocked = worldBlocked
 		if g and worldBlocked then
 			r.aS, r.aL = A.Graph.Area(g, S), A.Graph.Area(g, L)

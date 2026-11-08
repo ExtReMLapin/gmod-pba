@@ -1026,6 +1026,12 @@ LUA_FUNCTION(Echo) {
 	return 2;
 }
 
+// SetUnderwater(amount 0..1): low-pass on the native mix while the listener's head is in water
+LUA_FUNCTION(SetUnderwater) {
+	render::SetUnderwater((float)LUA->CheckNumber(1));
+	return 0;
+}
+
 // SetOutputMode(0 headphones | 1 speakers)
 LUA_FUNCTION(SetOutputMode) {
 	render::SetOutputMode((int)LUA->CheckNumber(1));
@@ -1243,6 +1249,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "LoadSoundAsync");
 	LUA->PushCFunction(SoundPending);
 	LUA->SetField(-2, "SoundPending");
+	LUA->PushCFunction(SetUnderwater);
+	LUA->SetField(-2, "SetUnderwater");
 	LUA->SetField(-2, "audioprop_native");
 	LUA->Pop();
 	return 0;

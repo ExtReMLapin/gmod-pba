@@ -99,6 +99,7 @@ AC.MAT_DEFAULT_ENTRY = { 10.5, 50, 8, 30, 65, 4 } -- unknown materials: heavy wa
 
 -- Surface-property name overrides (MAT_* alone is ambiguous: plaster/ceiling_tile are MAT_DIRT).
 AC.SURF_TABLE = {
+	audioprop_water = { 1, 24, 0, 24, 24, 4, fixed = true }, -- air / water interface (see audioprop_water_db)
 	plaster      = { 8, 35, 6, 25, 45, 3 },
 	ceiling_tile = { 1, 12, 6, 6, 20, 2 },
 	cardboard    = { 1, 12, 6, 6, 20, 2 },
@@ -125,6 +126,7 @@ end
 --- Transmission loss (dB) and low-pass level of one wall.
 -- matType: MAT_* ; surf: surfaceprop name (may be nil) ; thickness: units.
 function AC.WallLoss(matType, surf, thickness)
+	if surf == "audioprop_water" then return (audioprop.cfg.water_db or 24), 4 end
 	local e = surf and AC.SURF_TABLE[string.lower(surf)] or AC.MAT_TABLE[matType] or AC.MAT_DEFAULT_ENTRY
 	return evalEntry(e, thickness)
 end

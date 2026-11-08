@@ -23,6 +23,8 @@ rx = re.compile(r"^\w+Sound\s+(\S+)")
 call("console_exec", {"realm": "server", "cmd": "sv_cheats 1"})
 call("console_exec", {"realm": "client", "cmd": "developer 1"})
 call("console_exec", {"realm": "client", "cmd": "snd_showstart 1"})
+call("lua_exec", {"realm": "server", "code": "local p=player.GetHumans()[1] if not p:Alive() then p:Spawn() end return true"})
+time.sleep(1)
 call("lua_exec", {"realm": "server", "code": "local p=player.GetHumans()[1] p:SetPos(Vector(256,256,0)) p:SetEyeAngles(Angle(0,0,0)) p:Give('weapon_smg1') p:SelectWeapon('weapon_smg1') p:GiveAmmo(500,'SMG1',true)"})
 res = {}
 for mode in ("0", "1"):

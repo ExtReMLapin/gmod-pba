@@ -27,6 +27,8 @@ bool Running();
 std::string HrtfInfo();
 void SetOutputMode(int mode); // 0 headphones (binaural), 1 speakers (panning)
 void SetWet(float room, float echo);
+// listener under water: low-pass on the whole native mix (0 = dry, 1 = fully under water)
+void SetUnderwater(float amount);
 // reflection sources owned by the simulator (nullptr to detach before releasing them)
 void SetReflectionSources(IPLSource room, const IPLSource* echo, int n);
 // the simulation thread reports that slot (-1 = room) has been simulated at generation gen

@@ -546,6 +546,12 @@ hook.Add("Think", "audioprop_native_listener", function()
 	local L = ply:EyePos()
 	N.live, eL, eR = audioprop_native.SetListener(L, ang:Forward(), ang:Up(), master)
 	N.UpdateFollowers(L)
+	-- head under water: the engine applies its own water DSP to the sounds it plays; same for ours
+	local uw = A.cfg.water >= 0.5 and bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
+	if uw ~= N.underwater and audioprop_native.SetUnderwater then
+		N.underwater = uw
+		audioprop_native.SetUnderwater(uw and 1 or 0)
+	end
 	if A.Loops and A.Loops.FollowNative then A.Loops.FollowNative(L) end
 	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
 end)

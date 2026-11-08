@@ -14,6 +14,10 @@
 #define NOMINMAX
 #define MA_NO_ENCODING
 #define MA_NO_GENERATION
+// OGG Vorbis through stb_vorbis (public domain), as documented by miniaudio: declarations
+// here, implementation at the end of this file
+#define STB_VORBIS_HEADER_ONLY
+#include "stb_vorbis.c"
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
@@ -119,6 +123,7 @@ IPLAmbisonicsDecodeEffect g_decode = nullptr;
 Reflection g_room;                 // reverb at the listener, fed by every voice (send bus = g_room.in)
 Reflection g_echo[kEchoSlots];     // per-source reflections
 float g_wetRoom = 0, g_wetEcho = 0;
+float g_uw = 0, g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: target, current mix, LP states
 float g_roomRt[3] = {0, 0, 0}; // under g_mtx
 std::vector<float> g_mix(kBlock * 2);
 std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet consumed
@@ -315,6 +320,19 @@ void RenderBlock() {
 		}
 	}
 
+	// under water: one-pole low-pass (~400 Hz, -3 dB), cross-faded in and out over ~0.1 s
+	if (g_uw > 0 || g_uwCur > 0) {
+		const float a = 1.0f - std::exp(-2.0f * 3.14159265f * 400.0f / kRate);
+		for (int i = 0; i < kBlock; ++i) {
+			g_uwCur += (g_uw - g_uwCur) * 0.0002f;
+			const float l = g_mix[i * 2], r = g_mix[i * 2 + 1];
+			g_uwL += a * (l - g_uwL);
+			g_uwR += a * (r - g_uwR);
+			g_mix[i * 2] = l + (g_uwL * 0.7f - l) * g_uwCur;
+			g_mix[i * 2 + 1] = r + (g_uwR * 0.7f - r) * g_uwCur;
+		}
+		if (g_uw == 0 && g_uwCur < 1e-4f) g_uwCur = 0;
+	}
 	for (int i = 0; i < kBlock; ++i) {
 		g_energyL += (double)g_mix[i * 2] * g_mix[i * 2];
 		g_energyR += (double)g_mix[i * 2 + 1] * g_mix[i * 2 + 1];
@@ -514,6 +532,11 @@ std::string HrtfInfo() { return g_hrtfInfo; }
 void SetOutputMode(int mode) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	g_outMode = mode == 1 ? 1 : 0;
+}
+
+void SetUnderwater(float amount) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_uw = std::clamp(amount, 0.0f, 1.0f);
 }
 
 void SetWet(float room, float echo) {
@@ -753,3 +776,6 @@ int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, d
 }
 
 } // namespace render
+
+#undef STB_VORBIS_HEADER_ONLY
+#include "stb_vorbis.c"
