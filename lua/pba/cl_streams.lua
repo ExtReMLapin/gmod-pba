@@ -178,7 +178,7 @@ local function release(ch, r)
 	r.apparent, r.g, r.eq = nil, 1, { 1, 1, 1 }
 	pcall(applyPos, ch, r)
 	pcall(applyVol, ch, r)
-	if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) end
+	if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) r.filtered = nil end
 end
 
 timer.Create("pba_streams", 0.25, 0, function()
@@ -194,7 +194,8 @@ timer.Create("pba_streams", 0.25, 0, function()
 			if r.nativeId and pba_native then pba_native.StopVoice(r.nativeId) end
 			ST.chans[ch] = nil
 		elseif not on then
-			if r.apparent or (r.g or 1) ~= 1 or r.filtered then release(ch, r) end
+			-- a native voice must stop too: the owner keeps setting the BASS volume back, both would play
+			if r.apparent or (r.g or 1) ~= 1 or r.filtered or r.nativeId then release(ch, r) end
 		elseif r.pos then
 			n = n + 1
 			local ok, err = pcall(evaluate, ch, r, L)

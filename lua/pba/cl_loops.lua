@@ -102,7 +102,14 @@ local function apply(m, fade)
 	local L = A.ListenerPos()
 	if not L then return end
 	local S = ent == m.anchor and m.pos or ent:WorldSpaceCenter()
-	if A.Native and A.Native.render and not m.patch and A.Enabled() then
+	local nativeOn = A.Native and A.Native.render and A.Enabled()
+	if m.nativeId and not nativeOn then
+		-- mode or native rendering switched off: hand the loop back to the engine without a double
+		pba_native.StopVoice(m.nativeId)
+		m.nativeId = nil
+		if m.once then m.done = true return end -- a long one-shot cannot resume midway
+	end
+	if nativeOn and not m.patch then
 		if applyNative(m, S, L) ~= false then return end
 	end
 	local g, dsp = muffle(m, S, L)
