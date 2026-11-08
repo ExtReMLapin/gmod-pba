@@ -15,52 +15,64 @@ hook.Add("PopulateToolMenu", "audioprop_menu", function()
 		panel:CheckBox("Enable on this client", "audioprop_cl_enable")
 		panel:NumSlider("Debug overlay", "audioprop_debug", 0, 2, 0)
 		addSlider(panel, "Path search budget per frame (ms)", "frame_budget_ms", 1)
-		panel:Help("Server status: " .. (A.Enabled() and "on" or "off") .. " (audioprop_enable, admin).")
+		panel.apStatus = panel:Help("")
 		panel:CheckBox("Propagation delay (speed of sound)", "audioprop_delay")
 		panel:CheckBox("Radios / music streams of other addons", "audioprop_streams")
-		panel:CheckBox("Muffle those streams (native module)", "audioprop_streams_filter")
+		panel.apDeps = { { panel:CheckBox("Muffle those streams (native module)", "audioprop_streams_filter"), "ready" } }
+		panel.apPlayer = true
+		A.menuPanels = A.menuPanels or {}
+		A.menuPanels[#A.menuPanels + 1] = panel
+		A.RefreshMenu()
 	end)
-	-- feature set of the optional native backend: every option is a client preference
+	-- feature set of the optional native backend: every option is a client preference. Options
+	-- are greyed out while the module is missing / forbidden by the server, and the options that
+	-- depend on another one (native rendering, baked paths) while that one is off.
 	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_native", "#audioprop.menu.native", "", "", function(panel)
 		panel:ClearControls()
-		local N = A.Native or {}
-		local status
-		if N.ready then
-			status = string.format("Steam Audio module loaded: %d triangles%s.", N.tris or 0,
-				N.pathsReady and string.format(", %d path probes%s", N.probes or 0, N.fromCache and " (from cache)" or "") or "")
-		else
-			status = "Steam Audio module not available (" .. tostring(N.err or "not loaded") .. "). " ..
-				"Install gmcl_audioprop_win64.dll and phonon.dll in garrysmod/lua/bin."
+		local deps = {}
+		local function dep(ctl, need) if IsValid(ctl) then deps[#deps + 1] = { ctl, need } end return ctl end
+		local function slider(label, name, dec, need)
+			local c = A.CONFIG[name]
+			return dep(panel:NumSlider(label, "audioprop_" .. name, c[2], c[3], dec or 0), need)
 		end
-		panel:Help(status)
-		panel:CheckBox("Use the native backend (occlusion by the map geometry)", "audioprop_native")
+		local R = "render"
+		panel.apStatus = panel:Help("")
+		dep(panel:CheckBox("Use the native backend (occlusion by the map geometry)", "audioprop_native"), "module")
 
 		panel:Help("Rendering: the module plays the sounds audioprop processes (headphones recommended).")
-		panel:CheckBox("Native rendering", "audioprop_native_render")
-		panel:CheckBox("Render every sound natively (not only obstructed ones)", "audioprop_native_all")
-		local out = panel:ComboBox("Output", "audioprop_native_out")
+		dep(panel:CheckBox("Native rendering", "audioprop_native_render"), "ready")
+		dep(panel:CheckBox("Render every sound natively (not only obstructed ones)", "audioprop_native_all"), R)
+		local out, outLabel = panel:ComboBox("Output", "audioprop_native_out")
 		out:AddChoice("Headphones (HRTF)", 0)
 		out:AddChoice("Speakers (stereo panning)", 1)
-		addSlider(panel, "Loudness vs engine", "native_gain", 2)
-		panel:CheckBox("Air absorption", "audioprop_native_air")
-		panel:CheckBox("Doppler effect", "audioprop_native_doppler")
-		addSlider(panel, "Weapon directivity", "native_dir", 2)
+		dep(out, R)
+		dep(outLabel, R)
+		slider("Loudness vs engine", "native_gain", 2, R)
+		dep(panel:CheckBox("Air absorption", "audioprop_native_air"), R)
+		dep(panel:CheckBox("Doppler effect", "audioprop_native_doppler"), R)
+		slider("Weapon directivity", "native_dir", 2, R)
 
 		panel:Help("Reflections (simulated on a background thread).")
-		addSlider(panel, "Room reverb", "native_reverb", 2)
-		addSlider(panel, "Echoes of loud sounds", "native_echo", 2)
-		addSlider(panel, "Echo threshold (dB)", "native_echo_lvl")
-		addSlider(panel, "Rays per simulation", "native_rays")
-		panel:CheckBox("Doors in the acoustic scene", "audioprop_native_doors")
-		panel:CheckBox("Large props in the acoustic scene", "audioprop_native_props")
+		slider("Room reverb", "native_reverb", 2, R)
+		slider("Echoes of loud sounds", "native_echo", 2, R)
+		slider("Echo threshold (dB)", "native_echo_lvl", 0, R)
+		slider("Rays per simulation", "native_rays", 0, R)
+		dep(panel:CheckBox("Doors in the acoustic scene", "audioprop_native_doors"), "ready")
+		dep(panel:CheckBox("Large props in the acoustic scene", "audioprop_native_props"), "ready")
 
 		panel:Help("Baked paths around the map geometry (replaces the probe graph).")
-		panel:CheckBox("Steam Audio paths (bake on map load)", "audioprop_native_paths")
-		panel:CheckBox("Render paths as a sound field", "audioprop_native_path_fx")
-		panel:CheckBox("Keep the bake on disk", "audioprop_native_cache")
+		dep(panel:CheckBox("Steam Audio paths (bake on map load)", "audioprop_native_paths"), "ready")
+		dep(panel:CheckBox("Render paths as a sound field", "audioprop_native_path_fx"), "paths")
+		dep(panel:CheckBox("Keep the bake on disk", "audioprop_native_cache"), "paths")
 
-		panel:TextEntry("Custom HRTF (SOFA file in data/audioprop/hrtf/)", "audioprop_native_hrtf")
-		panel:Button("Restart native rendering", "audioprop_native_restart")
+		local hrtf, hrtfLabel = panel:TextEntry("Custom HRTF (SOFA file in data/audioprop/hrtf/)", "audioprop_native_hrtf")
+		dep(hrtf, R)
+		dep(hrtfLabel, R)
+		dep(panel:Button("Restart native rendering", "audioprop_native_restart"), R)
+		panel.apDeps = deps
+		A.menuPanels = A.menuPanels or {}
+		A.menuPanels[#A.menuPanels + 1] = panel
+		A.RefreshMenu()
 	end)
 	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_server", "#audioprop.menu.server", "", "", function(panel)
 		panel:ClearControls()
@@ -95,6 +107,63 @@ hook.Add("PopulateToolMenu", "audioprop_menu", function()
 		addSlider(panel, "Echo relay threshold (dB)", "echo_min_level")
 	end)
 end)
+
+-- state of the native backend, as shown in the menus
+local GREEN, RED, ORANGE = Color(40, 150, 60), Color(200, 40, 40), Color(200, 120, 0)
+local function nativeState()
+	local N = A.Native or {}
+	if (A.cfg.allow_native or 1) < 0.5 then return "forbidden", RED, "Native backend forbidden by this server (audioprop_allow_native 0)." end
+	if N.ready then
+		return "ready", GREEN, string.format("Steam Audio module loaded: %d triangles%s%s.", N.tris or 0,
+			N.render and ", native rendering on" or "",
+			N.pathsReady and string.format(", %d path probes%s", N.probes or 0, N.fromCache and " (from cache)" or "") or "")
+	end
+	if N.building then return "module", ORANGE, "Steam Audio module: loading the map geometry..." end
+	if (A.cfg.native or 1) < 0.5 then return "module", ORANGE, "Native backend switched off (audioprop_native 0)." end
+	if N.err == "module not installed" or not N.err then
+		return "missing", RED, "Steam Audio module NOT INSTALLED: these options need gmcl_audioprop_win64.dll and phonon.dll in garrysmod/lua/bin."
+	end
+	return "module", RED, "Steam Audio module not available: " .. tostring(N.err)
+end
+
+--- Greys out (and re-enables) the options of the open menu panels; called twice a second.
+function A.RefreshMenu()
+	local panels = A.menuPanels or {}
+	local state, color, text = nativeState()
+	local N = A.Native or {}
+	local have = {
+		module = state ~= "missing" and state ~= "forbidden",
+		ready = state == "ready",
+		render = state == "ready" and N.render == true,
+		paths = state == "ready" and (A.cfg.native_paths or 0) >= 0.5,
+	}
+	for i = #panels, 1, -1 do
+		local p = panels[i]
+		if not IsValid(p) then
+			table.remove(panels, i)
+		else
+			if IsValid(p.apStatus) then
+				if p.apPlayer then
+					local on = A.Enabled()
+					p.apStatus:SetText("audioprop is " .. (on and "ON" or "OFF") .. " on this server (audioprop_enable, admin).  " .. text)
+					p.apStatus:SetTextColor(on and color or RED)
+				else
+					p.apStatus:SetText(text)
+					p.apStatus:SetTextColor(color)
+				end
+			end
+			for _, d in ipairs(p.apDeps or {}) do
+				local ctl, ok = d[1], have[d[2]]
+				if IsValid(ctl) and ctl.apOk ~= ok then
+					ctl.apOk = ok
+					ctl:SetEnabled(ok)
+					ctl:SetAlpha(ok and 255 or 90)
+				end
+			end
+		end
+	end
+end
+timer.Create("audioprop_menu_state", 0.5, 0, function() if A.menuPanels and #A.menuPanels > 0 then A.RefreshMenu() end end)
 
 language.Add("audioprop.menu.player", "Player")
 language.Add("audioprop.menu.server", "Server (admin)")
