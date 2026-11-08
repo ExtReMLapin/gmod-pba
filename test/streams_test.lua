@@ -60,6 +60,26 @@ if r and r.filtered then pba_native.StreamFilter(ch, 1, 1, 1) end
 res.levelFlat = level(2)
 res.ratioFlat = hiLoRatio(2)
 RunConsoleCommand("pba_streams_filter", "1")
+-- native rendering of the stream (N2): BASS muted, the module plays the captured audio
+if pba.Native.ready and pba_native.PlayStream then
+	local wasRender = pba.cfg.native_render
+	RunConsoleCommand("pba_native_render", "1")
+	job:sleep(1.2)
+	local N = pba.Native
+	N.energyL, N.energyR = 0, 0
+	local lvlBefore = level(1)
+	res.native = {
+		voice = r.nativeId,
+		bassVolume = pba.Streams.orig.GetVolume(ch), -- what BASS really plays (0 when captured)
+		ownerVolume = ch:GetVolume(),                -- what the owner sees (its own value)
+		energy = N.energyL + N.energyR,              -- the module's output
+		levelForVisualisers = lvlBefore,             -- GetLevel ignores the channel volume
+		error = pba.Streams.lastNativeError,
+	}
+	RunConsoleCommand("pba_native_render", tostring(wasRender))
+	job:sleep(1)
+	res.native.afterOff = { voice = r.nativeId, bassVolume = pba.Streams.orig.GetVolume(ch) }
+end
 -- disabled: the owner's values come back
 RunConsoleCommand("pba_streams", "0")
 job:sleep(0.6)
@@ -72,4 +92,7 @@ res.pass = res.tracked and res.getPos == tostring(src) and math.abs(res.getVolum
 	and res.g < 0.9 and (not pba.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9
 		and res.ratioFiltered < res.ratioFlat * 0.3)) -- treble really removed, not replaced by noise
 	and res.offG == 1 and res.offApparent == false
+	and (not res.native or (res.native.voice and res.native.bassVolume == 0 and math.abs(res.native.ownerVolume - 0.8) < 1e-3
+		and res.native.energy > 0 and res.native.levelForVisualisers > 0.01 and not res.native.afterOff.voice
+		and res.native.afterOff.bassVolume > 0))
 return res

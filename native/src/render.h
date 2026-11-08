@@ -3,7 +3,10 @@
 #include <phonon.h>
 
 #include <cstddef>
+#include <memory>
 #include <string>
+
+#include "streambuf.h"
 
 namespace render {
 
@@ -47,6 +50,8 @@ bool SoundPending(const std::string& name);
 int Play(const std::string& name, const VoiceParams& p, bool loop); // voice id, 0 on failure
 // reflections-only voice: the sound feeds echo slot `slot` once it is simulated at `gen`
 int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay);
+// voice fed by a captured stream (another addon's BASS radio); lives until the stream closes
+int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p);
 bool Update(int id, const VoiceParams& p);
 void StopVoice(int id);
 // live voices; eL / eR: output energy per channel (pre master volume) since the previous call

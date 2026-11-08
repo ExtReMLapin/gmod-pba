@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace streams {
 
@@ -42,6 +43,7 @@ typedef HDSP(WINAPI* PFN_SetDSPEx)(DWORD, DSPPROC*, void*, int, DWORD);
 // BASS 2.4.18: request floating-point data whatever the channel's format and the global
 // BASS_CONFIG_FLOATDSP (which other modules may change); BASS converts before and after.
 constexpr DWORD BASS_DSP_FLOAT = 2;
+constexpr DWORD BASS_DSP_READONLY = 1;
 typedef BOOL(WINAPI* PFN_RemoveDSP)(DWORD, HDSP);
 typedef DWORD(WINAPI* PFN_GetConfig)(DWORD);
 
@@ -86,6 +88,10 @@ struct Fx {
 	float cur[3] = {1, 1, 1}; // gains applied at the end of the last buffer (ramped, no clicks)
 	float aL = 0, aH = 0;
 	float lo[8] = {}, hi[8] = {};
+	// capture to the native renderer (N2): read-only float DSP feeding a ring buffer
+	HDSP capDsp = 0;
+	std::shared_ptr<StreamBuf> buf;
+	std::vector<float> mono;
 	Fx() {
 		for (auto& x : g) x = 1.0f;
 	}
@@ -136,6 +142,21 @@ void CALLBACK Dsp(HDSP, DWORD, void* buffer, DWORD length, void* user) {
 	for (int b = 0; b < 3; ++b) f.cur[b] = t[b];
 }
 
+void CALLBACK CaptureDsp(HDSP, DWORD, void* buffer, DWORD length, void* user) {
+	Fx& f = *(Fx*)user;
+	if (!f.buf) return;
+	const DWORD ch = std::max<DWORD>(std::min<DWORD>(f.chans, 8), 1);
+	const float* s = (const float*)buffer; // BASS_DSP_FLOAT: always float here
+	const size_t frames = length / sizeof(float) / ch;
+	if (f.mono.size() < frames) f.mono.resize(frames);
+	for (size_t i = 0; i < frames; ++i) {
+		float acc = 0;
+		for (DWORD c = 0; c < ch; ++c) acc += s[i * ch + c];
+		f.mono[i] = acc / (float)ch;
+	}
+	f.buf->Write(f.mono.data(), frames);
+}
+
 // Validated BASS handle of an IGModAudioChannel object, 0 if anything looks wrong.
 DWORD HandleOf(void* obj, DWORD expectFreq, bool expect3D, BASS_CHANNELINFO* info) {
 	if (!obj) return 0;
@@ -154,6 +175,60 @@ DWORD HandleOf(void* obj, DWORD expectFreq, bool expect3D, BASS_CHANNELINFO* inf
 #endif
 
 } // namespace
+
+// Fx record of a validated channel, created (without any DSP) if needed. Lock held by the caller.
+static Fx* RecordOf(DWORD h, const BASS_CHANNELINFO& info) {
+	auto it = g_fx.find(h);
+	if (it != g_fx.end()) return it->second.get();
+	auto fx = std::make_unique<Fx>();
+	fx->handle = h;
+	fx->chans = info.chans ? info.chans : 1;
+	fx->freq = info.freq ? info.freq : 44100;
+	fx->aL = 1.0f - std::exp(-2.0f * 3.14159265f * 300.0f / fx->freq);
+	fx->aH = 1.0f - std::exp(-2.0f * 3.14159265f * 3000.0f / fx->freq);
+	fx->floatDspConfig = pGetConfig(BASS_CONFIG_FLOATDSP);
+	fx->channelFlags = info.flags;
+	Fx* raw = fx.get();
+	g_fx.emplace(h, std::move(fx));
+	return raw;
+}
+
+std::shared_ptr<StreamBuf> Capture(void* obj, unsigned freq, bool is3D, bool on, std::string* err) {
+#ifdef _WIN32
+	if (!Resolve()) { *err = "bass.dll / gmod_audio.dll not found"; return nullptr; }
+	if (!pSetDSPEx) { *err = "BASS_ChannelSetDSPEx missing (float capture needs it)"; return nullptr; }
+	BASS_CHANNELINFO info{};
+	const DWORD h = HandleOf(obj, freq, is3D, &info);
+	if (!h) { *err = "channel handle not validated"; return nullptr; }
+	std::lock_guard<std::mutex> lk(g_mtx);
+	Fx* f = RecordOf(h, info);
+	if (!on) {
+		if (f->capDsp) pRemoveDSP(h, f->capDsp);
+		f->capDsp = 0;
+		if (f->buf) f->buf->closed = true;
+		f->buf.reset();
+		return nullptr;
+	}
+	if (!f->capDsp) {
+		size_t size = 1;
+		while (size < (size_t)f->freq * 4) size <<= 1; // >= 4 s
+		f->buf = std::make_shared<StreamBuf>(size);
+		f->buf->rate = (float)f->freq;
+		f->mono.reserve(16384);
+		// high priority: copied before any other DSP of the channel changes the data
+		f->capDsp = pSetDSPEx(h, &CaptureDsp, f, 1000, BASS_DSP_FLOAT | BASS_DSP_READONLY);
+		if (!f->capDsp) {
+			f->buf.reset();
+			*err = "BASS_ChannelSetDSPEx failed";
+			return nullptr;
+		}
+	}
+	return f->buf;
+#else
+	*err = "windows only";
+	return nullptr;
+#endif
+}
 
 std::string Filter(void* obj, unsigned freq, bool is3D, float gl, float gm, float gh) {
 #ifdef _WIN32
@@ -228,8 +303,12 @@ int Collect() {
 	int n = 0;
 	for (auto it = g_fx.begin(); it != g_fx.end();) {
 		BASS_CHANNELINFO info{};
-		// channel freed: BASS dropped its DSPs with it, our state can go
-		if (!pGetInfo(it->first, &info)) it = g_fx.erase(it);
+		// channel freed: BASS dropped its DSPs with it, our state can go (the renderer's
+		// stream voice drains its buffer then stops)
+		if (!pGetInfo(it->first, &info)) {
+			if (it->second->buf) it->second->buf->closed = true;
+			it = g_fx.erase(it);
+		}
 		else {
 			++it;
 			++n;
@@ -249,6 +328,8 @@ void Shutdown() {
 	for (auto& kv : g_fx) {
 		BASS_CHANNELINFO info{};
 		if (kv.second->dsp && pGetInfo(kv.first, &info)) pRemoveDSP(kv.first, kv.second->dsp);
+		if (kv.second->capDsp && pGetInfo(kv.first, &info)) pRemoveDSP(kv.first, kv.second->capDsp);
+		if (kv.second->buf) kv.second->buf->closed = true;
 	}
 	g_fx.clear();
 #endif

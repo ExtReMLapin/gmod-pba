@@ -56,6 +56,9 @@ struct Sound {
 struct Voice {
 	int id = 0;
 	std::shared_ptr<Sound> snd;
+	std::shared_ptr<StreamBuf> stream; // captured stream instead of a decoded sound
+	double sfrac = 0;                  // fractional read position in the stream
+	bool primed = false;               // enough buffered to start (or restart after a gap)
 	double cursor = 0; // < 0: start delay still running (output samples)
 	float rate = 1;
 	bool loop = false;
@@ -212,9 +215,47 @@ void RenderBlock() {
 			if (++v.waited > kEchoWaitBlocks) v.alive = false;
 			continue;
 		}
+		float* m = g_mono.data[0];
+		if (v.stream) {
+			// captured stream: resample to kRate; the reading speed is nudged (+-0.5 %) to hold
+			// ~120 ms in the buffer, which absorbs the drift between BASS's and our clocks
+			StreamBuf& b = *v.stream;
+			const double srcRate = b.rate.load();
+			const double target = srcRate * 0.12;
+			double avail = (double)b.Available();
+			if (avail > (double)b.data.size() - srcRate * 0.25) { // overrun: jump close to the writer
+				b.r.store(b.w.load() - (uint64_t)target);
+				avail = target;
+			}
+			if (!v.primed && avail >= target) v.primed = true;
+			if (!v.primed) {
+				std::fill(m, m + kBlock, 0.0f);
+				if (b.closed.load() && avail < 2) v.alive = false;
+			} else {
+				const double adj = std::clamp((avail - target) / target * 0.01, -0.005, 0.005);
+				const double step = srcRate / kRate * (1.0 + adj) * v.rate;
+				uint64_t r = b.r.load(std::memory_order_relaxed);
+				const uint64_t w = b.w.load(std::memory_order_acquire);
+				for (int i = 0; i < kBlock; ++i) {
+					if (r + 1 >= w) { // underrun: silence, and wait for the buffer to refill
+						std::fill(m + i, m + kBlock, 0.0f);
+						v.primed = false;
+						break;
+					}
+					const float s0 = b.data[r & b.mask], s1 = b.data[(r + 1) & b.mask];
+					m[i] = s0 + (s1 - s0) * (float)v.sfrac;
+					v.sfrac += step;
+					while (v.sfrac >= 1.0) {
+						v.sfrac -= 1.0;
+						++r;
+					}
+				}
+				b.r.store(r, std::memory_order_release);
+				if (b.closed.load() && b.Available() < 2) v.alive = false;
+			}
+		} else {
 		const auto& pcm = v.snd->pcm;
 		const double len = (double)pcm.size();
-		float* m = g_mono.data[0];
 		for (int i = 0; i < kBlock; ++i) {
 			if (v.cursor < 0) {
 				m[i] = 0;
@@ -233,6 +274,7 @@ void RenderBlock() {
 			const float f = (float)(v.cursor - (double)k);
 			m[i] = pcm[k] * (1 - f) + pcm[k + 1] * f;
 			v.cursor += v.rate;
+		}
 		}
 		// gain smoothing over the block (no zipper noise / clicks on updates)
 		const float g0 = v.gainCur < 0 ? v.gain : v.gainCur, g1 = v.gain;
@@ -715,6 +757,28 @@ int Play(const std::string& name, const VoiceParams& p, bool loop) {
 	v->snd = it->second;
 	v->loop = loop;
 	v->cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
+	SetVoice(*v, p);
+	const int id = v->id;
+	g_voices.push_back(std::move(v));
+	return id;
+}
+
+int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	if (!buf || !g_devOk) return 0;
+	Reap();
+	const int slot = FindEffect();
+	if (slot < 0) return 0;
+	auto v = std::make_unique<Voice>();
+	g_pool[slot].used = true;
+	v->slot = slot;
+	iplDirectEffectReset(g_pool[slot].direct);
+	iplBinauralEffectReset(g_pool[slot].binaural);
+	iplPanningEffectReset(g_pool[slot].pan);
+	v->id = g_nextId++;
+	v->stream = std::move(buf);
+	// start from what is buffered now (no backlog)
+	v->stream->r.store(v->stream->w.load());
 	SetVoice(*v, p);
 	const int id = v->id;
 	g_voices.push_back(std::move(v));

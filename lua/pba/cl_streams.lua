@@ -51,12 +51,63 @@ local function applyPos(ch, r)
 	if pos then O.SetPos(ch, pos, r.dir, r.apparent and vector_origin or r.vel) end
 end
 
-local function applyVol(ch, r) O.SetVolume(ch, (r.vol or 1) * (r.g or 1)) end
+-- rendered by the native module (N2): BASS is muted (FFT / GetLevel are not affected by the
+-- channel volume, so visualisers keep working), the module plays the captured audio
+local function nativeMode(r)
+	local N = A.Native
+	return N and N.render and (A.cfg.streams_native or 0) >= 0.5 and pba_native and pba_native.PlayStream
+		and not r.nativeFailed
+end
+
+local function applyVol(ch, r)
+	if r.nativeId then O.SetVolume(ch, 0) return end
+	O.SetVolume(ch, (r.vol or 1) * (r.g or 1))
+end
+
+--- Native voice of a stream: position, gain (owner volume x BASS distance law x path), EQ.
+local function nativeParams(ch, r, L)
+	local pos = r.apparent or r.pos
+	local dS = r.pos:Distance(L)
+	local gain = (r.vol or 1) * bassGain(ch, dS) * (r.gRel or 1) * A.cfg.native_gain
+	local el, em, eh = A.Native.VoiceEQ(r.lp or 0, r.len or dS)
+	return pos, gain, el, em, eh
+end
+
+local function nativeUpdate(ch, r, L)
+	if not r.nativeId then return end
+	local pos, gain, el, em, eh = nativeParams(ch, r, L)
+	if not pba_native.Update(r.nativeId, pos, gain, el, em, eh, 100) then r.nativeId = nil end
+end
+
+local function nativeStart(ch, r, L)
+	local ok, id = pcall(function()
+		local pos, gain, el, em, eh = nativeParams(ch, r, L)
+		return pba_native.PlayStream(ch, pos, gain, el, em, eh, 100)
+	end)
+	if ok and id and id > 0 then
+		r.nativeId = id
+		O.SetVolume(ch, 0)
+	else
+		r.nativeFailed = true
+		ST.lastNativeError = ok and "PlayStream failed" or tostring(id)
+	end
+end
+
+local function nativeStop(ch, r)
+	if r.nativeId and pba_native then pba_native.StopVoice(r.nativeId) end
+	r.nativeId = nil
+	if pba_native and pba_native.StreamCapture then pcall(pba_native.StreamCapture, ch, false) end
+end
 
 function meta:SetPos(pos, dir, vel)
 	local ok, r = pcall(record, self)
 	if not ok or not r or not enabled() then return O.SetPos(self, pos, dir, vel) end
 	r.pos, r.dir, r.vel = pos, dir, vel
+	if r.nativeId and not r.apparent then
+		-- clear line: the native voice follows the owner's position every frame
+		local L = A.ListenerPos()
+		if L then pcall(nativeUpdate, self, r, L) end
+	end
 	if not r.apparent then return O.SetPos(self, pos, dir, vel) end
 	local ok2 = pcall(applyPos, self, r)
 	if not ok2 then return O.SetPos(self, pos, dir, vel) end
@@ -88,7 +139,7 @@ local function evaluate(ch, r, L)
 	local S = r.pos
 	local res = A.Paths.Compute(S, L, 75)
 	if res.clear or not res.voices or #res.voices == 0 then
-		r.apparent, r.g, r.eq = nil, 1, { 1, 1, 1 }
+		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len = nil, 1, { 1, 1, 1 }, 1, 0, nil
 		return
 	end
 	local p = 0
@@ -99,6 +150,7 @@ local function evaluate(ch, r, L)
 	-- BASS attenuates from the apparent (closer) position: compensate to the real distance
 	local corr = bassGain(ch, dS) / math.max(bassGain(ch, apparent:Distance(L)), 1e-6)
 	r.apparent, r.g = apparent, math.Clamp(g * corr, 0, 1)
+	r.gRel, r.lp, r.len = math.Clamp(g, 0, 1), res.voices[1].lp or 0, res.voices[1].len
 	local N = A.Native
 	r.eq = N and N.EQ and N.EQ[math.Clamp(res.voices[1].lp or 0, 0, 4)] or { 1, 1, 1 }
 end
@@ -119,6 +171,7 @@ local function filter(ch, r)
 end
 
 local function release(ch, r)
+	nativeStop(ch, r)
 	r.apparent, r.g, r.eq = nil, 1, { 1, 1, 1 }
 	pcall(applyPos, ch, r)
 	pcall(applyVol, ch, r)
@@ -135,6 +188,7 @@ timer.Create("pba_streams", 0.25, 0, function()
 	for ch, r in pairs(ST.chans) do
 		local okv, valid = pcall(ch.IsValid, ch)
 		if not okv or not valid then
+			if r.nativeId and pba_native then pba_native.StopVoice(r.nativeId) end
 			ST.chans[ch] = nil
 		elseif not on then
 			if r.apparent or (r.g or 1) ~= 1 or r.filtered then release(ch, r) end
@@ -142,9 +196,15 @@ timer.Create("pba_streams", 0.25, 0, function()
 			n = n + 1
 			local ok = pcall(evaluate, ch, r, L)
 			if ok then
+				if nativeMode(r) then
+					if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) end
+					if not r.nativeId then nativeStart(ch, r, L) else pcall(nativeUpdate, ch, r, L) end
+				elseif r.nativeId then
+					nativeStop(ch, r) -- native rendering switched off: back to BASS
+				end
 				pcall(applyPos, ch, r)
 				pcall(applyVol, ch, r)
-				filter(ch, r)
+				if not r.nativeId then filter(ch, r) end
 			end
 		end
 	end

@@ -35,7 +35,8 @@ function Build.player(panel)
 	chk(panel, "Enable on this client", "cl_enable")
 	chk(panel, "Speed of sound delay", "delay")
 	chk(panel, "Radios of other addons", "streams")
-	panel.apDeps = { { chk(panel, "Muffle those radios", "streams_filter"), "ready" }, { sld(panel, "Debug overlay", "debug"), "debug" } }
+	panel.apDeps = { { chk(panel, "Muffle those radios", "streams_filter"), "ready" },
+		{ chk(panel, "Radios in 3D (module)", "streams_native"), "render" }, { sld(panel, "Debug overlay", "debug"), "debug" } }
 	sld(panel, "Path budget (ms/frame)", "frame_budget_ms", 1)
 	panel.apPlayer = true
 	A.menuPanels = A.menuPanels or {}

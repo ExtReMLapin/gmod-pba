@@ -1085,6 +1085,61 @@ LUA_FUNCTION(StreamInfo) {
 	return 1;
 }
 
+// expected sampling rate and 3D flag of the channel at stack index 1 (through its Lua methods)
+static void ChannelFacts(ILuaBase* LUA, unsigned* freq, bool* is3D) {
+	*freq = 0;
+	*is3D = true;
+	LUA->Push(1);
+	LUA->GetField(-1, "GetSamplingRate");
+	if (LUA->IsType(-1, Type::Function)) {
+		LUA->Push(-2);
+		LUA->Call(1, 1);
+		*freq = (unsigned)LUA->GetNumber(-1);
+	}
+	LUA->Pop();
+	LUA->GetField(-1, "Is3D");
+	if (LUA->IsType(-1, Type::Function)) {
+		LUA->Push(-2);
+		LUA->Call(1, 1);
+		*is3D = LUA->GetBool(-1);
+	}
+	LUA->Pop(2);
+}
+
+// StreamCapture(channel, on) -> true | false, reason : copy the channel's audio for the renderer
+LUA_FUNCTION(StreamCapture) {
+	void* obj = LUA->GetUserType<void>(1, Type::SoundHandle);
+	if (!obj) LUA->ThrowError("StreamCapture: IGModAudioChannel expected");
+	const bool on = LUA->GetBool(2);
+	unsigned freq;
+	bool is3D;
+	ChannelFacts(LUA, &freq, &is3D);
+	std::string err;
+	auto buf = streams::Capture(obj, freq, is3D, on, &err);
+	LUA->PushBool(!on || buf != nullptr);
+	if (on && !buf) {
+		LUA->PushString(err.c_str());
+		return 2;
+	}
+	return 1;
+}
+
+// PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch]) -> voice id (0 = failed): the captured
+// audio of the channel played as a native voice (HRTF, reverb, paths); Update / StopVoice as usual
+LUA_FUNCTION(PlayStream) {
+	void* obj = LUA->GetUserType<void>(1, Type::SoundHandle);
+	if (!obj) LUA->ThrowError("PlayStream: IGModAudioChannel expected");
+	LUA->CheckType(2, Type::Vector);
+	render::VoiceParams p = ReadVoice(LUA, 2);
+	unsigned freq;
+	bool is3D;
+	ChannelFacts(LUA, &freq, &is3D);
+	std::string err;
+	auto buf = streams::Capture(obj, freq, is3D, true, &err);
+	LUA->PushNumber(buf ? render::PlayStream(buf, p) : 0);
+	return 1;
+}
+
 LUA_FUNCTION(StreamCollect) {
 	LUA->PushNumber(streams::Collect());
 	return 1;
@@ -1330,6 +1385,10 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetPaused");
 	LUA->PushCFunction(StreamInfo);
 	LUA->SetField(-2, "StreamInfo");
+	LUA->PushCFunction(StreamCapture);
+	LUA->SetField(-2, "StreamCapture");
+	LUA->PushCFunction(PlayStream);
+	LUA->SetField(-2, "PlayStream");
 	LUA->SetField(-2, "pba_native");
 	LUA->Pop();
 	return 0;
