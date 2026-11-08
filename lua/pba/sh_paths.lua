@@ -558,6 +558,14 @@ local wallOut, insideOut, backOut, detOut = {}, {}, {}, {}
 -- left out of the wall traces (their texture may declare "metal" or "concrete": 30 dB on d1_canals_01),
 -- so a wall a grate is mounted on keeps its own loss
 local NO_GRATE = bit.bnot(CONTENTS_GRATE)
+-- Tool brushes solid to traces but invisible: toolsblockbullets ($translucent: compiled CONTENTS_WINDOW
+-- like glass, 55 dB on d2_coast_04 / d3_c17_13). toolsinvisible, clips and block_los are already out by
+-- contents; toolsnodraw (hidden faces of real walls) and toolsskybox (map shell) stay walls.
+local PASS_TOOLS = { ["TOOLS/TOOLSBLOCKBULLETS"] = true, ["TOOLS/TOOLSINVISIBLE"] = true,
+	["TOOLS/TOOLSBLOCK_LOS"] = true, ["TOOLS/TOOLSINVISIBLELADDER"] = true }
+function P.PassTool(tr)
+	return tr.HitWorld and tr.HitNoDraw and PASS_TOOLS[string.upper(tr.HitTexture or "")] or false
+end
 local wallTr = { mask = bit.band(MASK_SOLID, NO_GRATE), filter = traceFilter, output = wallOut }
 local insideTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = traceFilter, output = insideOut }
 local backEnt
@@ -625,7 +633,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt)
 				return detClear(S, we) and detClear(we, L)
 			end)
 		end
-		walls[#walls + 1] = w
+		if hitEnt or not P.PassTool(tr) then walls[#walls + 1] = w end
 		if exit == L then break end
 		start = exit + dir * 0.5
 	end

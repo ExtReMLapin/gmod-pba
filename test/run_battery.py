@@ -176,6 +176,14 @@ steps = [
     ("soundscape_check d1_town_01", lambda: job("client", "soundscape_check.lua", 90)),
     # displacements are one-sided for traces: the same walls from both ends
     ("walls_symmetric gm_construct", lambda: (load("gm_construct"), job("client", "walls_symmetric.lua", 20))[1]),
+    # "^" distance-variant waves: the copy keeps the far wave of a far source (pushed to its real distance)
+    ("distvariant gm_construct", lambda: job("client", "distvariant.lua", 60)),
+    # invisible tool brushes (toolsblockbullets: compiled as glass) cost nothing, do not cut probe links
+    ("tool_brushes d2_coast_04", lambda: (load("d2_coast_04"), job("client", "tool_brushes.lua", 120))[1]),
+    # time scale: long sounds end in real time (at 2x the server forgot them halfway)
+    ("timescale", lambda: job("server", "timescale.lua", 60)),
+    # saved games: ambiences restored by the engine on load are taken over again
+    ("save_load_loops d1_town_01", lambda: py("save_load_loops.py")),
     # path quality against an independent single-bend reference (maps without areaportals: probes)
     ("path_quality", lambda: py("path_quality.py", "--check", "d1_town_01", "gm_construct")),
     # the path SEARCH through pba_demo's doorways (doors opened) against the single-bend reference, same

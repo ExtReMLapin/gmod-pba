@@ -160,7 +160,8 @@ function LP.Handle(data)
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	if not l then
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {} }
-		if once then l.once, l.endT = true, CurTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
+		-- sounds play in real time whatever the time scale (game.SetTimeScale, host_timescale): ends in real time
+		if once then l.once, l.endT = true, RealTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
 		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...) and model doors:
 		-- their C++ stops the loop with a StopSound that never reaches Lua; the mirror stops with the
 		-- motion. Brush models only ("*N"): a prop_dynamic is MOVETYPE_PUSH too, and a still machine
@@ -251,7 +252,7 @@ timer.Create("pba_loops", 0.5, 0, function()
 			for p in pairs(l.subs) do if IsValid(p) then plys[#plys + 1] = p end end
 			send(OP_STOP, l, plys)
 			LP.active[key] = nil
-		elseif l.once and CurTime() > l.endT then
+		elseif l.once and RealTime() > l.endT then
 			LP.active[key] = nil -- finished: the client mirrors end by themselves
 		else
 			local join, leave = {}, {}

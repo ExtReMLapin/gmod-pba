@@ -10,7 +10,7 @@ local A = pba
 local PR = {}
 A.Probes = PR
 
-local CACHE_VERSION = 6 -- 6: links cross grates
+local CACHE_VERSION = 7 -- 6: links cross grates; 7: and invisible tool brushes
 local MAX_PROBES = 30000
 local DIRS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 
@@ -21,10 +21,30 @@ local LINK_MASK = bit.band(MASK_SOLID_BRUSHONLY, bit.bnot(CONTENTS_GRATE))
 -- most of the ~166 KB of garbage per path computation, whose collection made 8-20 ms spikes
 local segOut = {}
 local segTr = { mask = LINK_MASK, filter = worldOnly, output = segOut }
+-- A hit on an invisible tool brush (A.Paths.PassTool: toolsblockbullets...) is no obstacle: the trace
+-- goes on from where it leaves the brush (a few hops at most).
+local function passThrough(tr, out, trace, b)
+	for _ = 1, 4 do
+		if not out.Hit then return true end
+		if not (A.Paths.PassTool and A.Paths.PassTool(out)) then return false end
+		local d = b - tr.start
+		d:Normalize()
+		tr.start = out.HitPos + d * 0.5
+		trace(tr)
+		if out.StartSolid then
+			if out.AllSolid or not out.FractionLeftSolid then return false end
+			tr.start = tr.start + (b - tr.start) * out.FractionLeftSolid + d * 0.5
+			trace(tr)
+		end
+	end
+	return not out.Hit
+end
+
 local function clearSeg(a, b)
 	segTr.start, segTr.endpos = a, b
 	util.TraceLine(segTr)
-	return not segOut.Hit
+	if not segOut.Hit then return true end
+	return passThrough(segTr, segOut, util.TraceLine, b)
 end
 PR.ClearSeg = clearSeg
 
@@ -380,7 +400,8 @@ local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = LINK_MASK, filter = wor
 local function clearFat(a, b)
 	fatTr.start, fatTr.endpos = a, b
 	util.TraceHull(fatTr)
-	return not fatOut.Hit
+	if not fatOut.Hit then return true end
+	return passThrough(fatTr, fatOut, util.TraceHull, b)
 end
 
 --- String pulling: removes vertices while the (fat) shortcut stays clear.

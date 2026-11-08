@@ -171,6 +171,19 @@ end
 --- Emits one voice. play: seconds the sound plays when it is to be followed (nil otherwise).
 -- Returns false when nothing was emitted, else a handle: { id = native voice } or { a = anchor,
 -- seq = emission number on it, chan } (both followable), or {} (a copy at a fixed position).
+--- "^" (distance variant) stereo waves: the engine picks the near or far channel by the copy's OWN
+-- distance (crossfade 240 -> 1320 u). A copy at an opening 192 u away played the near wave of NPC
+-- gunfire 2400 u away. The copy is pushed out along its direction to the real source distance (at
+-- most 1320 u); its level is kept by the engine-gain compensation.
+function A.DistVariantPos(name, pos, L, S)
+	if not S or not L then return pos end
+	local pre = string.sub(name or "", 1, #(name or "") - #A.SoundFile(name))
+	if not string.find(pre, "^", 1, true) then return pos end
+	local d, want = pos:Distance(L), math.min(S:Distance(L), 1320)
+	if want <= d or d < 1 then return pos end
+	return L + (pos - L) * (want / d)
+end
+
 local function emitVoice(data, v, L, src, copies, slot, play)
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
 	-- (a sentence is a sequence of words played by the engine: never by the module)
@@ -187,7 +200,8 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 		end
 	end
 	local lvl = data.SoundLevel
-	local d = v.pos:Distance(L)
+	v.epos = A.DistVariantPos(data.SoundName, v.pos, L, data.Pos)
+	local d = v.epos:Distance(L)
 	local vol = (data.Volume or 1) * v.gain / AC.EngineGain(math.max(d, 1), lvl)
 	vol = math.min(vol, 1)
 	if vol < 0.01 then return false end
@@ -196,7 +210,7 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 	if dsp == 0 or ((A.cfg.keep_dsp or 1) >= 0.5 and (data.DSP or 0) ~= 0) then dsp = data.DSP or 0 end
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
 	local delay = voiceDelay(v, L)
-	local name, pos, pitch = data.SoundName, v.pos, data.Pitch or 100
+	local name, pos, pitch = data.SoundName, v.epos, data.Pitch or 100
 	-- a muffled "#" (dry mix) sound: the engine would skip the preset, the sound would stay clear
 	if dsp ~= 0 then name = A.WithoutDryMix(name) end
 	local sentence = A.IsSentence(name)
@@ -296,8 +310,9 @@ local function targetValues(rec, fv, t, L)
 		local k = N.Doppler and N.Doppler(rec.S, N.VelocityOf(rec.ent), L, N.ListenerVelocity()) or 1
 		return rec.vol * t.gain * N.Directivity(rec.dirEnt, L) * A.cfg.native_gain, el, em, eh, t.pos, rec.pitch * k
 	end
-	local d = t.pos:Distance(L)
-	return math.min(rec.vol * t.gain / AC.EngineGain(math.max(d, 1), rec.lvl), 1), 1, 1, 1, t.pos, rec.pitch
+	local pos = A.DistVariantPos(rec.name, t.pos, L, rec.S)
+	local d = pos:Distance(L)
+	return math.min(rec.vol * t.gain / AC.EngineGain(math.max(d, 1), rec.lvl), 1), 1, 1, 1, pos, rec.pitch
 end
 
 local function evaluate(rec, now, L)
@@ -397,7 +412,7 @@ function OS.Add(data, src, S, L, r, list, play)
 	local N = A.Native
 	for _, e in ipairs(list) do
 		local fv, v = e.h, e.v
-		fv.tEnd, fv.pos, fv.ramp = fv.t0 + play, v.pos, {}
+		fv.tEnd, fv.pos, fv.ramp = fv.t0 + play, v.epos or v.pos, {}
 		if fv.id then
 			local el, em, eh = N.VoiceEQ(v.lp, v.len)
 			A.Paths.RampTo(fv.ramp, now, 0, L, v.vol * A.cfg.native_gain, el, em, eh, v.pos, rec.pitch)
@@ -406,7 +421,7 @@ function OS.Add(data, src, S, L, r, list, play)
 			if N.follow and N.follow[fv.id] then fv.nfollow, N.follow[fv.id] = N.follow[fv.id], nil end
 		else
 			fv.sent = v.vol
-			A.Paths.RampTo(fv.ramp, now, 0, L, v.vol, 1, 1, 1, v.pos, rec.pitch)
+			A.Paths.RampTo(fv.ramp, now, 0, L, v.vol, 1, 1, 1, v.epos or v.pos, rec.pitch)
 		end
 		fv.ramp.pending = false -- emitted with these values: nothing to send until the first update
 		rec.voices[#rec.voices + 1] = fv
