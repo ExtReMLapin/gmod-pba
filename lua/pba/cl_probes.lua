@@ -456,7 +456,8 @@ function PR.BuildField(g, L, yield, reuse)
 		cost, nxt = reuse.cost, reuse.nxt
 		for id = 1, #g.nodes do cost[id], nxt[id] = nil, nil end
 	end
-	local f = { g = g, L = L, cost = cost, nxt = nxt, pulled = {} }
+	-- arr: arrival of each probe's route at the listener, filled on first use (PR.FieldBlend)
+	local f = { g = g, L = L, cost = cost, nxt = nxt, pulled = {}, arr = {} }
 	local adj = g.adj or PR.Prepare(g)
 	local first, nid, elen = adj.first, adj.nid, adj.len
 	local hk, hv, n = {}, {}, 0
@@ -490,9 +491,9 @@ function PR.BuildFieldNow(L)
 	if PR.current then PR.field, PR.fieldJob, PR.fieldHold = PR.BuildField(PR.current, L), nil, SysTime() + 2 end
 end
 
-local function fieldUsable(g, L)
+local function fieldUsable(g, L, cfg)
 	local f = PR.field
-	return f and f.g == g and (A.cfg.probe_field or 1) >= 0.5 and f.L:DistToSqr(L) <= g.spacing * g.spacing and f
+	return f and f.g == g and ((cfg or A.cfg).probe_field or 1) >= 0.5 and f.L:DistToSqr(L) <= g.spacing * g.spacing and f
 end
 
 -- Pulled polylines (probe positions, without S and L) from each probe S sees down to the listener,
@@ -515,6 +516,7 @@ local function fieldPathFrom(f, best)
 	f.pulled[best.id] = c
 	return c
 end
+PR.FieldPathFrom = fieldPathFrom
 
 local function fieldPaths(f, starts, S)
 	local list = {}
@@ -559,8 +561,10 @@ hook.Add("Think", "pba_probes_field", function()
 	end
 end)
 
-local function pulledPaths(g, S, L, k)
-	local starts, goals = PR.Visible(g, S, 3), PR.Visible(g, L, 3)
+local function pulledPaths(g, S, L, k, cfg, starts)
+	cfg = cfg or A.cfg
+	starts = starts or PR.Visible(g, S, 3)
+	local goals = PR.Visible(g, L, 3)
 	if #starts == 0 or #goals == 0 then return {} end
 	local ck = starts[1].id .. ">" .. goals[1].id .. ">" .. k
 	local c = PR.pathCache[ck]
@@ -576,7 +580,7 @@ local function pulledPaths(g, S, L, k)
 	-- budget per call and per frame; beyond it the search goes on in the background as before.
 	local frame = FrameNumber()
 	if PR.inlineFrame ~= frame then PR.inlineFrame, PR.inlineUsed = frame, 0 end
-	local budget = math.min(A.cfg.probe_inline_ms or 3, (A.cfg.probe_inline_frame_ms or 6) - PR.inlineUsed)
+	local budget = math.min(cfg.probe_inline_ms or 3, (cfg.probe_inline_frame_ms or 6) - PR.inlineUsed)
 	if budget > 0 then
 		local t0 = SysTime()
 		PR.deadline = t0 + budget / 1000
@@ -588,7 +592,7 @@ local function pulledPaths(g, S, L, k)
 	-- the alternative routes, goes on in the background). PR.provisional tells P.Compute the answer
 	-- will change once the search is solved (a continuous sound then re-evaluates at its next turn).
 	PR.provisional = true
-	local f = fieldUsable(g, L)
+	local f = fieldUsable(g, L, cfg)
 	if f then return fieldPaths(f, starts, S) end
 	return {}
 end
@@ -687,6 +691,130 @@ local function attach(inner, S, L)
 	if #memo >= 8 then table.remove(memo, 1) end
 	memo[#memo + 1] = { sx, sy, sz, lx, ly, lz, pulled }
 	return pulled
+end
+PR.Attach = attach
+
+-- ------------------------------------------------------------------ blend over the probes S sees
+-- (Raghuvanshi 2021, eq. 6: the delay at a point is interpolated from the neighbouring samples'
+-- apparent positions.) The field's route from one probe, attached and tightened per source, makes
+-- the answer depend on which probe S sees first: when S moves, the set of probes it sees changes and
+-- the length, the bends and the apparent position step (route through another opening, or the same
+-- route tightened differently: 10 dB and 77 degrees in one 8 u step in the pure test). Instead each
+-- probe's route is tightened once per field, from the probe itself, and kept (its arrival); a source
+-- is joined to the first bend of each arrival and the results are averaged with weights that are
+-- continuous in S, so a small move of S gives a small change.
+
+-- The arrival of probe n's route at the listener the field was built at: the bends after n (n itself
+-- when it sees the listener) and the length along them. Filled on first use, shared by every source
+-- that sees n, dropped with the field.
+local function arrival(f, n)
+	local a = f.arr[n.id]
+	if a then return a end
+	local T = attach(fieldPathFrom(f, n), n.pos, f.L)
+	local bends = {}
+	for i = 2, #T - 1 do
+		if T[i]:DistToSqr(n.pos) > 1e-6 then bends[#bends + 1] = T[i] end
+	end
+	if #bends == 0 then bends[1] = n.pos end
+	local rest = 0
+	for i = 1, #bends - 1 do rest = rest + bends[i]:Distance(bends[i + 1]) end
+	a = { bends = bends, rest = rest }
+	f.arr[n.id] = a
+	return a
+end
+PR.Arrival = arrival
+
+PR.BLEND_LAMBDA = 1 -- length scale of the weights, in probe spacings (routes longer by more fade out)
+PR.BLEND_REACH = 1.5 -- the kernel reaches at least this many times the nearest probe's distance
+PR.BLEND_N = 5 -- probes asked of PR.Visible for a blend (the last one only bounds the others' weights)
+
+--- One path for S from the field f: the arrivals of the probes S sees (`starts`, nearest first, as
+-- PR.Visible gives them), each joined to S and evaluated like any probe path (P.EvalPolyline), then
+-- averaged. Weight of probe i = kernel(distance S - probe) x exp(-(length via i - shortest) / lambda):
+-- - the kernel is (1 - (d / D)^2)^2, zero from D on. D is one spacing (every probe that close is a
+--   candidate of PR.Visible), widened to 1.5 x the nearest probe's distance where probes are sparse
+--   (the nearest always weighs: no gap where the blend would give up), and bounded, when PR.Visible
+--   stopped at its maximum (`full`), by the distance of the last probe: that probe is the next to leave
+--   the set, so probes enter and leave it with weight 0;
+-- - the length term favours the shorter routes (a probe whose route goes round the other way).
+-- Length, losses and shape are averaged; the apparent position is the average direction seen from L,
+-- at the average distance. Points (for props on the path) and door lowpass: the heaviest route's.
+-- Before the widening, S seeing no probe within one spacing fell back to the per-sound path: a switch
+-- of model, 6 dB / 77 degrees in one 4 u step in the pure test. No trace beyond P.EvalPolyline's door
+-- checks; nil only when no probe S sees has a route (caller falls back).
+function PR.FieldBlend(f, S, L, starts, cfg, full)
+	cfg = cfg or A.cfg
+	local n = #starts
+	if n == 0 then return nil end
+	local sqrt, exp = math.sqrt, math.exp
+	local sx, sy, sz = S:Unpack()
+	local D = f.g.spacing
+	local d = {}
+	for i = 1, n do
+		local x, y, z = starts[i].pos:Unpack()
+		d[i] = sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2)
+	end
+	local nearest
+	for i = 1, n do
+		if f.cost[starts[i].id] then nearest = i break end
+	end
+	if not nearest then return nil end
+	D = math.max(D, PR.BLEND_REACH * d[nearest])
+	if full then D = math.min(D, d[n]) end
+	local cand, lmin = {}, math.huge
+	for i = 1, n do
+		local node = starts[i]
+		if d[i] < D and f.cost[node.id] then
+			local u = d[i] / D
+			local a = arrival(f, node)
+			local len = S:Distance(a.bends[1]) + a.rest + a.bends[#a.bends]:Distance(L)
+			cand[#cand + 1] = { a = a, k = (1 - u * u) ^ 2, len = len }
+			if len < lmin then lmin = len end
+		end
+	end
+	if #cand == 0 then -- the nearest probe at the edge of a full list (ties): it alone
+		local a = arrival(f, starts[nearest])
+		cand[1] = { a = a, k = 1, len = 0 }
+		lmin = 0
+	end
+	local lambda, wsum = f.g.spacing * PR.BLEND_LAMBDA, 0
+	for _, c in ipairs(cand) do
+		c.w = c.k * exp(-(c.len - lmin) / lambda)
+		wsum = wsum + c.w
+	end
+	if wsum <= 1e-9 then return nil end
+	local out = { chain = {}, probe = true, blend = #cand, length = 0, diffDb = 0, doorDb = 0, lossDb = 0, direct = 0, bendDeg = 0 }
+	local lx, ly, lz = L:Unpack()
+	local ux, uy, uz, dist, best, bw = 0, 0, 0, 0, nil, -1
+	for _, c in ipairs(cand) do
+		local w = c.w / wsum
+		if w > 0 then
+			local pts = { S }
+			for _, b in ipairs(c.a.bends) do pts[#pts + 1] = b end
+			pts[#pts + 1] = L
+			local p = A.Paths.EvalPolyline(pts, cfg)
+			out.length = out.length + w * p.length
+			out.diffDb = out.diffDb + w * p.diffDb
+			out.doorDb = out.doorDb + w * p.doorDb
+			out.lossDb = out.lossDb + w * p.lossDb
+			out.direct = out.direct + w * p.direct
+			out.bendDeg = out.bendDeg + w * p.bendDeg
+			local x, y, z = p.pos:Unpack()
+			x, y, z = x - lx, y - ly, z - lz
+			local r = sqrt(x * x + y * y + z * z)
+			if r > 1e-6 then ux, uy, uz, dist = ux + w * x / r, uy + w * y / r, uz + w * z / r, dist + w * r end
+			if w > bw then best, bw = p, w end
+		end
+	end
+	out.points = best.points
+	out.lp = math.max(A.AC.LowpassLevel(out.diffDb, cfg), best.doorDb > 0 and best.lp or 0)
+	local u = sqrt(ux * ux + uy * uy + uz * uz)
+	if u > 1e-6 then
+		out.pos = Vector(lx + ux / u * dist, ly + uy / u * dist, lz + uz / u * dist)
+	else
+		out.pos = best.pos -- opposite directions with equal weights: no average direction
+	end
+	return out
 end
 
 -- Whether the triangle u, v, w is free of the world, its edges u-v and u-w known clear: the new edge v-w,
@@ -798,7 +926,20 @@ function PR.Paths(S, L, k, cfg)
 	local g = PR.current
 	if not g then return {} end
 	local out = {}
-	local inners = pulledPaths(g, S, L, k)
+	local starts
+	if (cfg.probe_field_blend or 0) >= 0.5 then
+		local f = fieldUsable(g, L, cfg)
+		if f then
+			local vis = PR.Visible(g, S, PR.BLEND_N)
+			local p = PR.FieldBlend(f, S, L, vis, cfg, #vis >= PR.BLEND_N)
+			if p then
+				out[1] = p
+				return out
+			end
+			starts = { vis[1], vis[2], vis[3] } -- the first three: what PR.Visible(g, S, 3) gives
+		end
+	end
+	local inners = pulledPaths(g, S, L, k, cfg, starts)
 	if #inners == 0 then
 		local b = bridge(g, S, L, cfg)
 		if b then

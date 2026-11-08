@@ -185,6 +185,11 @@ steps = [
     # the listener field alone (no immediate search): no cold silence beyond the warm ones
     ("path_quality field only", lambda: py("path_quality.py", "--check", "--no-gap", "--set=pba_probe_inline_ms=0",
                                            "d1_town_01", "gm_construct")),
+    # probe paths averaged over the probes the source sees (pba_probe_field_blend): same quality bar as the
+    # field alone, and a source moving 4 u at a time gets no step of level or direction
+    ("path_quality field blend", lambda: py("path_quality.py", "--check", "--no-gap", "--set=pba_probe_field_blend=1",
+                                            "--set=pba_probe_inline_ms=0", "d1_town_01", "gm_construct")),
+    ("field_continuity noportal", lambda: (load("pba_noportal"), job("client", "field_continuity.lua", 300))[1]),
     # copies of one probe route counted once (report only: field and k-path, new vs former criterion)
     ("probe_dedupe gm_construct", lambda: (load("gm_construct"), job("client", "probe_dedupe.lua", 600))[1]),
     # what a player can hear: level steps > 1 dB (JND) and
