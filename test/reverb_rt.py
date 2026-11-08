@@ -24,6 +24,7 @@ def call(tool, args, mx=2_000_000):
 
 sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 import _cvsnap  # restores every pba_* setting at exit
+from _wait import wait_stable
 _cvsnap.guard(call)
 
 
@@ -47,10 +48,20 @@ def load(m):
 
 
 def rt(settle=8.0):
-    """Mid / low / high reverb time once the smoothed estimate has settled."""
-    time.sleep(settle)
-    s = lua("client", "local s = pba_native.Stats() return { s.rtLow, s.rtMid, s.rtHigh, s.rtSource or 'main', s.backend or '?', s.revMs or 0, s.reflMs }") or [0, 0, 0, "?", "?", 0, 0]
-    return s
+    """Low / mid / high reverb time once the smoothed estimate has settled (polled, at most `settle`
+    seconds plus a margin: the room reverb converges in 2 to 4 s)."""
+    q = "local s = pba_native.Stats() return { s.rtLow, s.rtMid, s.rtHigh, s.rtSource or 'main', s.backend or '?', s.revMs or 0, s.reflMs }"
+    last = {}
+
+    def read():
+        v = lua("client", q)
+        if not v or not v[1]:
+            return None
+        last["v"] = v
+        return [v[0], v[1], v[2]]
+
+    _, waited, _ = wait_stable(read, tol=0.02, n=4, dt=0.5, tmin=3.0, tmax=settle * 1.5)
+    return last.get("v") or [0, 0, 0, "?", "?", 0, 0]
 
 
 results = []

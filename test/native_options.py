@@ -29,6 +29,7 @@ def call(tool, args, mx=2_000_000):
 
 sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 import _cvsnap  # restores every pba_* setting at exit
+from _wait import wait_stable
 _cvsnap.guard(call)
 
 
@@ -77,7 +78,7 @@ def check(name, ok, info):
     print(("PASS " if ok else "FAIL ") + name + ": " + info, flush=True)
 
 
-def cost(samples=12):
+def cost(samples=6):
     """Average reflection-thread pass time (ms) over a few seconds, listener moving a little."""
     lua("client", "pba_native.Stats() return true")
     refl, rev = [], []
@@ -94,7 +95,7 @@ cvar("pba_native_render", 1)
 cvar("pba_native_reverb", 0.15)
 
 # ---- 1. Embree vs built-in
-for m in (() if ONLY_ECHO else ("pba_tworooms", "pba_demo")):
+for m in (() if ONLY_ECHO else ("pba_demo", "pba_tworooms")):  # then baked reverb on pba_tworooms: one load less
     if not load(m):
         check(f"cost-{m}", False, "native module not ready")
         continue
@@ -106,11 +107,12 @@ for m in (() if ONLY_ECHO else ("pba_tworooms", "pba_demo")):
         cvar("pba_native_scene", scene)
         time.sleep(1)
         rebuild()
-        time.sleep(6)
+        time.sleep(3)  # first passes after the rebuild
         res[scene] = cost()
         print(f"  {m} {res[scene][2]:8s}: reflections {res[scene][0]:.2f} ms, long reverb {res[scene][1]:.2f} ms", flush=True)
     t0, t1 = res[0][0] + res[0][1], res[1][0] + res[1][1]
-    check(f"cost-{m}", res[1][2] == "embree" and t1 <= t0 * 1.1,
+    # the built-in measure must really run on the built-in tracer (it once ran on Embree unnoticed)
+    check(f"cost-{m}", res[0][2] == "default" and res[1][2] == "embree" and t1 <= t0 * 1.1,
           f"built-in {t0:.2f} ms, Embree {t1:.2f} ms per pass ({t0 / max(t1, 1e-3):.1f}x)")
 cvar("pba_native_scene", 1)
 
@@ -119,8 +121,7 @@ if ONLY_ECHO:
     pass
 elif load("pba_tworooms"):
     rebuild()
-    time.sleep(8)
-    live = lua("client", "return pba_native.Stats().rtMid")
+    live = wait_stable(lambda: lua("client", "return pba_native.Stats().rtMid"), tol=0.02, n=4, tmin=3.0, tmax=12)[0]
     cvar("pba_native_baked_reverb", 1)
     st, t0 = None, time.time()
     while time.time() - t0 < 240:
@@ -128,8 +129,10 @@ elif load("pba_tworooms"):
         st = lua("client", "return pba.Native.revBake or 'none'")
         if st in ("ready", "error"):
             break
-    time.sleep(8)
-    s = lua("client", "local s = pba_native.Stats() return { s.rtSource, s.rtMid }") or ["?", 0]
+    def baked():
+        v = lua("client", "local s = pba_native.Stats() return { s.rtSource, s.rtMid }")
+        return v if v and v[0] == "baked" else None
+    s = wait_stable(baked, tol=0.02, n=4, tmin=3.0, tmax=12)[0] or ["?", 0]
     ok = st == "ready" and s[0] == "baked" and live > 0 and abs(s[1] / live - 1) <= 0.35
     check("baked-reverb", ok, f"bake {st} in {time.time() - t0:.0f} s, source {s[0]}, RT mid baked {s[1]:.2f} s vs run time {live:.2f} s")
     cvar("pba_native_baked_reverb", 0)

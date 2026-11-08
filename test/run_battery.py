@@ -1,5 +1,6 @@
 """Full PBA test battery, sequential (about 15 min; the game changes maps). Prints one ##progress line
-per step and a summary. Usage: python -I -u run_battery.py <path to mcp.py>. Needs ffmpeg on PATH."""
+per step and a summary. Usage: python -I -u run_battery.py <path to mcp.py> [--quick]. Needs ffmpeg on
+PATH. --quick: the fast checks only (about 2 minutes), to run before each commit."""
 import json, os, subprocess, sys, time
 TEST = os.path.dirname(os.path.abspath(__file__))
 MCP = sys.argv[1]  # path to the gmod-mcp client (mcp.py)
@@ -23,7 +24,8 @@ def load(m, mp=4):
         call("map_load", {"map": m, "maxplayers": mp}, timeout=300)
         time.sleep(4)
     for _ in range(60):
-        r = call("lua_exec", {"realm": "client", "code": "return pba.Native == nil or pba.Native.ready == true or pba_native == nil"})
+        # the demo map holds the module aside outside mode C (pba_demoHeld): loaded all the same
+        r = call("lua_exec", {"realm": "client", "code": "local N = pba.Native return N == nil or pba_native == nil or (not N.building and (N.ready == true or N.pba_demoHeld == true))"})
         if r.get("values") == [True]:
             break
         time.sleep(2)
@@ -103,10 +105,18 @@ steps = [
     # door leaf crossed by the line = its doorway (one model): no jump at the leaf / wall boundary
     ("door_sweep open", lambda: (load("pba_demo"), door("Open"), job("client", "door_sweep.lua"))[2]),
     ("door_sweep closed", lambda: (door("Close"), job("client", "door_sweep.lua"))[1]),
+    ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
     ("reverb_rt", lambda: py("reverb_rt.py")),
-    ("native_water", lambda: py("native_water.py")),
     ("native_options", lambda: py("native_options.py")),
 ]
+# --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
+# before merging into main or a release
+QUICK = {"load pba_tworooms", "GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire",
+         "loop_removed", "native_doors", "native_features", "door_sweep open", "door_sweep closed"}
+if "--quick" in sys.argv[2:]:
+    steps = [s_ for s_ in steps if s_[0] in QUICK]
+    # bot_gunfire and portal_sweep expect pba_tworooms: keep it loaded for them
+    steps = [("load pba_tworooms", lambda: load("pba_tworooms") or "ok")] + [s_ for s_ in steps if s_[0] != "load pba_tworooms"]
 for i, (label, fn) in enumerate(steps, 1):
     step(i, len(steps), label, fn)
 print("##progress done=ok", flush=True)

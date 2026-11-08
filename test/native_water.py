@@ -24,6 +24,7 @@ def call(tool, args, mx=2_000_000):
 
 sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 import _cvsnap  # restores every pba_* setting at exit
+from _wait import wait_stable
 _cvsnap.guard(call)
 
 
@@ -56,7 +57,8 @@ for w in (0, 1):
     if not ready():
         print(f"FAIL native module not ready (water {w})")
         sys.exit(1)
-    time.sleep(10)
+    # the occlusion is fixed once the scene is built; the reverb time (printed only) settles in a few s
+    wait_stable(lambda: lua("client", "return pba_native.Stats().rtMid"), tol=0.03, n=3, tmin=2.0, tmax=10)
     res[w] = lua("client", f"""local S = Vector({src[0]}, {src[1]}, {src[2]} + 64) -- above the radio (in the scene), still under water
 local d = pba_native.Direct({{ S }}, S + Vector(0, 0, 200), 2)[1]
 local s = pba_native.Stats()
