@@ -85,6 +85,12 @@ MAX_LOOPS_MEAN_MS = 5.0    # mean loop work per frame where loops run
 # spikes (one computation: 0.9 ms, then 12.7 ms, then 1.5 ms on the same input). Baseline 166 KB,
 # 104 traces per computation at 1.28 KB each (a new result table every time).
 MAX_ALLOC_KB = 80.0
+# 2026-11-09, after the field rework: 75 KB and 0.50-0.66 ms per computation (GC stopped), loops 55-62 ms/s.
+# Two thirds of a computation are engine traces (~100 hull traces tightening the probe paths), done
+# again every 0.25 s for a loop whose source and listener did not move.
+MAX_ALLOC_KB = 40.0
+MAX_COMPUTE_MS = 0.35
+MAX_LOOPS_MS_PER_S = 35.0
 # listener field: one full build on gm_construct (22 000 probes) took 18-24 ms and made 2.7 MB of garbage
 # (a table per heap entry, pairs() and a Vector call per edge: interpreted, the JIT could not compile it)
 MAX_FIELD_MS = 10.0
@@ -187,7 +193,7 @@ def measure(render):
     on2 = frames("PBA on (after)")
     over = (on.get("frametime_avg_ms", 0) + on2.get("frametime_avg_ms", 0)) / 2 - off.get("frametime_avg_ms", 0)
     print(f"  frame overhead {over:+.2f} ms (unreliable when the game is unfocused: ~20 fps cap)", flush=True)
-    return {"off": off, "on": on, "perf": perf, "overhead_ms": over}
+    return {"off": off, "on": on, "perf": perf, "overhead_ms": over, "elapsed": el}
 
 
 results = {r: measure(r) for r in RENDERS}
@@ -197,6 +203,8 @@ fails = []
 if not alloc:
     fails.append("allocation not measured")
 else:
+    if alloc["ms"] > MAX_COMPUTE_MS:
+        fails.append(f"path computation {alloc['ms']:.2f} ms > {MAX_COMPUTE_MS}")
     if alloc["kb"] > MAX_ALLOC_KB:
         fails.append(f"path computation garbage {alloc['kb']:.0f} KB > {MAX_ALLOC_KB:.0f}")
     if alloc["fieldMs"] > MAX_FIELD_MS:
@@ -209,6 +217,9 @@ for r, res in results.items():
         mean = t["sum"] / t["n"]
         if t["max"] > MAX_LOOPS_FRAME_MS:
             fails.append(f"{r}: loops worst frame {t['max']:.1f} ms > {MAX_LOOPS_FRAME_MS}")
+        per_s = t["sum"] / res["elapsed"]
+        if per_s > MAX_LOOPS_MS_PER_S:
+            fails.append(f"{r}: loops {per_s:.1f} ms/s > {MAX_LOOPS_MS_PER_S}")
         if mean > MAX_LOOPS_MEAN_MS:
             fails.append(f"{r}: loops mean {mean:.2f} ms > {MAX_LOOPS_MEAN_MS}")
     elif N >= 2:

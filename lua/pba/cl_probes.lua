@@ -250,7 +250,9 @@ function PR.Visible(g, p, maxn)
 		local id = g.index[key(ci + di, cj + dj, ck + dk)]
 		if id then cands[#cands + 1] = g.nodes[id] end
 	end end end
-	table.sort(cands, function(a, b) return a.pos:DistToSqr(p) < b.pos:DistToSqr(p) end)
+	local d = {} -- one Vector call per candidate, not two per comparison
+	for _, n in ipairs(cands) do d[n] = n.pos:DistToSqr(p) end
+	table.sort(cands, function(a, b) return d[a] < d[b] end)
 	local out = {}
 	for _, n in ipairs(cands) do
 		if clearSeg(p, n.pos) then
@@ -659,6 +661,30 @@ local function bridge(g, S, L, cfg)
 end
 PR.Bridge = bridge
 
+-- S and L attached to a pulled polyline (skipping the vertices they already see), then tightened. World
+-- geometry only, which does not change: the result for the same polyline, S and L (a loop and a listener
+-- that did not move, re-evaluated 4 times a second) is kept on the polyline and given again instead of
+-- redoing its ~30 hull traces. Last 8 (S, L) per polyline.
+local function attach(inner, S, L)
+	local sx, sy, sz = S:Unpack()
+	local lx, ly, lz = L:Unpack()
+	local memo = inner.attached
+	if not memo then memo = {} inner.attached = memo end
+	for _, e in ipairs(memo) do
+		if e[1] == sx and e[2] == sy and e[3] == sz and e[4] == lx and e[5] == ly and e[6] == lz then return e[7] end
+	end
+	local i, j = 1, #inner
+	while i < j and i < 8 and clearFat(S, inner[i + 1]) do i = i + 1 end
+	while j > i and #inner - j < 8 and clearFat(L, inner[j - 1]) do j = j - 1 end
+	local pulled = { S }
+	for x = i, j do pulled[#pulled + 1] = inner[x] end
+	pulled[#pulled + 1] = L
+	pulled = tighten(pulled)
+	if #memo >= 8 then table.remove(memo, 1) end
+	memo[#memo + 1] = { sx, sy, sz, lx, ly, lz, pulled }
+	return pulled
+end
+
 function PR.Paths(S, L, k, cfg)
 	cfg = cfg or A.cfg
 	local g = PR.current
@@ -678,14 +704,7 @@ function PR.Paths(S, L, k, cfg)
 		return out
 	end
 	for _, inner in ipairs(inners) do
-		-- attach S and L to the cached pulled polyline: skip the vertices they already see
-		local i, j = 1, #inner
-		while i < j and i < 8 and clearFat(S, inner[i + 1]) do i = i + 1 end
-		while j > i and #inner - j < 8 and clearFat(L, inner[j - 1]) do j = j - 1 end
-		local pulled = { S }
-		for x = i, j do pulled[#pulled + 1] = inner[x] end
-		pulled[#pulled + 1] = L
-		pulled = tighten(pulled)
+		local pulled = attach(inner, S, L)
 		if #pulled >= 3 then
 			local p = A.Paths.EvalPolyline(pulled, cfg)
 			-- distinct apparent positions only

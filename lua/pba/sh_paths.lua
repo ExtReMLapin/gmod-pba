@@ -235,9 +235,13 @@ end
 
 --- Door loss (dB) of the door entities crossed by segment a -> b (game state).
 local DOORS_ONLY = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
+local doorOut = {}
+local doorTr = { mask = MASK_SOLID, filter = function(e) return DOORS_ONLY[e:GetClass()] or false end, output = doorOut }
 function P.SegmentDoorLoss(a, b, cfg)
 	cfg = cfg or A.cfg
-	local tr = util.TraceLine({ start = a, endpos = b, mask = MASK_SOLID, filter = function(e) return DOORS_ONLY[e:GetClass()] or false end })
+	doorTr.start, doorTr.endpos = a, b
+	util.TraceLine(doorTr)
+	local tr = doorOut
 	if not tr.Hit or not IsValid(tr.Entity) then return 0 end
 	local st = A.Doors.byEnt and A.Doors.byEnt[tr.Entity:EntIndex()]
 	local frac, closedDb = st and st.frac or 0, st and st.closedDb or cfg.door_closed_db
