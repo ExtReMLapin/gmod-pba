@@ -8,8 +8,16 @@ GAME = r"D:\SteamLibrary\steamapps\common\GarrysMod\garrysmod"
 sys.path.insert(0, TEST)
 
 def call(tool, args, mx=200000, timeout=600):
-    out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), str(mx)],
+    a = json.dumps(args)
+    if len(a) > 20000:  # Windows command line limit: pass the arguments in a temp file (outside lua/)
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            f.write(a)
+        a = "@" + f.name
+    out = subprocess.run([sys.executable, "-I", MCP, "call", tool, a, str(mx)],
                          capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+    if a.startswith("@"):
+        os.remove(a[1:])
     try:
         return json.loads(out)
     except ValueError:
@@ -80,15 +88,18 @@ def drop_ogg():
     shutil.rmtree(os.path.join(GAME, "sound", "pba_test"), ignore_errors=True)
 
 def pure():
+    # the suite is sent inline, not copied into lua/: parallel game instances share that folder (and its
+    # autorefresh), a written file would be seen by every instance
     code = open(os.path.join(TEST, "gluatest", "run_pure.lua"), encoding="utf-8").read()
-    import shutil
-    shutil.copy(os.path.join(TEST, "gluatest", "pba_pure_test.lua"),
-                os.path.join(GAME, "lua", "mcpagent_tmp", "pba_pure_test.lua"))
-    return call("lua_exec", {"realm": "client", "code": code}).get("values")
+    src = open(os.path.join(TEST, "gluatest", "pba_pure_test.lua"), encoding="utf-8").read()
+    assert "]=======]" not in src
+    return call("lua_exec", {"realm": "client", "code": "local PBA_PURE_SRC = [=======[" + src + "]=======]" + chr(10) + code}).get("values")
 
 steps = [
     ("load pba_tworooms", lambda: load("pba_tworooms") or "ok"),
     ("GLuaTest pure suite", pure),
+    # metrics of the perceptual bench (Python, no game): full battery only
+    ("perceptual metrics (pure)", lambda: py("test_perceptual.py")),
     ("menu_fit", lambda: job("client", "menu_fit.lua")),
     # engine rendering: with "everything native" the server relays every sound to this client and the
     # "untouched" scenarios cannot hold (by design)
@@ -113,6 +124,8 @@ steps = [
     ("path_hysteresis twodoors", lambda: (doors_open(), job("client", "path_hysteresis.lua"))[1]),
     # continuous sounds glide to each re-evaluation: no gain / EQ / direction step between frames
     ("continuous_ramp twodoors", lambda: py("continuous_ramp.py")),
+    # a loop near a muffling threshold: no DSP flicker while the listener steps (pba_lp_hyst_db)
+    ("lowpass_hysteresis twodoors", lambda: py("lowpass_hysteresis.py")),
     ("door_sweep open", lambda: (load("pba_demo"), door("Open"), job("client", "door_sweep.lua"))[2]),
     ("door_sweep closed", lambda: (door("Close"), job("client", "door_sweep.lua"))[1]),
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
@@ -138,6 +151,11 @@ steps = [
     ("path_quality field blend", lambda: py("path_quality.py", "--check", "--no-gap", "--set=pba_probe_field_blend=1",
                                             "--set=pba_probe_inline_ms=0", "d1_town_01", "gm_construct")),
     ("field_continuity noportal", lambda: (load("pba_noportal"), job("client", "field_continuity.lua", 300))[1]),
+    # what a player can hear (docs/ETAT_DE_L_ART_RECHERCHE.md 6.4, 9): level steps > 1 dB (JND) and
+    # direction jumps when the source or the listener walks 16 u steps, level(S, L) vs level(L, S).
+    # Limits None (report only) until the first in-game baseline; --check fails on too few walks.
+    # gm_construct first: path_quality field only ends on it (one load less); pba_demo: portal paths
+    ("path_perceptual", lambda: py("path_perceptual.py", "--check", "--pairs=15", "gm_construct", "pba_demo")),
 ]
 # --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
 # before merging into main or a release

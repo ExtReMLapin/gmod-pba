@@ -2,9 +2,10 @@
 -- closed by the runner on the server: ents.FindByName("pba_boombox_door")[1]:Fire("Open"/"Close")).
 -- The listener slides sideways behind the door; each sample is classified by what the straight
 -- line crosses (leaf / wall / clear). Fails on a jump > JUMP_DB between neighbours, and (door open)
--- when a leaf sample is more muffled than the nearest wall sample.
+-- when a leaf sample is more muffled than the nearest wall sample. Never louder than the free field
+-- (loss below -FREE_TOL dB): the routes past one jamb are one wavefront, not two sources.
 local A, P, AC = pba, pba.Paths, pba.AC
-local JUMP_DB, STEP = 3, 2
+local JUMP_DB, STEP, FREE_TOL = 3, 2, 0.1
 local S = Vector(5180, 800, 52) -- stream_pos of the boombox room
 local door
 for _, e in ipairs(ents.FindByClass("prop_door_rotating")) do
@@ -27,11 +28,16 @@ local function sample(L)
 		if w.ent == door then cls = "leaf" end
 	end
 	if r.clear or not r.voices or #r.voices == 0 then return { cls = cls, loss = 0, lp = 0, kind = "direct" } end
-	local p = 0
-	for _, v in ipairs(r.voices) do p = p + v.gain * v.gain end
+	local p, kinds = 0, {}
+	local ff = AC.GainToDb(AC.EngineGain(S:Distance(L), 75))
+	for _, v in ipairs(r.voices) do
+		p = p + v.gain * v.gain
+		kinds[#kinds + 1] = string.format("%s %.1f", v.kind, ff - AC.GainToDb(v.gain))
+	end
 	-- loss relative to the free field at the same distance (as cl_streams.evaluate)
-	local loss = -(10 * math.log10(math.max(p, 1e-12)) - AC.GainToDb(AC.EngineGain(S:Distance(L), 75)))
-	return { cls = cls, loss = math.Round(loss, 1), lp = r.voices[1].lp or 0, kind = r.voices[1].kind, n = #r.voices }
+	local loss = -(10 * math.log10(math.max(p, 1e-12)) - ff)
+	return { cls = cls, loss = math.Round(loss, 1), lp = r.voices[1].lp or 0, kind = r.voices[1].kind, n = #r.voices,
+		voices = table.concat(kinds, " + ") }
 end
 local out = { frac = st.frac, leafY = math.Round(door:WorldSpaceCenter().y), rows = {}, fails = {} }
 for _, y in ipairs({ 440, 400, 340 }) do
@@ -42,6 +48,15 @@ for _, y in ipairs({ 440, 400, 340 }) do
 		job:step()
 	end
 	out.rows[y] = row
+	for _, s in ipairs(row) do
+		if s.loss < -FREE_TOL then
+			out.fails[#out.fails + 1] = string.format("y=%d x=%d %s %.1f dB louder than the free field (%s)", y, s.x, s.cls,
+				-s.loss, s.voices or s.kind)
+		end
+		if not out.loudest or s.loss < out.loudest.loss then
+			out.loudest = { y = y, x = s.x, cls = s.cls, loss = s.loss, voices = s.voices or s.kind }
+		end
+	end
 	for i = 2, #row do
 		local a, b = row[i - 1], row[i]
 		if math.abs(a.loss - b.loss) > JUMP_DB or math.abs(a.lp - b.lp) > 1 then
@@ -65,7 +80,7 @@ for _, y in ipairs({ 440, 400, 340 }) do
 					end
 					if nearest then break end
 				end
-				-- losses below 0 (two paths summed louder than the free field) are not muffling: clipped at 0
+				-- losses below 0 are not muffling (and fail above, beyond FREE_TOL): clipped at 0
 				if nearest and (math.max(s.loss, 0) > math.max(nearest.loss, 0) + 1 or s.lp > nearest.lp) then
 					out.fails[#out.fails + 1] = string.format("y=%d x=%d leaf %.1f dB lp%d > wall x=%d %.1f dB lp%d", y, s.x,
 						s.loss, s.lp, nearest.x, nearest.loss, nearest.lp)

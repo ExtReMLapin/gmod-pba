@@ -151,6 +151,27 @@ function AC.DSPForLevel(level, cfg)
 	return floor(cfg["dsp_lp" .. min(level, 4)] or 0)
 end
 
+--- Hysteresis on the low-pass level of a CONTINUOUS sound (lp_hyst_db). Near a threshold lp*_db the
+-- loss of a loop moves by a fraction of a dB as the listener steps, and its level (engine DSP preset,
+-- native EQ) flipped back and forth. `level`: the level just computed; `db`: the loss that set it
+-- (path.lpDb); `prev`: the level heard so far. The level heard is kept while the loss is within
+-- `margin` dB of the threshold between the two levels. It changes at once on a step of two levels or
+-- more, when the loss does not give `level` (a discrete cause set it: closed leaf, material, masking
+-- object, cap), without a loss or a previous level, or with margin 0. Never lags more than the margin.
+function AC.LowpassHold(level, db, prev, margin, cfg)
+	cfg = cfg or A.cfg
+	if not prev or prev == level or not db or not margin or margin <= 0 then return level end
+	if math.abs(level - prev) ~= 1 or AC.LowpassLevel(db, cfg) ~= level then return level end
+	local T = cfg["lp" .. max(level, prev) .. "_db"] -- threshold between the two levels
+	if not T then return level end
+	if level > prev then
+		if db < T + margin then return prev end
+	elseif db > T - margin then
+		return prev
+	end
+	return level
+end
+
 -- Transmission table: { t_ref (units), R_ref (dB), slope (dB per thickness doubling), min, max, lowpass }
 -- fixed = true: thickness ignored. Values: ETAT_DE_L_ART.md Q2 (assumed, tuned by ear).
 AC.MAT_TABLE = {
