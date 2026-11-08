@@ -22,6 +22,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Sound goes through openings (doors, windows, corridors) and comes from their direction | ✅ the map's areaportals, plus a probe graph for maps without them | ✅ same, or Steam Audio paths baked ahead and kept on disk | S `probes`, C `native_paths` |
 | Several paths (two doors = two directions) | ✅ merged or kept apart depending on the angle | ✅ also rendered as an ambisonic sound field (several arrival directions at once) | S `merge`, C `native_path_fx` |
 | Diffraction round edges (loss from the detour) | ✅ Maekawa / Kurze-Anderson model | ✅ same, or Steam Audio pathing | S `diff_*` |
+| Long detours (a path much longer than the straight line, or winding round many corners) arrive diffuse: still audible, but scattered and absorbed by the corridor's walls | ✅ quieter, the engine's tunnel-diffuse reverb preset instead of the plain low-pass | ✅ less direct sound, more room reverb, blurred binaural direction | S `diffuse*`, C `diffuse_dsp_at`, `native_diffuse_send` |
 | Transmission through walls by material and thickness (concrete, wood, metal, glass, plaster, brick...) | ✅ muffled, not cut; loud sounds and low frequencies get through more | ✅ plus soft volumetric occlusion near door frames | S `trans_*`, `fullscale_db` |
 | Doors: open, ajar, closed, followed live | ✅ | ✅ and part of the acoustic scene (reverb and echoes see them) | S `door_closed_db`, C `native_doors` |
 | Glass windows (`func_areaportalwindow`) | ✅ transmission through the glass, sound placed on the pane | ✅ | — |
@@ -60,6 +61,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 
 | Feature | Light | Full | Option |
 |---|---|---|---|
+| Map traces of the probe graph and path tightening done in the engine (about 2.5x faster than `util.TraceHull` from Lua; checked against it on every map, off at the first difference) | — | ◐ experimental | C `native_traces` |
 | `pba_enable 0` = exact vanilla (A/B) | ✅ | ✅ | S `enable` |
 | Menus (player, admin, Steam Audio) | ✅ | ✅ | — |
 | The server can forbid the native module (fairness in competitive play) | — | ✅ | S `allow_native` |

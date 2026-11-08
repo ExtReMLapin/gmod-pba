@@ -15,6 +15,9 @@ HRTF, simulated reverb and echoes, Doppler (see [below](#optional-native-backend
 - **Several paths.** Two open doors give two directions. Close paths are merged into one voice to
   avoid phasing.
 - **Doors.** Open, half-open or closed, with the loss of the door's material.
+- **Long detours.** A path much longer than the straight line, or winding round many corners,
+  still carries sound, but it arrives scattered and absorbed by the corridor's walls
+  (`pba_diffuse`): quieter, reverberant, its direction blurred.
 - **Walls and props.** Loss depends on the material and the thickness crossed (concrete, brick,
   wood, metal, glass, plaster…). Props block too, and sound bends round them: a can does nothing,
   a car a little, a container a lot.
