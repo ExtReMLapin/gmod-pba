@@ -33,6 +33,8 @@ bool Running();
 std::string HrtfInfo();
 void SetOutputMode(int mode); // 0 headphones (binaural), 1 speakers (panning)
 void SetWet(float room, float echo);
+// extra room-reverb send of diffuse voices (see VoiceParams::diffuse)
+void SetDiffuseSend(float k);
 // listener under water: low-pass on the whole native mix (0 = dry, 1 = fully under water)
 void SetUnderwater(float amount);
 // game paused (single player menu): silence, voices and reflections frozen where they are

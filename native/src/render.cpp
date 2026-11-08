@@ -139,6 +139,9 @@ double g_loadSum = 0, g_loadMax = 0; int g_loadN = 0;
 IPLAudioBuffer g_mono{}, g_mono2{}, g_stereo{}, g_amb{}, g_ambTmp{}, g_ambOut{};
 IPLAmbisonicsDecodeEffect g_decode = nullptr;
 Reflection g_room;                 // reverb at the listener, fed by every voice (send bus = g_room.in)
+// extra room-reverb send of a diffuse voice: send x (1 + g_diffuseSend x share). 1.5 keeps the total
+// (direct + reverb) about constant in a typical room (measured on pba_demo: direct x 0.11 at share 0.85)
+float g_diffuseSend = 1.5f;
 Reflection g_echo[kEchoSlots];     // per-source reflections
 float g_wetRoom = 0, g_wetEcho = 0;
 bool g_paused = false;
@@ -320,7 +323,7 @@ void RenderBlock() {
 		// its direction blurs (binaural spatial blend); the total energy is kept
 		const float dif = v.diffuse;
 		const float directGain = std::sqrt(std::max(1.0f - dif, 0.0f));
-		const float sendBoost = 1.0f + 4.0f * dif;
+		const float sendBoost = 1.0f + g_diffuseSend * dif;
 		if (v.hasSH && v.pathSlot >= 0) {
 			IPLPathEffectParams pp{};
 			for (int b = 0; b < 3; ++b) pp.eqCoeffs[b] = v.eq[b];
@@ -626,6 +629,11 @@ void SetWet(float room, float echo) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	g_wetRoom = std::clamp(room, 0.0f, 4.0f);
 	g_wetEcho = std::clamp(echo, 0.0f, 4.0f);
+}
+
+void SetDiffuseSend(float k) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_diffuseSend = std::clamp(k, 0.0f, 8.0f);
 }
 
 void SetReflectionSources(IPLSource room, const IPLSource* echo, int n) {
