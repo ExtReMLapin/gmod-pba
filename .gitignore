@@ -16,3 +16,4 @@ maps/rp_rockford_v2b.bsp
 test/perf_crowd_last.json
 test/jit_report_last.json
 test/paths_golden_ref.txt
+test/offline/pylib/
