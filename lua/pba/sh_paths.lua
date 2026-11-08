@@ -799,7 +799,9 @@ end
 -- Each voice: { pos, gain (linear target gain at the listener), lp, kind, members }.
 -- Every path's level is formed here (portal, probe, bridge, baked): the length / angle guard is
 -- applied here once, for all of them (p.guardDb, part of p.lossDb; p.rawLossDb stays without it).
-function P.SelectVoices(L, paths, trans, sndlvl, cfg)
+-- direct (optional): straight-line distance source - listener (else the transmission's length or
+-- the paths' own `direct`): the voices together never exceed the free field at that distance.
+function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	cfg = cfg or A.cfg
 	-- loud sources keep their headroom above the engine's full scale (see AC.Headroom)
 	for _, p in ipairs(paths) do
@@ -883,6 +885,33 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg)
 		end
 	end
 	while #voices > cfg.max_voices do table.remove(voices) end
+
+	-- one wavefront: obstacles only take away from the free field. Every route is modelled on its own up
+	-- to the free-field level (edge diffraction 0 dB at the shadow boundary, plus the diffuse leak), so
+	-- two routes past the same jamb (openings either side of a thin post, a doorway and the clear part of
+	-- the jamb in the transmission) each claim the same central Fresnel zone: summed in power they were up
+	-- to +3 dB louder than with no obstacle. Openings are parts of the plane between source and listener,
+	-- and what passes parts of it never exceeds what passes the whole: the total is capped at the free
+	-- field, all voices lowered alike (same balance and directions). One route, or routes well below the
+	-- free field (distinct openings, real detours), are unchanged.
+	local dist = direct or (trans and trans.length)
+	if not dist then
+		for _, p in ipairs(paths) do
+			if p.direct then dist = math.min(dist or math.huge, p.direct) end
+		end
+	end
+	if dist and #voices > 0 then
+		local ff = AC.EngineGain(dist, sndlvl)
+		local pw = 0
+		for _, v in ipairs(voices) do pw = pw + v.gain * v.gain end
+		if pw > ff * ff then
+			local k = ff / math.sqrt(pw)
+			for _, v in ipairs(voices) do
+				v.gain = v.gain * k
+				v.level = AC.GainToDb(v.gain)
+			end
+		end
+	end
 	return voices
 end
 
@@ -1364,7 +1393,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				if p.points and #p.points > 0 then pathProps(p, S, L, cfg, srcEnt) end
 			end
 		end
-		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg)
+		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
 	end
 	P.cache[key] = { t = now, r = r }
 	return r
