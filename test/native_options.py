@@ -6,14 +6,16 @@
 3. Echo directivity: on gm_flatgrass (only the ground reflects), a cardioid source (dipole 0.5) aimed at
    the ground must echo far more than the same source aimed at the sky (its rear lobe is zero).
    Without directivity both are equal.
-Usage: python -I -u native_options.py <mcp.py>
+Usage: python -I -u native_options.py <mcp.py> [echo]   (echo: only part 3)
 """
 import json
+import math
 import subprocess
 import sys
 import time
 
 MCP = sys.argv[1]
+ONLY_ECHO = "echo" in sys.argv[2:]
 
 
 def call(tool, args, mx=2_000_000):
@@ -92,7 +94,7 @@ cvar("pba_native_render", 1)
 cvar("pba_native_reverb", 0.15)
 
 # ---- 1. Embree vs built-in
-for m in ("pba_tworooms", "pba_demo"):
+for m in (() if ONLY_ECHO else ("pba_tworooms", "pba_demo")):
     if not load(m):
         check(f"cost-{m}", False, "native module not ready")
         continue
@@ -113,7 +115,9 @@ for m in ("pba_tworooms", "pba_demo"):
 cvar("pba_native_scene", 1)
 
 # ---- 2. baked reverb
-if load("pba_tworooms"):
+if ONLY_ECHO:
+    pass
+elif load("pba_tworooms"):
     rebuild()
     time.sleep(8)
     live = lua("client", "return pba_native.Stats().rtMid")
@@ -152,7 +156,17 @@ return true""")
         energy.setdefault(label, []).append(d or 0)
         print(f"  echo aimed at the {label}: energy {d:.4g}", flush=True)
     g, s_ = sum(energy["ground"]) / 2, sum(energy["sky"]) / 2
-    check("echo-directivity", g > 0 and g > 4 * s_, f"aimed at the ground {g:.4g}, at the sky {s_:.4g} (want ground > 4x sky)")
+    # flat ground: the echo is the specular reflection, seen from the source at angle a below the
+    # horizon (source 40 u high, ear 64 u, 300 u apart). A cardioid (dipole 0.5) weighs it
+    # (1 + sin a) / 2 aimed at the ground, (1 - sin a) / 2 aimed at the sky: energy ratio
+    # (1 + sin a) / (1 - sin a). Without directivity the ratio is 1.
+    hs, hl, dist = 40, (lua("client", "return LocalPlayer():EyePos().z - LocalPlayer():GetPos().z") or 64), 300
+    xr = dist * hs / (hs + hl)
+    sa = hs / math.hypot(hs, xr)
+    want = (1 + sa) / (1 - sa)
+    ratio = g / max(s_, 1e-9)
+    check("echo-directivity", g > 0 and abs(ratio / want - 1) <= 0.2,
+          f"aimed at the ground {g:.4g}, at the sky {s_:.4g}: ratio {ratio:.2f}, geometry predicts {want:.2f} (no directivity: 1)")
 else:
     check("echo-directivity", False, "native module not ready on gm_flatgrass")
 
