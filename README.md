@@ -93,19 +93,60 @@ speeches, beyond `pba_max_duration`) are followed like loops (`pba_long_sounds`)
 Build: `python native/fetch_deps.py`, then `native/build.bat` (Visual Studio C++ tools, CMake,
 Ninja). Licence of `native/` is pending (see `native/LICENSE`).
 
+## How it compares
+
+**PBA Light** is the Lua addon alone (Workshop). **PBA full** adds the optional native Steam Audio
+module (Windows x64, manual install, see below). The other columns are the GMod addons that touch
+the same problem, read from their code (subscriber counts noted on 2026-11-07). No other
+Steam Audio integration for GMod was found, on the Workshop or elsewhere.
+
+| | PBA Light | PBA full | MilSim Weapon Acoustics | Dynamic Weapon Reverb (149 k) | Sound Muffling Effect (41 k) | Echo/Reverb Everywhere (45 k) | MP Distant Sounds Fix (12 k) | 3D Stream Radio (387 k) |
+|---|---|---|---|---|---|---|---|---|
+| Sounds handled | all | all, plus other addons' radios | gunfire, explosions | gunfire | all | none in particular (global reverb) | loud distant sounds | its own radio |
+| Sound comes **from the door or window** | ✅ | ✅ | — (straight line) | — | — | — | — | — |
+| Several paths (two doors, two directions) | ✅ | ✅ | — | — | — | — | — | — |
+| Walls: loss by material and thickness | ✅ | ✅ | ◐ 0 / 0.5 / 1 occlusion | ◐ occlusion rays | ◐ estimated thickness, 3 presets | — | — | ◐ volume only |
+| Doors and windows, live state | ✅ | ✅ | — | — | — | — | — | — |
+| Half-open doors: real gap, Fresnel zone | ✅ | ✅ | — | — | — | — | — | — |
+| Open door lets the room's reverberant sound out | ✅ | ✅ | — | — | — | — | — | — |
+| Props shadow and diffract | ✅ | ✅ | — | — | — | — | — | — |
+| Loops and long sounds (music, engines), server and client side | ✅ | ✅ | — | — | ◐ | — | — | its radio |
+| Other addons' 3D radios (BASS) muffled | ◐ level and position | ✅ really filtered, or fully rendered | — | — | — | — | — | ◐ its own, volume |
+| Room reverb | engine | ✅ simulated on the map's geometry and materials¹ | ◐ recorded tails | ◐ recorded tails | — | ◐ one global DSP preset | — | — |
+| Gunfire echoes | — | ✅ simulated | ◐ recorded tails | ◐ recorded tails | — | — | — | — |
+| Speed-of-sound delay | ✅ (real path) | ✅ | ✅ | ✅ | — | — | — | — |
+| HRTF (3D over headphones) | — | ✅ | — | — | — | — | — | — |
+| Doppler | — | ✅ | — | — | — | — | — | ◐ BASS |
+| Supersonic crack, per-weapon layers | — | — | ✅ | ✅ | — | — | — | — |
+| Distant battle volume floor | ◐ obstructed players, up to 6 000 u | ◐ same | ✅ | ◐ | — | — | ✅ | — |
+| Exactly vanilla when off | ✅ | ✅ | ? | ? | ? | — | — | ✅ |
+| Network | targeted relay, ~25 bytes | same, plus opt-in relays | ~20 bytes per shot | shot relay | `WriteTable` to the PAS | none | 1 message per player per sound | — |
+| Every feature switchable (server / client) | ✅ | ✅ | ◐ | ◐ | ◐ | ◐ | — | ◐ |
+
+¹ Measured limit: with the current 0.5 s simulation window, Steam Audio's reverb time estimate
+saturates around 1.2 s, so hard materials (tile, concrete, metal) sound alike; absorbent ones (foam)
+are clearly drier. See docs/JOURNAL.md.
+
+**Where the others do better.** MilSim Weapon Acoustics and Dynamic Weapon Reverb play tails
+recorded by sound designers: an instant "movie" gunfire feel that PBA does not try to give
+(the full version simulates echoes instead, more correct, less produced). Light's muffling uses the
+engine's two low-pass presets, in steps. PBA costs about 0.14 ms of Lua per processed sound.
+They are complementary: weapon-layer addons can run on top of PBA. Sound Muffling Effect does the
+same job as PBA and is switched off automatically (`pba_compat_auto`).
+
 ## Known limits
 
 - Sentences (scripted NPC lines such as Combine radio chatter) and sounds with a scheduled start
   time are left vanilla.
 - 2D sounds (`surface.PlaySound`, UI) are not spatial and are not touched.
-- A relayed sound stays where it started: it does not follow a moving entity, and
-  `StopSound` on its original channel does not cut the relayed copy (short sounds only; loops are
-  handled separately).
+- A relayed one-shot stays where it started: it does not follow a moving entity (loops, long
+  sounds and, with the native module, every sound do).
 - Sounds from other addons sent with an explicit recipient filter are left alone.
 - Voice chat is not processed.
 - Maps whose BSP lumps are compressed (rare in GMod) fall back to wall muffling only.
 - Probe graphs are capped at 30 000 probes; very large maps are covered from the spawn points out.
-- No reverberation: room acoustics are left to the engine's own DSP.
+- Light has no reverberation of its own: room acoustics are left to the engine's DSP (the native
+  module simulates it).
 
 ## Compatibility
 
