@@ -246,8 +246,11 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 		-- a client-side StopSound: our copies of that sound stop too (the engine stops its own)
 		local idx = sourceIndex(data)
 		if idx then A.StopCopies(idx, data.SoundName) end
+		if idx and A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, nil, data.SoundName) end
 		return
 	end
+	-- long client-side sounds (music of client-side radios): followed like a loop
+	if A.Loops and A.Loops.HandleClient and A.Loops.HandleClient(data) then return false end
 	if not A.Eligible(data) then return end
 	local pos = A.SoundPos(data)
 	if not pos then return end
@@ -312,6 +315,7 @@ do
 		A.origCl.StopSound(self, name)
 		local idx = self:EntIndex()
 		if idx > 0 and A.StopCopies then pcall(A.StopCopies, idx, name or "") end
+		if idx > 0 and A.Loops and A.Loops.StopClient then pcall(A.Loops.StopClient, idx, nil, name or "") end
 	end
 end
 

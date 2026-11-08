@@ -136,6 +136,57 @@ local function apply(m, fade)
 	end
 end
 
+-- Long sounds emitted CLIENT-side (music of a client-side radio such as Exquisite Radio:
+-- radio:EmitSound of a 5-minute mp3 in a net receiver). Too long for A.Process, and the server
+-- never sees them: without this they play through every wall. Same mirror as a relayed long
+-- sound, keyed "cl:<entindex>:<channel>:<name>".
+local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+
+--- Stops the client-side long-sound mirrors of entity idx (channel chan, or any channel when nil;
+-- name, or any name when nil).
+function LP.StopClient(idx, chan, name)
+	for key, m in pairs(LP.mirrors) do
+		if m.client and m.idx == idx and (not chan or m.chan == chan) and (not name or name == "" or m.name == name) then
+			stopMirror(m)
+			LP.mirrors[key] = nil
+		end
+	end
+end
+
+--- Client EntityEmitSound: takes a long client-side sound over. Returns true when taken (the
+-- original must be suppressed). A new sound on a replacing channel cuts the previous mirror,
+-- as the engine would.
+function LP.HandleClient(data)
+	local e = data.Entity
+	if not IsValid(e) or e:IsWorld() or e == LocalPlayer() then return false end
+	local idx, chan, name = e:EntIndex(), data.Channel or CHAN_AUTO, data.SoundName
+	local flags = data.Flags or 0
+	if bit.band(flags, SND_STOP) ~= 0 then LP.StopClient(idx, nil, name) return false end
+	local change = bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
+	local key = "cl:" .. idx .. ":" .. chan .. ":" .. name
+	local m = LP.mirrors[key]
+	if change then
+		if not m then return false end
+		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end
+		if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then m.pitch = data.Pitch or m.pitch end
+		if m.patch then m.patch:ChangeVolume(m.vol * (m.g or 1), 0.1) m.patch:ChangePitch(m.pitch, 0.1) end
+		return true
+	end
+	if replacing(chan) then LP.StopClient(idx, chan) end
+	if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 then return false end
+	local lvl = data.SoundLevel or 75
+	if lvl <= 0 or lvl >= 256 or A.IsLooping(name) then return false end
+	local st = data.SoundTime or 0
+	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+	local dur = SoundDuration(name) or 0
+	if dur <= A.cfg.max_duration or dur > 1800 then return false end
+	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
+		dsp = data.DSP or 0, once = true, client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100 }
+	LP.mirrors[key] = m
+	apply(m, 0)
+	return true
+end
+
 net.Receive("pba_loop", function()
 	local op, key = net.ReadUInt(2), net.ReadString()
 	if op == OP_STOP then
