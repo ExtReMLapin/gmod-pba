@@ -917,7 +917,7 @@ return {
 				expect(near(p.length, q.length, 1e-6) and near(p.lossDb, q.lossDb, 1e-6) and p.pos:Distance(q.pos) < 1e-6).to.beTrue()
 			end)
 		end },
-		{ name = "Probe field blend: the last probe of a full PR.Visible list takes no part (it is the next to leave the set); no probe within a spacing = nil (caller falls back)", func = function()
+		{ name = "Probe field blend: the last probe of a full PR.Visible list takes no part (it is the next to leave the set); a lone far probe still answers; nil only when no probe seen has a route", func = function()
 			withProbeScene(function(g)
 				local L = Vector(40, -300, 64)
 				local f = A.Probes.BuildField(g, L)
@@ -925,7 +925,48 @@ return {
 				local S = Vector(-10, 150, 64)
 				expect(A.Probes.FieldBlend(f, S, L, { a, b, c }, A.cfg, true).blend).to.equal(2)
 				expect(A.Probes.FieldBlend(f, S, L, { a, b, c }, A.cfg, false).blend).to.equal(3)
-				expect(A.Probes.FieldBlend(f, Vector(-64, 392, 64), L, { a }, A.cfg)).to.beNil()
+				expect(A.Probes.FieldBlend(f, Vector(-64, 392, 64), L, { a }, A.cfg).blend).to.equal(1)
+				local cut = { id = -1, pos = Vector(-64, 300, 64) } -- not in the field: no route
+				expect(A.Probes.FieldBlend(f, Vector(-64, 392, 64), L, { cut }, A.cfg)).to.beNil()
+			end)
+		end },
+		{ name = "Probe field blend: where S sees no probe within one spacing it keeps the blend (the kernel reaches 1.5 x the nearest probe), no switch to the per-sound path: level step < 1 dB, direction < 5 deg per 4 u", func = function()
+			withProbeScene(function(g)
+				-- a gap in the grid: probes of rows y = 64 and 192 at x = -64 and 64 removed (no longer
+				-- visible, links cut). S going north from y = 130 to 290 sees no probe within one spacing for
+				-- part of the way. Before: the blend gave up there and the per-sound path took over (6.05 dB
+				-- and 77 degrees in one step at x = 40)
+				local gone = {}
+				for _, n in ipairs(g.nodes) do
+					if (n.j == 0 or n.j == 1) and n.i >= -1 and n.i <= 0 then gone[n.id] = true end
+				end
+				for id in pairs(gone) do
+					local n = g.nodes[id]
+					g.index[n.i .. "," .. n.j .. ",0"] = nil
+					for m in pairs(n.nb) do g.nodes[m].nb[id] = nil end
+					n.nb = {}
+				end
+				g.adj = nil
+				A.Probes.Prepare(g)
+				local L = Vector(40, -300, 64)
+				A.Probes.field = A.Probes.BuildField(g, L)
+				local dDb, dDir, blended = 0, 0, true
+				for _, X in ipairs({ -80, -20, 0, 40 }) do
+					local prev
+					for y = 130, 290, 4 do
+						local p, az, db = probeAnswer(Vector(X, y, 64), L, 1)
+						if not p then error("no probe path at x = " .. X .. ", y = " .. y) end
+						blended = blended and p.blend ~= nil
+						if prev then
+							dDb = math.max(dDb, math.abs(db - prev[2]))
+							dDir = math.max(dDir, math.abs(az - prev[1]))
+						end
+						prev = { az, db }
+					end
+				end
+				expect(blended).to.beTrue()
+				expect(dDb < 1).to.beTrue()
+				expect(dDir < 5).to.beTrue()
 			end)
 		end },
 		{ name = "LowpassHold: a loss oscillating +-0.5 dB around any threshold never flips the level", func = function()
