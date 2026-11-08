@@ -26,6 +26,11 @@ local files = {
 	{ "pba/cl_debug.lua", "cl" },
 	{ "pba/cl_menu.lua", "cl" },
 	{ "pba/sh_compat.lua", "sh" },
+	-- demo map (pba_demo): each file returns at once on any other map
+	{ "pba/demo/sh_rooms_gen.lua", "sh" },
+	{ "pba/demo/sh_rooms.lua", "sh" },
+	{ "pba/demo/sv_demo.lua", "sv" },
+	{ "pba/demo/cl_demo.lua", "cl" },
 }
 -- test bench (pba_demo): present in the repository, excluded from the Workshop package
 if file.Exists("pba/dev/sh_demo.lua", "LUA") then files[#files + 1] = { "pba/dev/sh_demo.lua", "sh" } end

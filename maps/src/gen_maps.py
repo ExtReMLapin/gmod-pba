@@ -22,26 +22,27 @@ ORIGIN = "tools/toolsorigin"
 _id = itertools.count(1)
 
 
-def side(p, tex, u, v):
+def side(p, tex, u, v, lms=16):
     pts = " ".join("(%g %g %g)" % tuple(q) for q in p)
     return (
         '\t\tside\n\t\t{\n\t\t\t"id" "%d"\n\t\t\t"plane" "%s"\n\t\t\t"material" "%s"\n'
         '\t\t\t"uaxis" "[%s 0] 0.25"\n\t\t\t"vaxis" "[%s 0] 0.25"\n\t\t\t"rotation" "0"\n'
-        '\t\t\t"lightmapscale" "16"\n\t\t\t"smoothing_groups" "0"\n\t\t}\n' % (next(_id), pts, tex, u, v)
+        '\t\t\t"lightmapscale" "%d"\n\t\t\t"smoothing_groups" "0"\n\t\t}\n' % (next(_id), pts, tex, u, v, lms)
     )
 
 
-def box(b, tex):
-    """Axis-aligned brush. b = (x0, y0, z0, x1, y1, z1). tex: str or dict per face."""
+def box(b, tex, lms=16):
+    """Axis-aligned brush. b = (x0, y0, z0, x1, y1, z1). tex: str or dict per face.
+    lms: lightmap scale (units per luxel; larger = lighter BSP for big surfaces)."""
     x0, y0, z0, x1, y1, z1 = b
     t = (lambda f: tex.get(f, tex.get("*"))) if isinstance(tex, dict) else (lambda f: tex)
     s = ""
-    s += side([(x0, y1, z1), (x1, y1, z1), (x1, y0, z1)], t("top"), "1 0 0", "0 -1 0")
-    s += side([(x0, y0, z0), (x1, y0, z0), (x1, y1, z0)], t("bottom"), "1 0 0", "0 -1 0")
-    s += side([(x0, y1, z1), (x0, y0, z1), (x0, y0, z0)], t("x0"), "0 1 0", "0 0 -1")
-    s += side([(x1, y1, z0), (x1, y0, z0), (x1, y0, z1)], t("x1"), "0 1 0", "0 0 -1")
-    s += side([(x1, y1, z1), (x0, y1, z1), (x0, y1, z0)], t("y1"), "1 0 0", "0 0 -1")
-    s += side([(x1, y0, z0), (x0, y0, z0), (x0, y0, z1)], t("y0"), "1 0 0", "0 0 -1")
+    s += side([(x0, y1, z1), (x1, y1, z1), (x1, y0, z1)], t("top"), "1 0 0", "0 -1 0", lms)
+    s += side([(x0, y0, z0), (x1, y0, z0), (x1, y1, z0)], t("bottom"), "1 0 0", "0 -1 0", lms)
+    s += side([(x0, y1, z1), (x0, y0, z1), (x0, y0, z0)], t("x0"), "0 1 0", "0 0 -1", lms)
+    s += side([(x1, y1, z0), (x1, y0, z0), (x1, y0, z1)], t("x1"), "0 1 0", "0 0 -1", lms)
+    s += side([(x1, y1, z1), (x0, y1, z1), (x0, y1, z0)], t("y1"), "1 0 0", "0 0 -1", lms)
+    s += side([(x1, y0, z0), (x0, y0, z0), (x0, y0, z1)], t("y0"), "1 0 0", "0 0 -1", lms)
     return '\tsolid\n\t{\n\t\t"id" "%d"\n%s\t}\n' % (next(_id), s)
 
 
@@ -74,25 +75,27 @@ def subtract(b, holes):
 class Map:
     def __init__(self, name):
         self.name = name
-        self.world = []      # (box, tex)
+        self.world = []      # (box, tex) or (box, tex, lightmapscale)
         self.holes = []
         self.ents = []
         self.ref = {"map": name}
 
-    def space(self, x0, y0, z0, x1, y1, z1, wall=WALL, t=T, walls=None):
-        """Hollow room with interior (x0..x1, y0..y1, z0..z1). walls: per-face material override."""
+    def space(self, x0, y0, z0, x1, y1, z1, wall=WALL, t=T, walls=None, floor=FLOOR, ceil=CEIL, lms=16, light=True):
+        """Hollow room with interior (x0..x1, y0..y1, z0..z1). walls: per-face material override
+        (None = no slab: the wall is provided by a neighbour). light: add a ceiling light."""
         w = dict(x0=wall, x1=wall, y0=wall, y1=wall)
         w.update(walls or {})
         slabs = [
-            ((x0 - t, y0 - t, z0 - t, x1 + t, y1 + t, z0), FLOOR),
-            ((x0 - t, y0 - t, z1, x1 + t, y1 + t, z1 + t), CEIL),
+            ((x0 - t, y0 - t, z0 - t, x1 + t, y1 + t, z0), floor),
+            ((x0 - t, y0 - t, z1, x1 + t, y1 + t, z1 + t), ceil),
             ((x0 - t, y0, z0, x0, y1, z1), w["x0"]),
             ((x1, y0, z0, x1 + t, y1, z1), w["x1"]),
             ((x0 - t, y0 - t, z0, x1 + t, y0, z1), w["y0"]),
             ((x0 - t, y1, z0, x1 + t, y1 + t, z1), w["y1"]),
         ]
-        self.world += [s for s in slabs if s[1] is not None]  # None = wall provided by a neighbour
-        self.ent("light", (x0 + x1) / 2, (y0 + y1) / 2, z1 - 24, _light="255 240 220 250", _distance="0")
+        self.world += [(b, tex, lms) for b, tex in slabs if tex is not None]  # None = wall provided by a neighbour
+        if light:
+            self.ent("light", (x0 + x1) / 2, (y0 + y1) / 2, z1 - 24, _light="255 240 220 250", _distance="0")
 
     def hole(self, *b):
         self.holes.append(b)
@@ -114,15 +117,17 @@ class Map:
             kv["target"] = target
         self.brush_ent("func_areaportal", [box(b, PORTAL)], **kv)
 
-    def vmf(self):
+    def vmf(self, skyname="sky_day01_01"):
         solids = []
-        for b, tex in self.world:
+        for w in self.world:
+            b, tex, lms = w if len(w) == 3 else (w[0], w[1], 16)
             for piece in subtract(b, self.holes):
-                solids.append(box(piece, tex))
+                solids.append(box(piece, tex, lms))
+        self.brush_count = len(solids)
         out = ['versioninfo\n{\n\t"editorversion" "400"\n\t"editorbuild" "8000"\n\t"mapversion" "1"\n'
                '\t"formatversion" "100"\n\t"prefab" "0"\n}\n',
                'world\n{\n\t"id" "%d"\n\t"mapversion" "1"\n\t"classname" "worldspawn"\n'
-               '\t"skyname" "sky_day01_01"\n%s}\n' % (next(_id), "".join(solids))]
+               '\t"skyname" "%s"\n%s}\n' % (next(_id), skyname, "".join(solids))]
         for kv, sol in self.ents:
             body = "".join('\t"%s" "%s"\n' % (k, v) for k, v in kv.items())
             out.append('entity\n{\n\t"id" "%d"\n%s%s}\n' % (next(_id), body, "".join(sol)))

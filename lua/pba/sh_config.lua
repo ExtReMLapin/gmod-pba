@@ -97,6 +97,9 @@ A.CONFIG = {
 
 A.cv = A.cv or {}
 A.cfg = A.cfg or {}
+-- in-memory overrides (demo map): name -> value. They win over the convar until cleared and
+-- are never written anywhere, so nothing survives a map change or a crash.
+A.override = A.override or {}
 
 for name, c in pairs(A.CONFIG) do
 	local cvname = "pba_" .. name
@@ -112,7 +115,9 @@ for name, c in pairs(A.CONFIG) do
 	if cv then
 		A.cv[name] = cv
 		A.cfg[name] = cv:GetFloat()
+		if A.override[name] ~= nil then A.cfg[name] = A.override[name] end
 		cvars.AddChangeCallback(cvname, function(_, _, new)
+			if A.override[name] ~= nil then return end
 			A.cfg[name] = tonumber(new) or def
 			if A.OnConfigChanged then A.OnConfigChanged(name) end
 		end, "pba_cfg")
@@ -124,7 +129,7 @@ if CLIENT then
 	timer.Create("pba_cfgpoll", 0.5, 0, function()
 		for name, c in pairs(A.CONFIG) do
 			local cv = A.cv[name]
-			if c[4] == "sv" and cv then
+			if c[4] == "sv" and cv and A.override[name] == nil then
 				local v = cv:GetFloat()
 				if v ~= A.cfg[name] then
 					A.cfg[name] = v
@@ -133,6 +138,21 @@ if CLIENT then
 			end
 		end
 	end)
+end
+
+--- Overrides a setting in memory for this realm (nil = back to the convar). No convar is
+-- written. silent: do not run the change handlers (used before the map is ready).
+function A.SetOverride(name, value, silent)
+	if not A.CONFIG[name] then return end
+	if value == nil then
+		A.override[name] = nil
+		local cv = A.cv[name]
+		A.cfg[name] = cv and cv:GetFloat() or A.CONFIG[name][1]
+	else
+		A.override[name] = tonumber(value) or A.CONFIG[name][1]
+		A.cfg[name] = A.override[name]
+	end
+	if not silent and A.OnConfigChanged then A.OnConfigChanged(name) end
 end
 
 --- Effective master switch for this realm.
