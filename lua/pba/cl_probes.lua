@@ -10,7 +10,7 @@ local A = pba
 local PR = {}
 A.Probes = PR
 
-local CACHE_VERSION = 4
+local CACHE_VERSION = 5
 local MAX_PROBES = 30000
 local DIRS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 
@@ -34,6 +34,15 @@ function PR.Hash(bsp)
 end
 
 local function cellCenter(i, j, k, s) return Vector((i + 0.5) * s, (j + 0.5) * s, (k + 0.5) * s) end
+
+-- Where a probe may sit inside its cell, in quarters of the spacing: the centre first. A cell whose
+-- centre lies on a floor plane (floors on multiples of the spacing: z = (k + 0.5) * s) or inside
+-- geometry would otherwise be dropped, and a whole small room with it.
+local OFFSETS = { { 0, 0, 0 }, { 0, 0, 1 }, { 0, 0, -1 }, { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 } }
+local function cellPoint(i, j, k, s, o)
+	local d = OFFSETS[o]
+	return cellCenter(i, j, k, s) + Vector(d[1], d[2], d[3]) * (s / 4)
+end
 
 local function validCell(c, s)
 	if bit.band(util.PointContents(c), CONTENTS_SOLID) ~= 0 then return false end
@@ -73,9 +82,13 @@ function PR.BuildCo(seeds, s, budgetFn)
 	local function add(i, j, k)
 		local kk = key(i, j, k)
 		if index[kk] ~= nil then return end
-		local c = cellCenter(i, j, k, s)
-		if not validCell(c, s) then index[kk] = false return end
-		local n = { i = i, j = j, k = k, pos = c, nb = {} }
+		local c, o
+		for oi = 1, #OFFSETS do
+			local q = cellPoint(i, j, k, s, oi)
+			if validCell(q, s) then c, o = q, oi break end
+		end
+		if not c then index[kk] = false return end
+		local n = { i = i, j = j, k = k, o = o, pos = c, nb = {} }
 		nodes[#nodes + 1] = n
 		n.id = #nodes
 		index[kk] = n.id
@@ -114,7 +127,8 @@ end
 
 -- Cache format (text; util.JSONToTable silently truncates arrays at 15000 elements):
 --   line 1: JSON header { v, hash, spacing, truncated, count }
---   then one line per probe: "i j k|nb nb x:y:z@nb ..." (neighbour ids, "@" = via waypoint)
+--   then one line per probe: "i j k o|nb nb x:y:z@nb ..." (o = offset of the probe in its cell;
+--   neighbour ids, "@" = via waypoint)
 function PR.Serialize(g, hash)
 	local out = { util.TableToJSON({ v = CACHE_VERSION, hash = hash, spacing = g.spacing, truncated = g.truncated, count = #g.nodes }) }
 	for _, n in ipairs(g.nodes) do
@@ -124,7 +138,7 @@ function PR.Serialize(g, hash)
 			else nb[#nb + 1] = string.format("%d@%.1f:%.1f:%.1f", id, q.x, q.y, q.z) end
 		end
 		table.sort(nb)
-		out[#out + 1] = n.i .. " " .. n.j .. " " .. n.k .. "|" .. table.concat(nb, " ")
+		out[#out + 1] = n.i .. " " .. n.j .. " " .. n.k .. " " .. (n.o or 1) .. "|" .. table.concat(nb, " ")
 	end
 	return table.concat(out, "\n")
 end
@@ -139,9 +153,10 @@ function PR.Deserialize(text, hash)
 	local id = 0
 	for line in string.gmatch(string.sub(text, (nl or #text) + 1), "[^\n]+") do
 		id = id + 1
-		local i, j, k, rest = string.match(line, "^(%-?%d+) (%-?%d+) (%-?%d+)|(.*)$")
-		i, j, k = tonumber(i), tonumber(j), tonumber(k)
-		local n = { id = id, i = i, j = j, k = k, pos = cellCenter(i, j, k, s), nb = {} }
+		local i, j, k, o, rest = string.match(line, "^(%-?%d+) (%-?%d+) (%-?%d+) (%d+)|(.*)$")
+		i, j, k, o = tonumber(i), tonumber(j), tonumber(k), tonumber(o)
+		if not o or not OFFSETS[o] then return nil end
+		local n = { id = id, i = i, j = j, k = k, o = o, pos = cellPoint(i, j, k, s, o), nb = {} }
 		for tok in string.gmatch(rest or "", "%S+") do
 			local nid, x, y, z = string.match(tok, "^(%d+)@(%-?[%d%.]+):(%-?[%d%.]+):(%-?[%d%.]+)$")
 			if nid then n.nb[tonumber(nid)] = Vector(tonumber(x), tonumber(y), tonumber(z))
@@ -399,6 +414,43 @@ hook.Add("Think", "pba_probes_solve", function()
 end)
 
 --- Up to `k` probe paths from S to L as evaluated path tables (same shape as portal paths).
+--- Tightens a pulled polyline around the obstacle edges: probes sit on a grid, often far from the
+-- edge the sound actually bends around (a doorway frame, a window sill), which made the diffraction
+-- angles, the length and the loss far too large. Each inner vertex slides towards the straight line
+-- between its neighbours as far as both segments stay clear (bisection), and is dropped when the
+-- neighbours see each other. A few passes converge to the taut string around the edges.
+local function tighten(pts)
+	for _ = 1, 3 do
+		local moved = false
+		local i = 2
+		while i < #pts do
+			local a, v, b = pts[i - 1], pts[i], pts[i + 1]
+			local ab = b - a
+			local len2 = ab:LengthSqr()
+			local t = len2 > 0 and math.Clamp((v - a):Dot(ab) / len2, 0, 1) or 0
+			local target = a + ab * t
+			if clearFat(a, b) then
+				table.remove(pts, i)
+				moved = true
+			else
+				local lo, hi = 0, 1
+				for _ = 1, 6 do
+					local mid = (lo + hi) / 2
+					local q = v + (target - v) * mid
+					if clearFat(a, q) and clearFat(q, b) then lo = mid else hi = mid end
+				end
+				local nv = v + (target - v) * lo
+				if nv:DistToSqr(v) > 1 then moved = true end
+				pts[i] = nv
+				i = i + 1
+			end
+		end
+		if not moved then break end -- converged
+	end
+	return pts
+end
+PR.Tighten = tighten
+
 function PR.Paths(S, L, k, cfg)
 	cfg = cfg or A.cfg
 	local g = PR.current
@@ -412,6 +464,7 @@ function PR.Paths(S, L, k, cfg)
 		local pulled = { S }
 		for x = i, j do pulled[#pulled + 1] = inner[x] end
 		pulled[#pulled + 1] = L
+		pulled = tighten(pulled)
 		if #pulled >= 3 then
 			local p = A.Paths.EvalPolyline(pulled, cfg)
 			-- distinct apparent positions only
