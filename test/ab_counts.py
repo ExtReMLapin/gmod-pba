@@ -38,6 +38,7 @@ time.sleep(2)
 call("console_exec", {"realm": "server", "cmd": "audioprop_demo stop"})
 call("console_exec", {"realm": "server", "cmd": "sv_cheats 1"})
 # engine starts are counted: the native renderer (which plays voices itself) must be off
+saved_render = call("lua_exec", {"realm": "client", "code": "return audioprop.cfg.native_render"}).get("values", [0])[0]
 call("console_exec", {"realm": "client", "cmd": "audioprop_native_render 0"})
 call("console_exec", {"realm": "client", "cmd": "developer 1"})
 call("console_exec", {"realm": "client", "cmd": "snd_showstart 1"})
@@ -59,4 +60,5 @@ for mode in ("0", "1"):
     print(f"enable={mode}: source emissions={emits} engine starts={len(starts)} volumes={res[mode]['vols']}", flush=True)
 call("console_exec", {"realm": "server", "cmd": "audioprop_enable 1"})
 call("console_exec", {"realm": "client", "cmd": "snd_showstart 0"})
+call("console_exec", {"realm": "client", "cmd": f"audioprop_native_render {saved_render}"})
 print(json.dumps(res))

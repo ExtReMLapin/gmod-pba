@@ -156,6 +156,7 @@ function BSP.LoadDisplacements(map, swap)
 	-- dispinfo: startPosition, DispVertStart, power, MapFace
 	local infos = {}
 	for i = 0, ndisp - 1 do
+		if BSP.Yield then BSP.Yield() end -- optional: lets a caller spread the work over frames
 		f:Seek(L[26].ofs + i * 176)
 		local start = vec()
 		local vstart = f:ReadLong()
@@ -167,6 +168,7 @@ function BSP.LoadDisplacements(map, swap)
 	end
 	local verts, idx = {}, {}
 	for _, d in ipairs(infos) do
+		if BSP.Yield then BSP.Yield() end
 		-- face corners
 		f:Seek(L[7].ofs + d.face * 56 + 4)
 		local firstedge, numedges = f:ReadLong(), f:ReadShort()

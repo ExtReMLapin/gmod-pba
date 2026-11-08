@@ -47,6 +47,8 @@ hook.Add("PopulateToolMenu", "audioprop_menu", function()
 		addSlider(panel, "Echoes of loud sounds", "native_echo", 2)
 		addSlider(panel, "Echo threshold (dB)", "native_echo_lvl")
 		addSlider(panel, "Rays per simulation", "native_rays")
+		panel:CheckBox("Doors in the acoustic scene", "audioprop_native_doors")
+		panel:CheckBox("Large props in the acoustic scene", "audioprop_native_props")
 
 		panel:Help("Baked paths around the map geometry (replaces the probe graph).")
 		panel:CheckBox("Steam Audio paths (bake on map load)", "audioprop_native_paths")

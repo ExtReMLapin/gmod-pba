@@ -20,6 +20,8 @@
 //     Update(id, ...), StopVoice(id), SetListener(pos, fwd, up, master), SetOutputMode(0|1),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table
+//   DynamicAdd(id, verts, tris, material), DynamicMove(id, matrixRows), DynamicRemove(id),
+//     DynamicCommit() -> committed   (doors and other moving objects in the scene)
 //   Shutdown()
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -36,6 +38,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "GarrysMod/Lua/Interface.h"
@@ -60,6 +63,16 @@ IPLProbeBatch g_probes = nullptr;
 std::vector<IPLSource> g_sources;
 IPLSource g_reverbSource = nullptr; // placed at the listener: room reverb estimation
 bool g_pathsReady = false;
+
+// Dynamic objects (doors...): a sub-scene per object, instanced into the world scene with a
+// rigid transform updated from Lua. Scene commits are serialized with the reflection thread.
+struct Dynamic {
+	IPLScene sub = nullptr;
+	IPLStaticMesh mesh = nullptr;
+	IPLInstancedMesh inst = nullptr;
+};
+std::unordered_map<int, Dynamic> g_dyn;
+bool g_dynDirty = false;
 
 // ---- reflection simulation thread (room reverb at the listener + per-source echoes)
 // RunReflections takes milliseconds (thousands of rays): it runs on its own thread, every
@@ -286,6 +299,20 @@ void ReleaseWorld() {
 	}
 	if (g_probes) iplProbeBatchRelease(&g_probes);
 	g_pathsReady = false;
+	for (auto& kv : g_dyn) {
+		Dynamic& d = kv.second;
+		if (d.inst) {
+			iplInstancedMeshRemove(d.inst, g_scene);
+			iplInstancedMeshRelease(&d.inst);
+		}
+		if (d.mesh) {
+			iplStaticMeshRemove(d.mesh, d.sub);
+			iplStaticMeshRelease(&d.mesh);
+		}
+		if (d.sub) iplSceneRelease(&d.sub);
+	}
+	g_dyn.clear();
+	g_dynDirty = false;
 	if (g_mesh) {
 		iplStaticMeshRemove(g_mesh, g_scene);
 		iplStaticMeshRelease(&g_mesh);
@@ -725,6 +752,141 @@ LUA_FUNCTION(Paths) {
 	return 1;
 }
 
+// ------------------------------------------------------------------ dynamic objects
+
+// DynamicAdd(id, verts, tris, material) -> true : object geometry in its LOCAL frame (Source
+// units, flat {x,y,z,...}; tris 0-based flat), one material { absorption, scattering,
+// transmission }. Placed with DynamicMove, effective after DynamicCommit.
+LUA_FUNCTION(DynamicAdd) {
+	if (!g_scene) LUA->ThrowError("no world loaded");
+	const int id = (int)LUA->CheckNumber(1);
+	LUA->CheckType(2, Type::Table);
+	LUA->CheckType(3, Type::Table);
+	LUA->CheckType(4, Type::Table);
+	if (g_dyn.count(id)) {
+		LUA->PushBool(true);
+		return 1;
+	}
+	const int nv = TableLen(LUA, 2) / 3, nt = TableLen(LUA, 3) / 3;
+	std::vector<IPLVector3> verts(nv);
+	for (int i = 0; i < nv; ++i) {
+		Vector v;
+		v.x = (float)TableNumber(LUA, 2, i * 3 + 1);
+		v.y = (float)TableNumber(LUA, 2, i * 3 + 2);
+		v.z = (float)TableNumber(LUA, 2, i * 3 + 3);
+		verts[i] = ToSA(v);
+	}
+	std::vector<IPLTriangle> tris(nt);
+	std::vector<IPLint32> matIdx(nt, 0);
+	for (int i = 0; i < nt; ++i)
+		for (int k = 0; k < 3; ++k) tris[i].indices[k] = (IPLint32)TableNumber(LUA, 3, i * 3 + k + 1);
+	IPLMaterial mat{};
+	for (int b = 0; b < 3; ++b) {
+		mat.absorption[b] = FieldIndex(LUA, 4, "absorption", b + 1, 0.1f);
+		mat.transmission[b] = FieldIndex(LUA, 4, "transmission", b + 1, 0.03f);
+	}
+	mat.scattering = FieldIndex(LUA, 4, "scattering", 1, 0.05f);
+	Dynamic d;
+	IPLSceneSettings ss{};
+	ss.type = IPL_SCENETYPE_DEFAULT;
+	if (iplSceneCreate(g_ctx, &ss, &d.sub) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplSceneCreate failed");
+	IPLStaticMeshSettings ms{};
+	ms.numVertices = nv;
+	ms.numTriangles = nt;
+	ms.numMaterials = 1;
+	ms.vertices = verts.data();
+	ms.triangles = tris.data();
+	ms.materialIndices = matIdx.data();
+	ms.materials = &mat;
+	if (iplStaticMeshCreate(d.sub, &ms, &d.mesh) != IPL_STATUS_SUCCESS) {
+		iplSceneRelease(&d.sub);
+		LUA->ThrowError("iplStaticMeshCreate failed");
+	}
+	iplStaticMeshAdd(d.mesh, d.sub);
+	iplSceneCommit(d.sub);
+	IPLInstancedMeshSettings is{};
+	is.subScene = d.sub;
+	for (int i = 0; i < 4; ++i) is.transform.elements[i][i] = 1;
+	if (iplInstancedMeshCreate(g_scene, &is, &d.inst) != IPL_STATUS_SUCCESS) {
+		iplStaticMeshRemove(d.mesh, d.sub);
+		iplStaticMeshRelease(&d.mesh);
+		iplSceneRelease(&d.sub);
+		LUA->ThrowError("iplInstancedMeshCreate failed");
+	}
+	iplInstancedMeshAdd(d.inst, g_scene);
+	g_dyn[id] = d;
+	g_dynDirty = true;
+	LUA->PushBool(true);
+	return 1;
+}
+
+// DynamicMove(id, m) : m = local-to-world 4x4 matrix in Source space, row-major, as the table
+// of rows returned by VMatrix:ToTable(). Converted to Steam Audio space: C * M * C^-1.
+LUA_FUNCTION(DynamicMove) {
+	const int id = (int)LUA->CheckNumber(1);
+	LUA->CheckType(2, Type::Table);
+	auto it = g_dyn.find(id);
+	if (it == g_dyn.end() || !g_scene) return 0;
+	float M[4][4];
+	for (int r = 0; r < 4; ++r) {
+		LUA->PushNumber(r + 1);
+		LUA->GetTable(2);
+		const int row = LUA->Top();
+		for (int c = 0; c < 4; ++c) M[r][c] = (float)TableNumber(LUA, row, c + 1);
+		LUA->Pop();
+	}
+	const float k = kUnit;
+	const float C[4][4] = {{k, 0, 0, 0}, {0, 0, k, 0}, {0, -k, 0, 0}, {0, 0, 0, 1}};
+	const float Ci[4][4] = {{1 / k, 0, 0, 0}, {0, 0, -1 / k, 0}, {0, 1 / k, 0, 0}, {0, 0, 0, 1}};
+	float T[4][4] = {}, S[4][4] = {};
+	for (int i = 0; i < 4; ++i)
+		for (int j = 0; j < 4; ++j)
+			for (int n = 0; n < 4; ++n) T[i][j] += C[i][n] * M[n][j];
+	for (int i = 0; i < 4; ++i)
+		for (int j = 0; j < 4; ++j)
+			for (int n = 0; n < 4; ++n) S[i][j] += T[i][n] * Ci[n][j];
+	IPLMatrix4x4 m{};
+	for (int i = 0; i < 4; ++i)
+		for (int j = 0; j < 4; ++j) m.elements[i][j] = S[i][j];
+	iplInstancedMeshUpdateTransform(it->second.inst, g_scene, m);
+	g_dynDirty = true;
+	return 0;
+}
+
+LUA_FUNCTION(DynamicRemove) {
+	const int id = (int)LUA->CheckNumber(1);
+	auto it = g_dyn.find(id);
+	if (it == g_dyn.end() || !g_scene) return 0;
+	{
+		std::lock_guard<std::mutex> lk(g_simMtx);
+		Dynamic& d = it->second;
+		iplInstancedMeshRemove(d.inst, g_scene);
+		iplSceneCommit(g_scene);
+		iplInstancedMeshRelease(&d.inst);
+		iplStaticMeshRemove(d.mesh, d.sub);
+		iplStaticMeshRelease(&d.mesh);
+		iplSceneRelease(&d.sub);
+	}
+	g_dyn.erase(it);
+	return 0;
+}
+
+// DynamicCommit() -> committed : applies the pending changes to the scene. Skipped (false) while
+// a path bake reads the scene on its thread.
+LUA_FUNCTION(DynamicCommit) {
+	if (!g_scene || !g_dynDirty || g_bakeState == 1) {
+		LUA->PushBool(false);
+		return 1;
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_simMtx);
+		iplSceneCommit(g_scene);
+	}
+	g_dynDirty = false;
+	LUA->PushBool(true);
+	return 1;
+}
+
 // ------------------------------------------------------------------ rendering (render.cpp)
 
 static IPLVector3 DirToSA(const Vector& v) { return {v.x, v.z, -v.y}; }
@@ -1054,6 +1216,14 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetReflections");
 	LUA->PushCFunction(Stats);
 	LUA->SetField(-2, "Stats");
+	LUA->PushCFunction(DynamicAdd);
+	LUA->SetField(-2, "DynamicAdd");
+	LUA->PushCFunction(DynamicMove);
+	LUA->SetField(-2, "DynamicMove");
+	LUA->PushCFunction(DynamicRemove);
+	LUA->SetField(-2, "DynamicRemove");
+	LUA->PushCFunction(DynamicCommit);
+	LUA->SetField(-2, "DynamicCommit");
 	LUA->SetField(-2, "audioprop_native");
 	LUA->Pop();
 	return 0;

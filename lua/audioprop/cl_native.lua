@@ -51,6 +51,7 @@ function N.BuildWorld()
 	for _, s in ipairs(game.GetWorld():GetBrushSurfaces() or {}) do
 		local m = s:GetMaterial()
 		local name = m and m:GetName() or ""
+		if N.Yield then N.Yield() end
 		if not s:IsSky() and not s:IsWater() and not skipMaterial(name) then
 			local surf = m and m:GetString("$surfaceprop") or "default"
 			local mi = matOf[surf]
@@ -101,14 +102,44 @@ function N.Start()
 	end
 	local ok, err = audioprop_native.Init()
 	if not ok then N.err = err return end
+	-- the world is gathered in a coroutine, 4 ms per frame (large maps: seconds of Lua work),
+	-- then handed to the module in one call
+	N.building = coroutine.create(function()
+		local t0 = SysTime()
+		local verts, tris, matIdx, mats, mins, maxs = N.BuildWorld()
+		N.buildMs = (SysTime() - t0) * 1000
+		return verts, tris, matIdx, mats, mins, maxs
+	end)
+	N.buildStart = SysTime()
+end
+
+hook.Add("Think", "audioprop_native_build", function()
+	local co = N.building
+	if not co then return end
+	local deadline = SysTime() + 0.004
+	local function yield() if SysTime() > deadline then coroutine.yield() end end
+	N.Yield, A.BSP.Yield = yield, yield
+	local ok, verts, tris, matIdx, mats, mins, maxs = coroutine.resume(co)
+	N.Yield, A.BSP.Yield = nil, nil
+	if not ok then
+		N.building, N.err = nil, "world build failed: " .. tostring(verts)
+		MsgN("[audioprop] native backend: ", N.err)
+		return
+	end
+	if coroutine.status(co) ~= "dead" then return end
+	N.building = nil
+	N.Finish(verts, tris, matIdx, mats, mins, maxs)
+end)
+
+function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	local t0 = SysTime()
-	local verts, tris, matIdx, mats, mins, maxs = N.BuildWorld()
 	local nt = audioprop_native.LoadWorld(verts, tris, matIdx, mats)
+	N.doors = {} -- the module released its dynamic objects with the old world
 	N.loadMs = (SysTime() - t0) * 1000
 	N.tris, N.mins, N.maxs = nt, mins, maxs
 	N.ready = nt > 0
-	MsgN(string.format("[audioprop] native backend: Steam Audio %d, %d triangles, %d materials, %.0f ms",
-		audioprop_native.Version(), nt, #mats, N.loadMs))
+	MsgN(string.format("[audioprop] native backend: Steam Audio %d, %d triangles, %d materials, gathered in %.0f ms over %.1f s, loaded in %.0f ms",
+		audioprop_native.Version(), nt, #mats, N.buildMs or 0, SysTime() - (N.buildStart or SysTime()), N.loadMs))
 	if N.ready then N.StartRender() end
 	if N.ready and (A.cfg.native_paths or 0) >= 0.5 then
 		-- the probe graph is built in the background: bake once it is there
@@ -321,6 +352,116 @@ function N.Echo(data, pos)
 	N.echoes = (N.echoes or 0) + 1
 end
 
+-- ------------------------------------------------------------------ doors in the scene
+-- Doors are instanced into the Steam Audio scene (one oriented box per door, moved with it):
+-- reflections, echoes and baked-path validation then see a closed door. The direct sound keeps
+-- audioprop's own door model (sh_doors), the world occlusion still ignores entities.
+local DOOR_CLASSES = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
+-- other moving brush geometry of real maps (RP: garage doors, lifts, bridges, rotating parts)
+local MOVER_CLASSES = { func_movelinear = true, func_tracktrain = true, func_rotating = true, func_physbox = true,
+	func_physbox_multiplayer = true, func_brush = false }
+-- large props (containers, vehicles, crates...) reflect sound too: same mechanism, capped
+-- on the client, engine brush entities report their CLIENT class ("class C_BaseToggle" for a
+-- func_door, ...): recognised by pattern on brush models ("*N")
+local CLIENT_DOOR_PATTERNS = { "C_BaseDoor", "C_BaseToggle", "C_BasePropDoor" }
+local CLIENT_MOVER_PATTERNS = { "MoveLinear", "TrackTrain", "FuncRotating", "PhysBox" }
+local function brushKind(e, cls)
+	if cls:sub(1, 6) ~= "class " then return nil end
+	local m = e:GetModel()
+	if not m or m:sub(1, 1) ~= "*" then return nil end
+	for _, pat in ipairs(CLIENT_MOVER_PATTERNS) do if string.find(cls, pat, 1, true) then return "mover" end end
+	for _, pat in ipairs(CLIENT_DOOR_PATTERNS) do if string.find(cls, pat, 1, true) then return "door" end end
+	return nil
+end
+
+local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, prop_dynamic = true, prop_vehicle_jeep = true,
+	prop_vehicle_airboat = true, prop_vehicle_prisoner_pod = false }
+local PROP_MIN_SIZE, PROP_MAX = 64, 64 -- units (largest box dimension), objects
+N.doors = N.doors or {}
+N.dynSkip = N.dynSkip or setmetatable({}, { __mode = "k" }) -- entities not to look at again
+
+local function boxMesh(mn, mx)
+	local v = {}
+	for i = 0, 7 do
+		local x = bit.band(i, 1) == 0 and mn.x or mx.x
+		local y = bit.band(i, 2) == 0 and mn.y or mx.y
+		local z = bit.band(i, 4) == 0 and mn.z or mx.z
+		v[#v + 1], v[#v + 2], v[#v + 3] = x, y, z
+	end
+	-- 12 triangles (6 faces)
+	local t = { 0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5 }
+	return v, t
+end
+
+function N.SyncDoors()
+	if not N.ready or not audioprop_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
+	local seen, nProps = {}, 0
+	local wantProps = (A.cfg.native_props or 0) >= 0.5
+	for id in pairs(N.doors) do if N.doors[id].prop then nProps = nProps + 1 end end
+	for _, e in ipairs(ents.GetAll()) do
+		local cls = e:GetClass()
+		local bk = brushKind(e, cls)
+		local isMover = MOVER_CLASSES[cls] or bk == "mover"
+		local isDoor, isProp = DOOR_CLASSES[cls] or bk == "door" or isMover, wantProps and PROP_CLASSES[cls]
+		local id = e:EntIndex()
+		if (isDoor or isProp) and id > 0 and not N.dynSkip[e] then
+			seen[id] = true
+			local d = N.doors[id]
+			if d and d.ent ~= e then -- entity index reused by another entity: rebuild
+				audioprop_native.DynamicRemove(id)
+				N.doors[id], d = nil, nil
+			end
+			if not d then
+				local mn, mx = e:OBBMins(), e:OBBMaxs()
+				local sz = mx - mn
+				local big = math.max(sz.x, sz.y, sz.z)
+				if isDoor and big > 8 then
+					local v, t = boxMesh(mn, mx)
+					if isMover then
+						-- lifts, bridges, shutters: usually metal or concrete
+						audioprop_native.DynamicAdd(id, v, t, saMaterial("metal", A.cfg))
+					else
+						local tm = 10 ^ (-A.cfg.door_closed_db / 20)
+						audioprop_native.DynamicAdd(id, v, t, { absorption = { 0.11, 0.07, 0.06 }, scattering = 0.05,
+							transmission = { math.min(tm * 10 ^ (A.cfg.trans_lf_bonus / 20), 1), tm, tm * 0.3 } })
+					end
+					d = { ent = e }
+					N.doors[id] = d
+				elseif isProp and big >= PROP_MIN_SIZE and nProps < PROP_MAX then
+					-- material from the physics surface: audioprop's wall table at the object's
+					-- smallest dimension (hollow objects behave like thin walls)
+					local phys = e:GetPhysicsObject()
+					local surf = IsValid(phys) and phys:GetMaterial() or "default"
+					local m = saMaterial(surf, A.cfg)
+					local v, t = boxMesh(mn, mx)
+					audioprop_native.DynamicAdd(id, v, t, m)
+					d = { prop = true, ent = e }
+					N.doors[id] = d
+					nProps = nProps + 1
+				else
+					N.dynSkip[e] = true -- too small (or over the cap): not looked at again
+				end
+			end
+			if d then
+				local p, a = e:GetPos(), e:GetAngles()
+				if not d.p or d.p ~= p or d.a ~= a then
+					audioprop_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
+					d.p, d.a = p, a
+				end
+			end
+		end
+	end
+	for id, d in pairs(N.doors) do
+		if not seen[id] or (d.prop and not wantProps) then
+			audioprop_native.DynamicRemove(id)
+			N.doors[id] = nil
+		end
+	end
+	-- the module only commits when something changed (and retries itself after a running bake)
+	audioprop_native.DynamicCommit()
+end
+timer.Create("audioprop_native_doors", 0.1, 0, function() N.SyncDoors() end)
+
 hook.Add("Think", "audioprop_native_listener", function()
 	if not N.render then return end
 	local ply = LocalPlayer()
@@ -352,6 +493,7 @@ cvars.AddChangeCallback("audioprop_native", function(_, _, new)
 		N.Start()
 	else
 		N.StopRender()
+		N.building = nil
 		N.ready, N.pathsReady = false, false
 	end
 	if A.Paths then A.Paths.InvalidateCache() end

@@ -71,6 +71,8 @@ With the module installed:
   server relays loud sounds only to clients that render echoes;
 - `audioprop_native_paths 1` (experimental): Steam Audio's baked pathing replaces the probe graph,
   rendered as a sound field (several arrival directions), bake kept on disk;
+- doors are moving objects of the Steam Audio scene (`audioprop_native_doors`): reflections,
+  echoes and baked paths see them closed or open;
 - custom HRTF: a SOFA file in `data/audioprop/hrtf/`, named by `audioprop_native_hrtf`.
 
 Every option is a client preference in Spawn menu > Utilities > audioprop > Steam Audio (native).
