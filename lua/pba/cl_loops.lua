@@ -196,7 +196,7 @@ function LP.HandleClient(data)
 	if lvl <= 0 or lvl >= 256 or A.IsLooping(name) then return false end
 	local st = data.SoundTime or 0
 	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
-	local dur = SoundDuration(name) or 0
+	local dur = A.SoundDuration(name) or 0
 	if dur <= A.cfg.max_duration or dur > 1800 then return false end
 	local n = 0
 	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end

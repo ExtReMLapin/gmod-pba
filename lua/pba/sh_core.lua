@@ -111,12 +111,26 @@ end
 
 -- ------------------------------------------------------------------ sound file properties
 
+--- The file behind a sound name: the leading sound characters (soundscript prefixes such as
+-- "*" stream, "^" distance variant, ")" spatial stereo, "#" dry mix, "}" fast pitch...) removed,
+-- case kept. The engine skips any number of them (SDK soundchars.h, PSkipSoundChars). Every lookup
+-- by file goes through it: SoundDuration fails on a prefixed name (wiki, Global.SoundDuration).
+function A.SoundFile(name)
+	return (string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(}]+", ""))
+end
+
+--- Duration of a sound name (s), looked up on its file: nil or 0 when unknown (sentence, missing
+-- file, VBR mp3).
+function A.SoundDuration(name)
+	return SoundDuration(A.SoundFile(name))
+end
+
 A.loopCache = A.loopCache or {}
 
 --- True if a .wav file carries loop points (cue/smpl chunk): re-emitting it as a one-shot
 -- would never stop, so such sounds are left to the engine.
 function A.IsLooping(name)
-	name = string.lower(string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(]+", ""))
+	name = string.lower(A.SoundFile(name))
 	local c = A.loopCache[name]
 	if c ~= nil then return c end
 	local loop = false
@@ -162,7 +176,7 @@ function A.Eligible(data)
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
 	if data.Channel == CHAN_STATIC and A.IsLooping(data.SoundName) then return false end
 	if A.IsLooping(data.SoundName) then return false end
-	local dur = SoundDuration(data.SoundName) or 0
+	local dur = A.SoundDuration(data.SoundName) or 0
 	if dur > A.cfg.max_duration then return false end
 	return true
 end

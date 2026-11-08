@@ -193,7 +193,7 @@ function A.Process(data, relayed)
 		return false
 	end
 	local now = RealTime()
-	local dur = math.max(SoundDuration(data.SoundName) or 0.5, 0.1)
+	local dur = math.max(A.SoundDuration(data.SoundName) or 0.5, 0.1)
 	local budget = A.cfg.max_active - activeCount(now)
 	local copies = beginCopies(data)
 	local emitted = 0

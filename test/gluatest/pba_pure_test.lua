@@ -939,5 +939,41 @@ return {
 			expect(flips(0)).to.equal(20)
 			expect(flips(1.5)).to.equal(0)
 		end },
+		-- SoundDuration "will not work with sound files prepended with a sound character" (wiki,
+		-- Global.SoundDuration): every lookup by file goes through A.SoundFile, one definition of the prefix.
+		{ name = "SoundFile: strips the leading sound characters only, keeps the case", func = function()
+			for c in string.gmatch("*^)(#@<>!?~$&%+`}", ".") do
+				expect(A.SoundFile(c .. "music/HL2_song.wav")).to.equal("music/HL2_song.wav")
+			end
+			expect(A.SoundFile("^)#weapons/ar2/fire1.wav")).to.equal("weapons/ar2/fire1.wav")
+			expect(A.SoundFile("ambient/levels/citadel/x(1).wav")).to.equal("ambient/levels/citadel/x(1).wav")
+			expect(A.SoundFile("!COMBINE_PAIN0")).to.equal("COMBINE_PAIN0") -- sentence: not a file, SoundDuration gives 0 anyway
+			expect(A.SoundFile("")).to.equal("")
+			expect(A.SoundFile(nil)).to.equal("")
+			expect(A.SoundFile("*")).to.equal("")
+			expect(select("#", A.SoundFile("*a.wav"))).to.equal(1) -- not gsub's count as a second value
+		end },
+		{ name = "SoundDuration: looked up on the bare file name; a prefixed long sound is not eligible as a short one", func = function()
+			local saved, asked = _G.SoundDuration, {} -- the global, not the suite's sandbox
+			_G.SoundDuration = function(n) asked[#asked + 1] = n return n == "music/pba_long.wav" and 60 or 0 end
+			local ok, err = pcall(function()
+				expect(A.SoundDuration("^)music/pba_long.wav")).to.equal(60)
+				expect(asked[#asked]).to.equal("music/pba_long.wav")
+				local d = { SoundName = "*music/pba_long.wav", SoundLevel = 75, Channel = CHAN_AUTO, Flags = 0, Volume = 1, Pitch = 100 }
+				expect(A.Eligible(d)).to.equal(false) -- 60 s > max_duration: followed as a long sound, not replayed as a short one
+				d.SoundName = "music/pba_long.wav"
+				expect(A.Eligible(d)).to.equal(false)
+				d.SoundName = "*music/pba_short.wav"
+				expect(A.Eligible(d)).to.equal(true)
+			end)
+			_G.SoundDuration = saved
+			if not ok then error(err, 0) end
+		end },
+		{ name = "IsLooping: same file name model (prefix stripped, then lower case for the cache)", func = function()
+			A.IsLooping("*)PBA_Test/No_Such.wav")
+			local hit = A.loopCache["pba_test/no_such.wav"]
+			A.loopCache["pba_test/no_such.wav"] = nil
+			expect(hit).to.equal(false)
+		end },
 	},
 }

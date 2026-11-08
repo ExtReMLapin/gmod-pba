@@ -347,7 +347,7 @@ function N.StopRender()
 end
 
 local function cleanName(name)
-	return string.lower(string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(]+", ""))
+	return string.lower(A.SoundFile(name))
 end
 
 --- Makes sure the module has decoded `name`. Returns true, cleanName when playable natively;
