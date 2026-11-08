@@ -124,6 +124,9 @@ steps = [
     # env_microphone in speaker mode: routed before the hook, so pba only processes the speaker copy
     ("microphone_order", lambda: job("server", "microphone_order.lua", 20)),
     ("loop_removed", lambda: job("server", "loop_removed.lua")),
+    # a loop playing while pba is turned off then on: back to the engine, then mirrored again (and a still
+    # prop_dynamic, MOVETYPE_PUSH like a door, keeps its loop)
+    ("loop_reenable", lambda: job("server", "loop_reenable.lua", 20)),
     ("native_doors", lambda: (native_on(True), job("client", "native_doors.lua"))[1]),
     ("native_features", lambda: job("client", "native_features.lua")),
     ("streams_test", lambda: job("client", "streams_test.lua")),

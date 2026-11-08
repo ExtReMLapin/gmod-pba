@@ -12,6 +12,7 @@ local NET = "pba_loop"
 util.AddNetworkString(NET)
 
 LP.active = LP.active or {} -- key -> { ent, idx, chan, name, vol, pitch, lvl, flags, dsp, pos, subs = {ply=true} }
+LP.released = LP.released or {} -- loops handed back to the engine while pba is off: taken again when it comes back
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 
@@ -63,6 +64,9 @@ end
 -- channel than the start). Returns true when one was running.
 function LP.Stop(idx, name)
 	local found = false
+	for k, x in pairs(LP.released) do
+		if x.idx == idx and (name == nil or name == "" or x.name == name) then LP.released[k] = nil end
+	end
 	for k, x in pairs(LP.active) do
 		if x.idx == idx and (name == nil or name == "" or x.name == name) then
 			local plys = {}
@@ -105,9 +109,12 @@ function LP.Handle(data)
 	if not l then
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {} }
 		if once then l.once, l.endT = true, CurTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
-		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...): their C++
-		-- stops the loop with a StopSound that never reaches Lua; the mirror stops with the motion
-		l.mover = IsValid(e) and e:GetMoveType() == MOVETYPE_PUSH or nil
+		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...) and model doors:
+		-- their C++ stops the loop with a StopSound that never reaches Lua; the mirror stops with the
+		-- motion. Brush models only ("*N"): a prop_dynamic is MOVETYPE_PUSH too, and a still machine
+		-- or radio plays its loop for good
+		l.mover = IsValid(e) and e:GetMoveType() == MOVETYPE_PUSH
+			and (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating") or nil
 		LP.active[key] = l
 	end
 	l.t = CurTime()
@@ -175,6 +182,16 @@ end
 -- already mirrored is left alone. Returns how many were restarted.
 function LP.AdoptAmbients()
 	if A.cfg.loops < 0.5 or not A.hooksInstalled then return 0 end
+	-- loops handed back to the engine when pba was turned off: the engine's copy stops, the mirror
+	-- starts again (the engine never says which loops it plays, so pba keeps the list itself)
+	for key, l in pairs(LP.released) do
+		LP.released[key] = nil
+		if IsValid(l.ent) and not (l.mover and LP.MoverStill(l.ent)) then
+			A.orig.EntStopSound(l.ent, l.name)
+			LP.Handle({ Entity = l.ent, SoundName = l.name, Channel = l.chan, Volume = l.vol, Pitch = l.pitch,
+				SoundLevel = l.lvl, DSP = l.dsp, Flags = 0 })
+		end
+	end
 	local mirrored = {}
 	for _, l in pairs(LP.active) do if IsValid(l.ent) then mirrored[l.ent] = true end end
 	local n = 0
@@ -201,6 +218,7 @@ function LP.Release()
 		send(OP_STOP, l, plys)
 		if IsValid(l.ent) then
 			A.Emit(A.orig.EntEmitSound, l.ent, l.name, l.lvl, l.pitch, l.vol, l.chan, 0, l.dsp)
+			if not l.once then l.subs = {} LP.released[key] = l end
 		end
 		LP.active[key] = nil
 	end

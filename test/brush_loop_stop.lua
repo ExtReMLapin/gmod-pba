@@ -4,6 +4,10 @@
 local NAME = "plats/rackmove1.wav" -- has loop points
 local d = ents.FindByName("pba_garage_shutter")[1]
 if not IsValid(d) then return { pass = false, err = "no pba_garage_shutter (load pba_demo)" } end
+-- the demo starts in mode A (vanilla: pba off): mode B for the test, restored at the end
+local DM = pba.DemoMap
+local oldMode = DM and DM.mode
+if DM and DM.mode == 1 then DM.SetMode(2) job:wait(function() return pba.hooksInstalled end, 3) end
 local oldNoise = d:GetInternalVariable("m_NoiseMoving")
 local oldSpeed = d:GetInternalVariable("m_flSpeed")
 util.PrecacheSound(NAME)
@@ -34,5 +38,6 @@ local afterClose = count()
 hook.Remove("EntityEmitSound", "pba_test_brushloop")
 d:SetKeyValue("noise1", oldNoise)
 d:SetKeyValue("speed", tostring(oldSpeed))
+if DM and oldMode and DM.mode ~= oldMode then DM.SetMode(oldMode) end
 return { pass = moving == 1 and after == 0 and afterClose == 0, before = before, activeWhileMoving = moving,
 	activeAfterOpen = after, activeAfterClose = afterClose, seen = seen }
