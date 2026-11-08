@@ -3,13 +3,15 @@ A flat prop (the door's own model, door01_left, frozen, standing in the doorway'
 covers part of the doorway. The same part is then given to the portal as a door leaf instead
 (door state ajar, aperture = the free interval that the prop leaves, as P.Aperture measures a leaf).
 The portal path must have the same loss within 1 dB and the same lowpass level:
-  2 placements (covering y 92..112, the jamb the default pair bends round; covering y 64..84),
+  2 placements (hinge y 92 yaw 0: covers y ~91..112, the jamb the default pair bends round;
+  hinge y 84 yaw 180: covers the doorway up to y ~85),
   x 3 source / listener pairs whose straight line hits the wall (bend round the y = 112 jamb,
   bend round the y = 64 jamb, oblique).
 The former amplitude law (pba_path_props_slit 0) is printed too, for comparison, not checked.
 Settings are forced by in-memory overrides on the client (pba.SetOverride), never written.
-Offline prediction (portal plane at x = 520, shipped defaults): leaf = object to the digit;
-former law 1.7 to 3.1 dB above the leaf.
+Offline prediction (portal as measured in game: x = 512, y 72..112, z 8..112; shipped defaults; the
+prop passing 14 to 18 dB, wood leaf): prop 0.0 to 0.3 dB above the leaf (what passes the prop then goes
+through the doorway, a leaf radiates from the opening itself); former law 0.7 to 3.0 dB above.
 Usage: python -I -u mask_equivalence.py <mcp.py>
 """
 import json
@@ -43,13 +45,15 @@ PAIRS = [("bend y=112 jamb", "784, 256, 40", "256, 256, 64"),
          ("bend y=64 jamb", "700, 20, 40", "300, 20, 64"),
          ("oblique", "784, 400, 40", "300, 20, 64")]
 # hinge y and yaw of the prop (door01_left: origin on the hinge, leaf along local +y, 48.5 x 108.5)
-PLACEMENTS = [("covers y 92..112", 92, 0), ("covers y 64..84", 84, 180)]
+PLACEMENTS = [("hinge y 92, covering the y = 112 side", 92, 0), ("hinge y 84 turned, covering the other side", 84, 180)]
 
 PORTAL = """local P = pba.Paths P.InvalidateCache()
 local r = P.Compute(Vector(784, 256, 40), Vector(256, 256, 64), 75)
 local p = r.paths and r.paths[1] and r.paths[1].chain[1]
 if not p then return nil end
-return { x = p.center.x, open = p.open }"""
+local y0, y1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
+for _, v in ipairs(p.poly) do y0, y1, z0, z1 = math.min(y0, v.y), math.max(y1, v.y), math.min(z0, v.z), math.max(z1, v.z) end
+return { x = p.center.x, open = p.open, y0 = y0, y1 = y1, z0 = z0, z1 = z1 }"""
 
 # loss of the single-portal path (before the loud-source headroom), its lowpass and what props added
 PATH = """local P = pba.Paths
@@ -95,7 +99,7 @@ return { none = true }"""
 
 SPAWN = """if IsValid(PBA_MASK) then PBA_MASK:Remove() end
 local e = ents.Create('prop_physics') e:SetModel('models/props_c17/door01_left.mdl')
-e:SetPos(Vector(@X, @Y, 54.25)) e:SetAngles(Angle(0, @YAW, 0)) e:Spawn()
+e:SetPos(Vector(@X, @Y, @Z)) e:SetAngles(Angle(0, @YAW, 0)) e:Spawn()
 local ph = e:GetPhysicsObject() if IsValid(ph) then ph:EnableMotion(false) end
 PBA_MASK = e
 local mn, mx = e:WorldSpaceAABB() return { mn.x, mn.y, mn.z, mx.x, mx.y, mx.z }"""
@@ -106,8 +110,9 @@ end return false"""
 
 
 def sub(code, **kw):
-    for k, v in kw.items():
-        code = code.replace("@" + k, str(v))
+    # longest keys first: "@Y" must not eat the start of "@YAW", nor "@S" that of "@SLIT"
+    for k in sorted(kw, key=len, reverse=True):
+        code = code.replace("@" + k, str(kw[k]))
     return code
 
 
@@ -125,17 +130,24 @@ for _ in range(20):
 if not portal:
     print("FAIL no portal path through door1")
     sys.exit(1)
-print(f"portal plane x = {portal['x']:.1f}, door1 open = {portal['open']:.2f}", flush=True)
+print(f"portal plane x = {portal['x']:.1f}, y {portal['y0']:.0f}..{portal['y1']:.0f}, z {portal['z0']:.0f}..{portal['z1']:.0f}, "
+      f"door1 open = {portal['open']:.2f}", flush=True)
 
 fails, n = [], 0
 for label, hinge, yaw in PLACEMENTS:
-    box = lua("server", sub(SPAWN, X=portal["x"], Y=hinge, YAW=yaw))
+    # leaf top flush with the opening's top (the leaf is 108.5 tall, its origin at mid height): no free
+    # strip above it that the leaf injected below (full height) would not have
+    box = lua("server", sub(SPAWN, X=portal["x"], Y=hinge, YAW=yaw, Z=portal["z1"] - 54.25))
+    if not box:
+        print(f"FAIL {label}: prop not spawned")
+        fails.append(label)
+        continue
     for _ in range(20):
         time.sleep(0.25)
         if lua("client", SEEN):
             break
     time.sleep(0.5)
-    ya, yb = max(box[1], 64), min(box[4], 112)  # covered part of the doorway (world y)
+    ya, yb = max(box[1], portal["y0"]), min(box[4], portal["y1"])  # covered part of the doorway (world y)
     objs = [(lua("client", sub(PATH, S=s, L=l, SLIT=1)), lua("client", sub(PATH, S=s, L=l, SLIT=0))) for _, s, l in PAIRS]
     lua("server", "if IsValid(PBA_MASK) then PBA_MASK:Remove() end return true")
     for _ in range(20):

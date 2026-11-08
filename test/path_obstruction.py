@@ -6,13 +6,14 @@ path bends, must lower the level heard through that doorway by at least 3 dB:
 Before the fix the props were only looked for on the straight source-listener line, so the level
 through the doorway did not change.
 Portal path (A): since pba_path_props_slit (default 1) the masked doorway is evaluated like a partly
-open door (Fresnel through the free part, diffuse sound through the free area, the rest through the
-machine), no longer by the amplitude law (1 - f) + f g. Measured with that law: -6.0 dB (A), -5.3 dB (B).
-Offline estimate with the new law (machine top at z 80..90, so 20 to 30 % of the doorway left free above
-it, 18 dB through it): -5.2 to -6.3 dB. The threshold stays 3 dB: the diffuse part dominates this bent
-path and keeps only the free share of its energy (<= 1/3: -4.8 dB); the direct ray crosses the doorway
-at z ~ 52, below the free band, so it loses too. (Only a direct part passing whole through the free
-third would bring the drop down to 2.8 dB.) (B) is unchanged (segment traces).
+open door (Fresnel through the free part, diffuse sound through the free area), and what passes the
+machine (through it and round it, as on the straight line) then goes through the doorway; no longer the
+amplitude law (1 - f) + f g. Measured with that law: -6.0 dB (A, f = 1), -5.3 dB (B). In game (portal
+x = 512, y 72..112, z 8..112; machine x 526..569, top z 96.6) the 15 samples are all masked; a ring of
+probes along the edges looks for the free strip above the machine. Offline: fully masked -> drop =
+what passes the machine (~6 dB, as with the former law); top 15 % free -> 3.7 dB (machine 4.4 dB) to
+5.3 dB (7 dB). The threshold stays 3 dB (pure test "vending machine ... loses >= 3 dB").
+(B) is unchanged (segment traces).
 Usage: python -I -u path_obstruction.py <mcp.py>
 """
 import json

@@ -253,6 +253,37 @@ return {
 			local add = P.MaskedDb(base, S, L, { mask }, cfg)
 			if math.abs(add) > 0.01 then error(string.format("closed door %.1f dB, object adds %.1f dB", base.lossDb, add)) end
 		end },
+		{ name = "Masked opening: never louder than the free opening; a vending machine in front of a doorway (top 15 % free) loses >= 3 dB", func = function()
+			-- pba_tworooms as measured in game: portal x = 512, y 72..112, z 8..112; vending machine (metal,
+			-- 7 dB through it) 14 u in front of the plane, top at z 96.6
+			local cfg = table.Copy(pba.cfg)
+			cfg.path_props_slit = 1
+			local function doorway() return { poly = rect(512, 72, 112, 8, 112), center = Vector(512, 92, 60), normal = Vector(-1, 0, 0), open = 1, closedDb = 28, closedLp = 3 } end
+			local n = Vector(-1, 0, 0)
+			local wax = n:Cross(Vector(0, 0, 1)) wax:Normalize()
+			local vax = n:Cross(wax)
+			local function v(z) return (Vector(512, 92, z) - Vector(512, 92, 60)):Dot(vax) end
+			local function cover(ztop, g)
+				-- 2 rows: below the top of the object (masked), the strip above it (free)
+				local lo, mid, hi = v(8), v(ztop), v(112)
+				local ys, grid
+				if lo < hi then ys, grid = { lo, mid, hi }, { { true }, { false } } else ys, grid = { hi, mid, lo }, { { false }, { true } } end
+				if ztop >= 112 then grid = { { true }, { true } } end
+				return { f = 1, g = g, lp = 2, ap = P.GridAperture(wax, vax, { -20, 20 }, ys, grid) }
+			end
+			local S, L = Vector(784, 256, 40), Vector(256, 256, 64)
+			local base = P.EvalChain(S, L, { doorway() }, cfg)
+			local bad = {}
+			for _, c in ipairs({ { 112, 1, 0 }, { 112, 0.446, 3 }, { 96.6, 0.446, 3 }, { 96.6, 0.6, 3 } }) do
+				local add = P.MaskedDb(base, S, L, { cover(c[1], c[2]) }, cfg)
+				-- MaskedDb clamps at 0: compare the raw re-evaluation too (never louder than free)
+				local raw = P.EvalChain(S, L, { doorway() }, cfg, { cover(c[1], c[2]) }).lossDb - base.lossDb
+				if add < c[3] or raw < -0.01 then
+					bad[#bad + 1] = string.format("object top z %.1f, g %.3f: %+.2f dB (raw %+.2f), want >= %d", c[1], c[2], add, raw, c[3])
+				end
+			end
+			if #bad > 0 then error(string.format("free doorway %.2f dB; ", base.lossDb) .. table.concat(bad, "; ")) end
+		end },
 		{ name = "GridAperture / ApertureRatio: masked cells to free intervals per row; a full-height mask = the 1-D slit; a free top band passes less to a ray crossing the masked part", func = function()
 			-- 5 x 3 grid over 48 x 112, columns 4-5 masked in every row, edge found at u = 0
 			local xs, ys = { -24, -12.96, -4.32, 0, 12.96, 24 }, { -56, -18, 18, 56 }
