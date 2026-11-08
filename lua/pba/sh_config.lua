@@ -44,6 +44,8 @@ A.CONFIG = {
 
 	-- doors
 	door_closed_db  = { 28, 0, 60, "sv", "Loss of a closed door when its material is unknown (dB)." },
+	probe_field     = { 1, 0, 1, "cl", "Probe paths come from one search done from the listener and kept up to date in the background (every sound reads its path at once: one-shots behind openings, sounds of one room leaving it the same way). 0 = one search per sound." },
+	probe_field_ms  = { 1, 0.1, 10, "cl", "Time per frame (ms) spent keeping the listener's probe field up to date while moving (a full build is ~27 ms on a large map)." },
 	probe_inline_ms = { 3, 0, 20, "cl", "Probe path search done at once when a sound needs it (ms per sound): a one-shot sound (gunshot, voice) is evaluated once, and without it got no path behind an opening on maps without areaportals. Beyond it the search goes on in the background. 0 = background only." },
 	probe_bridge_max = { 48, 0, 400, "cl", "When the probe graph finds no path: at most this many probes tried as a single bend seeing both ends (open air between a street and a rooftop is not in the graph). 0 = off." },
 	probe_bridge_ratio = { 1.5, 1, 4, "cl", "Bridge candidates: probes whose detour is at most this many times the straight line." },

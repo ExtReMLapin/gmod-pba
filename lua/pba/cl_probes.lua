@@ -393,6 +393,123 @@ local function advance(ck, job)
 	end -- suspended: continued later
 end
 
+-- ------------------------------------------------------------------ listener-centred field
+-- One Dijkstra over the probe graph from the probes the listener sees (as Hitman and Wwise do: the
+-- search starts from the listener): every probe gets its cost to the listener and its next hop. A
+-- sound then follows the hops from a probe it sees: no search per sound, so a one-shot gets its
+-- path at once whatever the load, and sounds of one room leave it the same way. Rebuilt in
+-- background slices (probe_field_ms per frame) when the listener moved half a cell, at most twice a
+-- second (a full build is ~27 ms for 22 000 probes on gm_construct); the previous field serves
+-- meanwhile, up to one cell away from where it was built.
+
+local function edgeLen(n, m, via)
+	if via == true then return n.pos:Distance(m.pos) end
+	return n.pos:Distance(via) + via:Distance(m.pos)
+end
+
+function PR.BuildField(g, L, yield)
+	local f = { g = g, L = L, cost = {}, nxt = {}, pulled = {} }
+	local goals = PR.Visible(g, L, 3)
+	local cost, nxt, closed, open = f.cost, f.nxt, {}, {}
+	for _, n in ipairs(goals) do
+		cost[n.id] = n.pos:Distance(L)
+		hpush(open, cost[n.id], n)
+	end
+	local k = 0
+	while #open > 0 do
+		local best = hpop(open)
+		if not closed[best.id] then
+			closed[best.id] = true
+			k = k + 1
+			if yield and k % 64 == 0 then yield() end
+			for id, via in pairs(best.nb) do
+				if not closed[id] then
+					local m = g.nodes[id]
+					local c = cost[best.id] + edgeLen(best, m, via)
+					if not cost[id] or c < cost[id] then
+						cost[id], nxt[id] = c, best.id
+						hpush(open, c, m)
+					end
+				end
+			end
+		end
+	end
+	return f
+end
+
+--- Built at once around L (tests: as if the listener had been standing there); the background
+-- upkeep around the real listener is held for 2 s so that it does not replace it.
+function PR.BuildFieldNow(L)
+	if PR.current then PR.field, PR.fieldJob, PR.fieldHold = PR.BuildField(PR.current, L), nil, SysTime() + 2 end
+end
+
+local function fieldUsable(g, L)
+	local f = PR.field
+	return f and f.g == g and (A.cfg.probe_field or 1) >= 0.5 and f.L:DistToSqr(L) <= g.spacing * g.spacing and f
+end
+
+-- Pulled polylines (probe positions, without S and L) from each probe S sees down to the listener,
+-- best first (S to the probe plus the probe's cost); several, as the k-path search gives, and
+-- PR.Paths keeps the distinct ones.
+local function fieldPathFrom(f, best)
+	local c = f.pulled[best.id]
+	if c then return c end
+	local g = f.g
+	local pts, id = { best.pos }, best.id
+	for _ = 1, #g.nodes do
+		local nid = f.nxt[id]
+		if not nid then break end
+		local via = g.nodes[id].nb[nid]
+		if via and via ~= true then pts[#pts + 1] = via end
+		pts[#pts + 1] = g.nodes[nid].pos
+		id = nid
+	end
+	c = PR.Pull(pts)
+	f.pulled[best.id] = c
+	return c
+end
+
+local function fieldPaths(f, starts, S)
+	local list = {}
+	for _, n in ipairs(starts) do
+		if f.cost[n.id] then list[#list + 1] = { n, f.cost[n.id] + S:Distance(n.pos) } end
+	end
+	table.sort(list, function(a, b) return a[2] < b[2] end)
+	local out = {}
+	for _, e in ipairs(list) do out[#out + 1] = fieldPathFrom(f, e[1]) end
+	return out
+end
+
+hook.Add("Think", "pba_probes_field", function()
+	local g = PR.current
+	if not g or (A.cfg.probe_field or 1) < 0.5 or (PR.fieldHold and SysTime() < PR.fieldHold) then return end
+	local L = A.ListenerPos and A.ListenerPos()
+	if not L then
+		local ply = LocalPlayer()
+		if not IsValid(ply) then return end
+		L = ply:EyePos()
+	end
+	local f, job = PR.field, PR.fieldJob
+	if job and job.g ~= g then job = nil end
+	if not job and (not f or f.g ~= g or (f.L:DistToSqr(L) > (g.spacing / 2) ^ 2 and SysTime() >= (PR.fieldNext or 0))) then
+		PR.fieldNext = SysTime() + 0.5
+		job = { g = g }
+		job.co = coroutine.create(function()
+			return PR.BuildField(g, L, function() if SysTime() >= PR.fieldDeadline then coroutine.yield() end end)
+		end)
+		PR.fieldJob = job
+	end
+	if not job then return end
+	PR.fieldDeadline = SysTime() + (A.cfg.probe_field_ms or 1) / 1000
+	local ok, res = coroutine.resume(job.co)
+	if not ok then
+		PR.fieldJob = nil
+		ErrorNoHaltWithStack("[PBA] probe field failed: " .. tostring(res))
+	elseif coroutine.status(job.co) == "dead" then
+		PR.field, PR.fieldJob = res, nil
+	end
+end)
+
 local function pulledPaths(g, S, L, k)
 	local starts, goals = PR.Visible(g, S, 3), PR.Visible(g, L, 3)
 	if #starts == 0 or #goals == 0 then return {} end
@@ -418,6 +535,10 @@ local function pulledPaths(g, S, L, k)
 		PR.inlineUsed = PR.inlineUsed + (SysTime() - t0) * 1000
 		if res then return res end
 	end
+	-- not solved in time: the listener field answers at once (its best route; the k-path search, with
+	-- the alternative routes, goes on in the background)
+	local f = fieldUsable(g, L)
+	if f then return fieldPaths(f, starts, S) end
 	return {}
 end
 

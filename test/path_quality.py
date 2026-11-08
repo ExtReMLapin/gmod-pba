@@ -18,7 +18,10 @@ PAIRS = 30
 # thresholds (share of pairs): None = report only. Set from the baseline, see docs/JOURNAL.md.
 MAX_OVER6 = None
 MAX_SILENT = 0.07  # warm, regression guard (0.033-0.067 today: street-to-rooftop bends in open air, target of the edge graph)
-MAX_COLD_SILENT = 0.15  # cold one-shots: ~1.0 before the inline probe solve (see JOURNAL)
+MAX_COLD_SILENT = 0.15        # cold one-shots: ~1.0 before the inline probe solve (absolute guard)
+MAX_COLD_EXTRA_SILENT = 0.01  # cold silences beyond the warm ones: the listener field leaves none (check it with --set=pba_probe_inline_ms=0)
+MAX_COLD_GAP = None if "--no-gap" in sys.argv[2:] else 1.0  # dB, cold vs warm median (default settings;
+# --no-gap with --set=pba_probe_inline_ms=0: the field alone gives the best route, not the alternatives)
 
 
 def call(tool, args, timeout=900):
@@ -45,7 +48,7 @@ for m in MAPS:
     time.sleep(0.5)
     t0 = time.time()
     r = call("lua_job", {"realm": "client", "code": code, "timeout_s": 600,
-                         "args": {"pairs": PAIRS, "seed": 1, "max_over6": MAX_OVER6, "max_silent": MAX_SILENT, "max_cold_silent": MAX_COLD_SILENT, "details": DETAILS, "lift": LIFT}})
+                         "args": {"pairs": PAIRS, "seed": 1, "max_over6": MAX_OVER6, "max_silent": MAX_SILENT, "max_cold_silent": MAX_COLD_SILENT, "max_cold_gap": MAX_COLD_GAP, "max_cold_extra_silent": MAX_COLD_EXTRA_SILENT, "details": DETAILS, "lift": LIFT}})
     v = (r.get("values") or [r])[0]
     print(f"{m} ({time.time() - t0:.0f}s): {json.dumps(v)}", flush=True)
     if CHECK and not (isinstance(v, dict) and v.get("pass")):

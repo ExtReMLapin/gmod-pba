@@ -89,6 +89,9 @@ while #rows < N and tries < N * 400 do
 						job:wait(function() return done end, 5)
 						return a1, a2
 					end
+					-- the listener-centred probe field (when present) is built around L, as if the player
+					-- had been standing there: the game keeps it current around the listener
+					if A.Probes.BuildFieldNow then unhooked(function() A.Probes.BuildFieldNow(b) end) end
 					local cold, coldSilent = unhooked(level)
 					-- let the background probe solve finish (at most 3 s)
 					local t0 = SysTime()
@@ -120,13 +123,13 @@ end
 local n = #rows
 local out = { map = game.GetMap(), pairs = n, skipped = skipped, warm = stats("excess", "silent"), cold = stats("cold", "coldSilent") }
 if args.details then
-	table.sort(rows, function(x, y) return x.excess > y.excess end)
+	table.sort(rows, function(x, y) return math.max(x.excess, x.cold) > math.max(y.excess, y.cold) end)
 	out.worst5 = {}
 	for i = 1, math.min(5, #rows) do
 		local r = rows[i]
 		local starts, goals = A.Probes.Visible(g, r.S, 3), A.Probes.Visible(g, r.L, 3)
 		local ps = A.Probes.Paths(r.S, r.L, A.cfg.max_paths, A.cfg)
-		out.worst5[i] = { excess = math.Round(r.excess, 1), silent = r.silent, S = tostring(r.S), L = tostring(r.L), q = tostring(r.q),
+		out.worst5[i] = { excess = math.Round(r.excess, 1), silent = r.silent, cold = math.Round(r.cold, 1), coldSilent = r.coldSilent, S = tostring(r.S), L = tostring(r.L), q = tostring(r.q),
 			refLen = math.Round(r.refLen), direct = math.Round(r.direct), starts = #starts, goals = #goals, probePaths = #ps,
 			pathLen = ps[1] and math.Round(ps[1].length), pathLoss = ps[1] and math.Round(ps[1].lossDb, 1),
 			sameStartGoal = starts[1] and goals[1] and starts[1].id == goals[1].id or false }
@@ -136,4 +139,6 @@ local w = out.warm
 out.pass = n >= math.floor(N / 2) and w.over6 ~= nil and (args.max_over6 == nil or w.over6 <= args.max_over6)
 	and (args.max_silent == nil or w.silent <= args.max_silent)
 	and (args.max_cold_silent == nil or out.cold.silent <= args.max_cold_silent)
+	and (args.max_cold_extra_silent == nil or out.cold.silent <= w.silent + args.max_cold_extra_silent)
+	and (args.max_cold_gap == nil or math.abs((out.cold.median or 99) - (w.median or 0)) <= args.max_cold_gap)
 return out

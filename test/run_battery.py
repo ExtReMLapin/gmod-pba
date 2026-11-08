@@ -120,6 +120,9 @@ steps = [
     ("path_obstruction", lambda: py("path_obstruction.py")),
     # path quality against an independent single-bend reference (maps without areaportals: probes)
     ("path_quality", lambda: py("path_quality.py", "--check", "d1_town_01", "gm_construct")),
+    # the listener field alone (no immediate search): no cold silence beyond the warm ones
+    ("path_quality field only", lambda: py("path_quality.py", "--check", "--no-gap", "--set=pba_probe_inline_ms=0",
+                                           "d1_town_01", "gm_construct")),
 ]
 # --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
 # before merging into main or a release
