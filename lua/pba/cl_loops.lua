@@ -69,6 +69,16 @@ local function applyNative(m, S, L)
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
 	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
 	if m.nativeId then
+		if (A.cfg.continuous_ramp or 0) >= 0.5 then
+			-- glide to the new values over one interval (LP.FollowNative, every frame); the update
+			-- below sends what is heard now (unchanged) and checks the voice is still alive
+			local P, now = A.Paths, RealTime()
+			m.ramp = m.ramp or {}
+			P.RampTo(m.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, gain, el, em, eh, pos, pitch)
+			gain, el, em, eh, pos, pitch = P.RampAt(m.ramp, now, L)
+		else
+			m.ramp = nil
+		end
 		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch) then m.nativeId = nil end
 		return
 	end
@@ -81,6 +91,12 @@ local function applyNative(m, S, L)
 	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once)
 	m.started = true
 	m.nativeId = id > 0 and id or nil
+	-- a new voice starts at its target: the next ramp starts from there
+	m.ramp = nil
+	if m.nativeId and (A.cfg.continuous_ramp or 0) >= 0.5 then
+		m.ramp = {}
+		A.Paths.RampTo(m.ramp, RealTime(), 0, L, gain, el, em, eh, pos, pitch)
+	end
 	return m.nativeId ~= nil
 end
 
@@ -221,21 +237,32 @@ net.Receive("pba_loop", function()
 	end
 end)
 
---- Every frame: natively rendered loops in clear sight follow their (moving) entity; the path
--- itself is re-evaluated every 0.25 s by the timer below.
+--- Every frame: natively rendered loops in clear sight follow their (moving) entity, and the
+-- others glide towards their last re-evaluation (continuous_ramp); the path itself is
+-- re-evaluated every update_interval by the hook below.
 function LP.FollowNative(L)
 	local N = A.Native
 	if not N or not N.Doppler then return end
+	local P, now = A.Paths, RealTime()
 	local vL = N.ListenerVelocity()
 	for _, m in pairs(LP.mirrors) do
-		if m.nativeId and m.clearPath and not m.done then
-			local ent = IsValid(m.ent) and m.ent or nil
+		if m.nativeId and not m.done then
+			local ramp = m.ramp
+			local ent = m.clearPath and IsValid(m.ent) and m.ent or nil
 			if ent then
 				local S = ent:WorldSpaceCenter()
 				local d = S:Distance(L)
 				local el, em, eh = N.VoiceEQ(0, d)
-				pba_native.Update(m.nativeId, S, AC.EngineGain(d, m.lvl) * m.vol * A.cfg.native_gain, el, em, eh,
-					m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL))
+				local g, pitch = AC.EngineGain(d, m.lvl) * m.vol * A.cfg.native_gain, m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL)
+				if ramp then
+					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
+				else
+					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch)
+				end
+			end
+			if ramp and ramp.pending then
+				local g, el, em, eh, pos, pitch = P.RampAt(ramp, now, L)
+				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch)
 			end
 		end
 	end

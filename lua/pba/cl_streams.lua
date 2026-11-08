@@ -49,8 +49,9 @@ local function bassGain(ch, d)
 	return mn / d
 end
 
+-- r.hPos / r.hG / r.hEq: what a running ramp (continuous_ramp) makes heard now, instead of the targets
 local function applyPos(ch, r)
-	local pos = r.apparent or r.pos
+	local pos = r.hPos or r.apparent or r.pos
 	if pos then O.SetPos(ch, pos, r.dir, r.apparent and vector_origin or r.vel) end
 end
 
@@ -64,7 +65,7 @@ end
 
 local function applyVol(ch, r)
 	if r.nativeId then O.SetVolume(ch, 0) return end
-	O.SetVolume(ch, (r.vol or 1) * (r.g or 1))
+	O.SetVolume(ch, (r.vol or 1) * (r.hG or r.g or 1))
 end
 
 --- Native voice of a stream: position, gain (owner volume x BASS distance law x path), EQ.
@@ -106,6 +107,7 @@ function meta:SetPos(pos, dir, vel)
 	local ok, r = pcall(record, self)
 	if not ok or not r or not enabled() then return O.SetPos(self, pos, dir, vel) end
 	r.pos, r.dir, r.vel = pos, dir, vel
+	if r.ramp and r.ramp.pending then return end -- gliding: placed every frame (pba_streams_ramp)
 	if r.nativeId and not r.apparent then
 		-- clear line: the native voice follows the owner's position every frame
 		local L = A.ListenerPos()
@@ -185,7 +187,7 @@ local function filter(ch, r)
 	if not (N and N.ready and pba_native and pba_native.StreamFilter) then return end
 	if (A.cfg.streams_filter or 0) < 0.5 then return end
 	if r.filterFailed then return end
-	local e = r.eq
+	local e = r.hEq or r.eq
 	local ok, done, why = pcall(pba_native.StreamFilter, ch, e[1], e[2], e[3])
 	if not ok or not done then
 		r.filterFailed = tostring(why or done)
@@ -195,8 +197,66 @@ local function filter(ch, r)
 	end
 end
 
+--- Ramps (continuous_ramp): instead of jumping every interval, a stream glides to each
+-- re-evaluation over one interval. Its values: the native voice's, or the BASS channel's (volume
+-- factor, filter EQ, position).
+local function rampTarget(ch, r, L)
+	if r.nativeId then
+		local pos, gain, el, em, eh = nativeParams(ch, r, L)
+		return gain, el, em, eh, pos
+	end
+	local e = r.eq
+	return r.g or 1, e[1], e[2], e[3], r.apparent or r.pos
+end
+
+local function dropRamp(r) r.ramp, r.hPos, r.hG, r.hEq = nil, nil, nil, nil end
+
+-- in clear sight the end of the ramp is the owner's (moving) position
+local function retarget(ch, r, L) A.Paths.Retarget(r.ramp, rampTarget(ch, r, L)) end
+
+--- Applies what the ramp makes heard at `now`.
+local function applyRamp(ch, r, L, now)
+	local g, e1, e2, e3, pos = A.Paths.RampAt(r.ramp, now, L)
+	if r.nativeId then
+		if not pba_native.Update(r.nativeId, pos, g, e1, e2, e3, 100) then r.nativeId = nil end
+		return
+	end
+	r.hG, r.hPos = g, pos
+	local e = r.hEq or {}
+	e[1], e[2], e[3] = e1, e2, e3
+	r.hEq = e
+	applyPos(ch, r)
+	applyVol(ch, r)
+	filter(ch, r)
+end
+
+--- New targets from a re-evaluation: ramp from what is heard now.
+local function rampStep(ch, r, L, now)
+	if not r.ramp then
+		r.ramp = {}
+		-- a BASS channel taken over glides from how its owner played it (a native voice starts at its target)
+		if not r.nativeId then A.Paths.RampTo(r.ramp, now, 0, L, 1, 1, 1, 1, r.pos) end
+	end
+	A.Paths.RampTo(r.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, rampTarget(ch, r, L))
+	applyRamp(ch, r, L, now)
+end
+
+hook.Add("Think", "pba_streams_ramp", A.PerfTimed("streams_ramp", function()
+	if next(ST.chans) == nil then return false end
+	local L = A.ListenerPos()
+	if not L then return false end
+	local now = RealTime()
+	for ch, r in pairs(ST.chans) do
+		if r.ramp and r.ramp.pending and r.pos then
+			if not r.apparent then pcall(retarget, ch, r, L) end
+			pcall(applyRamp, ch, r, L, now)
+		end
+	end
+end))
+
 local function release(ch, r)
 	nativeStop(ch, r)
+	dropRamp(r)
 	r.apparent, r.g, r.eq = nil, 1, { 1, 1, 1 }
 	pcall(applyPos, ch, r)
 	pcall(applyVol, ch, r)
@@ -220,6 +280,8 @@ timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, A.PerfTimed("strea
 			if r.apparent or (r.g or 1) ~= 1 or r.filtered or r.nativeId then release(ch, r) end
 		elseif r.pos then
 			n = n + 1
+			-- clear sight since the last ramp ended: its end follows the owner's position up to now
+			if r.ramp and not r.ramp.pending and not r.apparent then pcall(retarget, ch, r, L) end
 			local ok, err = pcall(evaluate, ch, r, L)
 			if not ok and ST.lastEvalError ~= err then
 				-- never swallow silently: keep it for diagnostics and say it once
@@ -227,15 +289,27 @@ timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, A.PerfTimed("strea
 				ErrorNoHalt("[PBA] stream evaluation failed: " .. tostring(err) .. "\n")
 			end
 			if ok then
+				local ramp = (A.cfg.continuous_ramp or 0) >= 0.5
 				if nativeMode(r) then
 					if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) end
-					if not r.nativeId then nativeStart(ch, r, L) else pcall(nativeUpdate, ch, r, L) end
+					if not r.nativeId then
+						dropRamp(r) -- the voice starts at its target
+						nativeStart(ch, r, L)
+					elseif not ramp then
+						pcall(nativeUpdate, ch, r, L)
+					end
 				elseif r.nativeId then
 					nativeStop(ch, r) -- native rendering switched off: back to BASS
+					dropRamp(r)
 				end
-				pcall(applyPos, ch, r)
-				pcall(applyVol, ch, r)
-				if not r.nativeId then filter(ch, r) end
+				if ramp then
+					pcall(rampStep, ch, r, L, RealTime())
+				else
+					dropRamp(r)
+					pcall(applyPos, ch, r)
+					pcall(applyVol, ch, r)
+					if not r.nativeId then filter(ch, r) end
+				end
 			end
 		end
 	end

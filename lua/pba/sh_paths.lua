@@ -818,6 +818,74 @@ function P.Stable(state, r, cfg)
 	return r
 end
 
+--- Ramps of a CONTINUOUS sound (loop, stream) between two re-evaluations (continuous_ramp): its
+-- gain, 3-band EQ, apparent position and pitch used to jump every update_interval, an audible step
+-- when the listener or the source moves. P.RampTo starts a ramp from what is heard at `now` to the
+-- new target, reached `dur` seconds later (one interval: no lag beyond it); P.RampAt gives what is
+-- heard at `now`. Gain and EQ move linearly in dB (equal dB steps per frame), the position turns
+-- around the listener at constant angular speed with its distance in between, the pitch linearly.
+-- The first target is heard at once; dur 0 = jump. `state` is a table the caller keeps per sound;
+-- state.pending stays true until the target itself has been returned once.
+local function towardDb(a, b, f)
+	if a <= 0 or b <= 0 then return a + (b - a) * f end
+	return a * (b / a) ^ f
+end
+
+local function turn(p0, p1, f, L)
+	if p0 == p1 or not L then return f < 0.5 and p0 or p1 end
+	local x0, y0, z0 = p0.x - L.x, p0.y - L.y, p0.z - L.z
+	local x1, y1, z1 = p1.x - L.x, p1.y - L.y, p1.z - L.z
+	local r0, r1 = math.sqrt(x0 * x0 + y0 * y0 + z0 * z0), math.sqrt(x1 * x1 + y1 * y1 + z1 * z1)
+	if r0 < 1e-3 or r1 < 1e-3 then return p0 + (p1 - p0) * f end
+	local c = math.min(math.max((x0 * x1 + y0 * y1 + z0 * z1) / (r0 * r1), -1), 1)
+	local th = math.acos(c)
+	local w0, w1 = 1 - f, f
+	if th > 1e-4 then
+		if th > math.pi - 1e-3 then return f < 0.5 and p0 or p1 end -- opposite sides: no way round
+		local s = math.sin(th)
+		w0, w1 = math.sin((1 - f) * th) / s, math.sin(f * th) / s
+	end
+	local r = (r0 + (r1 - r0) * f)
+	w0, w1 = w0 * r / r0, w1 * r / r1
+	return Vector(L.x + x0 * w0 + x1 * w1, L.y + y0 * w0 + y1 * w1, L.z + z0 * w0 + z1 * w1)
+end
+
+--- Values heard at `now`: gain, eq1, eq2, eq3, position, pitch.
+function P.RampAt(state, now, L)
+	local a, b = state.from, state.to
+	local f = state.dur > 0 and math.min(math.max((now - state.t0) / state.dur, 0), 1) or 1
+	state.pending = f < 1
+	if f >= 1 then return b[1], b[2], b[3], b[4], state.pos1, b[5] end
+	return towardDb(a[1], b[1], f), towardDb(a[2], b[2], f), towardDb(a[3], b[3], f), towardDb(a[4], b[4], f),
+		turn(state.pos0, state.pos1, f, L), a[5] + (b[5] - a[5]) * f
+end
+
+--- Moves the end of the running ramp (a target that moves every frame, e.g. a source in clear
+-- sight) without restarting it.
+function P.Retarget(state, g, e1, e2, e3, pos, pitch)
+	local b = state.to
+	if not b then
+		state.from, state.to, state.t0, state.dur = { g, e1, e2, e3, pitch or 100 }, { 0, 0, 0, 0, 0 }, 0, 0
+		state.pos0, b = pos, state.to
+	end
+	b[1], b[2], b[3], b[4], b[5], state.pos1 = g, e1, e2, e3, pitch or 100, pos
+	state.pending = true
+end
+
+--- New target from a re-evaluation: ramp from what is heard at `now`.
+function P.RampTo(state, now, dur, L, g, e1, e2, e3, pos, pitch)
+	if state.to then
+		local a = state.from
+		a[1], a[2], a[3], a[4], state.pos0, a[5] = P.RampAt(state, now, L)
+		local p0 = state.pos0
+		local same = a[1] == g and a[2] == e1 and a[3] == e2 and a[4] == e3 and a[5] == (pitch or 100)
+			and p0 and pos and p0.x == pos.x and p0.y == pos.y and p0.z == pos.z
+		-- unchanged (still source and listener): one update, then nothing per frame
+		state.t0, state.dur = now, same and 0 or math.max(dur or 0, 0)
+	end
+	P.Retarget(state, g, e1, e2, e3, pos, pitch)
+end
+
 -- ------------------------------------------------------------------ top level
 
 P.cache = P.cache or {}
