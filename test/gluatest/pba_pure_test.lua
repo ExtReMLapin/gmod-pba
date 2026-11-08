@@ -358,5 +358,14 @@ return {
 			P.RampTo(j, 1, 0, L, 0.1, 1, 1, 1, Vector(100, 0, 0))
 			expect(P.RampAt(j, 1, L)).to.equal(0.1)
 		end },
+		{ name = "Ramp: an unchanged target needs no per-frame update (still loop, still listener)", func = function()
+			local s, L = {}, Vector(0, 0, 0)
+			P.RampTo(s, 0, 0.25, L, 0.5, 1, 0.5, 0.2, Vector(100, 0, 0), 100)
+			P.RampAt(s, 0, L)
+			P.RampTo(s, 0.25, 0.25, L, 0.5, 1, 0.5, 0.2, Vector(100, 0, 0), 100)
+			expect(s.pending).to.beTrue()
+			expect(P.RampAt(s, 0.25, L)).to.equal(0.5)
+			expect(s.pending).to.equal(false) -- sent once, then nothing until something changes
+		end },
 	},
 }

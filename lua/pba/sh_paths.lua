@@ -823,7 +823,11 @@ function P.RampTo(state, now, dur, L, g, e1, e2, e3, pos, pitch)
 	if state.to then
 		local a = state.from
 		a[1], a[2], a[3], a[4], state.pos0, a[5] = P.RampAt(state, now, L)
-		state.t0, state.dur = now, math.max(dur or 0, 0)
+		local p0 = state.pos0
+		local same = a[1] == g and a[2] == e1 and a[3] == e2 and a[4] == e3 and a[5] == (pitch or 100)
+			and p0 and pos and p0.x == pos.x and p0.y == pos.y and p0.z == pos.z
+		-- unchanged (still source and listener): one update, then nothing per frame
+		state.t0, state.dur = now, same and 0 or math.max(dur or 0, 0)
 	end
 	P.Retarget(state, g, e1, e2, e3, pos, pitch)
 end
