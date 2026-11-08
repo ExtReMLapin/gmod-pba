@@ -26,7 +26,19 @@ def cursor():
 
 
 rx = re.compile(r"^\w+Sound\s+(\S+)\s*:\s*src\s+(-?\d+).*?vol\s+([\d.]+)")
+# the scenario may change the map, which resets sv_cheats (and snd_showstart with it): get there
+# first, then enable the counters
+call("console_exec", {"realm": "server", "cmd": f"audioprop_demo {SC} {SOUND} 5"})
+for _ in range(60):
+    time.sleep(1)
+    st = call("status", {})
+    if st.get("realms", {}).get("client", {}).get("available") and not st.get("loading"):
+        break
+time.sleep(2)
+call("console_exec", {"realm": "server", "cmd": "audioprop_demo stop"})
 call("console_exec", {"realm": "server", "cmd": "sv_cheats 1"})
+# engine starts are counted: the native renderer (which plays voices itself) must be off
+call("console_exec", {"realm": "client", "cmd": "audioprop_native_render 0"})
 call("console_exec", {"realm": "client", "cmd": "developer 1"})
 call("console_exec", {"realm": "client", "cmd": "snd_showstart 1"})
 res = {}

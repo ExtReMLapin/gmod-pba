@@ -167,6 +167,8 @@ void ReflectionLoop() {
 			g_reflMs = g_reflMs * 0.9f + ms * 0.1f;
 			g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
 		}
+		// at most ~12 passes per second whatever the rate of new echoes
+		std::this_thread::sleep_until(t0 + std::chrono::milliseconds(80));
 		std::unique_lock<std::mutex> lk(g_stageMtx);
 		g_reflCv.wait_until(lk, t0 + std::chrono::milliseconds(250), [] {
 			if (!g_reflRun.load()) return true;
@@ -831,7 +833,9 @@ LUA_FUNCTION(Echo) {
 				if (g_echo[k].last < g_echo[slot].last) slot = k;
 		}
 		EchoSlot& e = g_echo[slot];
-		if (e.gen == 0 || d2(e.pos, p) > 0.25f) {
+		// an echo response barely changes within 2 m: keep the simulated one (no new convolution
+		// transition in the renderer, no new simulation)
+		if (e.gen == 0 || d2(e.pos, p) > 4.0f) {
 			e.pos = p;
 			e.gen++;
 		}

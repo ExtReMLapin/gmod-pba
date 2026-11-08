@@ -65,6 +65,7 @@ struct Voice {
 	int echoSlot = -1; // reflections-only voice
 	int needGen = 0;
 	int waited = 0;
+	bool dying = false; // fading to 0 over one block, then dead
 };
 
 // Effects are expensive to create (the binaural one sets up its HRTF filters): pools are
@@ -226,6 +227,7 @@ void RenderBlock() {
 		const float g0 = v.gainCur < 0 ? v.gain : v.gainCur, g1 = v.gain;
 		for (int i = 0; i < kBlock; ++i) m[i] *= g0 + (g1 - g0) * (float)i / kBlock;
 		v.gainCur = g1;
+		if (v.dying && g1 <= 0) v.alive = false;
 
 		if (v.echoSlot >= 0) {
 			Reflection& r = g_echo[v.echoSlot];
@@ -654,6 +656,20 @@ int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch
 	auto it = g_sounds.find(name);
 	if (it == g_sounds.end() || !g_devOk || !g_echo[slot].fx) return 0;
 	Reap();
+	// automatic fire: at most kEchoPerSlot overlapping echo voices per slot (the oldest goes),
+	// so echoes never crowd the direct voices out of the voice budget
+	constexpr int kEchoPerSlot = 6;
+	int n = 0;
+	for (auto& v : g_voices)
+		if (v->echoSlot == slot && v->alive.load() && !v->dying) ++n;
+	for (auto& v : g_voices) {
+		if (n < kEchoPerSlot) break;
+		if (v->echoSlot == slot && v->alive.load() && !v->dying) {
+			v->dying = true;
+			v->gain = 0;
+			--n;
+		}
+	}
 	auto v = std::make_unique<Voice>();
 	v->id = g_nextId++;
 	v->snd = it->second;

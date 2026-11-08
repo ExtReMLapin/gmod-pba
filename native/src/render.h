@@ -8,7 +8,7 @@
 namespace render {
 
 constexpr int kEchoSlots = 4;      // reflection sources simulated per source (loud sounds)
-constexpr float kIRSeconds = 1.0f; // simulated impulse response length (convolution part)
+constexpr float kIRSeconds = 0.5f; // convolution part of the impulse response (parametric tail beyond)
 
 struct VoiceParams {
 	IPLVector3 pos{};    // Steam Audio coordinates (metres)

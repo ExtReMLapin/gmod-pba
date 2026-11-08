@@ -86,7 +86,10 @@ function A.Eligible(data)
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl < A.cfg.min_level or lvl >= 256 then return false end
 	if data.SoundName == "invalid.wav" then return false end -- sentences: vanilla in v1
-	if (data.SoundTime or 0) ~= 0 then return false end
+	-- SoundTime: predicted weapons (every player's gunfire) stamp their sounds with the current
+	-- time; only sounds scheduled away from "now" are left alone (re-emission plays immediately)
+	local st = data.SoundTime or 0
+	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
 	if data.Channel == CHAN_STATIC and A.IsLooping(data.SoundName) then return false end

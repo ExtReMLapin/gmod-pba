@@ -303,12 +303,15 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 end
 
 --- Echoes of a loud sound (reflections only, on top of whatever plays the direct sound).
+N.echoSkip = N.echoSkip or {}
+local function skip(why) N.echoSkip[why] = (N.echoSkip[why] or 0) + 1 end
+
 function N.Echo(data, pos)
-	if not N.render or (A.cfg.native_echo or 0) <= 0 or not audioprop_native.Echo then return end
+	if not N.render or (A.cfg.native_echo or 0) <= 0 or not audioprop_native.Echo then return skip("off") end
 	local lvl = data.SoundLevel or 75
-	if lvl < A.cfg.native_echo_lvl then return end
+	if lvl < A.cfg.native_echo_lvl then return skip("level") end
 	local ok, n = N.EnsureSound(data.SoundName)
-	if not ok then return end
+	if not ok then return skip("sound") end
 	-- source strength = what the engine would play at 1 m (52.5 units); the impulse response
 	-- carries the distance and the room
 	local gain = (data.Volume or 1) * A.AC.EngineGain(52.5, lvl)
