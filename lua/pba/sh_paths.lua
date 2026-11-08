@@ -20,8 +20,89 @@ local function planeHit(a, b, c, n)
 	return a + ab * t
 end
 
+-- ------------------------------------------------------------------ numeric portal geometry
+-- Hot path: GMod Vector operations are C calls that LuaJIT cannot compile, so the relaxation and
+-- the portal search work on plain numbers. A portal's geometry never changes once the graph is
+-- built: it is converted once and cached on the portal (rebuilt if its polygon is replaced).
+
+local function portalNum(p)
+	local k = p._num
+	if k and k.poly == p.poly then return k end
+	local c, n = p.center, p.normal
+	k = { poly = p.poly, cx = c.x, cy = c.y, cz = c.z, nx = n.x, ny = n.y, nz = n.z, cnt = #p.poly,
+		ax = {}, ay = {}, az = {}, ex = {}, ey = {}, ez = {}, ux = {}, uy = {}, uz = {}, uu = {}, sc = {} }
+	for i, v in ipairs(p.poly) do k.ax[i], k.ay[i], k.az[i] = v.x, v.y, v.z end
+	for i = 1, k.cnt do
+		local j = i % k.cnt + 1
+		local ux, uy, uz = k.ax[j] - k.ax[i], k.ay[j] - k.ay[i], k.az[j] - k.az[i]
+		k.ux[i], k.uy[i], k.uz[i], k.uu[i] = ux, uy, uz, math.max(ux * ux + uy * uy + uz * uz, 1e-6)
+		-- edge normal in the plane: (b - a) x n
+		local ex, ey, ez = uy * k.nz - uz * k.ny, uz * k.nx - ux * k.nz, ux * k.ny - uy * k.nx
+		k.ex[i], k.ey[i], k.ez[i] = ex, ey, ez
+		k.sc[i] = (k.cx - k.ax[i]) * ex + (k.cy - k.ay[i]) * ey + (k.cz - k.az[i]) * ez -- centre side
+	end
+	p._num = k
+	return k
+end
+P.PortalNum = portalNum
+
+--- Closest point to (x, y, z) inside the portal polygon (numeric G.ClampToPoly).
+local function clampNum(k, x, y, z)
+	local d = (x - k.cx) * k.nx + (y - k.cy) * k.ny + (z - k.cz) * k.nz
+	local qx, qy, qz = x - k.nx * d, y - k.ny * d, z - k.nz * d
+	local inside = true
+	for i = 1, k.cnt do
+		local sq = (qx - k.ax[i]) * k.ex[i] + (qy - k.ay[i]) * k.ey[i] + (qz - k.az[i]) * k.ez[i]
+		if sq * k.sc[i] < 0 then inside = false break end
+	end
+	if inside then return qx, qy, qz end
+	local bx, by, bz, bd = qx, qy, qz, math.huge
+	for i = 1, k.cnt do
+		local t = ((qx - k.ax[i]) * k.ux[i] + (qy - k.ay[i]) * k.uy[i] + (qz - k.az[i]) * k.uz[i]) / k.uu[i]
+		if t < 0 then t = 0 elseif t > 1 then t = 1 end
+		local px, py, pz = k.ax[i] + k.ux[i] * t, k.ay[i] + k.uy[i] * t, k.az[i] + k.uz[i] * t
+		local dd = (px - qx) ^ 2 + (py - qy) ^ 2 + (pz - qz) ^ 2
+		if dd < bd then bd, bx, by, bz = dd, px, py, pz end
+	end
+	return bx, by, bz
+end
+
 --- Relaxes the crossing points of a portal chain between S and L (pure).
 function P.RelaxPoints(S, L, chain, iters)
+	local n = #chain
+	local X, Y, Z, K = {}, {}, {}, {}
+	for i, p in ipairs(chain) do
+		local k = portalNum(p)
+		K[i], X[i], Y[i], Z[i] = k, k.cx, k.cy, k.cz
+	end
+	local sx, sy, sz, lx, ly, lz = S.x, S.y, S.z, L.x, L.y, L.z
+	for _ = 1, iters or 4 do
+		for i = 1, n do
+			local ax, ay, az, bx, by, bz
+			if i == 1 then ax, ay, az = sx, sy, sz else ax, ay, az = X[i - 1], Y[i - 1], Z[i - 1] end
+			if i == n then bx, by, bz = lx, ly, lz else bx, by, bz = X[i + 1], Y[i + 1], Z[i + 1] end
+			local k = K[i]
+			-- planeHit: the segment a -> b against the portal plane (clamped to the segment)
+			local dx, dy, dz = bx - ax, by - ay, bz - az
+			local den = dx * k.nx + dy * k.ny + dz * k.nz
+			local hx, hy, hz
+			if math.abs(den) < 1e-4 then
+				hx, hy, hz = (ax + bx) * 0.5, (ay + by) * 0.5, (az + bz) * 0.5
+			else
+				local t = ((k.cx - ax) * k.nx + (k.cy - ay) * k.ny + (k.cz - az) * k.nz) / den
+				if t < 0 then t = 0 elseif t > 1 then t = 1 end
+				hx, hy, hz = ax + dx * t, ay + dy * t, az + dz * t
+			end
+			X[i], Y[i], Z[i] = clampNum(k, hx, hy, hz)
+		end
+	end
+	local pts = {}
+	for i = 1, n do pts[i] = Vector(X[i], Y[i], Z[i]) end
+	return pts
+end
+
+--- Reference (Vector) version, kept for the equivalence test.
+function P.RelaxPointsRef(S, L, chain, iters)
 	local pts = {}
 	for i, p in ipairs(chain) do pts[i] = p.center end
 	local n = #chain
@@ -188,6 +269,82 @@ end
 --- k best portal chains from area aS to area aL, with distinct last portals (one Dijkstra
 -- over portal nodes; cost = length + door penalty). Pure given the graph.
 function P.FindChains(g, S, aS, L, aL, cfg)
+	cfg = cfg or A.cfg
+	local DOOR_UNITS_PER_DB = 40
+	local closedDef = cfg.door_closed_db
+	local penalty = {} -- per call: the door state may change between calls
+	local function pcost(p) -- penalty of crossing p
+		local c = penalty[p]
+		if not c then
+			c = -AC.GainToDb(AC.DoorGain(p.open or 1, AC.LeafDb(p.closedDb or closedDef, cfg))) * DOOR_UNITS_PER_DB
+			penalty[p] = c
+		end
+		return c
+	end
+	local sqrt = math.sqrt
+	local function dist3(k, x, y, z) return sqrt((k.cx - x) ^ 2 + (k.cy - y) ^ 2 + (k.cz - z) ^ 2) end
+	local dist, prev, depth, done, num = {}, {}, {}, {}, {}
+	local open = {}
+	local sx, sy, sz = S.x, S.y, S.z
+	for _, p in ipairs(g.areaPortals[aS] or {}) do
+		local k = portalNum(p)
+		num[p] = k
+		dist[p] = dist3(k, sx, sy, sz) + pcost(p)
+		depth[p] = 1
+		open[#open + 1] = p
+	end
+	-- area through which we left p (the side not equal to the area we came from)
+	local fromArea = {}
+	for _, p in ipairs(open) do fromArea[p] = aS end
+	local maxDepth = cfg.max_depth
+	while #open > 0 do
+		local bi, best = 1, open[1]
+		local bd = dist[best]
+		for i = 2, #open do
+			local d = dist[open[i]]
+			if d < bd then bi, best, bd = i, open[i], d end
+		end
+		table.remove(open, bi) -- keeps the list order: same tie-breaking as before
+		if not done[best] then
+			done[best] = true
+			local nextArea = (best.a1 == fromArea[best]) and best.a2 or best.a1
+			if nextArea ~= aL and depth[best] < maxDepth then
+				local kb = num[best]
+				for _, q in ipairs(g.areaPortals[nextArea] or {}) do
+					if not done[q] and q ~= best then
+						local kq = num[q]
+						if not kq then kq = portalNum(q) num[q] = kq end
+						local c = bd + dist3(kq, kb.cx, kb.cy, kb.cz) + pcost(q)
+						if not dist[q] or c < dist[q] then
+							dist[q], prev[q], depth[q], fromArea[q] = c, best, depth[best] + 1, nextArea
+							open[#open + 1] = q
+						end
+					end
+				end
+			end
+		end
+	end
+	-- candidates: portals that lead into aL
+	local cands = {}
+	local lx, ly, lz = L.x, L.y, L.z
+	for _, q in ipairs(g.areaPortals[aL] or {}) do
+		if dist[q] and done[q] then
+			local entered = (q.a1 == fromArea[q]) and q.a2 or q.a1
+			if entered == aL then
+				local chain, c = {}, q
+				while c do table.insert(chain, 1, c) c = prev[c] end
+				cands[#cands + 1] = { chain = chain, cost = dist[q] + dist3(num[q], lx, ly, lz) }
+			end
+		end
+	end
+	table.sort(cands, function(x, y) return x.cost < y.cost end)
+	local out = {}
+	for i = 1, math.min(#cands, cfg.max_paths) do out[i] = cands[i].chain end
+	return out
+end
+
+--- Reference (Vector) version, kept for the equivalence test.
+function P.FindChainsRef(g, S, aS, L, aL, cfg)
 	cfg = cfg or A.cfg
 	local DOOR_UNITS_PER_DB = 40
 	local function pcost(p) -- penalty of crossing p
