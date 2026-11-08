@@ -6,14 +6,13 @@ path bends, must lower the level heard through that doorway by at least 3 dB:
 Before the fix the props were only looked for on the straight source-listener line, so the level
 through the doorway did not change.
 Portal path (A): since pba_path_props_slit (default 1) the masked doorway is evaluated like a partly
-open door (Fresnel through the free part, diffuse sound through the free area), and what passes the
-machine (through it and round it, as on the straight line) then goes through the doorway; no longer the
-amplitude law (1 - f) + f g. Measured with that law: -6.0 dB (A, f = 1), -5.3 dB (B). In game (portal
-x = 512, y 72..112, z 8..112; machine x 526..569, top z 96.6) the 15 samples are all masked; a ring of
-probes along the edges looks for the free strip above the machine. Offline: fully masked -> drop =
-what passes the machine (~6 dB, as with the former law); top 15 % free -> 3.7 dB (machine 4.4 dB) to
-5.3 dB (7 dB). The threshold stays 3 dB (pure test "vending machine ... loses >= 3 dB").
-(B) is unchanged (segment traces).
+open door: the direct sound through the part of the opening the source sees past the machine (rays that
+the jamb blocks count as covered where the machine covers the doorway), the room's diffuse sound through
+the part of the opening's plane it leaves free (the 15 % above it), the rest through the machine (two
+sheets, ~30 dB) and then the doorway. Measured with the former amplitude law: -6.0 dB (A), -5.3 dB (B);
+first versions of the new law: -0.03 then -2.2 dB (strip seen through the jamb, way over the top counted
+twice, one sheet). Offline (box scene with the in-game geometry, pure test "vending machine against a
+deep doorway"): -9.4 dB. The threshold stays 3 dB. (B: segment traces, ~10 dB expected with two sheets.)
 Usage: python -I -u path_obstruction.py <mcp.py>
 """
 import json
