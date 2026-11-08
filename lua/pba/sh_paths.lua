@@ -704,6 +704,38 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg)
 	return voices
 end
 
+-- ------------------------------------------------------------------ continuous sounds
+
+--- Hysteresis on the dominant voice of a CONTINUOUS sound (loop, stream) re-evaluated over time:
+-- between voices of almost equal level the order can flip from one evaluation to the next, and the
+-- apparent direction (and muffling) jumps back and forth as the listener moves a few units. The
+-- voice heard so far (the one closest to the previous dominant direction, within 30 degrees) stays
+-- first unless the new best beats it by path_hyst_db. `state` is a table the caller keeps per sound.
+-- Returns r, or a copy with the voices reordered: the cached result is shared and never modified.
+local COS30 = math.cos(math.rad(30))
+function P.Stable(state, r, cfg)
+	cfg = cfg or A.cfg
+	local vs = r and r.voices
+	if not vs or #vs == 0 or not r.L then return r end
+	local L = r.L
+	local function dir(v) return v.pos and (v.pos - L):GetNormalized() end
+	local hyst = cfg.path_hyst_db or 2
+	if state.dir and #vs > 1 and hyst > 0 then
+		local keep, best = nil, COS30
+		for i, v in ipairs(vs) do
+			local d = dir(v)
+			if d and d:Dot(state.dir) >= best then keep, best = i, d:Dot(state.dir) end
+		end
+		if keep and keep ~= 1 and vs[keep].level >= vs[1].level - hyst then
+			local nv = { vs[keep] }
+			for i, v in ipairs(vs) do if i ~= keep then nv[#nv + 1] = v end end
+			r = setmetatable({ voices = nv }, { __index = r })
+		end
+	end
+	state.dir = dir(r.voices[1]) or state.dir
+	return r
+end
+
 -- ------------------------------------------------------------------ top level
 
 P.cache = P.cache or {}

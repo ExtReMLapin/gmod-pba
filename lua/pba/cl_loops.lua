@@ -35,7 +35,8 @@ end
 --- Gain multiplier and DSP of a loop at S for the local listener.
 local function muffle(m, S, L)
 	if not A.Enabled() then return 1, m.dsp end
-	local r = A.Paths.Compute(S, L, m.lvl, nil, m.ent)
+	m.hyst = m.hyst or {}
+	local r = A.Paths.Stable(m.hyst, A.Paths.Compute(S, L, m.lvl, nil, m.ent))
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	if r.clear or not r.voices or #r.voices == 0 then return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
@@ -49,7 +50,8 @@ end
 -- (the opening it comes through, or the source itself) with the engine's distance law.
 local function applyNative(m, S, L)
 	local N = A.Native
-	local r = A.Paths.Compute(S, L, m.lvl, nil, m.ent)
+	m.hyst = m.hyst or {}
+	local r = A.Paths.Stable(m.hyst, A.Paths.Compute(S, L, m.lvl, nil, m.ent))
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	local pos, gain, lp
 	m.clearPath = r.clear or not r.voices or #r.voices == 0

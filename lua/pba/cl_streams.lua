@@ -160,7 +160,8 @@ local function evaluate(ch, r, L)
 	if not r.emitterPos or r.emitterPos:DistToSqr(S) > 1 or (r.emitter ~= nil and not IsValid(r.emitter)) then
 		r.emitter, r.emitterPos = emitterAt(S) or false, S
 	end
-	local res = A.Paths.Compute(S, L, 75, nil, r.emitter or nil)
+	r.hyst = r.hyst or {}
+	local res = A.Paths.Stable(r.hyst, A.Paths.Compute(S, L, 75, nil, r.emitter or nil))
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len = nil, 1, { 1, 1, 1 }, 1, 0, nil

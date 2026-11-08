@@ -40,6 +40,12 @@ def py(script, *args, timeout=1500):
                        text=True, encoding="utf-8", timeout=timeout)
     return (p.stdout + p.stderr)[-2500:]
 
+def doors_open(m="pba_twodoors"):
+    load(m)
+    call("lua_exec", {"realm": "server", "code": "for _, n in ipairs({'door_s', 'door_n'}) do for _, d in ipairs(ents.FindByName(n)) do d:Fire('Open') end end return true"})
+    time.sleep(3)
+    return "ok"
+
 def door(action):
     """pba_demo boombox room: mode C, door opened or closed (the sweep waits for its state)."""
     call("lua_exec", {"realm": "server", "code": "pba.DemoMap.SetMode(3) ents.FindByName('pba_boombox_door')[1]:Fire('%s') return true" % action})
@@ -103,6 +109,8 @@ steps = [
     ("water_ogg gm_construct", lambda: (load("gm_construct", 1), native_on(True), make_ogg(), job("client", "water_ogg.lua"), drop_ogg())[3]),
     ("paths_numeric_equiv pba_demo", lambda: (load("pba_demo", 1), job("client", "paths_numeric_equiv.lua"))[1]),
     # door leaf crossed by the line = its doorway (one model): no jump at the leaf / wall boundary
+    # continuous sounds: no flip-flop between two equal paths, a real move still switches once
+    ("path_hysteresis twodoors", lambda: (doors_open(), job("client", "path_hysteresis.lua"))[1]),
     ("door_sweep open", lambda: (load("pba_demo"), door("Open"), job("client", "door_sweep.lua"))[2]),
     ("door_sweep closed", lambda: (door("Close"), job("client", "door_sweep.lua"))[1]),
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
@@ -112,7 +120,8 @@ steps = [
 # --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
 # before merging into main or a release
 QUICK = {"load pba_tworooms", "GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire",
-         "loop_removed", "native_doors", "native_features", "door_sweep open", "door_sweep closed"}
+         "loop_removed", "native_doors", "native_features", "path_hysteresis twodoors", "door_sweep open",
+         "door_sweep closed"}
 if "--quick" in sys.argv[2:]:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
     # bot_gunfire and portal_sweep expect pba_tworooms: keep it loaded for them
