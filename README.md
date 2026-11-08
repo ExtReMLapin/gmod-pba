@@ -19,7 +19,9 @@ Pure Lua, server + client, no binary module.
   a car a little, a container a lot.
 - **Loud sounds stay loud.** Gunfire and explosions get through a concrete wall, muffled;
   footsteps and voices don't.
-- **Looping sounds** (vehicles, fire, alarms) are muffled in place.
+- **Looping sounds** (vehicles, fire, alarms) are muffled in place. They and other addons'
+  radios glide to each update (level, muffling, direction) instead of stepping as you walk
+  (`pba_continuous_ramp`).
 - **Open spaces are untouched**: with a clear line of sight, the sound is exactly vanilla.
 
 ## How it works
