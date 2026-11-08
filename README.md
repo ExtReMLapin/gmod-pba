@@ -83,7 +83,9 @@ With the module installed:
   heard through openings and attenuated by walls (transparent detour, `audioprop_streams`);
   with the module they are also really muffled (`audioprop_streams_filter`, BASS DSP EQ).
 
-Every option is a client preference in Spawn menu > Utilities > audioprop > Steam Audio (native).
+Settings: **context menu (C) > audioprop** (a window with the Player, Steam Audio and Server
+tabs), the console command `audioprop_menu`, or Spawn menu (Q) > Utilities > audioprop. Steam
+Audio options are greyed out when the module is not installed or the server forbids it.
 Server admins can forbid the native backend with `audioprop_allow_native 0`. Long sounds (music,
 speeches, beyond `audioprop_max_duration`) are followed like loops (`audioprop_long_sounds`).
 `audioprop_delay 1` (pure Lua, any renderer) delays processed sounds by the speed of sound.

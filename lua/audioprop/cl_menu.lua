@@ -8,8 +8,9 @@ local function addSlider(panel, label, name, dec)
 	panel:NumSlider(label, "audioprop_" .. name, c[2], c[3], dec or 0)
 end
 
-hook.Add("PopulateToolMenu", "audioprop_menu", function()
-	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_client", "#audioprop.menu.player", "", "", function(panel)
+local Build = {}
+
+function Build.player(panel)
 		panel:ClearControls()
 		panel:Help("audioprop: sound travels through openings (doors, windows) instead of through walls.")
 		panel:CheckBox("Enable on this client", "audioprop_cl_enable")
@@ -23,11 +24,11 @@ hook.Add("PopulateToolMenu", "audioprop_menu", function()
 		A.menuPanels = A.menuPanels or {}
 		A.menuPanels[#A.menuPanels + 1] = panel
 		A.RefreshMenu()
-	end)
+end
 	-- feature set of the optional native backend: every option is a client preference. Options
 	-- are greyed out while the module is missing / forbidden by the server, and the options that
 	-- depend on another one (native rendering, baked paths) while that one is off.
-	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_native", "#audioprop.menu.native", "", "", function(panel)
+function Build.native(panel)
 		panel:ClearControls()
 		local deps = {}
 		local function dep(ctl, need) if IsValid(ctl) then deps[#deps + 1] = { ctl, need } end return ctl end
@@ -73,8 +74,8 @@ hook.Add("PopulateToolMenu", "audioprop_menu", function()
 		A.menuPanels = A.menuPanels or {}
 		A.menuPanels[#A.menuPanels + 1] = panel
 		A.RefreshMenu()
-	end)
-	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_server", "#audioprop.menu.server", "", "", function(panel)
+end
+function Build.server(panel)
 		panel:ClearControls()
 		if not LocalPlayer():IsAdmin() then
 			panel:Help("Admin only.")
@@ -105,6 +106,65 @@ hook.Add("PopulateToolMenu", "audioprop_menu", function()
 		panel:CheckBox("Relay all sounds to 'everything native' players", "audioprop_native_relay")
 		panel:CheckBox("Relay loud sounds for client echoes", "audioprop_echo_relay")
 		addSlider(panel, "Echo relay threshold (dB)", "echo_min_level")
+end
+
+-- 1. the standard place: Spawn menu (Q) > Utilities > audioprop
+hook.Add("PopulateToolMenu", "audioprop_menu", function()
+	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_client", "#audioprop.menu.player", "", "", Build.player)
+	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_native", "#audioprop.menu.native", "", "", Build.native)
+	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_server", "#audioprop.menu.server", "", "", Build.server)
+end)
+
+-- 2. a window with the three pages as tabs: console command audioprop_menu, and an icon in the
+-- context menu (C) next to the other desktop windows
+local function fillWindow(window)
+	local sheet = vgui.Create("DPropertySheet", window)
+	sheet:Dock(FILL)
+	for _, page in ipairs({ { "#audioprop.menu.player", "icon16/user.png", Build.player },
+		{ "#audioprop.menu.native", "icon16/sound.png", Build.native },
+		{ "#audioprop.menu.server", "icon16/server.png", Build.server } }) do
+		local scroll = vgui.Create("DScrollPanel", sheet)
+		local cp = vgui.Create("ControlPanel", scroll)
+		cp:Dock(TOP)
+		cp:SetLabel(language.GetPhrase(page[1]))
+		page[3](cp)
+		sheet:AddSheet(language.GetPhrase(page[1]), scroll, page[2])
+	end
+end
+
+function A.OpenMenu()
+	if IsValid(A.menuWindow) then A.menuWindow:Remove() end
+	local f = vgui.Create("DFrame")
+	f:SetSize(math.min(520, ScrW() - 40), math.min(760, ScrH() - 40))
+	f:Center()
+	f:SetTitle("audioprop")
+	f:SetSizable(true)
+	f:MakePopup()
+	fillWindow(f)
+	A.menuWindow = f
+end
+concommand.Add("audioprop_menu", function() A.OpenMenu() end, nil, "Opens the audioprop settings window.")
+
+list.Set("DesktopWindows", "audioprop", {
+	title = "audioprop",
+	icon = "icon64/tool.png",
+	width = 520,
+	height = 760,
+	onewindow = true,
+	init = function(icon, window)
+		window:SetTitle("audioprop")
+		window:SetSizable(true)
+		fillWindow(window)
+	end,
+})
+
+-- 3. one chat hint per client, the first time a map is played with audioprop
+hook.Add("InitPostEntity", "audioprop_menu_hint", function()
+	if cookie.GetNumber("audioprop_menu_hint", 0) >= 1 then return end
+	timer.Simple(8, function()
+		chat.AddText(Color(90, 200, 255), "[audioprop] ", color_white,
+			"realistic sound propagation is on. Settings: context menu (C) > audioprop, Q > Utilities > audioprop, or the console command audioprop_menu.")
+		cookie.Set("audioprop_menu_hint", "1")
 	end)
 end)
 
