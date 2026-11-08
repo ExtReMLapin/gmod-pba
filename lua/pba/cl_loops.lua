@@ -36,6 +36,7 @@ end
 local function muffle(m, S, L)
 	if not A.Enabled() then return 1, m.dsp end
 	local r = A.Paths.Compute(S, L, m.lvl, nil, m.ent)
+	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	if r.clear or not r.voices or #r.voices == 0 then return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
 	local p, best = 0, r.voices[1]
@@ -49,6 +50,7 @@ end
 local function applyNative(m, S, L)
 	local N = A.Native
 	local r = A.Paths.Compute(S, L, m.lvl, nil, m.ent)
+	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	local pos, gain, lp
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
 	if m.clearPath then

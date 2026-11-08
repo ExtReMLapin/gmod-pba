@@ -33,6 +33,8 @@ local function record(ch)
 	if not ok or not is3d then return nil end -- 2D channels (interface music): untouched
 	local okv, vol = pcall(O.GetVolume, ch)
 	r = { vol = okv and vol or 1, g = 1, apparent = nil, eq = { 1, 1, 1 } }
+	local okf, file = pcall(ch.GetFileName, ch)
+	r.file = okf and file or nil -- shown by the debug overlay
 	ST.chans[ch] = r
 	return r
 end
@@ -138,6 +140,7 @@ end
 local function evaluate(ch, r, L)
 	local S = r.pos
 	local res = A.Paths.Compute(S, L, 75)
+	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len = nil, 1, { 1, 1, 1 }, 1, 0, nil
 		return

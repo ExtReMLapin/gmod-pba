@@ -8,7 +8,6 @@ local AC = A.AC
 local NET = "pba_snd"
 
 A.active = A.active or {}      -- list of { t_end, gain } for the voice budget
-A.lastResults = A.lastResults or {}
 A.perf = A.perf or { sum = 0, n = 0, maxCall = 0, maxFrame = 0, frames = 0, cur = 0 }
 function A.ResetPerf() A.perf = { sum = 0, n = 0, maxCall = 0, maxFrame = 0, frames = 0, cur = 0 } end
 A.stats = A.stats or { processed = 0, vanilla = 0, voices = 0, relayedIn = 0, dropped = 0 }
@@ -171,6 +170,7 @@ function A.Process(data, relayed)
 	local src = data.Entity
 	if not IsValid(src) and data.EntIndex and data.EntIndex > 0 then src = Entity(data.EntIndex) end
 	local r = A.Paths.Compute(S, L, lvl, nil, IsValid(src) and src or nil)
+	A.DebugNote(nil, S, L, r, data.SoundName, A.Native and A.Native.render and "native" or "sound")
 	if r.clear or not r.voices or #r.voices == 0 then
 		-- "everything native": a clear sound is played by the module at its real position
 		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 then
@@ -217,8 +217,6 @@ function A.Process(data, relayed)
 	A.stats.voices = A.stats.voices + emitted
 
 	local rec = { t = now, S = S, L = L, r = r, name = data.SoundName, relayed = relayed, ms = (SysTime() - t0) * 1000 }
-	table.insert(A.lastResults, 1, rec)
-	while #A.lastResults > 8 do table.remove(A.lastResults) end
 	if A.cfg.report >= 0.5 then
 		local vs = {}
 		for _, v in ipairs(r.voices) do
