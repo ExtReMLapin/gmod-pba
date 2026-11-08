@@ -95,6 +95,10 @@ bool g_stageLisOk = false;
 std::thread g_reflThread;
 std::atomic<bool> g_reflRun{false}, g_reflWanted{false};
 std::atomic<int> g_reflRays{2048}, g_reflBounces{16}, g_reflRuns{0}, g_reflErrors{0};
+// rays the simulator was created for: Steam Audio generates the listener ray directions for
+// maxNumRays (azimuth = 2*pi*i/maxNumRays) and traces the FIRST numRays of them, so numRays below
+// maxNumRays covers only part of the horizon (2048 of 8192 = one fixed quadrant). Both are equal.
+std::atomic<int> g_simMaxRays{2048};
 std::atomic<float> g_reflMs{0}, g_reflMaxMs{0};
 float g_rt[3] = {0, 0, 0}; // smoothed room reverb times (under g_stageMtx)
 
@@ -129,13 +133,16 @@ void ReflectionLoop() {
 				std::lock_guard<std::mutex> lk(g_simMtx);
 				IPLSimulationSharedInputs sh{};
 				sh.listener = lis;
-				sh.numRays = g_reflRays.load();
+				sh.numRays = std::min(g_reflRays.load(), g_simMaxRays.load());
 				// enough bounces to fill the simulated window: with too few, the energy of a
 				// reflective room stops early and the reverb time estimate is capped (~0.8 s)
 				sh.numBounces = g_reflBounces.load();
 				sh.duration = render::kIRSeconds;
 				sh.order = 1;
-				sh.irradianceMinDistance = 1.0f;
+				// Steam Audio DROPS (does not clamp, despite its doc) the energy of surfaces closer than
+				// this to the source; the reverb source sits on the listener, so 1 m removed corridor
+				// walls and the floor of a crouching player (reflection_simulator.cpp, v4.8.1)
+				sh.irradianceMinDistance = 0.25f;
 				iplSimulatorSetSharedInputs(g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
 				auto setSrc = [](IPLSource s, IPLVector3 p, bool on) {
 					IPLSimulationInputs in{};
@@ -330,7 +337,8 @@ bool EnsureSimulator() {
 	                                 IPL_SIMULATIONFLAGS_REFLECTIONS);
 	sim.sceneType = IPL_SCENETYPE_DEFAULT;
 	sim.reflectionType = IPL_REFLECTIONEFFECTTYPE_HYBRID;
-	sim.maxNumRays = 8192;
+	g_simMaxRays = g_reflRays.load();
+	sim.maxNumRays = g_simMaxRays.load(); // see g_simMaxRays
 	sim.numDiffuseSamples = 32;
 	sim.maxDuration = render::kIRSeconds;
 	sim.maxNumSources = kMaxSources + 1 + render::kEchoSlots;
@@ -388,6 +396,7 @@ LUA_FUNCTION(Init) {
 #endif
 	IPLContextSettings cs{};
 	cs.version = STEAMAUDIO_VERSION;
+	cs.simdLevel = IPL_SIMDLEVEL_AVX2; // zero-initialised = SSE2 cap; Steam Audio still checks the CPU
 	if (iplContextCreate(&cs, &g_ctx) != IPL_STATUS_SUCCESS) {
 		LUA->PushBool(false);
 		LUA->PushString("iplContextCreate failed");
@@ -1208,7 +1217,7 @@ LUA_FUNCTION(Stats) {
 	LUA->SetField(-2, "reflRuns");
 	LUA->PushNumber(g_reflErrors.load());
 	LUA->SetField(-2, "reflErrors");
-	LUA->PushNumber(g_reflRays.load());
+	LUA->PushNumber(std::min(g_reflRays.load(), g_simMaxRays.load()));
 	LUA->SetField(-2, "rays");
 	LUA->PushNumber(g_reflBounces.load());
 	LUA->SetField(-2, "bounces");

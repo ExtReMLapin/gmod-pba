@@ -185,6 +185,8 @@ end)
 
 function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	local t0 = SysTime()
+	-- the simulator is created with the current ray count (it fixes the ray directions)
+	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays, A.cfg.native_bounces or 16)
 	local nt = pba_native.LoadWorld(verts, tris, matIdx, mats)
 	N.doors = {} -- the module released its dynamic objects with the old world
 	N.worldGen = (N.worldGen or 0) + 1 -- others holding dynamic meshes (demo panels) re-add them
@@ -623,6 +625,11 @@ hook.Add("Think", "pba_native_listener", function()
 	if A.Loops and A.Loops.FollowNative then A.Loops.FollowNative(L) end
 	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
 end)
+
+-- the ray count fixes the simulator's ray directions: a new count rebuilds the scene (seconds)
+cvars.AddChangeCallback("pba_native_rays", function()
+	if N.ready and not N.building then N.Start() end
+end, "pba_native_rays_rebuild")
 
 cvars.AddChangeCallback("pba_native_render", function(_, _, new)
 	if tonumber(new) == 1 then N.StartRender() else N.StopRender() end
