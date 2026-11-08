@@ -253,6 +253,27 @@ return {
 			local add = P.MaskedDb(base, S, L, { mask }, cfg)
 			if math.abs(add) > 0.01 then error(string.format("closed door %.1f dB, object adds %.1f dB", base.lossDb, add)) end
 		end },
+		{ name = "GridAperture / ApertureRatio: masked cells to free intervals per row; a full-height mask = the 1-D slit; a free top band passes less to a ray crossing the masked part", func = function()
+			-- 5 x 3 grid over 48 x 112, columns 4-5 masked in every row, edge found at u = 0
+			local xs, ys = { -24, -12.96, -4.32, 0, 12.96, 24 }, { -56, -18, 18, 56 }
+			local half = { { false, false, false, true, true }, { false, false, false, true, true }, { false, false, false, true, true } }
+			local ap = P.GridAperture(Vector(0, -1, 0), Vector(0, 0, -1), xs, ys, half)
+			expect(near(ap.area, 0.5, 1e-9)).to.beTrue()
+			expect(#ap.rows[2].intervals).to.equal(1)
+			expect(near(ap.rows[2].intervals[1][2], 0, 1e-9)).to.beTrue()
+			for _, f in ipairs({ 250, 500, 4000 }) do
+				local slit = AC.SlitRatio({ { -24, 0 } }, -24, 24, 6, 100, 120, f)
+				expect(near(AC.ApertureRatio(ap, 6, 10, 100, 120, f), slit, 1e-6)).to.beTrue()
+			end
+			-- an object covering the two lower rows over the whole width (v from -18 to 56 masked)
+			local low = { { false, false, false, false, false }, { true, true, true, true, true }, { true, true, true, true, true } }
+			local lap = P.GridAperture(Vector(0, -1, 0), Vector(0, 0, -1), xs, ys, low)
+			expect(near(lap.area, 38 / 112, 1e-9)).to.beTrue()
+			local inFree = AC.ApertureBand(lap, 0, -37, 100, 120, 500)
+			local inMasked = AC.ApertureBand(lap, 0, 37, 100, 120, 500)
+			expect(inMasked < inFree).to.beTrue()
+			expect(inFree < 1).to.beTrue()
+		end },
 		{ name = "SelectVoices: weak paths rejected, far-apart strong paths split", func = function()
 			local L = Vector(0, 0, 0)
 			local mk = function(pos, len, loss) return { pos = pos, length = len, lossDb = loss, lp = 0 } end

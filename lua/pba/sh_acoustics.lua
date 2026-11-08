@@ -74,34 +74,62 @@ function AC.Fresnel(v)
 	return c, s
 end
 
---- Amplitude through a set of free intervals of a line (aperture plane), relative to the whole
--- doorway [w0, w1]. u0: where the straight ray crosses the plane (same coordinate); d1, d2:
--- distances (units) from the source side and to the listener side; freq in Hz. 0..1.
-function AC.SlitRatio(intervals, w0, w1, u0, d1, d2, freq)
-	local lambda = SPEED / freq / UNIT_M -- units
-	local k = math.sqrt(2 * (d1 + d2) / (lambda * math.max(d1, 1) * math.max(d2, 1)))
-	local function span(a, b)
-		local ca, sa = AC.Fresnel((a - u0) * k)
-		local cb, sb = AC.Fresnel((b - u0) * k)
-		return cb - ca, sb - sa
-	end
+-- complex Fresnel integral over [a, b] (coordinates along one axis of the plane, c = where the ray
+-- crosses it, k = Fresnel scale), and over a list of such intervals
+local function span(a, b, c, k)
+	local ca, sa = AC.Fresnel((a - c) * k)
+	local cb, sb = AC.Fresnel((b - c) * k)
+	return cb - ca, sb - sa
+end
+local function spans(intervals, c, k)
 	local re, im = 0, 0
 	for _, iv in ipairs(intervals) do
-		local r, i = span(iv[1], iv[2])
+		local r, i = span(iv[1], iv[2], c, k)
 		re, im = re + r, im + i
 	end
-	local fr, fi = span(w0, w1)
+	return re, im
+end
+
+--- Amplitude through the free part of an opening, relative to the whole opening (paraxial
+-- Fresnel-Kirchhoff; a rectangle separates into width x height). The free part is either free
+-- intervals along the width over the whole height (a door leaf: ap = { w0, w1, intervals }), or
+-- height bands, each with its own free intervals (an object masking part of the opening:
+-- ap = { w0, w1, h0, h1, rows = { { va, vb, intervals = { { ua, ub }, ... } }, ... } }).
+-- u, v: where the straight ray crosses the plane (same coordinates); d1, d2: distances (units)
+-- from the source side and to the listener side; freq in Hz. 0..1.
+function AC.ApertureRatio(ap, u, v, d1, d2, freq)
+	local lambda = SPEED / freq / UNIT_M -- units
+	local k = math.sqrt(2 * (d1 + d2) / (lambda * math.max(d1, 1) * math.max(d2, 1)))
+	local re, im
+	local fr, fi = span(ap.w0, ap.w1, u, k)
 	local full = math.sqrt(fr * fr + fi * fi)
+	if ap.rows then
+		re, im = 0, 0
+		for _, row in ipairs(ap.rows) do
+			local a, b = spans(row.intervals, u, k)
+			local c, d = span(row[1], row[2], v, k)
+			re, im = re + a * c - b * d, im + a * d + b * c
+		end
+		local hr, hi = span(ap.h0, ap.h1, v, k)
+		full = full * math.sqrt(hr * hr + hi * hi)
+	else
+		re, im = spans(ap.intervals, u, k)
+	end
 	if full < 1e-6 then return 0 end
 	return math.min(math.sqrt(re * re + im * im) / full, 1)
 end
 
---- SlitRatio averaged in power over a third-octave-ish band around freq (one frequency alone
+--- One dimension only: free intervals of the doorway [w0, w1] (see AC.ApertureRatio).
+function AC.SlitRatio(intervals, w0, w1, u0, d1, d2, freq)
+	return AC.ApertureRatio({ w0 = w0, w1 = w1, intervals = intervals }, u0, 0, d1, d2, freq)
+end
+
+--- ApertureRatio averaged in power over a third-octave-ish band around freq (one frequency alone
 -- falls on Fresnel ripples: an off-axis crack would flip between muffled and not).
-function AC.SlitBand(intervals, w0, w1, u0, d1, d2, freq)
+function AC.ApertureBand(ap, u, v, d1, d2, freq)
 	local p = 0
 	for _, m in ipairs({ 0.71, 0.84, 1, 1.19, 1.41 }) do
-		local r = AC.SlitRatio(intervals, w0, w1, u0, d1, d2, freq * m)
+		local r = AC.ApertureRatio(ap, u, v, d1, d2, freq * m)
 		p = p + r * r
 	end
 	return math.sqrt(p / 5)
