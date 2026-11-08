@@ -997,6 +997,7 @@ local function portalMasked(portal, prev, nxt, srcEnt, cfg)
 	for k in pairs(maskSet) do maskSet[k] = nil end
 	return { f = f, g = math.sqrt(pw / #hits), lp = lp, ap = P.GridAperture(wax, vax, xs, ys, G) }
 end
+P.PortalMasked = portalMasked -- tests
 
 --- Loss (dB) and lowpass level that objects masking openings of portal path p add (pure).
 -- masks[i]: what masks the i-th portal of p.chain (nil = nothing): ap = aperture they leave
