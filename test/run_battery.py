@@ -116,6 +116,8 @@ steps = [
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
     ("reverb_rt", lambda: py("reverb_rt.py")),
     ("native_options", lambda: py("native_options.py")),
+    # path quality against an independent single-bend reference (maps without areaportals: probes)
+    ("path_quality", lambda: py("path_quality.py", "--check", "d1_town_01", "gm_construct")),
 ]
 # --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
 # before merging into main or a release

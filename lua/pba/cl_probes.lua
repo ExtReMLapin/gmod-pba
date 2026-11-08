@@ -373,15 +373,50 @@ local function solve(g, s0, g0, k, yield)
 	return out
 end
 
+-- Advances one queued search until PR.deadline. Returns its paths once solved (and caches them).
+local function advance(ck, job)
+	job.co = job.co or coroutine.create(function()
+		return solve(job.g, job.s0, job.g0, job.k, function()
+			if SysTime() >= PR.deadline then coroutine.yield() end
+		end)
+	end)
+	local ok, res = coroutine.resume(job.co)
+	if not ok then
+		PR.queue[ck] = nil
+		ErrorNoHaltWithStack("[PBA] probe search failed: " .. tostring(res))
+	elseif coroutine.status(job.co) == "dead" then
+		PR.queue[ck] = nil
+		PR.pathCache[ck] = res
+		PR.pathCacheN = (PR.pathCacheN or 0) + 1
+		if PR.pathCacheN > 4000 then PR.pathCache, PR.pathCacheN = {}, 0 end
+		return res
+	end -- suspended: continued later
+end
+
 local function pulledPaths(g, S, L, k)
 	local starts, goals = PR.Visible(g, S, 3), PR.Visible(g, L, 3)
 	if #starts == 0 or #goals == 0 then return {} end
 	local ck = starts[1].id .. ">" .. goals[1].id .. ">" .. k
 	local c = PR.pathCache[ck]
 	if c then return c end
-	if not PR.queue[ck] then
-		PR.queue[ck] = { g = g, s0 = starts[1], g0 = goals[1], k = k }
+	local job = PR.queue[ck]
+	if not job then
+		job = { g = g, s0 = starts[1], g0 = goals[1], k = k }
+		PR.queue[ck] = job
 		PR.queueN = (PR.queueN or 0) + 1
+	end
+	-- a one-shot sound is evaluated once: answered from the background queue it only ever got the
+	-- transmission (silence behind an opening on maps without areaportals). Solve now, within a small
+	-- budget per call and per frame; beyond it the search goes on in the background as before.
+	local frame = FrameNumber()
+	if PR.inlineFrame ~= frame then PR.inlineFrame, PR.inlineUsed = frame, 0 end
+	local budget = math.min(A.cfg.probe_inline_ms or 3, (A.cfg.probe_inline_frame_ms or 6) - PR.inlineUsed)
+	if budget > 0 then
+		local t0 = SysTime()
+		PR.deadline = t0 + budget / 1000
+		local res = advance(ck, job)
+		PR.inlineUsed = PR.inlineUsed + (SysTime() - t0) * 1000
+		if res then return res end
 	end
 	return {}
 end
@@ -393,23 +428,7 @@ hook.Add("Think", "pba_probes_solve", function()
 		local ck, job = next(PR.queue)
 		if not ck then return end
 		if job.g ~= PR.current then PR.queue[ck] = nil
-		else
-			job.co = job.co or coroutine.create(function()
-				return solve(job.g, job.s0, job.g0, job.k, function()
-					if SysTime() >= PR.deadline then coroutine.yield() end
-				end)
-			end)
-			local ok, res = coroutine.resume(job.co)
-			if not ok then
-				PR.queue[ck] = nil
-				ErrorNoHaltWithStack("[PBA] probe search failed: " .. tostring(res))
-			elseif coroutine.status(job.co) == "dead" then
-				PR.queue[ck] = nil
-				PR.pathCache[ck] = res
-				PR.pathCacheN = (PR.pathCacheN or 0) + 1
-				if PR.pathCacheN > 4000 then PR.pathCache, PR.pathCacheN = {}, 0 end
-			end -- suspended: the while condition ends the slice
-		end
+		else advance(ck, job) end -- suspended: the while condition ends the slice
 	end
 end)
 
