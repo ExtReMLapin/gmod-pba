@@ -69,6 +69,9 @@ DM.SND = {
 }
 -- 3D stream of "another addon" (sound.PlayFile, like 3D Stream Radio)
 DM.STREAM = "sound/music/hl2_song26_trainstation1.mp3"
+-- default music of the boombox room, streamed over http (chosen by the project owner); falls
+-- back to DM.STREAM when it cannot be fetched. pba_demo_music overrides it per player.
+DM.STREAM_URL = "https://dn721601.ca.archive.org/0/items/tvtunes_19283/Caramelldansen%20-%20Speedycake%20Remix.ogg"
 
 -- ------------------------------------------------------------------ buttons
 -- Every room gets A, B, C and Reset first. kind: "push" (default), "toggle", "select" (radio

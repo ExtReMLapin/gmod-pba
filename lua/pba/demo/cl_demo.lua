@@ -144,32 +144,41 @@ function DM.StopStream()
 end
 
 DM.musicCvar = DM.musicCvar or CreateClientConVar("pba_demo_music", "", true, false,
-	"Demo map, boombox room: your own music instead of the HL2 track (data/... or sound/... file, or an http(s) URL). Stays on your computer.")
+	"Demo map, boombox room: your own music instead of the default one (data/... or sound/... file, or an http(s) URL). Stays on your computer.")
 
 function DM.StartStream(r)
 	DM.StopStream()
 	local tok = DM.streamTok
 	DM.streamRoom = r
 	local p = r.stream_pos and Vector(r.stream_pos[1], r.stream_pos[2], r.stream_pos[3]) or r.listenPos
-	-- the player's own music (a file they own, never shipped): pba_demo_music "data/music.mp3",
-	-- "sound/..." or an http(s) URL; empty = the HL2 track
+	-- order: the player's own music (pba_demo_music: data/... or sound/... file, or an http(s)
+	-- URL), the map's default URL, the HL2 track shipped with the game
 	local own = string.Trim(DM.musicCvar:GetString())
-	local play = sound.PlayFile
-	local path = own ~= "" and own or DM.STREAM
-	if string.match(path, "^https?://") then play = sound.PlayURL end
-	play(path, "3d noplay", function(ch)
-		if not IsValid(ch) then
-			if own ~= "" then chat.AddText(Color(255, 150, 140), "[PBA demo] pba_demo_music: cannot play \"" .. own .. "\"") end
-			return
-		end
-		if DM.streamTok ~= tok then ch:Stop() return end
-		ch:SetPos(p)
-		ch:Set3DFadeDistance(250, 10000)
-		ch:EnableLooping(true)
-		ch:SetVolume(1)
-		ch:Play()
-		DM.stream = ch
-	end)
+	local tries = {}
+	if own ~= "" then tries[#tries + 1] = own end
+	if DM.STREAM_URL then tries[#tries + 1] = DM.STREAM_URL end
+	tries[#tries + 1] = DM.STREAM
+	local function try(i)
+		local path = tries[i]
+		if not path then return end
+		local play = string.match(path, "^https?://") and sound.PlayURL or sound.PlayFile
+		-- noblock: the whole file is fetched, so that the channel can loop (an http stream is
+		-- block-streamed otherwise and EnableLooping errors)
+		play(path, "3d noplay noblock", function(ch)
+			if DM.streamTok ~= tok then if IsValid(ch) then ch:Stop() end return end
+			if not IsValid(ch) then
+				if path == own then chat.AddText(Color(255, 150, 140), "[PBA demo] pba_demo_music: cannot play \"" .. own .. "\"") end
+				return try(i + 1)
+			end
+			ch:SetPos(p)
+			ch:Set3DFadeDistance(250, 10000)
+			ch:EnableLooping(true)
+			ch:SetVolume(1)
+			ch:Play()
+			DM.stream = ch
+		end)
+	end
+	try(1)
 end
 
 net.Receive(NET_STREAM, function()
