@@ -13,6 +13,55 @@ function A.AddHook(event, fn)
 	if A.hooksInstalled then hook.Add(event, "pba", fn) end
 end
 
+-- Engine rule: a new sound on an entity's replacing channel (not CHAN_AUTO / CHAN_STATIC) cuts
+-- the previous one. When pba takes a sound over (the original is suppressed), the engine never
+-- sees it, so a sound it still plays on that channel would go on forever. Addons rely on it:
+-- Exquisite Radio "stops" its 5-minute song by emitting a short sound on the same CHAN_ITEM.
+-- The orphan then follows whatever entity reuses the index. We remember the name the engine
+-- plays per entity + channel and stop it ourselves when the replacement is taken over.
+A.vanillaOn = A.vanillaOn or {} -- entindex -> { [chan] = sound name played by the engine }
+local NOT_NEW = SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH
+
+local function stopEngineSound(e, name)
+	if SERVER then
+		local f = A.orig and A.orig.EntStopSound
+		if f then f(e, name) else e:StopSound(name) end
+	else
+		local f = A.origCl and A.origCl.StopSound
+		if f then f(e, name) else e:StopSound(name) end
+	end
+end
+
+--- Wraps an EntityEmitSound handler with the channel rule above.
+function A.WithChannelRule(fn)
+	return function(data)
+		local ret = fn(data)
+		if A.reemitting then return ret end
+		local chan, e = data.Channel, data.Entity
+		if not chan or chan == CHAN_AUTO or chan == CHAN_STATIC or chan <= 0 then return ret end
+		if not IsValid(e) or e:IsWorld() or bit.band(data.Flags or 0, NOT_NEW) ~= 0 then return ret end
+		local idx = e:EntIndex()
+		if idx <= 0 then return ret end
+		local per = A.vanillaOn[idx]
+		if ret == false then
+			local prev = per and per[chan]
+			-- same name: left alone (stopping it would also cut what pba just re-emitted by name)
+			if prev and prev ~= data.SoundName then pcall(stopEngineSound, e, prev) end
+			if per then per[chan] = nil end
+		else
+			if not per then per = {} A.vanillaOn[idx] = per end
+			per[chan] = data.SoundName
+		end
+		return ret
+	end
+end
+
+hook.Add("EntityRemoved", "pba_vanilla_chans", function(e, fullUpdate)
+	if fullUpdate then return end
+	local idx = e:EntIndex()
+	if idx > 0 then A.vanillaOn[idx] = nil end
+end)
+
 function A.InstallHooks(on)
 	for event, fn in pairs(A.hooks) do
 		if on then hook.Add(event, "pba", fn) else hook.Remove(event, "pba") end

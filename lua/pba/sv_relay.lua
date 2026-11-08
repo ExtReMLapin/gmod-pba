@@ -105,7 +105,8 @@ function A.RelayStop(e, name)
 	net.Send(plys)
 end
 
-A.AddHook("EntityEmitSound", function(data)
+-- (fallback: a partial autorefresh may reload this file before sh_core)
+A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
 	if A.reemitting or A.explicitFilter then return end
 	A.stats.seen = A.stats.seen + 1
 	if A.Loops and A.Loops.Handle(data) then return false end
@@ -191,7 +192,7 @@ A.AddHook("EntityEmitSound", function(data)
 	net.Send(blocked)
 	A.stats.relayed = A.stats.relayed + 1
 	return false
-end)
+end))
 
 -- entity removed: the engine stops its sounds; clients that got relayed copies stop theirs
 hook.Add("EntityRemoved", "pba_relay_removed", function(e)

@@ -239,7 +239,8 @@ function A.Process(data, relayed)
 	return true
 end
 
-A.AddHook("EntityEmitSound", function(data)
+-- (fallback: a partial autorefresh may reload this file before sh_core)
+A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
 	if A.reemitting then return end
 	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
 		-- a client-side StopSound: our copies of that sound stop too (the engine stops its own)
@@ -256,7 +257,7 @@ A.AddHook("EntityEmitSound", function(data)
 	if IsValid(ply) and data.Entity == ply then return end -- own sounds: always clear
 	data.Pos = pos
 	if A.Process(data, false) then return false end
-end)
+end))
 
 -- relayed server sounds: always played by us (the server suppressed the original)
 A.dict = A.dict or {}
