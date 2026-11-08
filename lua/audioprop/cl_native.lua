@@ -95,6 +95,7 @@ end
 function N.Start()
 	N.ready, N.pathsReady, N.err = false, false, nil
 	if (A.cfg.native or 1) < 0.5 then return end
+	if (A.cfg.allow_native or 1) < 0.5 then N.err = "disabled by the server (audioprop_allow_native 0)" return end
 	if not file.Exists(MODULE, "GAME") then N.err = "module not installed" return end
 	if not audioprop_native then
 		local ok, err = pcall(require, "audioprop")
@@ -272,6 +273,7 @@ N.hrtfCvar = N.hrtfCvar or CreateClientConVar("audioprop_native_hrtf", "", true,
 	"SOFA HRTF file in data/audioprop/hrtf/ for native rendering (empty = Steam Audio default). Restart native rendering to apply.")
 -- tells the server that this client renders echoes (loud server sounds are then relayed to it)
 N.echoCvar = N.echoCvar or CreateClientConVar("audioprop_echo_want", "0", false, true, "Internal: native echoes active.")
+N.allCvar = N.allCvar or CreateClientConVar("audioprop_native_all_want", "0", false, true, "Internal: every sound rendered natively.")
 
 function N.StopRender()
 	if N.render and audioprop_native then audioprop_native.AudioStop() end
@@ -282,13 +284,27 @@ local function cleanName(name)
 	return string.lower(string.gsub(name or "", "^[%^%)%*#@<>!%?%$&~`+%%%(]+", ""))
 end
 
---- Makes sure the module has decoded `name`. Returns true when playable natively.
+--- Makes sure the module has decoded `name`. Returns true, cleanName when playable natively;
+-- false, nil, "pending" while a large file decodes on the module's worker thread.
 function N.EnsureSound(name)
 	local n = cleanName(name)
 	if N.failed[n] then return false end
 	if audioprop_native.HasSound(n) then return true, n end
+	if audioprop_native.SoundPending and audioprop_native.SoundPending(n) then return false, nil, "pending" end
+	if N.loading and N.loading[n] then
+		-- the worker finished without a sound: undecodable
+		N.loading[n] = nil
+		N.failed[n] = true
+		return false
+	end
 	local data = file.Read("sound/" .. n, "GAME")
-	if not data or #data > 8 * 1024 * 1024 then N.failed[n] = true return false end
+	if not data or #data > 48 * 1024 * 1024 then N.failed[n] = true return false end
+	if #data > 512 * 1024 and audioprop_native.LoadSoundAsync then
+		audioprop_native.LoadSoundAsync(n, data)
+		N.loading = N.loading or {}
+		N.loading[n] = true
+		return false, nil, "pending"
+	end
 	local secs = audioprop_native.LoadSound(n, data)
 	if not secs then N.failed[n] = true return false end
 	return true, n
@@ -330,7 +346,64 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and opt.sh or nil
 	local id = audioprop_native.Play(n, pos, gain * A.cfg.native_gain, l, m, h, pitch or 100, false, opt.delay or 0, sh)
+	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
+		-- direct voice of a moving entity: follows it every frame like the engine does
+		opt.follow.pitch = pitch or 100
+		N.follow[id] = opt.follow
+	end
 	return id and id > 0
+end
+
+-- Doppler shift between a moving source and listener: f' = f (c + vL.u) / (c - vS.u), u = unit
+-- vector source -> listener, c = 343 m/s in units. Clamped to half / double pitch.
+local SPEED_UNITS = 343 / 0.01905
+function N.Doppler(S, vS, L, vL)
+	if (A.cfg.native_doppler or 0) < 0.5 then return 1 end
+	local u = L - S
+	local d = u:Length()
+	if d < 1 then return 1 end
+	u:Mul(1 / d)
+	local k = (SPEED_UNITS - vL:Dot(u)) / math.max(SPEED_UNITS - vS:Dot(u), 1)
+	return math.Clamp(k, 0.5, 2)
+end
+
+local function velocityOf(e)
+	if not IsValid(e) then return vector_origin end
+	local p = e.GetParent and e:GetParent()
+	if IsValid(p) then e = p end -- welded / parented to a vehicle: its motion
+	return e:GetVelocity()
+end
+N.VelocityOf = velocityOf
+
+--- Listener velocity: the vehicle when driving, else the player.
+function N.ListenerVelocity()
+	local ply = LocalPlayer()
+	if not IsValid(ply) then return vector_origin end
+	local veh = ply.GetVehicle and ply:GetVehicle()
+	if IsValid(veh) then
+		local p = veh:GetParent()
+		return (IsValid(p) and p or veh):GetVelocity()
+	end
+	return ply:GetVelocity()
+end
+
+-- voices bound to an entity (clear line): position and distance law updated every frame
+N.follow = N.follow or {}
+function N.UpdateFollowers(L)
+	local vL = N.ListenerVelocity()
+	for id, f in pairs(N.follow) do
+		local e = f.ent
+		if not IsValid(e) then
+			N.follow[id] = nil
+		else
+			local S = A.SoundPos({ Entity = e })
+			local d = S:Distance(L)
+			local g = f.vol * A.AC.EngineGain(math.max(d, 1), f.lvl) * N.Directivity(e, L) * A.cfg.native_gain
+			local l, m, h = N.VoiceEQ(0, d)
+			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
+			if not audioprop_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil end
+		end
+	end
 end
 
 --- Echoes of a loud sound (reflections only, on top of whatever plays the direct sound).
@@ -470,7 +543,10 @@ hook.Add("Think", "audioprop_native_listener", function()
 	local master = GetConVar("volume"):GetFloat()
 	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
 	local eL, eR
-	N.live, eL, eR = audioprop_native.SetListener(ply:EyePos(), ang:Forward(), ang:Up(), master)
+	local L = ply:EyePos()
+	N.live, eL, eR = audioprop_native.SetListener(L, ang:Forward(), ang:Up(), master)
+	N.UpdateFollowers(L)
+	if A.Loops and A.Loops.FollowNative then A.Loops.FollowNative(L) end
 	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
 end)
 
@@ -503,8 +579,20 @@ hook.Add("ShutDown", "audioprop_native", function() N.StopRender() end)
 
 -- reflections run on the module's own thread; keep its settings and the server flag in sync
 timer.Create("audioprop_native_reverb", 0.5, 0, function()
+	-- the server may forbid the native backend at any time (replicated, polled)
+	if (A.cfg.allow_native or 1) < 0.5 and (N.ready or N.building) then
+		N.StopRender()
+		N.building, N.ready, N.pathsReady = nil, false, false
+		N.err = "disabled by the server (audioprop_allow_native 0)"
+		if A.Paths then A.Paths.InvalidateCache() end
+	elseif (A.cfg.allow_native or 1) >= 0.5 and not N.ready and not N.building
+		and N.err == "disabled by the server (audioprop_allow_native 0)" then
+		N.Start()
+	end
 	local want = N.render and (A.cfg.native_echo or 0) > 0 and A.Enabled() or false
 	if N.echoCvar and N.echoCvar:GetBool() ~= want then RunConsoleCommand("audioprop_echo_want", want and "1" or "0") end
+	local all = N.render and (A.cfg.native_all or 0) >= 0.5 and A.Enabled() or false
+	if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("audioprop_native_all_want", all and "1" or "0") end
 	if not N.render or not audioprop_native or not audioprop_native.RoomReverb then return end
 	N.ApplySettings()
 	local ok, l, m, h = pcall(audioprop_native.RoomReverb)

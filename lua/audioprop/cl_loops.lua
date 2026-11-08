@@ -50,7 +50,8 @@ local function applyNative(m, S, L)
 	local N = A.Native
 	local r = A.Paths.Compute(S, L, m.lvl, nil, m.ent)
 	local pos, gain, lp
-	if r.clear or not r.voices or #r.voices == 0 then
+	m.clearPath = r.clear or not r.voices or #r.voices == 0
+	if m.clearPath then
 		pos, gain, lp = S, AC.EngineGain(S:Distance(L), m.lvl), 0
 	else
 		local p = 0
@@ -62,18 +63,25 @@ local function applyNative(m, S, L)
 	m.curDsp = AC.DSPForLevel(lp or 0)
 	gain = gain * m.vol * A.cfg.native_gain
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
+	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
 	if m.nativeId then
-		if not audioprop_native.Update(m.nativeId, pos, gain, el, em, eh, m.pitch) then m.nativeId = nil end
+		if not audioprop_native.Update(m.nativeId, pos, gain, el, em, eh, pitch) then m.nativeId = nil end
 		return
 	end
-	local ok, name = N.EnsureSound(m.name)
-	if not ok then return false end
-	local id = audioprop_native.Play(name, pos, gain, el, em, eh, m.pitch, true)
+	if m.once and m.started then m.done = true return end -- a long one-shot that ended
+	local ok, name, why = N.EnsureSound(m.name)
+	if not ok then
+		if why == "pending" then return nil end -- decoding: wait for it (no engine fallback meanwhile)
+		return false
+	end
+	local id = audioprop_native.Play(name, pos, gain, el, em, eh, pitch, not m.once)
+	m.started = true
 	m.nativeId = id > 0 and id or nil
 	return m.nativeId ~= nil
 end
 
 local function apply(m, fade)
+	if m.done then return end
 	local ent = m.ent
 	if not IsValid(ent) then
 		-- not networked (yet?): after a grace period, fall back to an anchor at the position
@@ -88,7 +96,10 @@ local function apply(m, fade)
 		if applyNative(m, S, L) ~= false then return end
 	end
 	local g, dsp = muffle(m, S, L)
+	if m.patch and m.once and not m.patch:IsPlaying() then m.done = true return end
 	if not m.patch then
+		if m.once and m.started then m.done = true return end
+		m.started = true
 		m.patch = CreateSound(ent, m.name)
 		A.reemitting = true
 		m.patch:SetSoundLevel(m.lvl)
@@ -117,10 +128,11 @@ net.Receive("audioprop_loop", function()
 	end
 	local name, idx, pos = net.ReadString(), net.ReadUInt(16), net.ReadVector()
 	local vol, pitch, lvl, dsp = net.ReadUInt(8) / 255, net.ReadUInt(8), net.ReadUInt(9), net.ReadUInt(8)
+	local once = net.ReadBool()
 	local m = LP.mirrors[key]
 	if op == OP_START and m then stopMirror(m) m = nil end
 	if not m then
-		m = { key = key, name = name, idx = idx, pos = pos, lvl = lvl, dsp = dsp }
+		m = { key = key, name = name, idx = idx, pos = pos, lvl = lvl, dsp = dsp, once = once }
 		LP.mirrors[key] = m
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
@@ -136,10 +148,33 @@ net.Receive("audioprop_loop", function()
 	end
 end)
 
+--- Every frame: natively rendered loops in clear sight follow their (moving) entity; the path
+-- itself is re-evaluated every 0.25 s by the timer below.
+function LP.FollowNative(L)
+	local N = A.Native
+	if not N or not N.Doppler then return end
+	local vL = N.ListenerVelocity()
+	for _, m in pairs(LP.mirrors) do
+		if m.nativeId and m.clearPath and not m.done then
+			local ent = IsValid(m.ent) and m.ent or nil
+			if ent then
+				local S = ent:WorldSpaceCenter()
+				local d = S:Distance(L)
+				local el, em, eh = N.VoiceEQ(0, d)
+				audioprop_native.Update(m.nativeId, S, AC.EngineGain(d, m.lvl) * m.vol * A.cfg.native_gain, el, em, eh,
+					m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL))
+			end
+		end
+	end
+end
+
 timer.Create("audioprop_loops_cl", 0.25, 0, function()
 	if not IsValid(LocalPlayer()) then return end
 	for key, m in pairs(LP.mirrors) do
-		if m.idx ~= 0 and not IsValid(m.ent) and not m.anchor then
+		if m.done then
+			stopMirror(m)
+			LP.mirrors[key] = nil
+		elseif m.idx ~= 0 and not IsValid(m.ent) and not m.anchor then
 			m.ent = Entity(m.idx) -- may become valid once networked
 		end
 		apply(m)

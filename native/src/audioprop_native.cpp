@@ -935,6 +935,21 @@ LUA_FUNCTION(HasSound) {
 	return 1;
 }
 
+// LoadSoundAsync(name, bytes) -> started ; SoundPending(name) -> bool
+LUA_FUNCTION(LoadSoundAsync) {
+	const char* name = LUA->CheckString(1);
+	unsigned int len = 0;
+	const char* data = LUA->GetString(2, &len);
+	if (!data || len == 0) LUA->ThrowError("LoadSoundAsync: no data");
+	LUA->PushBool(render::LoadSoundAsync(name, std::string(data, len)));
+	return 1;
+}
+
+LUA_FUNCTION(SoundPending) {
+	LUA->PushBool(render::SoundPending(LUA->CheckString(1)));
+	return 1;
+}
+
 // LoadSound(name, bytes) -> seconds | nil, err
 LUA_FUNCTION(LoadSound) {
 	const char* name = LUA->CheckString(1);
@@ -1224,6 +1239,10 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "DynamicRemove");
 	LUA->PushCFunction(DynamicCommit);
 	LUA->SetField(-2, "DynamicCommit");
+	LUA->PushCFunction(LoadSoundAsync);
+	LUA->SetField(-2, "LoadSoundAsync");
+	LUA->PushCFunction(SoundPending);
+	LUA->SetField(-2, "SoundPending");
 	LUA->SetField(-2, "audioprop_native");
 	LUA->Pop();
 	return 0;

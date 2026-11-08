@@ -27,7 +27,9 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace render {
@@ -121,6 +123,9 @@ float g_roomRt[3] = {0, 0, 0}; // under g_mtx
 std::vector<float> g_mix(kBlock * 2);
 std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet consumed
 size_t g_fifoPos = 0;
+std::unordered_set<std::string> g_pending; // under g_mtx
+std::vector<std::thread> g_loaders;       // joined at Stop (the DLL may be unloaded after)
+std::mutex g_loadMtx;
 
 IPLSpeakerLayout Stereo() {
 	IPLSpeakerLayout l{};
@@ -462,7 +467,18 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 	return "";
 }
 
+void JoinLoaders() {
+	std::vector<std::thread> ts;
+	{
+		std::lock_guard<std::mutex> lk(g_loadMtx);
+		ts.swap(g_loaders);
+	}
+	for (auto& t : ts)
+		if (t.joinable()) t.join();
+}
+
 void Stop() {
+	JoinLoaders();
 	if (g_devOk) {
 		ma_device_uninit(&g_dev); // joins the audio thread
 		g_devOk = false;
@@ -580,6 +596,28 @@ void TestBinaural(IPLVector3 dir, double* eL, double* eR) {
 	iplAudioBufferFree(g_ctx, &in);
 	iplAudioBufferFree(g_ctx, &out);
 	iplBinauralEffectRelease(&be);
+}
+
+
+bool LoadSoundAsync(const std::string& name, std::string data) {
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		if (g_sounds.count(name) || g_pending.count(name)) return false;
+		g_pending.insert(name);
+	}
+	std::lock_guard<std::mutex> lk(g_loadMtx);
+	g_loaders.emplace_back([name, data = std::move(data)]() {
+		double secs = 0;
+		LoadSound(name, data.data(), data.size(), &secs); // inserts into g_sounds on success
+		std::lock_guard<std::mutex> lk2(g_mtx);
+		g_pending.erase(name);
+	});
+	return true;
+}
+
+bool SoundPending(const std::string& name) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	return g_pending.count(name) != 0;
 }
 
 bool HasSound(const std::string& name) {

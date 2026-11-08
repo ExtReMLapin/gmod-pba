@@ -89,6 +89,17 @@ function A.Process(data, relayed)
 	if not IsValid(src) and data.EntIndex and data.EntIndex > 0 then src = Entity(data.EntIndex) end
 	local r = A.Paths.Compute(S, L, lvl, nil, IsValid(src) and src or nil)
 	if r.clear or not r.voices or #r.voices == 0 then
+		-- "everything native": a clear sound is played by the module at its real position
+		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 then
+			local d = S:Distance(L)
+			local g = (data.Volume or 1) * AC.EngineGain(math.max(d, 1), lvl) * A.Native.Directivity(IsValid(src) and src or nil, L)
+			-- PlayVoice only (no engine fallback here: the caller plays the original if this fails)
+			local follow = IsValid(src) and not src:IsWorld() and { ent = src, vol = data.Volume or 1, lvl = lvl } or nil
+			if A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = voiceDelay({ len = d, pos = S }, L), follow = follow }) then
+				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
+				return true
+			end
+		end
 		A.stats.vanilla = A.stats.vanilla + 1
 		return false
 	end

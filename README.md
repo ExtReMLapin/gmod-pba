@@ -75,7 +75,13 @@ With the module installed:
   echoes and baked paths see them closed or open;
 - custom HRTF: a SOFA file in `data/audioprop/hrtf/`, named by `audioprop_native_hrtf`.
 
+- `audioprop_native_all 1` (default with native rendering): every sound, also in clear sight, is
+  played by the module (HRTF, reverb); the server relays them to that client only
+  (`audioprop_native_relay`, admin).
+
 Every option is a client preference in Spawn menu > Utilities > audioprop > Steam Audio (native).
+Server admins can forbid the native backend with `audioprop_allow_native 0`. Long sounds (music,
+speeches, beyond `audioprop_max_duration`) are followed like loops (`audioprop_long_sounds`).
 `audioprop_delay 1` (pure Lua, any renderer) delays processed sounds by the speed of sound.
 
 Build: `python native/fetch_deps.py`, then `native/build.bat` (Visual Studio C++ tools, CMake,

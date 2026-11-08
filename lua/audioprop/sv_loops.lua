@@ -1,4 +1,5 @@
--- Looping sounds (vehicles, fire, alarms, NPC engine loops, CSoundPatch). They cannot be
+-- Looping sounds (vehicles, fire, alarms, NPC engine loops, CSoundPatch) and LONG one-shot
+-- sounds (music, speeches: longer than audioprop_max_duration). They cannot be
 -- re-emitted as one-shots, so the server takes them over entirely: every start / volume /
 -- pitch change / stop event is suppressed and relayed (reliably) to the players in range,
 -- whose client plays a mirror loop on the same entity and muffles it in place (see
@@ -29,6 +30,7 @@ local function send(op, l, plys)
 		net.WriteUInt(math.Clamp(math.floor(l.pitch), 0, 255), 8)
 		net.WriteUInt(math.Clamp(math.floor(l.lvl), 0, 511), 9)
 		net.WriteUInt(math.Clamp(math.floor(l.dsp or 0), 0, 255), 8)
+		net.WriteBool(l.once or false)
 	end
 	net.Send(plys)
 end
@@ -39,6 +41,15 @@ local function inRange(l, ply)
 	return ply:EyePos():DistToSqr(pos) <= r * r
 end
 
+--- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
+function LP.IsLong(data)
+	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
+	local st = data.SoundTime or 0
+	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+	local dur = SoundDuration(data.SoundName) or 0
+	return dur > A.cfg.max_duration and dur <= 1800, dur
+end
+
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
 function LP.Handle(data)
 	if A.cfg.loops < 0.5 then return false end
@@ -47,7 +58,11 @@ function LP.Handle(data)
 	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
 	local l = LP.active[key]
 	local flags = data.Flags or 0
-	if not l and not A.IsLooping(data.SoundName) then return false end
+	local once, dur = false, 0
+	if not l and not A.IsLooping(data.SoundName) then
+		once, dur = LP.IsLong(data)
+		if not once then return false end
+	end
 
 	-- stop events carry no sound level: test them first
 	if bit.band(flags, SND_STOP) ~= 0 then
@@ -63,6 +78,7 @@ function LP.Handle(data)
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	if not l then
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {} }
+		if once then l.once, l.endT = true, CurTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
 		LP.active[key] = l
 	end
 	if not update or bit.band(flags, SND_CHANGE_VOL) ~= 0 then l.vol = data.Volume or 1 end
@@ -87,11 +103,14 @@ timer.Create("audioprop_loops", 0.5, 0, function()
 	for key, l in pairs(LP.active) do
 		if l.idx ~= 0 and not IsValid(l.ent) then
 			LP.active[key] = nil
+		elseif l.once and CurTime() > l.endT then
+			LP.active[key] = nil -- finished: the client mirrors end by themselves
 		else
 			local join, leave = {}, {}
 			for _, p in ipairs(player.GetHumans()) do
 				local want = inRange(l, p)
-				if want and not l.subs[p] then l.subs[p] = true join[#join + 1] = p
+				-- a long one-shot cannot be joined midway (it would restart from the beginning)
+				if want and not l.subs[p] and not l.once then l.subs[p] = true join[#join + 1] = p
 				elseif not want and l.subs[p] then l.subs[p] = nil leave[#leave + 1] = p end
 			end
 			send(OP_START, l, join)

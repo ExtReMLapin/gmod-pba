@@ -92,17 +92,23 @@ A.AddHook("EntityEmitSound", function(data)
 	local clear, blocked = {}, {}
 	-- audience by distance, not PAS: a sealed room is outside the PAS (the engine would not
 	-- send the sound at all) but its sound still transmits through the walls
+	-- clients rendering every sound natively (userinfo audioprop_native_all_want) get the relay
+	-- even with a clear line: their module plays the sound instead of the engine
 	for _, ply in ipairs(player.GetHumans()) do
 		if ply ~= predicted then
 			local eye = ply:EyePos()
 			if eye:DistToSqr(pos) <= radius * radius then
-				local walls = A.Paths.Walls(pos, eye, 1, data.Entity)
-				if #walls == 0 then clear[#clear + 1] = ply else blocked[#blocked + 1] = ply end
+				if A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("audioprop_native_all_want", 0) >= 1 then
+					blocked[#blocked + 1] = ply
+				else
+					local walls = A.Paths.Walls(pos, eye, 1, data.Entity)
+					if #walls == 0 then clear[#clear + 1] = ply else blocked[#blocked + 1] = ply end
+				end
 			end
 		end
 	end
 	-- clients rendering echoes natively also want the loud sounds they hear directly
-	if A.cfg.echo_relay >= 0.5 and lvl >= A.cfg.echo_min_level and #clear > 0 then
+	if A.cfg.echo_relay >= 0.5 and A.cfg.allow_native >= 0.5 and lvl >= A.cfg.echo_min_level and #clear > 0 then
 		local want = {}
 		for _, ply in ipairs(clear) do
 			if ply:GetInfoNum("audioprop_echo_want", 0) >= 1 then want[#want + 1] = ply end
