@@ -45,6 +45,8 @@ A.CONFIG = {
 	-- doors
 	door_closed_db  = { 28, 0, 60, "sv", "Loss of a closed door when its material is unknown (dB)." },
 	probe_inline_ms = { 3, 0, 20, "cl", "Probe path search done at once when a sound needs it (ms per sound): a one-shot sound (gunshot, voice) is evaluated once, and without it got no path behind an opening on maps without areaportals. Beyond it the search goes on in the background. 0 = background only." },
+	probe_bridge_max = { 48, 0, 400, "cl", "When the probe graph finds no path: at most this many probes tried as a single bend seeing both ends (open air between a street and a rooftop is not in the graph). 0 = off." },
+	probe_bridge_ratio = { 1.5, 1, 4, "cl", "Bridge candidates: probes whose detour is at most this many times the straight line." },
 	probe_inline_frame_ms = { 6, 0, 40, "cl", "At most this many ms of immediate probe path searches per frame, all sounds together." },
 	path_hyst_db    = { 2, 0, 10, "cl", "Continuous sounds (loops, radios): a new dominant path must be this many dB louder than the one heard so far, so that the apparent direction does not flip back and forth between two almost equal paths. 0 = off." },
 	door_leaf_portal = { 1, 0, 1, "sv", "A door leaf crossed by the straight line is modelled by its doorway (portal path with the door state: gap, closed loss), as when the line crosses the wall beside it. 0 = the leaf alone (transmission, or an object when open)." },

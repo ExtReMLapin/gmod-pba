@@ -51,7 +51,10 @@ local rows, skipped = {}, { visible = 0, entity = 0, multibend = 0 }
 local tries = 0
 while #rows < N and tries < N * 400 do
 	tries = tries + 1
-	local a, b = nodes[math.random(#nodes)].pos, nodes[math.random(#nodes)].pos
+	-- args.lift (12 u) above the probe: a probe may sit right on a floor plane; lift 0 = sources at
+	-- floor level (footsteps, falling objects)
+	local lift = Vector(0, 0, args.lift or 12)
+	local a, b = nodes[math.random(#nodes)].pos + lift, nodes[math.random(#nodes)].pos + lift
 	local d = a:Distance(b)
 	if d >= 300 and d <= 1200 then
 		if clear(a, b) then
@@ -92,7 +95,7 @@ while #rows < N and tries < N * 400 do
 					while next(A.Probes.queue or {}) and SysTime() - t0 < 3 do job:frames(1) end
 					local warm, warmSilent = unhooked(level)
 					rows[#rows + 1] = { excess = refLevel - warm, silent = warmSilent, cold = refLevel - cold,
-						coldSilent = coldSilent, refLen = rp.length, direct = d }
+						coldSilent = coldSilent, refLen = rp.length, direct = d, S = a, L = b, q = ref[2] }
 				end
 			end
 		end
@@ -116,6 +119,19 @@ local function stats(field, silentField)
 end
 local n = #rows
 local out = { map = game.GetMap(), pairs = n, skipped = skipped, warm = stats("excess", "silent"), cold = stats("cold", "coldSilent") }
+if args.details then
+	table.sort(rows, function(x, y) return x.excess > y.excess end)
+	out.worst5 = {}
+	for i = 1, math.min(5, #rows) do
+		local r = rows[i]
+		local starts, goals = A.Probes.Visible(g, r.S, 3), A.Probes.Visible(g, r.L, 3)
+		local ps = A.Probes.Paths(r.S, r.L, A.cfg.max_paths, A.cfg)
+		out.worst5[i] = { excess = math.Round(r.excess, 1), silent = r.silent, S = tostring(r.S), L = tostring(r.L), q = tostring(r.q),
+			refLen = math.Round(r.refLen), direct = math.Round(r.direct), starts = #starts, goals = #goals, probePaths = #ps,
+			pathLen = ps[1] and math.Round(ps[1].length), pathLoss = ps[1] and math.Round(ps[1].lossDb, 1),
+			sameStartGoal = starts[1] and goals[1] and starts[1].id == goals[1].id or false }
+	end
+end
 local w = out.warm
 out.pass = n >= math.floor(N / 2) and w.over6 ~= nil and (args.max_over6 == nil or w.over6 <= args.max_over6)
 	and (args.max_silent == nil or w.silent <= args.max_silent)

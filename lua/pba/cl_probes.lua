@@ -470,12 +470,48 @@ local function tighten(pts)
 end
 PR.Tighten = tighten
 
+--- One-bend bridge when the graph search finds nothing: the graph keeps cells near floors only, so
+-- two places that see each other through open air (a street and a rooftop 900 u above, a pit and
+-- its rim) may have no link but stairs. The probes inside the S-L ellipse (detour <= probe_bridge_ratio
+-- x the straight line) are tried shortest first; the first one seeing both ends is the bend (then
+-- tightened onto the edge). At most probe_bridge_max candidates (two hull traces each).
+local function bridge(g, S, L, cfg)
+	local maxn = cfg.probe_bridge_max or 48
+	if maxn <= 0 then return nil end
+	local direct, ratio = S:Distance(L), cfg.probe_bridge_ratio or 1.5
+	local cands = {}
+	for _, n in ipairs(g.nodes) do
+		local len = S:Distance(n.pos) + n.pos:Distance(L)
+		if len <= direct * ratio then cands[#cands + 1] = { n.pos, len } end
+	end
+	table.sort(cands, function(a, b) return a[2] < b[2] end)
+	for i = 1, math.min(#cands, maxn) do
+		local q = cands[i][1]
+		if clearFat(S, q) and clearFat(q, L) then return { S, q, L } end
+	end
+	return nil
+end
+PR.Bridge = bridge
+
 function PR.Paths(S, L, k, cfg)
 	cfg = cfg or A.cfg
 	local g = PR.current
 	if not g then return {} end
 	local out = {}
-	for _, inner in ipairs(pulledPaths(g, S, L, k)) do
+	local inners = pulledPaths(g, S, L, k)
+	if #inners == 0 then
+		local b = bridge(g, S, L, cfg)
+		if b then
+			local pulled = tighten(b)
+			if #pulled >= 3 then
+				local p = A.Paths.EvalPolyline(pulled, cfg)
+				p.probe, p.bridge = true, true
+				out[1] = p
+			end
+		end
+		return out
+	end
+	for _, inner in ipairs(inners) do
 		-- attach S and L to the cached pulled polyline: skip the vertices they already see
 		local i, j = 1, #inner
 		while i < j and i < 8 and clearFat(S, inner[i + 1]) do i = i + 1 end
