@@ -5,7 +5,8 @@ a building: through doors, corridors and windows. If a gunshot happens in the ne
 door is on your right, you hear it on your right, muffled; the wall in front of you only lets a
 dull rumble through.
 
-Pure Lua, server + client, no binary module.
+Pure Lua, server + client. An optional native module (Windows x64) adds Steam Audio rendering:
+HRTF, simulated reverb and echoes, Doppler (see [below](#optional-native-backend-steam-audio)).
 
 ## What it does
 
@@ -24,6 +25,9 @@ Pure Lua, server + client, no binary module.
   (`pba_continuous_ramp`), and their muffling does not flicker near a threshold
   (`pba_lp_hyst_db`).
 - **Open spaces are untouched**: with a clear line of sight, the sound is exactly vanilla.
+
+The full feature list, Light and full version side by side with their options, is in
+[FEATURES.md](FEATURES.md).
 
 ## How it works
 
@@ -117,13 +121,35 @@ Server admins can forbid the native backend with `pba_allow_native 0`. Long soun
 speeches, beyond `pba_max_duration`) are followed like loops (`pba_long_sounds`).
 `pba_delay 1` (pure Lua, any renderer) delays processed sounds by the speed of sound.
 
-Build: `python native/fetch_deps.py`, then `native/build.bat` (Visual Studio C++ tools, CMake,
-Ninja). Licence of `native/` is pending (see `native/LICENSE`).
+Build (Windows x64):
+
+1. `python native/fetch_deps.py` downloads the Steam Audio 4.8.1 SDK, Facepunch's
+   gmod-module-base, miniaudio and stb_vorbis into `native/deps/`, then replaces the SDK's
+   Windows `phonon.dll` with the fork's build above (SHA-256 checked; `--official-phonon` keeps
+   Valve's).
+2. `native\build.bat` (Visual Studio 2022 or later C++ tools, CMake, Ninja; set `VCVARS` to your
+   `vcvars64.bat` if Visual Studio is not in the default place) builds
+   `native/build/gmcl_pba_win64.dll`.
+3. Copy `gmcl_pba_win64.dll` and `native/deps/steamaudio/lib/windows-x64/phonon.dll` into
+   `garrysmod/lua/bin/`, with the game closed (a loaded `phonon.dll` is never released).
+
+Licence of `native/` is pending (see `native/LICENSE`).
+
+## Demo map
+
+`maps/pba_demo.bsp` ships with the addon: `map pba_demo`. It is a walk through small test rooms
+(a neighbour behind a wall, a nightclub, a window, a shooting range, a garage door, a pool,
+a passing train, another addon's radio, wall materials, a long detour...). At each room's desk,
+buttons switch between **A** (original game), **B** (PBA Light) and **C** (PBA + Steam Audio, when
+the module is installed) and play the room's sounds; a card says what to listen for (F1 folds it).
+Modes live in memory: the map never changes your settings. Text is in English, or in French when
+the game language is French. On a public server, `pba_demo_admin_only 1` keeps the buttons for
+admins.
 
 ## How it compares
 
 **PBA Light** is the Lua addon alone (Workshop). **PBA full** adds the optional native Steam Audio
-module (Windows x64, manual install, see below). The other columns are the GMod addons that touch
+module (Windows x64, manual install, see above). The other columns are the GMod addons that touch
 the same problem, read from their code (subscriber counts noted on 2026-11-07). No other
 Steam Audio integration for GMod was found, on the Workshop or elsewhere.
 
@@ -153,7 +179,7 @@ Steam Audio integration for GMod was found, on the Workshop or elsewhere.
 
 ¹ Measured limit: with the current 0.5 s simulation window, Steam Audio's reverb time estimate
 saturates around 1.2 s, so hard materials (tile, concrete, metal) sound alike; absorbent ones (foam)
-are clearly drier. See docs/JOURNAL.md.
+are clearly drier.
 
 **Where the others do better.** MilSim Weapon Acoustics and Dynamic Weapon Reverb play tails
 recorded by sound designers: an instant "movie" gunfire feel that PBA does not try to give
@@ -185,9 +211,20 @@ same job as PBA and is switched off automatically (`pba_compat_auto`).
 
 ## Development
 
-`docs/` holds the research (`ETAT_DE_L_ART.md`), the engine facts found by reverse engineering
-(`REVERSE.md`), the coverage study, the test matrix, performance numbers and the listening
-protocol. `maps/src/gen_maps.py` generates the test maps; `pba_demo <scenario>` (repository
-only, not in the Workshop package) runs the test bench.
+- `lua/autorun/pba_init.lua` loads the files of `lua/pba/` in order; every tunable is a convar
+  declared in `lua/pba/sh_config.lua`.
+- `test/` holds the test suite. Most tests drive a running game through the
+  [gmod-mcp](https://github.com/ExtReMLapin/gmod-mcp) server (`test/mcp.py`, its small
+  command-line client, reads the server address from Claude Code's `~/.claude.json` or the file
+  named by `CLAUDE_JSON`); `python -u test/run_battery.py test/mcp.py --quick` runs the fast checks,
+  without `--quick` the full battery (about 15 minutes, needs ffmpeg). The pure unit suite also
+  runs without the game: `pip install lupa`, then `python test/offline/run_pure.py`.
+- `maps/src/gen_maps.py` and `gen_demo.py` generate the test maps and the demo map;
+  `sh maps/src/build_maps.sh [maps]` compiles them with the game's vbsp / vvis / vrad
+  (`GM=<GarrysMod folder>` if the game is elsewhere). `gen_demo.py` also writes
+  `lua/pba/demo/sh_rooms_gen.lua`, the only source of the demo's positions.
+- `pba_demo <scenario>` (repository only, not in the Workshop package) places the listener and a
+  repeating source on a test map: the bench behind `test/run_scenarios.py`.
+- `python tools/make_release.py` builds the release zip (see the script's help).
 
 Licence: GPL-3.0-or-later. See `THIRD_PARTY.md` for attributions.
