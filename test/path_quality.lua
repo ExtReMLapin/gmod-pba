@@ -14,6 +14,9 @@
 --   over6: share of pairs with excess > 6 dB (too muffled), under6: excess < -6 dB (too loud), best: the
 --   lowest excess, median: median excess, silent: share where PBA has
 --   no path at all (transmission only) although the reference found one.
+-- Long detours (length / angle guard, pba_path_guard_db): `detours` on the kept pairs and `multibend` on up
+-- to N pairs without a single-bend reference: long2 = share whose path heard most is > 2 x the straight
+-- line, guarded = share faded by > 1 dB, guard_db = mean fade, and the multibend pairs' silences.
 -- Each pair is measured COLD (first evaluation: what a one-shot sound gets, probe paths not solved
 -- yet are queued for a background solve) and WARM (after that solve: what a loop gets).
 local A, P, AC = pba, pba.Paths, pba.AC
@@ -84,7 +87,7 @@ local function reference(S, L)
 	return { S, best, L }
 end
 
-local rows, skipped = {}, { visible = 0, entity = 0, multibend = 0 }
+local rows, skipped, multi = {}, { visible = 0, entity = 0, multibend = 0 }, {}
 local tries = 0
 while #rows < N and tries < N * 400 do
 	tries = tries + 1
@@ -103,29 +106,43 @@ while #rows < N and tries < N * 400 do
 				skipped.entity = skipped.entity + 1
 			else
 				local ref = reference(a, b)
+				local function level()
+					P.InvalidateCache()
+					local r = P.Compute(a, b, 75)
+					local pw, silent = 0, true
+					for _, v in ipairs(r.voices or {}) do
+						pw = pw + v.gain * v.gain
+						if v.kind ~= "transmission" then silent = false end
+					end
+					-- the path heard most (loudest member of the first voice): its length / straight line
+					-- and the length / angle guard it got (pba_path_guard_db)
+					local v1 = r.voices and r.voices[1]
+					local dom = v1 and v1.kind ~= "transmission" and v1.members and v1.members[1]
+					local ratio = dom and dom.direct and dom.length / math.max(dom.direct, 1)
+					return 10 * math.log10(math.max(pw, 1e-12)), silent, ratio, dom and dom.guardDb or 0
+				end
+				-- outside the job's debug hook (it turns LuaJIT off): the immediate probe search has a
+				-- time budget, and must be measured at the game's real speed
+				local function unhooked(fn)
+					local done, a1, a2, a3, a4
+					timer.Simple(0, function() a1, a2, a3, a4 = fn() done = true end)
+					job:wait(function() return done end, 5)
+					return a1, a2, a3, a4
+				end
 				if not ref then
 					skipped.multibend = skipped.multibend + 1
+					-- no single-bend reference: where long detours live. PBA's chosen path is still measured
+					-- (share of long detours and the guard they get), at most N of them
+					if #multi < N then
+						if A.Probes.BuildFieldNow then unhooked(function() A.Probes.BuildFieldNow(b) end) end
+						local _, mSilent, mRatio, mGuard = unhooked(level)
+						multi[#multi + 1] = { silent = mSilent, ratio = mRatio, guard = mGuard }
+					end
 				else
 					local rp = P.EvalPolyline(ref, A.cfg)
-					local refLevel = AC.GainToDb(AC.EngineGain(rp.length, 75)) - (rp.lossDb or 0)
-					local function level()
-						P.InvalidateCache()
-						local r = P.Compute(a, b, 75)
-						local pw, silent = 0, true
-						for _, v in ipairs(r.voices or {}) do
-							pw = pw + v.gain * v.gain
-							if v.kind ~= "transmission" then silent = false end
-						end
-						return 10 * math.log10(math.max(pw, 1e-12)), silent
-					end
-					-- outside the job's debug hook (it turns LuaJIT off): the immediate probe search has a
-					-- time budget, and must be measured at the game's real speed
-					local function unhooked(fn)
-						local done, a1, a2
-						timer.Simple(0, function() a1, a2 = fn() done = true end)
-						job:wait(function() return done end, 5)
-						return a1, a2
-					end
+					-- same physics as PBA, guard included (0 in practice: a single bend inside the S-L box
+					-- is at most 1.63 x the straight line and bends less than 180 degrees)
+					local refLevel = AC.GainToDb(AC.EngineGain(rp.length, 75)) - (rp.lossDb or 0) - P.PathGuardDb(rp, A.cfg)
 					-- the listener-centred probe field (when present) is built around L, as if the player
 					-- had been standing there: the game keeps it current around the listener
 					if A.Probes.BuildFieldNow then unhooked(function() A.Probes.BuildFieldNow(b) end) end
@@ -133,9 +150,10 @@ while #rows < N and tries < N * 400 do
 					-- let the background probe solve finish (at most 3 s)
 					local t0 = SysTime()
 					while next(A.Probes.queue or {}) and SysTime() - t0 < 3 do job:frames(1) end
-					local warm, warmSilent = unhooked(level)
+					local warm, warmSilent, warmRatio, warmGuard = unhooked(level)
 					rows[#rows + 1] = { excess = refLevel - warm, silent = warmSilent, cold = refLevel - cold,
-						coldSilent = coldSilent, refLen = rp.length, refDb = refLevel, direct = d, S = a, L = b, q = ref[2] }
+						coldSilent = coldSilent, refLen = rp.length, refDb = refLevel, direct = d, S = a, L = b, q = ref[2],
+						ratio = warmRatio, guard = warmGuard }
 				end
 			end
 		end
@@ -158,8 +176,26 @@ local function stats(field, silentField)
 	return { over6 = math.Round(over6 / n, 3), under6 = math.Round(under6 / n, 3), best = math.Round(ex[1], 1), silent = math.Round(silent / n, 3), median = math.Round(ex[math.ceil(n / 2)], 1),
 		p90 = math.Round(ex[math.ceil(n * 0.9)], 1), worst = math.Round(ex[n], 1) }
 end
+-- long detours: share of pairs whose path heard most is more than 2 x the straight line (long2), share
+-- faded by more than 1 dB by the length / angle guard (guarded) and the mean fade (guard_db)
+local function detours(list)
+	local n, long2, guarded, sum = #list, 0, 0, 0
+	if n == 0 then return { n = 0 } end
+	for _, r in ipairs(list) do
+		if r.ratio and r.ratio > 2 then long2 = long2 + 1 end
+		if (r.guard or 0) > 1 then guarded = guarded + 1 end
+		sum = sum + (r.guard or 0)
+	end
+	return { n = n, long2 = math.Round(long2 / n, 3), guarded = math.Round(guarded / n, 3), guard_db = math.Round(sum / n, 2) }
+end
 local n = #rows
-local out = { map = game.GetMap(), pairs = n, skipped = skipped, warm = stats("excess", "silent"), cold = stats("cold", "coldSilent") }
+local out = { map = game.GetMap(), pairs = n, skipped = skipped, warm = stats("excess", "silent"), cold = stats("cold", "coldSilent"),
+	detours = detours(rows), multibend = detours(multi) }
+do -- silences among the multi-bend pairs (no reference there, but a guard must not add any)
+	local s = 0
+	for _, r in ipairs(multi) do if r.silent then s = s + 1 end end
+	out.multibend.silent = #multi > 0 and math.Round(s / #multi, 3) or nil
+end
 if args.details then
 	-- details "under": the loudest-vs-reference pairs first (PBA too loud), with every voice
 	if args.details == "under" then
@@ -183,7 +219,8 @@ if args.details then
 			for _, v in ipairs(res.voices or {}) do
 				local ms = {}
 				for _, p in ipairs(v.members or {}) do
-					ms[#ms + 1] = string.format("len %d loss %.1f raw %.1f pts %d%s%s", p.length or -1, p.lossDb or -1, p.rawLossDb or -1, p.points and #p.points or 0,
+					ms[#ms + 1] = string.format("len %d loss %.1f raw %.1f guard %.1f ratio %.2f bend %d pts %d%s%s", p.length or -1, p.lossDb or -1, p.rawLossDb or -1,
+						p.guardDb or 0, p.direct and p.length / math.max(p.direct, 1) or -1, p.bendDeg or -1, p.points and #p.points or 0,
 						p.bridge and " bridge" or "", p.portals and (" portals " .. #p.portals) or "")
 				end
 				vs[#vs + 1] = { kind = v.kind, db = math.Round(AC.GainToDb(v.gain), 1), len = v.len and math.Round(v.len), lp = v.lp, members = ms }

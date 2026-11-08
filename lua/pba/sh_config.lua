@@ -22,6 +22,10 @@ A.CONFIG = {
 	max_voices      = { 3, 1, 6, "sv", "Voices per processed sound." },
 	max_active      = { 24, 4, 60, "sv", "Global budget of pba voices alive at once (per client)." },
 	max_depth       = { 8, 1, 16, "sv", "Max portals crossed by a path." },
+	path_guard_db   = { 12, 0, 40, "sv", "Implausible paths fade (dB at most): a path much longer than the straight line, or winding by a large total angle, is not where most of the sound comes from (walls, other routes). Progressive, never a cut: the path always stays. 0 = off." },
+	path_guard_ratio = { 2, 1, 10, "sv", "Paths fade from this many times the straight line (full fade at twice it)." },
+	path_guard_angle = { 180, 30, 720, "sv", "Paths fade from this total bend in degrees, summed over their corners (full fade at twice it)." },
+	path_guard_near = { 512, 0, 4096, "sv", "For the fade, a straight line shorter than this (units) counts as this long: a source just behind a wall heard through the door round it is a normal detour." },
 	probe_spacing   = { 128, 32, 512, "sv", "Probe grid spacing (units) of the fallback graph." },
 	probes          = { 1, 0, 1, "sv", "Use the probe graph when no areaportal path exists." },
 

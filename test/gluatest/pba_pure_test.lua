@@ -299,5 +299,111 @@ return {
 			local both = P.SelectVoices(L, { p }, t, 75, CFG)
 			expect(#both).to.equal(1) -- 40 dB below: outside the 20 dB window
 		end },
+		-- length / angle guard (ETAT_DE_L_ART_LUA.md 1.2): an implausible detour fades progressively
+		{ name = "PathShape: straight-line length and total bend of a path", func = function()
+			local S, L = Vector(0, 0, 0), Vector(100, 100, 0)
+			local d, b = P.PathShape(S, { Vector(100, 0, 0) }, L)
+			expect(near(d, math.sqrt(2) * 100)).to.beTrue()
+			expect(near(b, 90, 1e-6)).to.beTrue()
+			local _, straight = P.PathShape(Vector(0, 0, 0), { Vector(50, 0, 0) }, Vector(100, 0, 0))
+			expect(near(straight, 0, 1e-6)).to.beTrue()
+			-- U-turn round a wall end: 90 + 90; a duplicated vertex (two portals on one spot) counts once
+			local _, u = P.PathShape(Vector(0, 0, 0), { Vector(100, 0, 0), Vector(100, 0, 0), Vector(100, 50, 0) }, Vector(0, 50, 0))
+			expect(near(u, 180, 1e-6)).to.beTrue()
+		end },
+		{ name = "PathGuardDb: a 3x detour fades, a short gentle path does not, capped, 0 = off", func = function()
+			local cfg = setmetatable({ path_guard_db = 12, path_guard_ratio = 2, path_guard_angle = 180, path_guard_near = 512 }, { __index = CFG })
+			local function guard(len, direct, bend) return P.PathGuardDb({ length = len, direct = direct, bendDeg = bend }, cfg) end
+			expect(guard(1100, 1000, 30)).to.equal(0) -- 1.1x, gentle: untouched
+			expect(guard(3000, 1000, 30) - guard(1100, 1000, 30) >= 4).to.beTrue()
+			expect(guard(3000, 1000, 30) < 12).to.beTrue() -- progressive, not a cut
+			expect(near(guard(20000, 1000, 30), 12, 1e-9)).to.beTrue() -- never more than path_guard_db
+			expect(near(guard(20000, 1000, 700), 12, 1e-9)).to.beTrue()
+			expect(guard(1100, 1000, 170)).to.equal(0) -- two right-angle corners: a normal path
+			expect(guard(1100, 1000, 400) >= 10).to.beTrue() -- winding beyond 360 degrees
+			-- a source just behind a wall heard through the door round it: short line, room-scale detour
+			expect(guard(900, 40, 120)).to.equal(0)
+			-- no shape known (Steam Audio baked path): untouched
+			expect(P.PathGuardDb({ length = 5000 }, cfg)).to.equal(0)
+			cfg.path_guard_db = 0
+			expect(guard(20000, 1000, 700)).to.equal(0)
+		end },
+		{ name = "PathGuardDb: continuous (no step above 0.5 dB for 1 % of length or 1 degree)", func = function()
+			local cfg = setmetatable({ path_guard_db = 12, path_guard_ratio = 2, path_guard_angle = 180, path_guard_near = 512 }, { __index = CFG })
+			local worst, prev = 0, nil
+			local r = 1
+			while r < 8 do
+				local g = P.PathGuardDb({ length = 1000 * r, direct = 1000, bendDeg = 100 }, cfg)
+				if prev then worst = math.max(worst, math.abs(g - prev)) end
+				prev, r = g, r * 1.01
+			end
+			expect(worst <= 0.5).to.beTrue()
+			expect(prev > 11.9).to.beTrue() -- the sweep reached the full fade
+			worst, prev = 0, nil
+			for a = 0, 720 do
+				local g = P.PathGuardDb({ length = 1200, direct = 1000, bendDeg = a }, cfg)
+				if prev then worst = math.max(worst, math.abs(g - prev)) end
+				prev = g
+			end
+			expect(worst <= 0.5).to.beTrue()
+			-- across the near floor: the straight line moving by 5 units never jumps either
+			worst, prev = 0, nil
+			for d = 200, 1500, 5 do
+				local g = P.PathGuardDb({ length = 2000, direct = d, bendDeg = 100 }, cfg)
+				if prev then worst = math.max(worst, math.abs(g - prev)) end
+				prev = g
+			end
+			expect(worst <= 0.5).to.beTrue()
+		end },
+		{ name = "Guard, one model: a portal chain and a probe polyline on the same points get the same shape and fade", func = function()
+			local g = G.Build(synthBsp())
+			g.byKey[1].open = 1
+			local S, L = Vector(0, 25, 50), Vector(300, 125, 50)
+			local p = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, CFG)
+			expect(near(p.direct, S:Distance(L))).to.beTrue()
+			expect(p.bendDeg > 0).to.beTrue()
+			local pts = { S }
+			for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+			pts[#pts + 1] = L
+			local saved = P.SegmentDoorLoss
+			P.SegmentDoorLoss = function() return 0, 0 end -- no game traces in the pure suite
+			local ok, q = pcall(P.EvalPolyline, pts, CFG)
+			P.SegmentDoorLoss = saved
+			expect(ok).to.beTrue()
+			expect(near(q.direct, p.direct)).to.beTrue()
+			expect(near(q.bendDeg, p.bendDeg)).to.beTrue()
+			expect(near(q.length, p.length)).to.beTrue()
+			local cfg = setmetatable({ path_guard_db = 12, path_guard_ratio = 1.05, path_guard_angle = 20, path_guard_near = 1 }, { __index = CFG })
+			expect(P.PathGuardDb(p, cfg) > 0).to.beTrue()
+			expect(near(P.PathGuardDb(p, cfg), P.PathGuardDb(q, cfg))).to.beTrue()
+		end },
+		{ name = "SelectVoices: a long detour fades (dominance goes to the shorter route), never vanishes", func = function()
+			local L = Vector(0, 0, 0)
+			local on = setmetatable({ path_guard_db = 12, path_guard_ratio = 2, path_guard_angle = 180, path_guard_near = 512 }, { __index = CFG })
+			local off = setmetatable({ path_guard_db = 0 }, { __index = on })
+			local function paths()
+				return { { pos = Vector(100, 100, 0), length = 1000, direct = 600, bendDeg = 90, lossDb = 8, lp = 1, name = "short" },
+					{ pos = Vector(100, -100, 0), length = 1700, direct = 600, bendDeg = 150, lossDb = 0, lp = 0, name = "long" } }
+			end
+			local v0 = P.SelectVoices(L, paths(), nil, 75, off)
+			expect(v0[1].members[1].name).to.equal("long") -- without the guard the 2.8x detour dominates
+			local ps = paths()
+			local v1 = P.SelectVoices(L, ps, nil, 75, on)
+			expect(v1[1].members[1].name).to.equal("short")
+			expect(ps[2].guardDb > 3).to.beTrue()
+			expect(ps[1].guardDb).to.equal(0)
+			-- idempotent: the cached paths re-selected keep the same levels (the guard is not added twice)
+			local lvl = v1[1].level
+			local v2 = P.SelectVoices(L, ps, nil, 75, on)
+			expect(near(v2[1].level, lvl, 1e-9)).to.beTrue()
+			-- alone, the long detour is quieter but still a path voice (the guard never makes a sound silent)
+			local function lone() return { { pos = Vector(100, -100, 0), length = 1700, direct = 600, bendDeg = 150, lossDb = 0, lp = 0 } } end
+			local t = { walls = { {} }, lossDb = 40, lp = 4, length = 600, pos = Vector(50, 0, 0) }
+			local a = P.SelectVoices(L, lone(), t, 75, on)
+			local b = P.SelectVoices(L, lone(), t, 75, off)
+			expect(a[1].kind).to.equal("portal")
+			expect(b[1].level - a[1].level > 3).to.beTrue()
+			expect(b[1].level - a[1].level <= 12 + 1e-6).to.beTrue()
+		end },
 	},
 }
