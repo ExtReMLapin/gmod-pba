@@ -13,7 +13,9 @@ local A, LP = pba, pba.Loops
 local args = job.args or {}
 local SPEED = args.speed or 150
 -- MIN_EVAL_DB > MAX_GAIN_DB: without ramps such a re-evaluation step is heard in one frame and fails
-local MAX_GAIN_DB, MAX_HIGH_DB, MAX_DIR_DEG, MIN_EVAL_DB, MIN_FPS = 1.5, 3, 20, 2, 30
+-- MIN_FPS 15: an unfocused game is capped at 20 fps (engine_no_focus_sleep does not exist in GMod);
+-- at 15 fps a 0.25 s ramp still spans ~4 frames, so the per-frame thresholds still tell a ramp from a step
+local MAX_GAIN_DB, MAX_HIGH_DB, MAX_DIR_DEG, MIN_EVAL_DB, MIN_FPS = 1.5, 3, 20, 2, 15
 local X, Y0, Y1, Z = 440, 30, 420, 64
 
 local function db(a, b) return math.abs(20 * math.log10(math.max(a, 1e-6) / math.max(b, 1e-6))) end
