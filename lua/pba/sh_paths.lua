@@ -587,6 +587,11 @@ function P.Walls(S, L, maxWalls, srcEnt)
 		end
 		local w = { entry = entry, exit = exit, thickness = entry:Distance(exit), mat = tr.MatType, surf = surf,
 			surfIdx = tr.SurfaceProps, ent = hitEnt }
+		if hitEnt then
+			local ext = hitEnt:OBBMaxs() - hitEnt:OBBMins()
+			w.minExtent = math.min(ext.x, ext.y, ext.z) -- panel or closed volume (P.EvalWalls)
+			w.fromInside = tr.StartSolid or nil -- the ray starts inside it: one sheet crossed
+		end
 		if hitEnt and not isClosure(hitEnt) then
 			-- detour round the object's ORIENTED box, in its local frame (a tilted slab keeps
 			-- the size of a slab; its world AABB would be huge and could even contain S)
@@ -661,6 +666,9 @@ function P.DetourDelta(S, L, mins, maxs, valid)
 end
 
 --- Transmission summary of a wall list (pure).
+-- units (30 cm): a prop whose thinnest box side is larger is a closed volume, not a panel (a door model
+-- is ~12 u thick with its handles)
+local HOLLOW_MIN = 16
 function P.EvalWalls(walls, cfg, noCap)
 	cfg = cfg or A.cfg
 	local loss, mid, lp = 0, 0, 0
@@ -675,10 +683,18 @@ function P.EvalWalls(walls, cfg, noCap)
 		local dd
 		if w.ent and not isClosure(w.ent) then
 			-- props: hollow models (sheet metal, panels...) follow the mass law on the
-			-- surfaceprop's own thickness when it declares one
+			-- surfaceprop's own thickness when it declares one. A closed hollow volume (vending
+			-- machine, car, container: every side of its box thicker than a panel) is crossed through
+			-- two of its sheets, whatever the chord: a double wall over the depth crossed. A panel
+			-- (thin box) is one sheet.
 			local data = w.surfIdx and util.GetSurfaceData(w.surfIdx)
 			if data and (data.thickness or 0) > 0 then
-				db = math.min(db, AC.MassLaw(data.density, data.thickness, 500))
+				-- both sheets crossed: the ray enters and leaves the volume (not from or to inside it)
+				if (w.minExtent or 0) > HOLLOW_MIN and not w.fromInside and w.thickness > 2 * data.thickness / 0.75 then
+					db = math.min(db, AC.DoubleWall(data.density, data.thickness, w.thickness, 500))
+				else
+					db = math.min(db, AC.MassLaw(data.density, data.thickness, 500))
+				end
 			end
 			-- a prop is finite: sound also bends around it. Combine (power sum) the
 			-- transmission through it with the diffraction over / round it. A small object

@@ -219,6 +219,20 @@ function AC.MassLaw(density, thicknessInches, f)
 	return max(20 * log10(m * (f or 500)) - 47, 0)
 end
 
+--- A hollow object crossed through: two sheets with an air gap (Sharp 1978, double-leaf partition):
+-- below the mass-air-mass resonance f0 one wall of the total mass, then R1 + R2 + 20 log10(f d) - 29
+-- up to fl = 55 / d, then R1 + R2 + 6. gapUnits: depth crossed (units), both sheets included.
+function AC.DoubleWall(density, thicknessInches, gapUnits, f)
+	f = f or 500
+	local m = density * thicknessInches * 0.0254
+	local both = AC.MassLaw(density, 2 * thicknessInches, f)
+	local d = gapUnits * UNIT_M - 2 * thicknessInches * 0.0254 -- air gap (m)
+	if m <= 0 or d <= 0 or f <= 60 * sqrt(2 / (m * d)) then return both end
+	local r1 = AC.MassLaw(density, thicknessInches, f)
+	if f < 55 / d then return max(both, 2 * r1 + 20 * log10(f * d) - 29) end
+	return max(both, 2 * r1 + 6)
+end
+
 --- Gain multiplier of a door at opening fraction `frac` (0 closed .. 1 open) whose closed
 -- transmission loss is `closedDb`. TDM-style interpolation (sqrt), see ETAT_DE_L_ART Q5.
 --- Rendered loss (dB) of a closed door leaf: the SAME convention as a wall crossed by the
