@@ -75,6 +75,73 @@ local function wallWithHole(x0, x1)
 		{ Vector(x0, 64, 112), Vector(x1, 112, 300) }, { Vector(-1000, -1000, -100), Vector(2000, 2000, 0) } }
 end
 
+-- Probe scene: two rooms as in pba_noportal (A x 0..512, B x 528..1040, y 0..512, z 0..192), the wall
+-- between them pierced by `holes` ({ y0, y1, top }), plus `extra` boxes. For the duration of fn(g) only
+-- (restored even on error): line and hull traces and PointContents see these boxes, A.cfg takes `over`,
+-- and the probe module works on its own graph g (flood-filled from room A), field, queue and cache.
+local function withProbeRooms(holes, extra, over, fn)
+	local PR = A.Probes
+	local BIG = 4000
+	local boxes = { { Vector(-BIG, -BIG, -BIG), Vector(BIG, BIG, 0) }, { Vector(-BIG, -BIG, 192), Vector(BIG, BIG, BIG) },
+		{ Vector(-BIG, -BIG, -BIG), Vector(0, BIG, BIG) }, { Vector(1040, -BIG, -BIG), Vector(BIG, BIG, BIG) },
+		{ Vector(-BIG, -BIG, -BIG), Vector(BIG, 0, BIG) }, { Vector(-BIG, 512, -BIG), Vector(BIG, BIG, BIG) } }
+	local y = -8
+	for _, h in ipairs(holes) do
+		boxes[#boxes + 1] = { Vector(512, y, -8), Vector(528, h[1], 200) }
+		boxes[#boxes + 1] = { Vector(512, h[1] - 8, h[3]), Vector(528, h[2] + 8, 200) } -- lintel, overlapping
+		y = h[2]
+	end
+	boxes[#boxes + 1] = { Vector(512, y, -8), Vector(528, 520, 200) }
+	for _, b in ipairs(extra or {}) do boxes[#boxes + 1] = b end
+	local function inside(p)
+		for _, b in ipairs(boxes) do
+			if p.x > b[1].x and p.y > b[1].y and p.z > b[1].z and p.x < b[2].x and p.y < b[2].y and p.z < b[2].z then return true end
+		end
+		return false
+	end
+	local function trace(t, pad)
+		local out = t.output or {}
+		local best
+		if not t.ignoreworld then
+			local d = Vector(pad, pad, pad)
+			for _, b in ipairs(boxes) do
+				local t0, t1 = segBox(t.start, t.endpos, b[1] - d, b[2] + d)
+				if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+			end
+		end
+		out.Hit, out.HitWorld, out.Fraction, out.Entity = best ~= nil, best ~= nil, best or 1, nil
+		out.StartSolid = best == 0 and inside(t.start)
+		out.HitPos = t.start + (t.endpos - t.start) * (best or 1)
+		return out
+	end
+	local saved = { util.TraceLine, util.TraceHull, util.PointContents }
+	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold" }
+	local savedPR, savedCfg = {}, {}
+	for _, k in ipairs(state) do savedPR[k] = PR[k] end
+	for k, v in pairs(over or {}) do savedCfg[k] = A.cfg[k] A.cfg[k] = v end
+	util.TraceLine = function(t) return trace(t, 0) end
+	util.TraceHull = function(t) return trace(t, t.maxs and t.maxs.x or 0) end
+	util.PointContents = function(p) return inside(p) and CONTENTS_SOLID or 0 end
+	local ok, err = pcall(function()
+		PR.queue, PR.pathCache, PR.pathCacheN, PR.inlineFrame, PR.field, PR.fieldHold = {}, {}, 0, nil, nil, nil
+		local g = PR.BuildCo({ Vector(256, 256, 49) }, 128)
+		PR.Prepare(g)
+		PR.current = g
+		fn(g)
+	end)
+	util.TraceLine, util.TraceHull, util.PointContents = saved[1], saved[2], saved[3]
+	for _, k in ipairs(state) do PR[k] = savedPR[k] end
+	for k in pairs(over or {}) do A.cfg[k] = savedCfg[k] end
+	if not ok then error(err, 0) end
+end
+-- every segment of a polyline clear of the scene (a test route must be a real route)
+local function routeClear(pts)
+	for i = 1, #pts - 1 do
+		if not A.Probes.ClearSeg(pts[i], pts[i + 1]) then return false end
+	end
+	return true
+end
+
 -- synthetic BSP: three areas in a row, portals 1 (areas 1|2, plane x=100) and 2 (areas 2|3, x=200)
 local function rect(x, y0, y1, z0, z1)
 	return { Vector(x, y0, z0), Vector(x, y0, z1), Vector(x, y1, z1), Vector(x, y1, z0) }
@@ -938,6 +1005,86 @@ return {
 			end
 			expect(flips(0)).to.equal(20)
 			expect(flips(1.5)).to.equal(0)
+		end },
+		{ name = "Probe routes: one opening is heard once (field and k-path routes from neighbouring probes), at the level of the best", func = function()
+			-- pba_noportal measured offline: 14 % of the sources behind the wall got 2 or 3 routes through the one
+			-- hole (the same route reached from neighbouring probes, last bends 128 u apart on either side of the
+			-- wall), summed up to +2.9 dB over the best
+			local L = Vector(256, 256, 64)
+			local function sweep(over)
+				local n, multi, worst = 0, 0, 0
+				withProbeRooms({ { 64, 112, 112 } }, nil, over, function(g)
+					A.Probes.field = A.Probes.BuildField(g, L)
+					local cfg = setmetatable({ probe_bridge_max = 0 }, { __index = CFG })
+					for _, x in ipairs({ 600, 900 }) do for y = 24, 488, 8 do
+						local S = Vector(x, y, 40)
+						if not A.Probes.ClearSeg(S, L) then
+							local ps = A.Probes.Paths(S, L, 3, cfg)
+							n = n + 1
+							if #ps > 1 then multi = multi + 1 end
+							if #ps > 0 then
+								local vs = P.SelectVoices(L, ps, nil, 75, cfg)
+								local best, pw = -math.huge, 0
+								for _, p in ipairs(ps) do best = math.max(best, p.level) end
+								for _, v in ipairs(vs) do pw = pw + v.gain ^ 2 end
+								worst = math.max(worst, AC.GainToDb(math.sqrt(pw)) - best)
+							end
+						end
+					end end
+				end)
+				return n, multi, worst
+			end
+			for _, over in ipairs({ { probe_field = 1, probe_inline_ms = 0 }, -- the listener field alone
+				{ probe_field = 0, probe_inline_ms = 1000, probe_inline_frame_ms = 1e9 } }) do -- the k-path search alone
+				local n, multi, worst = sweep(over)
+				expect(n > 100).to.beTrue()
+				expect(multi).to.equal(0)
+				expect(worst < 0.1).to.beTrue()
+			end
+		end },
+		{ name = "Probe routes: of two routes through one opening the best is kept, whatever the order", func = function()
+			local S, L = Vector(900, 264, 40), Vector(256, 256, 64)
+			withProbeRooms({ { 64, 112, 112 } }, nil, nil, function()
+				-- as tightened from two neighbouring probes on pba_noportal: last bend before or after the wall
+				local a, b = { S, Vector(576, 67, 64), L }, { S, Vector(448, 70, 64), L }
+				expect(routeClear(a) and routeClear(b)).to.beTrue()
+				local pa, pb = P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG)
+				local best = P.PathLevel(pa.length, pa.lossDb, 75) >= P.PathLevel(pb.length, pb.lossDb, 75) and pa or pb
+				for _, order in ipairs({ { pa, pb }, { pb, pa } }) do
+					local kept = A.Probes.DistinctRoutes(S, L, order)
+					expect(#kept).to.equal(1)
+					expect(kept[1] == best).to.beTrue()
+				end
+			end)
+		end },
+		{ name = "Probe routes: distinct openings stay distinct (far doorways: two voices; close doorways, a post)", func = function()
+			-- far apart: two voices
+			local S, L = Vector(900, 256, 40), Vector(256, 256, 64)
+			withProbeRooms({ { 64, 112, 112 }, { 400, 448, 112 } }, nil, nil, function()
+				local a = { S, Vector(536, 100, 60), Vector(504, 100, 60), L }
+				local b = { S, Vector(536, 412, 60), Vector(504, 412, 60), L }
+				expect(routeClear(a) and routeClear(b) and not A.Probes.ClearSeg(S, L)).to.beTrue()
+				local kept = A.Probes.DistinctRoutes(S, L, { P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG) })
+				expect(#kept).to.equal(2)
+				expect(#P.SelectVoices(L, kept, nil, 75, CFG)).to.equal(2)
+			end)
+			-- two doorways 32 u apart, source and listener symmetric: the routes cross the wall at the same point of
+			-- their length, last bends 48 u apart (the former filter, last bends < one probe spacing apart, merged them)
+			S, L = Vector(900, 264, 40), Vector(256, 264, 64)
+			withProbeRooms({ { 200, 248, 112 }, { 280, 328, 112 } }, nil, nil, function()
+				local a = { S, Vector(536, 240, 60), Vector(504, 240, 60), L }
+				local b = { S, Vector(536, 288, 60), Vector(504, 288, 60), L }
+				expect(routeClear(a) and routeClear(b) and not A.Probes.ClearSeg(S, L)).to.beTrue()
+				expect(#A.Probes.DistinctRoutes(S, L, { P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG) })).to.equal(2)
+			end)
+			-- one doorway, a post in front of it: the two sides of the post are two routes
+			S, L = Vector(900, 256, 40), Vector(256, 256, 64)
+			withProbeRooms({ { 232, 280, 112 } }, { { Vector(700, 240, -8), Vector(732, 272, 200) } }, nil, function()
+				local a = { S, Vector(716, 230, 40), L }
+				local b = { S, Vector(716, 282, 40), L }
+				expect(routeClear(a) and routeClear(b) and not A.Probes.ClearSeg(S, L)).to.beTrue()
+				expect(#A.Probes.DistinctRoutes(S, L, { P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG) })).to.equal(2)
+			end)
 		end },
 	},
 }
