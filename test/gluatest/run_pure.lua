@@ -4,7 +4,8 @@ local function expect(v)
 		beNil = function() if v ~= nil then error("expected nil, got " .. tostring(v), 2) end end,
 		equal = function(o) if v ~= o then error("expected " .. tostring(o) .. ", got " .. tostring(v), 2) end end } }
 end
-local src = file.Read("mcpagent_tmp/pba_pure_test.lua", "LUA")
+-- PBA_PURE_SRC: the suite sent inline by run_battery.py (no file written: parallel game instances share lua/)
+local src = PBA_PURE_SRC or file.Read("mcpagent_tmp/pba_pure_test.lua", "LUA")
 local fn = CompileString(src, "pba_pure_test")
 setfenv(fn, setmetatable({ expect = expect }, { __index = _G }))
 local suite = fn()

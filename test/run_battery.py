@@ -8,8 +8,16 @@ GAME = r"D:\SteamLibrary\steamapps\common\GarrysMod\garrysmod"
 sys.path.insert(0, TEST)
 
 def call(tool, args, mx=200000, timeout=600):
-    out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), str(mx)],
+    a = json.dumps(args)
+    if len(a) > 20000:  # Windows command line limit: pass the arguments in a temp file (outside lua/)
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            f.write(a)
+        a = "@" + f.name
+    out = subprocess.run([sys.executable, "-I", MCP, "call", tool, a, str(mx)],
                          capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+    if a.startswith("@"):
+        os.remove(a[1:])
     try:
         return json.loads(out)
     except ValueError:
@@ -80,11 +88,12 @@ def drop_ogg():
     shutil.rmtree(os.path.join(GAME, "sound", "pba_test"), ignore_errors=True)
 
 def pure():
+    # the suite is sent inline, not copied into lua/: parallel game instances share that folder (and its
+    # autorefresh), a written file would be seen by every instance
     code = open(os.path.join(TEST, "gluatest", "run_pure.lua"), encoding="utf-8").read()
-    import shutil
-    shutil.copy(os.path.join(TEST, "gluatest", "pba_pure_test.lua"),
-                os.path.join(GAME, "lua", "mcpagent_tmp", "pba_pure_test.lua"))
-    return call("lua_exec", {"realm": "client", "code": code}).get("values")
+    src = open(os.path.join(TEST, "gluatest", "pba_pure_test.lua"), encoding="utf-8").read()
+    assert "]=======]" not in src
+    return call("lua_exec", {"realm": "client", "code": "local PBA_PURE_SRC = [=======[" + src + "]=======]" + chr(10) + code}).get("values")
 
 steps = [
     ("load pba_tworooms", lambda: load("pba_tworooms") or "ok"),
