@@ -49,6 +49,7 @@ A.CONFIG = {
 	probe_bridge_ratio = { 1.5, 1, 4, "cl", "Bridge candidates: probes whose detour is at most this many times the straight line." },
 	probe_inline_frame_ms = { 6, 0, 40, "cl", "At most this many ms of immediate probe path searches per frame, all sounds together." },
 	path_hyst_db    = { 2, 0, 10, "cl", "Continuous sounds (loops, radios): a new dominant path must be this many dB louder than the one heard so far, so that the apparent direction does not flip back and forth between two almost equal paths. 0 = off." },
+	path_props      = { 1, 0, 1, "sv", "Props on the paths through openings (a crate in a doorway, a container in front of an opening) muffle them like on the straight line. 0 = only the straight line is checked for props." },
 	door_leaf_portal = { 1, 0, 1, "sv", "A door leaf crossed by the straight line is modelled by its doorway (portal path with the door state: gap, closed loss), as when the line crosses the wall beside it. 0 = the leaf alone (transmission, or an object when open)." },
 
 	-- low-pass mapping: lowpass level thresholds (dB of diffraction) and DSP presets

@@ -116,6 +116,8 @@ steps = [
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
     ("reverb_rt", lambda: py("reverb_rt.py")),
     ("native_options", lambda: py("native_options.py")),
+    # props on the paths through openings (portal and probe paths), not only on the straight line
+    ("path_obstruction", lambda: py("path_obstruction.py")),
     # path quality against an independent single-bend reference (maps without areaportals: probes)
     ("path_quality", lambda: py("path_quality.py", "--check", "d1_town_01", "gm_construct")),
 ]

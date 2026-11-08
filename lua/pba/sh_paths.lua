@@ -750,6 +750,74 @@ local function q(v) return math.floor(v.x / 32) .. "," .. math.floor(v.y / 32) .
 
 --- Full computation for one sound. S, L: positions; returns result table:
 -- { clear = bool, aS, aL, paths, trans, voices }.
+--- Props (and closed movers) on the paths, not only on the straight line: a crate in a doorway, a
+-- container parked in front of an opening. Same object model as on the straight line (P.Walls /
+-- P.EvalWalls: detour around the object, capped by prop_max_db); doors are left to the portal state,
+-- the emitter never obstructs its own sound.
+-- Portal paths: the relaxed point sits on an edge of a zero-thickness portal plane, so a single ray
+-- slips past an object pushed against the doorway (through the jamb). The share f of the opening the
+-- object masks is measured instead (15 samples over the opening, rays before and after it) and the
+-- direct part becomes (1 - f) + f * g, g = what passes the object. Probe paths: segment traces.
+local PORTAL_GRID = { 5, 3 }
+local function objectsOn(a, b, srcEnt, cfg, out)
+	for _, w in ipairs(P.Walls(a, b, cfg.trans_max_walls, srcEnt)) do
+		if w.ent and not OPENABLE[w.ent:GetClass()] then out[#out + 1] = w end
+	end
+	return out
+end
+local function portalMasked(portal, prev, nxt, srcEnt, cfg)
+	local n = portal.normal
+	local wax = n:Cross(Vector(0, 0, 1))
+	if wax:LengthSqr() < 1e-4 then wax = n:Cross(Vector(1, 0, 0)) end
+	wax:Normalize()
+	local vax = n:Cross(wax)
+	local u0, u1, v0, v1 = math.huge, -math.huge, math.huge, -math.huge
+	for _, x in ipairs(portal.poly or {}) do
+		local d = x - portal.center
+		u0, u1 = math.min(u0, d:Dot(wax)), math.max(u1, d:Dot(wax))
+		v0, v1 = math.min(v0, d:Dot(vax)), math.max(v1, d:Dot(vax))
+	end
+	if u0 > u1 then return nil end
+	local blocked, total, objs = 0, 0, {}
+	for i = 1, PORTAL_GRID[1] do
+		for j = 1, PORTAL_GRID[2] do
+			local q = portal.center + wax * (u0 + (u1 - u0) * (0.05 + 0.9 * (i - 0.5) / PORTAL_GRID[1]))
+				+ vax * (v0 + (v1 - v0) * (0.05 + 0.9 * (j - 0.5) / PORTAL_GRID[2]))
+			local k = #objs
+			objectsOn(prev, q, srcEnt, cfg, objs)
+			objectsOn(q, nxt, srcEnt, cfg, objs)
+			total = total + 1
+			if #objs > k then blocked = blocked + 1 end
+		end
+	end
+	if blocked == 0 then return nil end
+	-- what passes the object: the first sample's objects, as on the straight line
+	local seen, uniq = {}, {}
+	for _, w in ipairs(objs) do if not seen[w.ent] then seen[w.ent] = true uniq[#uniq + 1] = w end end
+	local loss, lp = P.EvalWalls(uniq, cfg)
+	local f = blocked / total
+	return -AC.GainToDb((1 - f) + f * 10 ^ (-loss / 20)), f >= 0.5 and lp or 0
+end
+local function pathProps(p, S, L, cfg, srcEnt)
+	local pts = { S }
+	for _, q in ipairs(p.points) do pts[#pts + 1] = q end
+	pts[#pts + 1] = L
+	local add, lpAdd = 0, 0
+	if p.chain and #p.chain > 0 then
+		for i, portal in ipairs(p.chain) do
+			local dl, dlp = portalMasked(portal, pts[i], pts[i + 2] or L, srcEnt, cfg)
+			if dl then add, lpAdd = add + dl, math.max(lpAdd, dlp) end
+		end
+	else
+		local objs = {}
+		for i = 1, #pts - 1 do objectsOn(pts[i], pts[i + 1], srcEnt, cfg, objs) end
+		if #objs == 0 then return end
+		add, lpAdd = P.EvalWalls(objs, cfg)
+	end
+	if add <= 0 then return end
+	p.lossDb, p.propDb, p.lp = p.lossDb + add, add, math.max(p.lp or 0, lpAdd)
+end
+
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
 	local key = q(S) .. "|" .. q(L) .. "|" .. sndlvl
@@ -852,6 +920,11 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			and not (A.FrameBudgetExceeded and A.FrameBudgetExceeded()) then
 			r.paths = A.Probes.Paths(S, L, cfg.max_paths, cfg)
 			r.viaProbes = #r.paths > 0
+		end
+		if (cfg.path_props or 1) >= 0.5 then
+			for _, p in ipairs(r.paths) do
+				if p.points and #p.points > 0 then pathProps(p, S, L, cfg, srcEnt) end
+			end
 		end
 		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg)
 	end
