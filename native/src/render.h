@@ -40,6 +40,8 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n);
 void PublishSimulated(int slot, int gen);
 // latest reverb times at the listener (read by the audio thread from the simulation outputs)
 void RoomReverbTimes(float rt[3]);
+// hybrid tail EQ last applied to the room reverb (3 bands)
+void RoomTailEq(float eq[3]);
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir);
 void TestBinaural(IPLVector3 dir, double* eL, double* eR);
 bool HasSound(const std::string& name);

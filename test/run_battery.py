@@ -1,5 +1,5 @@
 """Full PBA test battery, sequential (about 15 min; the game changes maps). Prints one ##progress line
-per step and a summary. Usage: python -I -u run_battery.py <path to mcp.py> [--quick]. Needs ffmpeg on
+per step and a summary. Usage: python -I -u run_battery.py <path to mcp.py> [--quick | --only=step,step]. Needs ffmpeg on
 PATH. --quick: the fast checks only (about 2 minutes), to run before each commit."""
 import json, os, subprocess, sys, time
 TEST = os.path.dirname(os.path.abspath(__file__))
@@ -116,6 +116,8 @@ steps = [
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
     ("reverb_rt", lambda: py("reverb_rt.py")),
     ("native_options", lambda: py("native_options.py")),
+    # room reverb tail EQ: air absorption counted once (Steam Audio bug 6, fixed in the fork's DLL)
+    ("native_tail_eq", lambda: py("native_tail_eq.py")),
     # props on the paths through openings (portal and probe paths), not only on the straight line
     ("path_obstruction", lambda: py("path_obstruction.py")),
     # path quality against an independent single-bend reference (maps without areaportals: probes)
@@ -137,6 +139,10 @@ if "--quick" in sys.argv[2:]:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
     # bot_gunfire and portal_sweep expect pba_tworooms: keep it loaded for them
     steps = [("load pba_tworooms", lambda: load("pba_tworooms") or "ok")] + [s_ for s_ in steps if s_[0] != "load pba_tworooms"]
+# --only=a,b: just these steps (exact names), in battery order, after loading pba_tworooms
+ONLY = next((a[len("--only="):].split(",") for a in sys.argv[2:] if a.startswith("--only=")), None)
+if ONLY:
+    steps = [("load pba_tworooms", lambda: load("pba_tworooms") or "ok")] + [s_ for s_ in steps if s_[0] in ONLY]
 for i, (label, fn) in enumerate(steps, 1):
     step(i, len(steps), label, fn)
 print("##progress done=ok", flush=True)

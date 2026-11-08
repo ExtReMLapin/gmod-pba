@@ -1530,6 +1530,14 @@ LUA_FUNCTION(Stats) {
 		LUA->PushNumber(rt[b]);
 		LUA->SetField(-2, b == 0 ? "rtLow" : b == 1 ? "rtMid" : "rtHigh");
 	}
+	{
+		float eq[3];
+		render::RoomTailEq(eq);
+		for (int b = 0; b < 3; ++b) {
+			LUA->PushNumber(eq[b]);
+			LUA->SetField(-2, b == 0 ? "tailEqLow" : b == 1 ? "tailEqMid" : "tailEqHigh");
+		}
+	}
 	LUA->PushString(render::HrtfInfo().c_str());
 	LUA->SetField(-2, "hrtf");
 	LUA->PushString(g_backend.c_str());

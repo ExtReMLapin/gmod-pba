@@ -1,6 +1,6 @@
 """Downloads the native build dependencies into native/deps/ (not versioned):
 Steam Audio SDK 4.8.1 (Apache-2.0), Facepunch gmod-module-base (development branch), miniaudio.
-The SDK's Windows x64 phonon.dll is then replaced by the one of our fork (4.8.1 + five fixes
+The SDK's Windows x64 phonon.dll is then replaced by the one of our fork (4.8.1 + six fixes
 submitted upstream, same API), checked against a fixed SHA-256. Headers, phonon.lib and the
 Linux libraries stay the official ones.
 Usage: python -I native/fetch_deps.py [--official-phonon]   (or PBA_OFFICIAL_PHONON=1)
@@ -47,12 +47,12 @@ for name, url in ITEMS:
     src = os.path.join(tmp, inner[0]) if len(inner) == 1 else tmp
     os.replace(src, out)
     print("extracted", name)
-# Steam Audio fork (ExtReMLapin/steam-audio, tag v4.8.1-pba.1): Windows x64 phonon.dll + .pdb.
+# Steam Audio fork (ExtReMLapin/steam-audio, tag v4.8.1-pba.2): Windows x64 phonon.dll + .pdb.
 # Back to the official DLL once Valve releases these fixes.
-FORK_ZIP = "https://github.com/ExtReMLapin/steam-audio/releases/download/v4.8.1-pba.1/steamaudio_4.8.1-pba.1_windows-x64.zip"
+FORK_ZIP = "https://github.com/ExtReMLapin/steam-audio/releases/download/v4.8.1-pba.2/steamaudio_4.8.1-pba.2_windows-x64.zip"
 FORK_SHA256 = {
-    "phonon.dll": "397ef611a54e235142d7a4fae94e30238b4a24e61c8da2b98d36c5940dbd460b",
-    "phonon.pdb": "f73f3231fdc7f5be9c06bb0abc9d2158b8d9bbe98dd9537adaedc5657a7e3f45",
+    "phonon.dll": "6123695c2d531a1c48a32f1605b4ea43e5693e20ad3020520375097c52b01a54",
+    "phonon.pdb": "ae66b708bd088de70e6f6206d58c3ef896e251f85462400956e2d71dd42a88f7",
 }
 OFFICIAL_DLL_SHA256 = "ca3dbc01dbc24492717011e80f6a51404ca143ae344ca660971d2c983f1e058d"
 SA = os.path.join(DEPS, "steamaudio")
@@ -77,7 +77,7 @@ if official:
         sys.exit("phonon.dll is neither the official 4.8.1 nor the fork's: delete native/deps/steamaudio and run again")
     print("ok phonon.dll (official, as requested)")
 elif current == FORK_SHA256["phonon.dll"]:
-    print("ok phonon.dll (fork v4.8.1-pba.1)")
+    print("ok phonon.dll (fork v4.8.1-pba.2)")
 else:
     print("downloading", FORK_ZIP, flush=True)
     data = urllib.request.urlopen(FORK_ZIP, timeout=600).read()
@@ -94,4 +94,4 @@ else:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         open(dst + ".tmp", "wb").write(blob)
         os.replace(dst + ".tmp", dst)
-    print("replaced phonon.dll and phonon.pdb with the fork's (v4.8.1-pba.1)")
+    print("replaced phonon.dll and phonon.pdb with the fork's (v4.8.1-pba.2)")

@@ -52,11 +52,10 @@ std::atomic<int> g_tailBlocks{(int)(kRate * 2.5 / kBlock)};
 // Room reverb times from the long-window parametric simulator (pba_native.cpp); they replace the main simulator's estimate (biased by its 0.5 s window) for the room reverb.
 std::atomic<float> g_rtOv[3] = {0, 0, 0};
 std::atomic<bool> g_rtOvOn{false};
-// Air absorption missing from the hybrid tail EQ (to be verified: hybrid_reverb_estimator.cpp takes it
-// from the energy field, which has no air, while the IR it continues has it). The reverb TIME has air
-// with our Steam Audio fork (docs/STEAM_AUDIO_BUGS.md #3). Tail EQ at the 0.375 s crossover =
-// exp(-coef * c * t / 2), coef = {0.0002, 0.0017, 0.0182} per metre.
-constexpr float kAirTailEq[3] = {0.987f, 0.896f, 0.311f};
+// The hybrid tail EQ and the reverb time include air absorption with our Steam Audio fork
+// (docs/STEAM_AUDIO_BUGS.md #3 and #6): no correction here.
+// tail EQ last applied to the room reverb (Stats: the air absorption must be counted once)
+std::atomic<float> g_roomTailEq[3] = {0, 0, 0};
 
 struct Sound {
 	std::vector<float> pcm; // mono, 48 kHz
@@ -201,7 +200,8 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr) {
 	rp.ir = out.reflections.ir;
 	for (int b = 0; b < 3; ++b) {
 		rp.reverbTimes[b] = std::clamp(rt[b], 0.0f, 12.0f);
-		rp.eq[b] = out.reflections.eq[b] * kAirTailEq[b];
+		rp.eq[b] = out.reflections.eq[b];
+		if (rtOut) g_roomTailEq[b] = rp.eq[b];
 	}
 	rp.delay = out.reflections.delay;
 	rp.numChannels = kAmbi;
@@ -629,6 +629,10 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n) {
 		g_echo[k].src = (echo && k < n) ? echo[k] : nullptr;
 		g_echo[k].simGen = 0;
 	}
+}
+
+void RoomTailEq(float eq[3]) {
+	for (int b = 0; b < 3; ++b) eq[b] = g_roomTailEq[b].load();
 }
 
 void RoomReverbTimes(float rt[3]) {
