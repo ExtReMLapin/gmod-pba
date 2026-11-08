@@ -823,19 +823,37 @@ local function portalMasked(portal, prev, nxt, srcEnt, cfg)
 	local seen, uniq = {}, {}
 	for _, w in ipairs(objs) do if not seen[w.ent] then seen[w.ent] = true uniq[#uniq + 1] = w end end
 	local loss, lp = P.EvalWalls(uniq, cfg)
-	local f = blocked / total
-	return -AC.GainToDb((1 - f) + f * 10 ^ (-loss / 20)), f >= 0.5 and lp or 0
+	return { f = blocked / total, g = 10 ^ (-loss / 20), lp = lp }
 end
+
+--- Loss (dB) and lowpass level that objects masking openings of portal path p add (pure).
+-- masks[i]: what masks the i-th portal of p.chain (nil = nothing): f = share of the opening
+-- masked, g = amplitude passing the object, lp = its lowpass level.
+function P.MaskedDb(p, S, L, masks, cfg)
+	local add, lp = 0, 0
+	for i = 1, #p.chain do
+		local m = masks[i]
+		if m then
+			add = add - AC.GainToDb((1 - m.f) + m.f * m.g)
+			lp = math.max(lp, m.f >= 0.5 and m.lp or 0)
+		end
+	end
+	return add, lp
+end
+
 local function pathProps(p, S, L, cfg, srcEnt)
 	local pts = { S }
 	for _, q in ipairs(p.points) do pts[#pts + 1] = q end
 	pts[#pts + 1] = L
 	local add, lpAdd = 0, 0
 	if p.chain and #p.chain > 0 then
+		local masks, any = {}, false
 		for i, portal in ipairs(p.chain) do
-			local dl, dlp = portalMasked(portal, pts[i], pts[i + 2] or L, srcEnt, cfg)
-			if dl then add, lpAdd = add + dl, math.max(lpAdd, dlp) end
+			masks[i] = portalMasked(portal, pts[i], pts[i + 2] or L, srcEnt, cfg)
+			any = any or masks[i] ~= nil
 		end
+		if not any then return end
+		add, lpAdd = P.MaskedDb(p, S, L, masks, cfg)
 	else
 		local objs = {}
 		for i = 1, #pts - 1 do objectsOn(pts[i], pts[i + 1], srcEnt, cfg, objs) end
