@@ -229,8 +229,9 @@ function P.EvalChain(S, L, chain, cfg)
 	local lp = math.max(AC.LowpassLevel(openDiff, cfg), leafLp, tiltLp)
 	-- every opening wide open: the diffuse part carries the treble through
 	if allOpen then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
+	local direct, bend = P.PathShape(S, pts, L)
 	return { chain = chain, points = pts, length = len, diffDb = diff, doorDb = loss - diff, lossDb = loss,
-		pos = pts[#pts], lp = lp }
+		pos = pts[#pts], lp = lp, direct = direct, bendDeg = bend }
 end
 
 --- Door loss (dB) of the door entities crossed by segment a -> b (game state).
@@ -266,8 +267,9 @@ function P.EvalPolyline(pts, cfg)
 	diff = math.min(diff, cfg.diff_max_total)
 	local inner = {}
 	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
+	local direct, bend = P.PathShape(pts[1], inner, pts[#pts])
 	return { chain = {}, points = inner, length = len, diffDb = diff, doorDb = door, lossDb = diff + door,
-		pos = pts[#pts - 1], lp = math.max(AC.LowpassLevel(diff, cfg), doorLp) }
+		pos = pts[#pts - 1], lp = math.max(AC.LowpassLevel(diff, cfg), doorLp), direct = direct, bendDeg = bend }
 end
 
 -- ------------------------------------------------------------------ portal search
@@ -644,14 +646,66 @@ local function pathLevel(len, lossDb, sndlvl)
 end
 P.PathLevel = pathLevel
 
+--- Shape of a path S, pts[1] .. pts[n], L (pure): straight-line length |S - L| and total bend in
+-- degrees (sum of the turns at the inner vertices, 0 = straight). A vertex on top of the previous one
+-- (two portals crossed at one spot) is skipped, so its turn is counted once.
+function P.PathShape(S, pts, L)
+	local sqrt, acos, deg = math.sqrt, math.acos, math.deg
+	local bend = 0
+	local px, py, pz = S.x, S.y, S.z
+	local n = #pts
+	for i = 1, n do
+		local v, w = pts[i], pts[i + 1] or L
+		local ax, ay, az = v.x - px, v.y - py, v.z - pz
+		local bx, by, bz = w.x - v.x, w.y - v.y, w.z - v.z
+		local la, lb = sqrt(ax * ax + ay * ay + az * az), sqrt(bx * bx + by * by + bz * bz)
+		if la > 1e-3 and lb > 1e-3 then
+			local c = (ax * bx + ay * by + az * bz) / (la * lb)
+			if c > 1 then c = 1 elseif c < -1 then c = -1 end
+			bend = bend + deg(acos(c))
+			px, py, pz = v.x, v.y, v.z
+		end
+	end
+	return S:Distance(L), bend
+end
+
+-- 0 below x0, 1 from 2 * x0, smoothstep in between (continuous level and slope: no pop)
+local function guardRamp(x, x0)
+	if x <= x0 then return 0 end
+	local t = (x - x0) / x0
+	if t >= 1 then return 1 end
+	return t * t * (3 - 2 * t)
+end
+
+--- Length / angle guard (pure, ETAT_DE_L_ART_LUA.md 1.2): extra loss (dB) of an implausible path.
+-- A path much longer than the straight line (a detour round the other end of the map), or winding
+-- by a large total angle, is not where most of the sound comes from (walls, routes not modelled):
+-- games cap or fade such paths (Wwise diffraction tapering, Rainbow Six Siege path cost). Beyond
+-- about 180 degrees the diffraction cap (diff_max_total) also stops counting the extra corners.
+-- Progressive, never a cut: each criterion ramps from its onset to twice it, the sum is capped at
+-- path_guard_db. The straight line counts as at least path_guard_near long (a source just behind a
+-- wall heard through the door round it is a normal, room-scale detour). Paths without a known shape
+-- (Steam Audio baked paths) are left alone.
+function P.PathGuardDb(p, cfg)
+	cfg = cfg or A.cfg
+	local maxDb = cfg.path_guard_db or 0
+	if maxDb <= 0 or not p.direct or not p.length then return 0 end
+	local ratio = p.length / math.max(p.direct, cfg.path_guard_near or 512, 1)
+	local f = guardRamp(ratio, cfg.path_guard_ratio or 2) + guardRamp(p.bendDeg or 0, cfg.path_guard_angle or 180)
+	return maxDb * math.min(f, 1)
+end
+
 --- Builds the voice list from evaluated portal paths and the transmission path (pure).
 -- Each voice: { pos, gain (linear target gain at the listener), lp, kind, members }.
+-- Every path's level is formed here (portal, probe, bridge, baked): the length / angle guard is
+-- applied here once, for all of them (p.guardDb, part of p.lossDb; p.rawLossDb stays without it).
 function P.SelectVoices(L, paths, trans, sndlvl, cfg)
 	cfg = cfg or A.cfg
 	-- loud sources keep their headroom above the engine's full scale (see AC.Headroom)
 	for _, p in ipairs(paths) do
 		p.rawLossDb = p.rawLossDb or p.lossDb
-		p.lossDb = math.max(p.rawLossDb - AC.Headroom(sndlvl, p.length, cfg.fullscale_db), 0)
+		p.guardDb = P.PathGuardDb(p, cfg)
+		p.lossDb = math.max(p.rawLossDb + p.guardDb - AC.Headroom(sndlvl, p.length, cfg.fullscale_db), 0)
 	end
 	if trans then
 		trans.rawLossDb = trans.rawLossDb or trans.lossDb

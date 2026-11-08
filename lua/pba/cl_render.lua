@@ -235,7 +235,8 @@ function A.Process(data, relayed)
 			for _, c in ipairs(p.chain) do keys[#keys + 1] = c.key end
 			ps[#ps + 1] = { portals = keys, length = math.Round(p.length), diff_db = math.Round(p.diffDb, 1),
 				door_db = math.Round(p.doorDb, 1), level_db = math.Round(p.level or 0, 1),
-				az = math.Round(A.Azimuth(L, ang.y, p.pos), 1) }
+				guard_db = math.Round(p.guardDb or 0, 1), ratio = p.direct and math.Round(p.length / math.max(p.direct, 1), 2),
+				bend = p.bendDeg and math.Round(p.bendDeg), az = math.Round(A.Azimuth(L, ang.y, p.pos), 1) }
 		end
 		A.Report("paths", { name = data.SoundName, relayed = relayed, aS = r.aS, aL = r.aL, voices = vs, paths = ps,
 			trans = r.trans and { loss_db = math.Round(r.trans.lossDb, 1), raw_db = math.Round(r.trans.rawLossDb or r.trans.lossDb, 1),
