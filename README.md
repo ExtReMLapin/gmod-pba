@@ -73,6 +73,14 @@ All the other acoustic constants are convars too (`find pba_`). Client: `pba_cl_
 It cannot be shipped through the Workshop: copy it with `phonon.dll` (Steam Audio's runtime)
 into `garrysmod/lua/bin`. Without it, PBA runs in pure Lua as described above.
 
+The `phonon.dll` we use comes from [our Steam Audio fork](https://github.com/ExtReMLapin/steam-audio/releases/tag/v4.8.1-pba.1):
+4.8.1 (current `master`) plus five fixes we sent upstream
+([#595](https://github.com/ValveSoftware/steam-audio/pull/595), [#596](https://github.com/ValveSoftware/steam-audio/pull/596),
+[#597](https://github.com/ValveSoftware/steam-audio/pull/597), [#599](https://github.com/ValveSoftware/steam-audio/pull/599),
+[#601](https://github.com/ValveSoftware/steam-audio/pull/601)). `native/fetch_deps.py` downloads it
+(`--official-phonon` keeps Valve's), and we will go back to the official one once Valve releases
+a fixed version. The fork has no Linux build, so on Linux `libphonon.so` is still the official 4.8.1.
+
 With the module installed:
 
 - the world (brushes and terrain displacements) is loaded into a Steam Audio scene; occlusion of
