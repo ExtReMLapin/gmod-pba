@@ -975,5 +975,55 @@ return {
 			A.loopCache["pba_test/no_such.wav"] = nil
 			expect(hit).to.equal(false)
 		end },
+		{ name = "Follow: a one-shot is followed when it still plays min_left after its first update", func = function()
+			expect(P.FollowWorth(3.4, 0.25, 0.5)).to.beTrue()       -- the courtyard radio line
+			expect(P.FollowWorth(0.6, 0.25, 0.5)).to.equal(false)   -- a gunshot: over before it would matter
+			expect(P.FollowWorth(0.75, 0.25, 0.5)).to.beTrue()
+			expect(P.FollowWorth(2.4, 2, 0.5)).to.equal(false)      -- slow updates: only longer sounds
+		end },
+		{ name = "Follow: bounded set; nearly ended sounds give their slot first, then the one ending soonest", func = function()
+			local now = 100
+			expect(P.FollowSlot({}, now, 0, now + 3, 0.5)).to.beNil()
+			expect(P.FollowSlot({}, now, 2, now + 3, 0.5)).to.equal(1)
+			local recs = { { tEnd = now + 2 }, { tEnd = now + 5 } }
+			expect(P.FollowSlot(recs, now, 3, now + 3, 0.5)).to.equal(3)
+			expect(P.FollowSlot(recs, now, 2, now + 3, 0.5)).to.equal(1)    -- full: the one ending soonest
+			expect(P.FollowSlot(recs, now, 2, now + 1.5, 0.5)).to.beNil()   -- ... only for a sound playing longer
+			recs[2].tEnd = now + 0.3                                         -- nearly over: no longer followed
+			expect(P.FollowSlot(recs, now, 3, now + 1.5, 0.5)).to.equal(2)
+		end },
+		{ name = "Follow: path -> clear sight, the dominant voice moves to the source with all the power, the other fades", func = function()
+			local L, S = Vector(0, 0, 0), Vector(300, 0, 0)
+			local t = P.FollowAssign(L, { Vector(100, 100, 0), Vector(100, -100, 0) }, { { pos = S, gain = 0.5, lp = 0, len = 300 } })
+			expect(#t).to.equal(2)
+			expect(t[1].pos:Distance(S) < 1e-6).to.beTrue()
+			expect(near(t[1].gain, 0.5)).to.beTrue()
+			expect(t[1].lp).to.equal(0)
+			expect(t[1].len).to.equal(300)
+			expect(t[2]).to.equal(false)
+		end },
+		{ name = "Follow: voices keep their direction (no swap across the head), extra new voices add their power", func = function()
+			local L = Vector(0, 0, 0)
+			local front, left, right, back = Vector(200, 0, 0), Vector(0, 200, 0), Vector(0, -200, 0), Vector(-200, 0, 0)
+			-- heard: front (dominant), left, right; new, by level: front, right, left
+			local t = P.FollowAssign(L, { front, left, right },
+				{ { pos = front, gain = 0.4 }, { pos = right + Vector(0, 0, 10), gain = 0.3 }, { pos = left, gain = 0.2 } })
+			expect(t[1].pos:Distance(front) < 1e-6).to.beTrue()
+			expect(t[2].pos:Distance(left) < 1e-6).to.beTrue()
+			expect(t[3].pos:Distance(right) < 11).to.beTrue()
+			-- one voice heard, three now: it carries their total power, from the dominant one
+			local t1 = P.FollowAssign(L, { front },
+				{ { pos = front, gain = 0.4, lp = 2 }, { pos = left, gain = 0.3 }, { pos = back, gain = 0.2 } })
+			expect(#t1).to.equal(1)
+			expect(near(t1[1].gain, math.sqrt(0.16 + 0.09 + 0.04))).to.beTrue()
+			expect(t1[1].lp).to.equal(2)
+			-- two heard, three new: the third adds to the voice closest in direction (left), power kept
+			local t2 = P.FollowAssign(L, { front, left },
+				{ { pos = front, gain = 0.4 }, { pos = left, gain = 0.3 }, { pos = Vector(-10, 200, 0), gain = 0.2 } })
+			expect(near(t2[1].gain, 0.4)).to.beTrue()
+			expect(near(t2[2].gain, math.sqrt(0.09 + 0.04))).to.beTrue()
+			-- nothing heard any more: nothing to drive
+			expect(#P.FollowAssign(L, {}, { { pos = front, gain = 1 } })).to.equal(0)
+		end },
 	},
 }
