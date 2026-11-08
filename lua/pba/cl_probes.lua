@@ -21,6 +21,46 @@ local LINK_MASK = bit.band(MASK_SOLID_BRUSHONLY, bit.bnot(CONTENTS_GRATE))
 -- most of the ~166 KB of garbage per path computation, whose collection made 8-20 ms spikes
 local segOut = {}
 local segTr = { mask = LINK_MASK, filter = worldOnly, output = segOut }
+
+-- Native world traces (pba_native.trace of the module, EXPERIMENTAL, full version only): the engine's IEngineTrace called
+-- straight from the module instead of util.TraceLine / TraceHull, whose Lua binding is most of their
+-- cost (probe links and tightening: ~100 hull traces per path computation). World only, like these
+-- traces. Checked against util.* on the map at first use (64 lines and hulls): any difference and they
+-- stay off. pba_native_traces 0 = always util.*.
+local NT -- nil: not checked yet; false: unavailable or failed; else the module table
+local function fillOut(o, f, ss, as, ep, _, fls, surf, sflags)
+	o.Hit = f < 1 or ss
+	o.Fraction, o.StartSolid, o.AllSolid, o.HitPos, o.FractionLeftSolid = f, ss, as, ep, fls
+	o.HitTexture, o.HitNoDraw, o.HitWorld = surf or "", bit.band(sflags or 0, 0x80) ~= 0, true
+	return o
+end
+local function ntLine(t) return fillOut(t.output, NT.Trace(t.start, t.endpos, t.mask)) end
+local function ntHull(t) return fillOut(t.output, NT.Trace(t.start, t.endpos, t.mask, t.mins, t.maxs)) end
+local function nativeTraces()
+	if (A.cfg.native_traces or 0) < 0.5 then return false end
+	if NT ~= nil then return NT end
+	NT = false
+	local T = pba_native and pba_native.trace
+	if not (T and T.Init and T.Init()) then return false end
+	local L = LocalPlayer and IsValid(LocalPlayer()) and LocalPlayer():EyePos() or Vector()
+	local mn, mx = Vector(-4, -4, -4), Vector(4, 4, 4)
+	for i = 1, 64 do
+		local a = L + Vector(math.random(-2000, 2000), math.random(-2000, 2000), math.random(-400, 400))
+		local b = L + Vector(math.random(-2000, 2000), math.random(-2000, 2000), math.random(-400, 400))
+		local hull = i % 2 == 0
+		local t = hull and util.TraceHull({ start = a, endpos = b, mins = mn, maxs = mx, mask = LINK_MASK, filter = worldOnly })
+			or util.TraceLine({ start = a, endpos = b, mask = LINK_MASK, filter = worldOnly })
+		local f, ss = T.Trace(a, b, LINK_MASK, hull and mn or nil, hull and mx or nil)
+		if not f or math.abs(f - t.Fraction) > 1e-3 or ss ~= t.StartSolid then
+			MsgN("[PBA] native traces differ from util.Trace* on this map: left off")
+			return false
+		end
+	end
+	NT = T
+	return NT
+end
+PR.NativeTraces = function() return nativeTraces() and true or false end
+-- (re-checked on the next map: a new client Lua state)
 -- A hit on an invisible tool brush (A.Paths.PassTool: toolsblockbullets...) is no obstacle: the trace
 -- goes on from where it leaves the brush (a few hops at most).
 local function passThrough(tr, out, trace, b)
@@ -46,13 +86,14 @@ end
 local function upThroughDisp(a, b) return a.z < b.z - 1 and A.Paths.HasDisplacements and A.Paths.HasDisplacements() end
 
 local function clearSeg(a, b)
+	local TL = nativeTraces() and ntLine or util.TraceLine
 	segTr.start, segTr.endpos = a, b
-	util.TraceLine(segTr)
-	if segOut.Hit and not passThrough(segTr, segOut, util.TraceLine, b) then return false end
+	TL(segTr)
+	if segOut.Hit and not passThrough(segTr, segOut, TL, b) then return false end
 	if upThroughDisp(a, b) then
 		segTr.start, segTr.endpos = b, a
-		util.TraceLine(segTr)
-		if segOut.Hit and not passThrough(segTr, segOut, util.TraceLine, a) then return false end
+		TL(segTr)
+		if segOut.Hit and not passThrough(segTr, segOut, TL, a) then return false end
 	end
 	return true
 end
@@ -408,13 +449,14 @@ local HULL_MIN, HULL_MAX = Vector(-4, -4, -4), Vector(4, 4, 4)
 local fatOut = {}
 local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = LINK_MASK, filter = worldOnly, output = fatOut }
 local function clearFat(a, b)
+	local TH = nativeTraces() and ntHull or util.TraceHull
 	fatTr.start, fatTr.endpos = a, b
-	util.TraceHull(fatTr)
-	if fatOut.Hit and not passThrough(fatTr, fatOut, util.TraceHull, b) then return false end
+	TH(fatTr)
+	if fatOut.Hit and not passThrough(fatTr, fatOut, TH, b) then return false end
 	if upThroughDisp(a, b) then
 		fatTr.start, fatTr.endpos = b, a
-		util.TraceHull(fatTr)
-		if fatOut.Hit and not passThrough(fatTr, fatOut, util.TraceHull, a) then return false end
+		TH(fatTr)
+		if fatOut.Hit and not passThrough(fatTr, fatOut, TH, a) then return false end
 	end
 	return true
 end

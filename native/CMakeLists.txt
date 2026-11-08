@@ -1,5 +1,5 @@
 # gmcl_pba: optional native backend of pba (Steam Audio simulation).
-# Licence of this directory: Apache-2.0, decision pending (see native/LICENSE).
+# Licence of this directory: MIT (see native/LICENSE).
 # Dependencies: python -I native/fetch_deps.py  (Steam Audio SDK + gmod-module-base into native/deps)
 # Build (x64 Developer prompt): cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 #                               cmake --build native/build
@@ -31,7 +31,7 @@ else()
 endif()
 
 set(MA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/deps/miniaudio" CACHE PATH "miniaudio dir")
-add_library(gmcl_pba SHARED src/pba_native.cpp src/render.cpp src/streams.cpp)
+add_library(gmcl_pba SHARED src/pba_native.cpp src/render.cpp src/streams.cpp src/trace.cpp)
 target_include_directories(gmcl_pba PRIVATE "${GMB_ROOT}" "${MA_ROOT}")
 if(WIN32)
 	# phonon.dll is delay-loaded and loaded explicitly from the module's folder (lua/bin), so a

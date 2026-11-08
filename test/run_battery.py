@@ -137,6 +137,8 @@ steps = [
     ("client_loop", lambda: job("client", "client_loop.lua", 20)),
     ("native_doors", lambda: (native_on(True), job("client", "native_doors.lua"))[1]),
     ("native_features", lambda: job("client", "native_features.lua")),
+    # engine traces from the module (pba_native.trace): identical to util.TraceLine / TraceHull / PointContents
+    ("native_trace", lambda: job("client", "native_trace.lua", 60)),
     ("streams_test", lambda: job("client", "streams_test.lua")),
     ("portal_sweep tworooms", lambda: job("client", "portal_sweep.lua")),
     # (loads pba_materials: last of the pba_tworooms block) lip sync: a citizen speaking behind the glass cell keeps moving his mouth with pba (re-emitted voice)

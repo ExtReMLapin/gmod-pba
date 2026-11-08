@@ -1673,6 +1673,8 @@ void JoinBakeThread() {
 	g_bakeState = 0;
 }
 
+void RegisterTrace(GarrysMod::Lua::ILuaBase* LUA); // trace.cpp: pba_native.trace (engine traces)
+
 GMOD_MODULE_OPEN() {
 	LUA->PushSpecial(SPECIAL_GLOB);
 	LUA->CreateTable();
@@ -1762,6 +1764,7 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "StreamCapture");
 	LUA->PushCFunction(PlayStream);
 	LUA->SetField(-2, "PlayStream");
+	RegisterTrace(LUA);
 	LUA->SetField(-2, "pba_native");
 	LUA->Pop();
 	return 0;

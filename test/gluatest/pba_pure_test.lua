@@ -182,7 +182,9 @@ local function withProbeScene(fn)
 	local keys = { "current", "field", "fieldJob", "fieldHold", "pathCache", "pathCacheN", "queue", "queueN" }
 	local savedPR, savedCfg = {}, {}
 	for _, k in ipairs(keys) do savedPR[k] = PR[k] end
-	for _, k in ipairs({ "probe_field", "probe_inline_ms", "probe_field_blend" }) do savedCfg[k] = A.cfg[k] end
+	-- native_traces: the scene replaces util.Trace*, the engine's own traces would bypass it
+	for _, k in ipairs({ "probe_field", "probe_inline_ms", "probe_field_blend", "native_traces" }) do savedCfg[k] = A.cfg[k] end
+	A.cfg.native_traces = 0
 	local function tr(t, pad)
 		local out = t.output or {}
 		-- probe traces: brush-only, with or without grates (links cross grates)

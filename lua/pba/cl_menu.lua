@@ -115,6 +115,7 @@ function Build.native(panel)
 
 	panel:Help("Baked paths (replace the probe graph):")
 	dep(chk(panel, "Steam Audio paths", "native_paths"), "ready")
+	chk(panel, "Native world traces (experimental)", "native_traces")
 	dep(chk(panel, "Render as a sound field", "native_path_fx"), "paths")
 	dep(chk(panel, "Keep the bake on disk", "native_cache"), "paths")
 

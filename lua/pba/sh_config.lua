@@ -28,6 +28,7 @@ A.CONFIG = {
 	diffuse_width   = { 128, 16, 1024, "sv", "Diffuse model: units between two wall bounces along a detour (about a corridor's width)." },
 	diffuse_max_db  = { 20, 0, 60, "sv", "Diffuse model: most dB the walls of a detour absorb." },
 	diffuse_near    = { 512, 0, 4096, "sv", "Diffuse model: a straight line shorter than this (units) counts as this long: a source just behind a wall heard through the door round it is a normal, room-scale detour." },
+	native_traces   = { 1, 0, 1, "cl", "Experimental, full version: probe links and path tightening trace the world through the engine directly (native module, checked against util.Trace* at load) instead of util.TraceLine / TraceHull. 0 = always util.*." },
 	native_diffuse_send = { 1.5, 0, 8, "cl", "Diffuse model, native rendering: extra room-reverb send of a diffuse voice (send x (1 + this x share)); 1.5 keeps the total level about constant in a typical room." },
 	diffuse_dsp_at  = { 0.4, 0, 1, "cl", "Diffuse model, engine rendering: from this diffuse share a sound gets a reverberant tunnel preset instead of the plain low-pass." },
 	probe_spacing   = { 128, 32, 512, "sv", "Probe grid spacing (units) of the fallback graph." },

@@ -142,7 +142,7 @@ while #rows < N and tries < N * 400 do
 					local rp = P.EvalPolyline(ref, A.cfg)
 					-- same physics as PBA, absorption included (0 in practice: a single bend inside the S-L box
 					-- is at most 1.63 x the straight line and bends less than 180 degrees)
-					local refLevel = AC.GainToDb(AC.EngineGain(rp.length, 75)) - (rp.lossDb or 0) - P.PathGuardDb(rp, A.cfg)
+					local refLevel = AC.GainToDb(AC.EngineGain(rp.length, 75)) - (rp.lossDb or 0) - select(2, P.PathDiffuse(rp, A.cfg))
 					-- the listener-centred probe field (when present) is built around L, as if the player
 					-- had been standing there: the game keeps it current around the listener
 					if A.Probes.BuildFieldNow then unhooked(function() A.Probes.BuildFieldNow(b) end) end
