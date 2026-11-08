@@ -8,11 +8,12 @@ garrysmod/addons/ gives garrysmod/addons/pba/.
 Files are read from the working tree, so the script refuses to run when one of them has
 uncommitted changes (--allow-dirty to override).
 
-Usage: python tools/make_release.py [--version=1.0.0] [--out=dist] [--test-maps] [--dry-run]
+Usage: python tools/make_release.py [--version=1.0.0] [--out=dist] [--no-test-maps] [--dry-run]
                                     [--allow-dirty]
   --version    name of the release (default: git describe)
   --out        output folder (default: dist/, gitignored)
-  --test-maps  also ship the test maps (pba_tworooms, pba_window...) that addon.json leaves out
+  --no-test-maps  leave out the test maps (pba_tworooms, pba_window...): shipped by default,
+                  the public test bench needs them
   --dry-run    print the file list and sizes, write nothing
 """
 import fnmatch
@@ -43,7 +44,7 @@ def options(argv):
             sys.exit(f"unknown argument: {a}")
         k, _, v = a[2:].partition("=")
         opts[k] = v if v else True
-    unknown = set(opts) - {"version", "out", "test-maps", "dry-run", "allow-dirty", "help"}
+    unknown = set(opts) - {"version", "out", "no-test-maps", "dry-run", "allow-dirty", "help"}
     if unknown or "help" in opts:
         sys.exit(__doc__ if "help" in opts else f"unknown option(s): {', '.join(sorted(unknown))}")
     return opts
@@ -72,7 +73,7 @@ def release_files(test_maps):
 def main():
     opts = options(sys.argv[1:])
     version = opts.get("version") or git("describe", "--tags", "--always", "--dirty").strip()
-    files = release_files(bool(opts.get("test-maps")))
+    files = release_files(not opts.get("no-test-maps"))
     with open(os.path.join(ROOT, "lua", "autorun", "pba_init.lua"), encoding="utf-8") as f:
         m = re.search(r'pba\.VERSION\s*=\s*"([^"]*)"', f.read())
     lua_version = m.group(1) if m else "?"

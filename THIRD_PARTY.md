@@ -1,6 +1,7 @@
 # Third-party sources
 
-PBA is licensed under the GNU GPL v3 or later. No third-party code is copied verbatim; the
+PBA is licensed under the GNU GPL v3 or later, except its native module (`native/`), which is
+MIT. No third-party code is copied verbatim; the
 works below inspired algorithms that were re-implemented. Their licences allow porting into a
 GPL-3.0 project; attribution is given here and in the header of the concerned files.
 

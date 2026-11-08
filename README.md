@@ -133,7 +133,7 @@ Build (Windows x64):
 3. Copy `gmcl_pba_win64.dll` and `native/deps/steamaudio/lib/windows-x64/phonon.dll` into
    `garrysmod/lua/bin/`, with the game closed (a loaded `phonon.dll` is never released).
 
-Licence of `native/` is pending (see `native/LICENSE`).
+The native module (`native/`) is MIT licensed (see `native/LICENSE`).
 
 ## Demo map
 
@@ -227,4 +227,4 @@ same job as PBA and is switched off automatically (`pba_compat_auto`).
   repeating source on a test map: the bench behind `test/run_scenarios.py`.
 - `python tools/make_release.py` builds the release zip (see the script's help).
 
-Licence: GPL-3.0-or-later. See `THIRD_PARTY.md` for attributions.
+Licence: GPL-3.0-or-later, except `native/` (MIT). See `THIRD_PARTY.md` for attributions.

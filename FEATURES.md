@@ -66,6 +66,6 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Compatibility: turns off Sound Muffling Effect, warns about overlaps with DWR, RSD, MWA and MP Distant Sounds Fix | ✅ | ✅ | S `compat_auto` |
 | Real maps tested | gm_construct, gm_bigcity, ttt_bigcity, rp_downtown_v4c_v2, rp_rockford_v2b | same | — |
 | Measured cost (10 bots firing, gm_construct) | 0.14 ms of Lua per sound; about 0.2 ms per frame at 60 fps; about 25 bytes per relayed sound, only to obstructed players | 0.06 ms of Lua per frame at 86 fps in "all native"; audio thread 1 ms per 10.7 ms block; reflections on their own thread; about 1.9 KB/s per player in "all native" | — |
-| Distribution | Workshop | manual install; Windows x64 only; licence of the module still to be confirmed | — |
+| Distribution | Workshop | manual install; Windows x64 only; MIT-licensed module | — |
 
 For the comparison with other GMod sound addons, see the README.

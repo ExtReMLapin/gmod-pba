@@ -1,5 +1,5 @@
 // gmcl_pba: Steam Audio simulation backend for pba (Garry's Mod, client).
-// Licence: Apache-2.0 (decision pending, see native/LICENSE). Steam Audio is Apache-2.0.
+// Licence: MIT (see native/LICENSE). Steam Audio is Apache-2.0.
 //
 // The module only computes; pba's Lua side keeps playing the sounds. Lua API, in the
 // global table `pba_native` after require("pba"):

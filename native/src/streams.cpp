@@ -5,7 +5,7 @@
 // fact observed in gmod_audio.dll, no decompiled code) only after strict validation, and the BASS
 // functions are resolved from the bass.dll the game already loaded, with prototypes from the
 // public BASS 2.4 documentation (un4seen). Any failed check: nothing is done.
-// Licence: Apache-2.0 (decision pending, see native/LICENSE).
+// Licence: MIT (see native/LICENSE).
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX

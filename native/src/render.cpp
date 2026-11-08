@@ -10,7 +10,7 @@
 //                  tail) -> ambisonic bus
 //   ambisonic bus -> IPLAmbisonicsDecodeEffect (HRTF / speakers) -> mix
 // The engine still plays every sound pba does not take over (clear line of sight...).
-// Licence: Apache-2.0 (decision pending, see native/LICENSE).
+// Licence: MIT (see native/LICENSE).
 #define NOMINMAX
 #define MA_NO_ENCODING
 #define MA_NO_GENERATION
