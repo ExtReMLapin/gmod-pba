@@ -189,6 +189,7 @@ function PR.Start()
 	local cached = js and PR.Deserialize(js, hash)
 	if cached then
 		cached.map, cached.hash, cached.fromCache = map, hash, true
+		PR.Prepare(cached)
 		PR.current = cached
 		MsgN("[PBA] probe graph loaded from cache: ", #cached.nodes, " probes")
 		return
@@ -227,6 +228,7 @@ function PR.Start()
 			hook.Remove("Think", "pba_probes_build")
 			res.map, res.hash = b.map, b.hash
 			res.buildTime = SysTime() - b.t0
+			PR.Prepare(res)
 			PR.current, PR.building = res, nil
 			file.CreateDir("pba")
 			file.Write(cachePath(b.map), PR.Serialize(res, b.hash))
@@ -259,33 +261,58 @@ function PR.Visible(g, p, maxn)
 	return out
 end
 
--- binary min-heap of { f, node }
-local function hpush(h, f, n)
-	local i = #h + 1
-	h[i] = { f, n }
+-- Binary min-heap in two arrays (keys hk, node ids hv) and a size: no table per entry (the field build
+-- made 2.7 MB of garbage). Pushes and pops return the new size.
+local function hpush(hk, hv, n, f, id)
+	n = n + 1
+	local i = n
+	hk[i], hv[i] = f, id
 	while i > 1 do
 		local p = math.floor(i / 2)
-		if h[p][1] <= h[i][1] then break end
-		h[p], h[i] = h[i], h[p]
+		if hk[p] <= hk[i] then break end
+		hk[p], hk[i], hv[p], hv[i] = hk[i], hk[p], hv[i], hv[p]
 		i = p
 	end
+	return n
 end
-local function hpop(h)
-	local top = h[1]
-	local last = table.remove(h)
-	if #h > 0 then
-		h[1] = last
-		local i, n = 1, #h
-		while true do
-			local l, r, m = i * 2, i * 2 + 1, i
-			if l <= n and h[l][1] < h[m][1] then m = l end
-			if r <= n and h[r][1] < h[m][1] then m = r end
-			if m == i then break end
-			h[m], h[i] = h[i], h[m]
-			i = m
+local function hpop(hk, hv, n)
+	local topK, top = hk[1], hv[1]
+	hk[1], hv[1] = hk[n], hv[n]
+	n = n - 1
+	local i = 1
+	while true do
+		local l, r, m = i * 2, i * 2 + 1, i
+		if l <= n and hk[l] < hk[m] then m = l end
+		if r <= n and hk[r] < hk[m] then m = r end
+		if m == i then break end
+		hk[m], hk[i], hv[m], hv[i] = hk[i], hk[m], hv[i], hv[m]
+		i = m
+	end
+	return top, topK, n
+end
+
+local function edgeLen(n, m, via)
+	if via == true then return n.pos:Distance(m.pos) end
+	return n.pos:Distance(via) + via:Distance(m.pos)
+end
+
+--- Neighbours of every probe as plain arrays, built once per graph: probe k's links are first[k] ..
+-- first[k + 1] - 1 in nid (neighbour id) and len (edge length). The searches read them instead of
+-- pairs() over the links and a Vector call per edge (neither compiled by this LuaJIT); same order as
+-- pairs() and same Distance calls, hence exactly the same results.
+function PR.Prepare(g)
+	if g.adj then return g.adj end
+	local first, nid, len, k = {}, {}, {}, 1
+	for id, n in ipairs(g.nodes) do
+		first[id] = k
+		for m, via in pairs(n.nb) do
+			nid[k], len[k] = m, edgeLen(n, g.nodes[m], via)
+			k = k + 1
 		end
 	end
-	return top[2]
+	first[#g.nodes + 1] = k
+	g.adj = { first = first, nid = nid, len = len }
+	return g.adj
 end
 
 --- A* over the probe grid from the probes visible from S to those visible from L, with
@@ -295,38 +322,40 @@ function PR.FindPath(g, S, L, avoid, maxExpand, starts, goals, yield)
 	if #starts == 0 or #goals == 0 then return nil end
 	local goalSet = {}
 	for _, n in ipairs(goals) do goalSet[n.id] = n.pos:Distance(L) end
+	local adj = g.adj or PR.Prepare(g)
+	local first, nid, elen, nodes = adj.first, adj.nid, adj.len, g.nodes
 	local gs, prev, closed = {}, {}, {}
-	local open = {}
-	local function h(n) return n.pos:Distance(L) end
-	for _, n in ipairs(starts) do
-		gs[n.id] = S:Distance(n.pos)
-		hpush(open, gs[n.id] + h(n), n)
+	local hk, hv, n = {}, {}, 0
+	for _, s in ipairs(starts) do
+		gs[s.id] = S:Distance(s.pos)
+		n = hpush(hk, hv, n, gs[s.id] + s.pos:Distance(L), s.id)
 	end
 	local expanded = 0
 	local found
-	while #open > 0 do
-		local best = hpop(open)
-		if not closed[best.id] then
-			closed[best.id] = true
-			if goalSet[best.id] then found = best break end
+	while n > 0 do
+		local best, _
+		best, _, n = hpop(hk, hv, n)
+		if not closed[best] then
+			closed[best] = true
+			if goalSet[best] then found = best break end
 			expanded = expanded + 1
 			if expanded > (maxExpand or 4000) then break end
 			if yield and expanded % 32 == 0 then yield() end
-			for id, via in pairs(best.nb) do
+			local gb = gs[best]
+			for e = first[best], first[best + 1] - 1 do
+				local id = nid[e]
 				if not closed[id] then
-					local m = g.nodes[id]
-					local len = via == true and best.pos:Distance(m.pos) or (best.pos:Distance(via) + via:Distance(m.pos))
-					local c = gs[best.id] + len * ((avoid and avoid[id]) and 3 or 1)
+					local c = gb + elen[e] * ((avoid and avoid[id]) and 3 or 1)
 					if not gs[id] or c < gs[id] then
-						gs[id], prev[id] = c, best.id
-						hpush(open, c + h(m), m)
+						gs[id], prev[id] = c, best
+						n = hpush(hk, hv, n, c + nodes[id].pos:Distance(L), id)
 					end
 				end
 			end
 		end
 	end
 	if not found then return nil end
-	local ids, c = {}, found.id
+	local ids, c = {}, found
 	while c do table.insert(ids, 1, c) c = prev[c] end
 	local pts = { S }
 	for i, id in ipairs(ids) do
@@ -412,34 +441,38 @@ end
 -- second (a full build is ~27 ms for 22 000 probes on gm_construct); the previous field serves
 -- meanwhile, up to one cell away from where it was built.
 
-local function edgeLen(n, m, via)
-	if via == true then return n.pos:Distance(m.pos) end
-	return n.pos:Distance(via) + via:Distance(m.pos)
-end
-
-function PR.BuildField(g, L, yield)
-	local f = { g = g, L = L, cost = {}, nxt = {}, pulled = {} }
-	local goals = PR.Visible(g, L, 3)
-	local cost, nxt, closed, open = f.cost, f.nxt, {}, {}
-	for _, n in ipairs(goals) do
-		cost[n.id] = n.pos:Distance(L)
-		hpush(open, cost[n.id], n)
+-- No `closed` set: keys pop in increasing order and a probe is pushed again only with a strictly lower
+-- cost, so the first pop of a probe carries its final cost (key == cost) and any later pop of it, or a
+-- relaxation towards a probe already popped, is ruled out by the key / cost comparison itself.
+-- `reuse`: a field no longer used (the one just replaced), whose tables are cleared and filled again
+-- instead of growing new ones (two tables of 22 000 entries: ~0.5 MB of garbage per build).
+function PR.BuildField(g, L, yield, reuse)
+	local cost, nxt = {}, {}
+	if reuse and reuse.g == g then
+		cost, nxt = reuse.cost, reuse.nxt
+		for id = 1, #g.nodes do cost[id], nxt[id] = nil, nil end
+	end
+	local f = { g = g, L = L, cost = cost, nxt = nxt, pulled = {} }
+	local adj = g.adj or PR.Prepare(g)
+	local first, nid, elen = adj.first, adj.nid, adj.len
+	local hk, hv, n = {}, {}, 0
+	for _, s in ipairs(PR.Visible(g, L, 3)) do
+		cost[s.id] = s.pos:Distance(L)
+		n = hpush(hk, hv, n, cost[s.id], s.id)
 	end
 	local k = 0
-	while #open > 0 do
-		local best = hpop(open)
-		if not closed[best.id] then
-			closed[best.id] = true
+	while n > 0 do
+		local best, key
+		best, key, n = hpop(hk, hv, n)
+		if key == cost[best] then
 			k = k + 1
 			if yield and k % 64 == 0 then yield() end
-			for id, via in pairs(best.nb) do
-				if not closed[id] then
-					local m = g.nodes[id]
-					local c = cost[best.id] + edgeLen(best, m, via)
-					if not cost[id] or c < cost[id] then
-						cost[id], nxt[id] = c, best.id
-						hpush(open, c, m)
-					end
+			for e = first[best], first[best + 1] - 1 do
+				local id, c = nid[e], key + elen[e]
+				local ci = cost[id]
+				if not ci or c < ci then
+					cost[id], nxt[id] = c, best
+					n = hpush(hk, hv, n, c, id)
 				end
 			end
 		end
@@ -504,8 +537,10 @@ hook.Add("Think", "pba_probes_field", function()
 	if not job and (not f or f.g ~= g or (f.L:DistToSqr(L) > (g.spacing / 2) ^ 2 and SysTime() >= (PR.fieldNext or 0))) then
 		PR.fieldNext = SysTime() + 0.5
 		job = { g = g }
+		local spare = PR.fieldSpare
+		PR.fieldSpare = nil
 		job.co = coroutine.create(function()
-			return PR.BuildField(g, L, function() if SysTime() >= PR.fieldDeadline then coroutine.yield() end end)
+			return PR.BuildField(g, L, function() if SysTime() >= PR.fieldDeadline then coroutine.yield() end end, spare)
 		end)
 		PR.fieldJob = job
 	end
@@ -516,7 +551,7 @@ hook.Add("Think", "pba_probes_field", function()
 		PR.fieldJob = nil
 		ErrorNoHaltWithStack("[PBA] probe field failed: " .. tostring(res))
 	elseif coroutine.status(job.co) == "dead" then
-		PR.field, PR.fieldJob = res, nil
+		PR.fieldSpare, PR.field, PR.fieldJob = PR.field, res, nil
 	end
 end)
 

@@ -85,6 +85,10 @@ MAX_LOOPS_MEAN_MS = 5.0    # mean loop work per frame where loops run
 # spikes (one computation: 0.9 ms, then 12.7 ms, then 1.5 ms on the same input). Baseline 166 KB,
 # 104 traces per computation at 1.28 KB each (a new result table every time).
 MAX_ALLOC_KB = 80.0
+# listener field: one full build on gm_construct (22 000 probes) took 18-24 ms and made 2.7 MB of garbage
+# (a table per heap entry, pairs() and a Vector call per edge: interpreted, the JIT could not compile it)
+MAX_FIELD_MS = 10.0
+MAX_FIELD_KB = 500.0
 
 ALLOC_LUA = """PBA_ALLOC = nil
 timer.Simple(0, function()
@@ -97,8 +101,16 @@ timer.Simple(0, function()
   for rep = 1, 3 do for _, S in ipairs(srcs) do P.InvalidateCache() P.Compute(S, L, 75) n = n + 1 end end
   local ms = (SysTime() - t0) * 1000 / math.max(n, 1)
   local kb = (collectgarbage('count') - m0) / math.max(n, 1)
+  local PR, fms, fkb = pba.Probes, 0, 0
+  if PR and PR.current then -- listener field: one full build (sliced over the frames in game), reusing
+    -- the tables of the field it replaces, as the game's upkeep does
+    local old = PR.BuildField(PR.current, L)
+    m0, t0 = collectgarbage('count'), SysTime()
+    PR.BuildField(PR.current, L, nil, old)
+    fms, fkb = (SysTime() - t0) * 1000, collectgarbage('count') - m0
+  end
   collectgarbage('restart')
-  PBA_ALLOC = { kb = kb, ms = ms, n = n }
+  PBA_ALLOC = { kb = kb, ms = ms, n = n, fieldMs = fms, fieldKb = fkb }
 end) return true"""
 
 
@@ -110,6 +122,7 @@ def alloc_per_compute():
         v = lua("client", "return PBA_ALLOC")
         if v:
             print(f"  path computation: {v['kb']:.0f} KB garbage, {v['ms']:.2f} ms without GC (mean of {v['n']})", flush=True)
+            print(f"  listener field build: {v['fieldKb']:.0f} KB garbage, {v['fieldMs']:.1f} ms without GC", flush=True)
             return v
     return None
 
@@ -183,8 +196,13 @@ stage = stages() if "--stages" in sys.argv[2:] else None
 fails = []
 if not alloc:
     fails.append("allocation not measured")
-elif alloc["kb"] > MAX_ALLOC_KB:
-    fails.append(f"path computation garbage {alloc['kb']:.0f} KB > {MAX_ALLOC_KB:.0f}")
+else:
+    if alloc["kb"] > MAX_ALLOC_KB:
+        fails.append(f"path computation garbage {alloc['kb']:.0f} KB > {MAX_ALLOC_KB:.0f}")
+    if alloc["fieldMs"] > MAX_FIELD_MS:
+        fails.append(f"field build {alloc['fieldMs']:.1f} ms > {MAX_FIELD_MS:.0f}")
+    if alloc["fieldKb"] > MAX_FIELD_KB:
+        fails.append(f"field build garbage {alloc['fieldKb']:.0f} KB > {MAX_FIELD_KB:.0f}")
 for r, res in results.items():
     t = ((res["perf"] or {}).get("timers") or {}).get("loops")
     if t and t["n"] > 0:
