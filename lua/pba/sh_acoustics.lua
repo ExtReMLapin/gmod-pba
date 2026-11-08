@@ -55,6 +55,58 @@ function AC.Diffraction(delta, freq, maxDb)
 	return min(max(a, 0), maxDb or 20)
 end
 
+-- ------------------------------------------------------------------ apertures (Fresnel)
+-- A partly open door is a slit: what reaches the listener directly depends on how much of the
+-- first Fresnel zone around the ray passes through the free gap, not on the opening angle. A 1 cm
+-- crack in line of sight lets the highs through but little of the rest; the same crack out of
+-- line passes even less. 1-D Fresnel-Kirchhoff along the doorway's width (the height of a door is
+-- larger than the Fresnel zone in the bands that matter).
+
+--- Fresnel integrals C(v), S(v) (Abramowitz & Stegun 7.3.32-33 auxiliary functions, |err| < 2e-3).
+function AC.Fresnel(v)
+	local a = math.abs(v)
+	local f = (1 + 0.926 * a) / (2 + 1.792 * a + 3.104 * a * a)
+	local g = 1 / (2 + 4.142 * a + 3.492 * a * a + 6.670 * a * a * a)
+	local ph = math.pi * a * a / 2
+	local c = 0.5 + f * math.sin(ph) - g * math.cos(ph)
+	local s = 0.5 - f * math.cos(ph) - g * math.sin(ph)
+	if v < 0 then return -c, -s end
+	return c, s
+end
+
+--- Amplitude through a set of free intervals of a line (aperture plane), relative to the whole
+-- doorway [w0, w1]. u0: where the straight ray crosses the plane (same coordinate); d1, d2:
+-- distances (units) from the source side and to the listener side; freq in Hz. 0..1.
+function AC.SlitRatio(intervals, w0, w1, u0, d1, d2, freq)
+	local lambda = SPEED / freq / UNIT_M -- units
+	local k = math.sqrt(2 * (d1 + d2) / (lambda * math.max(d1, 1) * math.max(d2, 1)))
+	local function span(a, b)
+		local ca, sa = AC.Fresnel((a - u0) * k)
+		local cb, sb = AC.Fresnel((b - u0) * k)
+		return cb - ca, sb - sa
+	end
+	local re, im = 0, 0
+	for _, iv in ipairs(intervals) do
+		local r, i = span(iv[1], iv[2])
+		re, im = re + r, im + i
+	end
+	local fr, fi = span(w0, w1)
+	local full = math.sqrt(fr * fr + fi * fi)
+	if full < 1e-6 then return 0 end
+	return math.min(math.sqrt(re * re + im * im) / full, 1)
+end
+
+--- SlitRatio averaged in power over a third-octave-ish band around freq (one frequency alone
+-- falls on Fresnel ripples: an off-axis crack would flip between muffled and not).
+function AC.SlitBand(intervals, w0, w1, u0, d1, d2, freq)
+	local p = 0
+	for _, m in ipairs({ 0.71, 0.84, 1, 1.19, 1.41 }) do
+		local r = AC.SlitRatio(intervals, w0, w1, u0, d1, d2, freq * m)
+		p = p + r * r
+	end
+	return math.sqrt(p / 5)
+end
+
 --- Low-pass level 0..4 from a diffraction loss in dB.
 function AC.LowpassLevel(db, cfg)
 	cfg = cfg or A.cfg

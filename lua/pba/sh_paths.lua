@@ -36,40 +36,114 @@ function P.RelaxPoints(S, L, chain, iters)
 	return pts
 end
 
---- Evaluates a portal chain: length, diffraction, door losses, apparent position (pure).
+-- ------------------------------------------------------------------ door apertures
+
+local DOOR_LEAVES = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
+local GAP_SAMPLES = 32
+
+--- Free intervals of a partly open doorway, measured (game state): traces across the portal
+-- plane at mid height, every 1/32 of its width, hitting door leaves only. Works for any door
+-- (rotating, sliding, double). Cached per opening state. Returns { w0, w1, wax, intervals, area }
+-- in coordinates along the width axis `wax` from the portal centre.
+function P.Aperture(p)
+	local key = math.Round((p.open or 1) * 255)
+	if p.ap and p.ap.key == key then return p.ap end
+	local n = p.normal
+	local wax = n:Cross(Vector(0, 0, 1))
+	if wax:LengthSqr() < 1e-4 then p.ap = { key = key } return p.ap end -- floor / ceiling portal
+	wax:Normalize()
+	local w0, w1 = math.huge, -math.huge
+	for _, v in ipairs(p.poly) do
+		local u = (v - p.center):Dot(wax)
+		w0, w1 = math.min(w0, u), math.max(w1, u)
+	end
+	local ap = { key = key, w0 = w0, w1 = w1, wax = wax, intervals = {} }
+	local step = (w1 - w0) / GAP_SAMPLES
+	local free, cur = 0, nil
+	for k = 0, GAP_SAMPLES - 1 do
+		local u = w0 + (k + 0.5) * step
+		local pt = p.center + wax * u
+		local tr = util.TraceLine({ start = pt + n * 12, endpos = pt - n * 12, ignoreworld = true,
+			filter = function(e) return DOOR_LEAVES[e:GetClass()] or false end })
+		if not tr.Hit then
+			free = free + 1
+			if cur then cur[2] = w0 + (k + 1) * step else cur = { w0 + k * step, w0 + (k + 1) * step } ap.intervals[#ap.intervals + 1] = cur end
+		else
+			cur = nil
+		end
+	end
+	ap.area = free / GAP_SAMPLES
+	if free == 0 and (p.open or 1) > 0.01 then
+		-- no leaf found by the traces (unlinked or exotic door): the opening fraction as a gap
+		local o = p.open or 1
+		ap.intervals, ap.area = { { w1 - (w1 - w0) * o, w1 } }, o
+	end
+	p.ap = ap
+	return ap
+end
+
+--- Evaluates a portal chain: length, diffraction, door losses, apparent position.
+-- Pure for fully open / closed portals; a partly open door reads its measured aperture.
 function P.EvalChain(S, L, chain, cfg)
 	cfg = cfg or A.cfg
 	local pts = P.RelaxPoints(S, L, chain)
 	local len, diff, loss = 0, 0, 0
 	local allOpen = true
-	local openDiff, leafLp = 0, 0 -- what muffles: diffraction of the open parts, material of the leaves
+	local openDiff, leafLp, tiltLp = 0, 0, 0 -- what muffles: diffraction, door leaves, a narrow gap
+	local fd = cfg.portal_diffuse_db or 60
 	local prev = S
 	for i, p in ipairs(chain) do
 		local pt = pts[i]
 		local nxt = pts[i + 1] or L
 		len = len + prev:Distance(pt)
 		local delta = prev:Distance(pt) + pt:Distance(nxt) - prev:Distance(nxt)
-		local d = AC.Diffraction(delta, cfg.diff_freq, cfg.diff_max_edge)
-		-- the source room's diffuse field also leaves through the opening, in every direction and
-		-- unfiltered: power sum with the edge diffraction (never more loss than the diffuse part)
-		local fd = cfg.portal_diffuse_db or 60
-		if fd < 60 then d = -10 * math.log10(10 ^ (-d / 10) + 10 ^ (-fd / 10)) end
-		diff = diff + d
-		-- open part diffracts around the frame; closed part radiates from the door leaf
-		-- itself (transmission only, no diffraction). Mixed by sqrt(opening), as DoorGain.
-		local sf = math.sqrt(math.Clamp(p.open or 1, 0, 1))
-		if sf < 0.99 then allOpen = false end
-		-- the leaf: same rendered loss and lowpass as when the straight trace crosses it
-		local go, gc = sf * 10 ^ (-d / 20), (1 - sf) * 10 ^ (-AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg) / 20)
-		if gc > go then leafLp = math.max(leafLp, p.closedLp or 3) else openDiff = openDiff + d end
-		local g = go + gc
-		loss = loss - AC.GainToDb(g)
+		local dEdge = AC.Diffraction(delta, cfg.diff_freq, cfg.diff_max_edge)
+		local open = math.Clamp(p.open or 1, 0, 1)
+		-- direct part: diffraction round the doorway, times the share of the Fresnel zone that
+		-- the actual gap lets through (1 wide open, 0 closed)
+		-- diffuse part: the source room's diffuse field leaves through the free AREA (power law)
+		-- leaf: transmits over the area it covers, like the straight trace through it
+		local area, rRef, rLow, rHigh = 1, 1, 1, 1
+		if open <= 0.01 then
+			area, rRef, rLow, rHigh = 0, 0, 0, 0
+		elseif open < 0.99 then
+			local ap = (cfg.door_aperture or 1) >= 0.5 and P.Aperture(p) or {}
+			if ap.wax then
+				area = ap.area
+				local hit = planeHit(prev, nxt, p.center, p.normal)
+				local u0 = (hit - p.center):Dot(ap.wax)
+				local d1, d2 = prev:Distance(hit), hit:Distance(nxt)
+				rRef = AC.SlitBand(ap.intervals, ap.w0, ap.w1, u0, d1, d2, cfg.diff_freq)
+				rLow = AC.SlitBand(ap.intervals, ap.w0, ap.w1, u0, d1, d2, 250)
+				rHigh = AC.SlitBand(ap.intervals, ap.w0, ap.w1, u0, d1, d2, 4000)
+			else
+				area = open
+				rRef, rLow, rHigh = math.sqrt(open), math.sqrt(open), math.sqrt(open)
+			end
+		end
+		if area < 0.99 then allOpen = false end
+		local gEdge = 10 ^ (-dEdge / 20)
+		local gDiffuse = fd < 60 and 10 ^ (-fd / 20) or 0
+		local gDirect = gEdge * rRef
+		local go = math.sqrt(gDirect * gDirect + gDiffuse * gDiffuse * area)
+		local gc = math.sqrt(1 - area) * 10 ^ (-AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg) / 20)
+		local g = math.sqrt(go * go + gc * gc)
+		if go > 0 then diff = diff - AC.GainToDb(go) end
+		if gc > go then
+			leafLp = math.max(leafLp, p.closedLp or 3)
+		else
+			-- spectrum of the open part: the doorway's diffraction (with the diffuse leak), and the
+			-- gap's own tilt when it passes the lows better than the highs
+			openDiff = openDiff - AC.GainToDb(math.sqrt(gEdge * gEdge + gDiffuse * gDiffuse))
+			if rHigh > 0 and rLow > rHigh then tiltLp = math.max(tiltLp, AC.LowpassLevel(AC.GainToDb(rLow / rHigh) , cfg)) end
+		end
+		loss = loss - AC.GainToDb(math.max(g, 1e-6))
 		prev = pt
 	end
 	len = len + prev:Distance(L)
-	diff = math.min(diff, cfg.diff_max_total)
+	diff = math.min(diff, cfg.diff_max_total + 40)
 	loss = math.min(loss, cfg.diff_max_total + cfg.door_closed_db * #chain)
-	local lp = math.max(AC.LowpassLevel(openDiff, cfg), leafLp)
+	local lp = math.max(AC.LowpassLevel(openDiff, cfg), leafLp, tiltLp)
 	-- every opening wide open: the diffuse part carries the treble through
 	if allOpen then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
 	return { chain = chain, points = pts, length = len, diffDb = diff, doorDb = loss - diff, lossDb = loss,

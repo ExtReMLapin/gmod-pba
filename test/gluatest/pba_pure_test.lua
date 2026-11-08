@@ -190,6 +190,19 @@ return {
 			expect(near(p.lossDb, AC.LeafDb(30, CFG), 0.5)).to.beTrue()
 			expect(p.lp).to.equal(2) -- the leaf material's lowpass, not the diffraction scale (lp4 at 20 dB)
 		end },
+		{ name = "SlitRatio: whole doorway = 1; a narrow gap in line passes the highs; out of line passes less", func = function()
+			-- doorway 48 u wide, source and listener 100 u either side
+			expect(near(AC.SlitRatio({ { -24, 24 } }, -24, 24, 0, 100, 100, 1000), 1, 1e-6)).to.beTrue()
+			local gap = { { 20, 22 } } -- a 2-unit crack near the latch
+			local inLow = AC.SlitRatio(gap, -24, 24, 21, 100, 100, 250)
+			local inHigh = AC.SlitRatio(gap, -24, 24, 21, 100, 100, 4000)
+			expect(inHigh > inLow).to.beTrue() -- the crack is a high-pass in line of sight
+			expect(inHigh < 0.6).to.beTrue()   -- but still far from the whole doorway
+			local outHigh = AC.SlitRatio(gap, -24, 24, -15, 100, 100, 4000)
+			expect(outHigh < inHigh).to.beTrue() -- the same crack out of line passes less
+			local Cv, Sv = AC.Fresnel(1)
+			expect(near(Cv, 0.7799, 3e-3) and near(Sv, 0.4383, 3e-3)).to.beTrue() -- tabulated C(1), S(1)
+		end },
 		{ name = "SelectVoices: weak paths rejected, far-apart strong paths split", func = function()
 			local L = Vector(0, 0, 0)
 			local mk = function(pos, len, loss) return { pos = pos, length = len, lossDb = loss, lp = 0 } end
