@@ -124,6 +124,12 @@ local function fillWindow(window)
 		{ "#audioprop.menu.native", "icon16/sound.png", Build.native },
 		{ "#audioprop.menu.server", "icon16/server.png", Build.server } }) do
 		local scroll = vgui.Create("DScrollPanel", sheet)
+		-- light page background, like the Q menu: the default tab colour is a mid grey on which
+		-- the dark Derma text is unreadable
+		scroll.Paint = function(_, w, h)
+			surface.SetDrawColor(240, 240, 240)
+			surface.DrawRect(0, 0, w, h)
+		end
 		local cp = vgui.Create("ControlPanel", scroll)
 		cp:Dock(TOP)
 		cp:SetLabel(language.GetPhrase(page[1]))
@@ -135,7 +141,7 @@ end
 function A.OpenMenu()
 	if IsValid(A.menuWindow) then A.menuWindow:Remove() end
 	local f = vgui.Create("DFrame")
-	f:SetSize(math.min(520, ScrW() - 40), math.min(760, ScrH() - 40))
+	f:SetSize(math.min(620, ScrW() - 40), math.min(800, ScrH() - 40))
 	f:Center()
 	f:SetTitle("audioprop")
 	f:SetSizable(true)
@@ -148,8 +154,8 @@ concommand.Add("audioprop_menu", function() A.OpenMenu() end, nil, "Opens the au
 list.Set("DesktopWindows", "audioprop", {
 	title = "audioprop",
 	icon = "icon64/tool.png",
-	width = 520,
-	height = 760,
+	width = 620,
+	height = 800,
 	onewindow = true,
 	init = function(icon, window)
 		window:SetTitle("audioprop")
@@ -169,7 +175,8 @@ hook.Add("InitPostEntity", "audioprop_menu_hint", function()
 end)
 
 -- state of the native backend, as shown in the menus
-local GREEN, RED, ORANGE = Color(40, 150, 60), Color(200, 40, 40), Color(200, 120, 0)
+-- dark colours: the pages have a light background (same rule as the Q menu: dark text on light)
+local GREEN, RED, ORANGE = Color(20, 110, 40), Color(180, 25, 25), Color(170, 90, 0)
 local function nativeState()
 	local N = A.Native or {}
 	if (A.cfg.allow_native or 1) < 0.5 then return "forbidden", RED, "Native backend forbidden by this server (audioprop_allow_native 0)." end
@@ -185,6 +192,13 @@ local function nativeState()
 	end
 	return "module", RED, "Steam Audio module not available: " .. tostring(N.err)
 end
+
+local WHY = {
+	module = "Needs the Steam Audio module (gmcl_audioprop_win64.dll + phonon.dll in garrysmod/lua/bin), allowed by the server.",
+	ready = "Needs the Steam Audio module loaded (see the status line at the top).",
+	render = "Turn on \"Native rendering\" above to use this.",
+	paths = "Turn on \"Steam Audio paths\" above to use this.",
+}
 
 --- Greys out (and re-enables) the options of the open menu panels; called twice a second.
 function A.RefreshMenu()
@@ -217,7 +231,9 @@ function A.RefreshMenu()
 				if IsValid(ctl) and ctl.apOk ~= ok then
 					ctl.apOk = ok
 					ctl:SetEnabled(ok)
-					ctl:SetAlpha(ok and 255 or 90)
+					ctl:SetAlpha(ok and 255 or 140)
+					-- say what unlocks a greyed-out option
+					ctl:SetTooltip(not ok and (WHY[d[2]] or "") or nil)
 				end
 			end
 		end
