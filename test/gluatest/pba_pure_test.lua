@@ -781,19 +781,50 @@ return {
 			local dq, aq = P.PathDiffuse(q, cfg)
 			expect(near(dp, dq) and near(ap, aq)).to.beTrue()
 		end },
-		{ name = "SelectVoices: a long detour stays a path voice, diffuse and absorbed (no fade-out), the short route clean", func = function()
+		{ name = "DiffuseMix: the diffuse part goes round corners by reflections (diffuse_corner_db per 90 degrees), the direct part keeps the diffraction", func = function()
+			local cfg = setmetatable({ diffuse_corner_db = 3, diffuse_max = 0.85 }, { __index = CFG })
+			-- room 14: 4 corners, 29.8 dB of edge diffraction, share 0.54, 3.4 dB of wall absorption
+			local p = { lossDb = 29.8, diffDb = 29.8, bendDeg = 350 }
+			local loss, arr = P.DiffuseMix(p, 0.54, 3.4, cfg)
+			expect(loss > 14 and loss < 20).to.beTrue() -- the corridor carries the sound
+			expect(arr > 0.8 and arr <= 0.85).to.beTrue() -- what arrives is mostly diffuse
+			-- share 0: the path as computed
+			local l0, a0 = P.DiffuseMix(p, 0, 3.4, cfg)
+			expect(l0).to.equal(29.8)
+			expect(a0).to.equal(0)
+			-- no diffraction (wide openings): the diffuse part only adds the walls' absorption
+			local l1 = P.DiffuseMix({ lossDb = 6, diffDb = 0, bendDeg = 350 }, 0.54, 3.4, cfg)
+			expect(l1 > 6 and l1 < 9.4).to.beTrue()
+			-- corner loss never above the diffraction it replaces; door losses are paid by both parts
+			local l2 = P.DiffuseMix({ lossDb = 12, diffDb = 2, bendDeg = 720 }, 0.85, 0, cfg)
+			expect(l2 >= 12 - 1e-9 and l2 < 12 + 1e-6).to.beTrue()
+			-- continuous in the share
+			local prev, worst = nil, 0
+			for s = 0, 0.85, 0.01 do
+				local l = P.DiffuseMix(p, s, 3.4, cfg)
+				if prev then worst = math.max(worst, math.abs(l - prev)) end
+				prev = l
+			end
+			expect(worst < 1.5).to.beTrue()
+		end },
+		{ name = "SelectVoices: a long detour stays a path voice, diffuse (no fade-out), the short route clean", func = function()
 			local L = Vector(0, 0, 0)
 			local on = setmetatable({ diffuse = 1, diffuse_max = 0.85, diffuse_absorb = 0.1, diffuse_width = 128, diffuse_max_db = 20, diffuse_near = 512 }, { __index = CFG })
 			local off = setmetatable({ diffuse = 0 }, { __index = on })
-			local function lone() return { { pos = Vector(100, -100, 0), length = 2300, direct = 600, bendDeg = 360, lossDb = 0, lp = 0 } } end
+			-- 4 corridor corners: 30 dB of edge diffraction
+			local function lone() return { { pos = Vector(100, -100, 0), length = 2300, direct = 600, bendDeg = 360, lossDb = 30, diffDb = 30, lp = 0 } } end
 			local t = { walls = { {} }, lossDb = 40, lp = 4, length = 600, pos = Vector(50, 0, 0) }
 			local a = P.SelectVoices(L, lone(), t, 75, on)
 			local b = P.SelectVoices(L, lone(), t, 75, off)
 			expect(a[1].kind).to.equal("portal")
 			expect(a[1].diffuse > 0.6).to.beTrue()
 			expect((b[1].diffuse or 0) == 0).to.beTrue()
-			expect(b[1].level - a[1].level > 5).to.beTrue() -- absorbed by the corridor's walls
-			expect(b[1].level - a[1].level <= 20 + 1e-6).to.beTrue()
+			-- the corridor guides the diffuse part round its corners: louder than pure diffraction
+			expect(a[1].level - b[1].level > 5).to.beTrue()
+			-- the same detour through wide openings (no diffraction): the walls only absorb, quieter
+			local function wide() return { { pos = Vector(100, -100, 0), length = 2300, direct = 600, bendDeg = 360, lossDb = 0, lp = 0 } } end
+			local wa, wb = P.SelectVoices(L, wide(), t, 75, on), P.SelectVoices(L, wide(), t, 75, off)
+			expect(wb[1].level - wa[1].level > 1 and wb[1].level - wa[1].level <= 20 + 1e-6).to.beTrue()
 			-- idempotent: the cached paths re-selected keep the same levels (absorption not added twice)
 			local ps = lone()
 			local v1 = P.SelectVoices(L, ps, t, 75, on)

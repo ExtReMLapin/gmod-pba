@@ -1,8 +1,7 @@
 -- Diffuse model (pba_diffuse) in room 14 of pba_demo ("the long way round"): the music behind the thick
 -- wall is heard through the corridor (almost 4x the straight line, 4 corners). With the model on, that
 -- corridor voice is mostly diffuse (reverberant tunnel preset on the engine path, blurred and reverbed in
--- the module) and a few dB lower (the corridor's walls absorb), never faded out; off, it is a clean
--- voice. lua_job, client realm, pba_demo (any demo mode: computed directly).
+-- the module) and louder than the clean wavefront that pays every corner's diffraction (off). lua_job, client realm, pba_demo (any demo mode: computed directly).
 -- Returns { pass, on = {...}, off = {...} }.
 if game.GetMap() ~= "pba_demo" then return { pass = false, err = "needs pba_demo" } end
 local A = pba
@@ -28,6 +27,8 @@ end
 local on, off = measure(true), measure(false)
 A.SetOverride("diffuse", old)
 A.Paths.InvalidateCache()
+-- the corridor guides the diffuse part round its 4 corners (diffuse_corner_db) instead of the edge
+-- diffraction the clean wavefront pays: louder with the model on
 local pass = on.voice and off.voice and on.diffuse >= 0.5 and (on.dsp == 116 or on.dsp == 117) and off.diffuse == 0
-	and off.level - on.level >= 3 and off.level - on.level <= 20.5
+	and on.level - off.level >= 6
 return { pass = pass, on = on, off = off }

@@ -857,10 +857,31 @@ function P.PathDiffuse(p, cfg)
 	return share, absorb
 end
 
+--- Energy of a path split by the diffuse model (pure). The coherent part (1 - share) pays the path's
+-- losses as computed: edge diffraction at each corner, doors, walls. The diffuse part reaches the
+-- listener by reflections along the corridor: it pays the same doors and walls but, instead of the
+-- corners' edge diffraction (a free-field screen: 7-8 dB per corner of a corridor), the walls'
+-- absorption (absorbDb) and diffuse_corner_db per 90 degrees of bend: hard walls guide sound round a
+-- bend (a few dB). Never more than the diffraction it replaces.
+-- Returns the path's loss (dB, before headroom) and the share of the ARRIVING energy that is diffuse
+-- (at most diffuse_max), which the rendering blurs.
+function P.DiffuseMix(p, share, absorbDb, cfg)
+	cfg = cfg or A.cfg
+	local raw = p.rawLossDb or p.lossDb or 0
+	if not share or share <= 0 then return raw, 0 end
+	local diff = math.Clamp(p.diffDb or 0, 0, math.max(raw, 0))
+	local corners = math.min((p.bendDeg or 0) / 90 * (cfg.diffuse_corner_db or 3), diff)
+	local ec = (1 - share) * 10 ^ (-raw / 10)
+	local ed = share * 10 ^ (-(raw - diff + corners + (absorbDb or 0)) / 10)
+	local e = math.max(ec + ed, 1e-30)
+	return -10 * math.log10(e), math.min(ed / e, cfg.diffuse_max or 0.85)
+end
+
 --- Builds the voice list from evaluated portal paths and the transmission path (pure).
 -- Each voice: { pos, gain (linear target gain at the listener), lp, kind, members }.
 -- Every path's level is formed here (portal, probe, bridge, baked): the diffuse model is applied here
--- once, for all of them (p.diffuse; p.absorbDb part of p.lossDb, p.rawLossDb stays without it).
+-- once, for all of them (P.DiffuseMix: p.diffuse = arriving diffuse share, p.lossDb includes the
+-- mix, p.rawLossDb stays without it).
 -- direct (optional): straight-line distance source - listener (else the transmission's length or
 -- the paths' own `direct`): the voices together never exceed the free field at that distance.
 function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
@@ -868,8 +889,11 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	-- loud sources keep their headroom above the engine's full scale (see AC.Headroom)
 	for _, p in ipairs(paths) do
 		p.rawLossDb = p.rawLossDb or p.lossDb
-		p.diffuse, p.absorbDb = P.PathDiffuse(p, cfg)
-		p.lossDb = math.max(p.rawLossDb + p.absorbDb - AC.Headroom(sndlvl, p.length, cfg.fullscale_db), 0)
+		local share
+		share, p.absorbDb = P.PathDiffuse(p, cfg)
+		local loss
+		loss, p.diffuse = P.DiffuseMix(p, share, p.absorbDb, cfg)
+		p.lossDb = math.max(loss - AC.Headroom(sndlvl, p.length, cfg.fullscale_db), 0)
 	end
 	if trans then
 		trans.rawLossDb = trans.rawLossDb or trans.lossDb
