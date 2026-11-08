@@ -1,5 +1,5 @@
 # gmcl_pba: optional native backend of pba (Steam Audio simulation).
-# Licence of this directory: Apache-2.0 (see native/LICENSE) - decision pending, see docs/JOURNAL.md.
+# Licence of this directory: Apache-2.0, decision pending (see native/LICENSE).
 # Dependencies: python -I native/fetch_deps.py  (Steam Audio SDK + gmod-module-base into native/deps)
 # Build (x64 Developer prompt): cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 #                               cmake --build native/build

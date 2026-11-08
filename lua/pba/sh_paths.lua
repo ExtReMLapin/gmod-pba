@@ -781,7 +781,7 @@ local function guardRamp(x, x0)
 	return t * t * (3 - 2 * t)
 end
 
---- Length / angle guard (pure, ETAT_DE_L_ART_LUA.md 1.2): extra loss (dB) of an implausible path.
+--- Length / angle guard (pure): extra loss (dB) of an implausible path.
 -- A path much longer than the straight line (a detour round the other end of the map), or winding
 -- by a large total angle, is not where most of the sound comes from (walls, routes not modelled):
 -- games cap or fade such paths (Wwise diffraction tapering, Rainbow Six Siege path cost). Beyond

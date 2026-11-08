@@ -4,7 +4,7 @@ PATH. --quick: the fast checks only (about 2 minutes), to run before each commit
 import json, os, subprocess, sys, time
 TEST = os.path.dirname(os.path.abspath(__file__))
 MCP = sys.argv[1]  # path to the gmod-mcp client (mcp.py)
-GAME = r"D:\SteamLibrary\steamapps\common\GarrysMod\garrysmod"
+GAME = os.environ.get("PBA_GAME_DIR", r"D:\SteamLibrary\steamapps\common\GarrysMod\garrysmod")  # garrysmod/ folder
 sys.path.insert(0, TEST)
 
 def call(tool, args, mx=200000, timeout=600):
@@ -148,7 +148,7 @@ steps = [
                                            "d1_town_01", "gm_construct")),
     # copies of one probe route counted once (report only: field and k-path, new vs former criterion)
     ("probe_dedupe gm_construct", lambda: (load("gm_construct"), job("client", "probe_dedupe.lua", 600))[1]),
-    # what a player can hear (docs/ETAT_DE_L_ART_RECHERCHE.md 6.4, 9): level steps > 1 dB (JND) and
+    # what a player can hear: level steps > 1 dB (JND) and
     # direction jumps when the source or the listener walks 16 u steps, level(S, L) vs level(L, S).
     # Limits None (report only) until the first in-game baseline; --check fails on too few walks.
     # gm_construct first: path_quality field only ends on it (one load less); pba_demo: portal paths

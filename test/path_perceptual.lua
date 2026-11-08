@@ -1,5 +1,5 @@
 -- Perceptual bench of PBA's paths (client lua_job, any map with a probe graph): what a player can
--- hear, against the audible thresholds (docs/ETAT_DE_L_ART_RECHERCHE.md sections 6.4 and 9):
+-- hear, against the audible thresholds:
 --   continuity: the source S (then, separately, the listener L) walks args.steps steps of args.step
 --     units along a random horizontal line that stays in free space (8 u hull); at each position the
 --     heard level (power sum of the voices, as path_quality.lua) and the direction of the dominant

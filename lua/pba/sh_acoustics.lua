@@ -1,6 +1,6 @@
 -- Pure acoustic functions (no game state): engine gain model, diffraction, transmission,
 -- volume compensation, low-pass mapping. Unit-tested in test/gluatest/.
--- Sources and justification: docs/ETAT_DE_L_ART.md (Q1-Q3), docs/REVERSE.md.
+-- Engine facts (gain formula, presets) were measured in game; see THIRD_PARTY.md for sources.
 
 local A = pba
 local AC = {}
@@ -13,7 +13,7 @@ local SPEED = 343      -- m/s
 function AC.DbToGain(db) return 10 ^ (db / 20) end
 function AC.GainToDb(g) return 20 * log10(max(g, 1e-9)) end
 
---- Distance gain of the Source sound engine (engine.dll x64, see REVERSE.md section 3).
+--- Distance gain of the Source sound engine (engine.dll x64, measured; see THIRD_PARTY.md).
 -- Returns the linear gain applied to a sound of level `sndlvl` dB at `dist` units.
 function AC.EngineGain(dist, sndlvl)
 	if sndlvl <= 0 then return 1 end
@@ -173,7 +173,7 @@ function AC.LowpassHold(level, db, prev, margin, cfg)
 end
 
 -- Transmission table: { t_ref (units), R_ref (dB), slope (dB per thickness doubling), min, max, lowpass }
--- fixed = true: thickness ignored. Values: ETAT_DE_L_ART.md Q2 (assumed, tuned by ear).
+-- fixed = true: thickness ignored. Values: literature figures (assumed, tuned by ear).
 AC.MAT_TABLE = {
 	[MAT_CONCRETE] = { 10.5, 56, 10, 40, 65, 4 },
 	[MAT_TILE]     = { 10.5, 56, 10, 40, 65, 4 },
@@ -255,7 +255,7 @@ function AC.DoubleWall(density, thicknessInches, gapUnits, f)
 end
 
 --- Gain multiplier of a door at opening fraction `frac` (0 closed .. 1 open) whose closed
--- transmission loss is `closedDb`. TDM-style interpolation (sqrt), see ETAT_DE_L_ART Q5.
+-- transmission loss is `closedDb`. TDM-style interpolation (sqrt), see THIRD_PARTY.md.
 --- Rendered loss (dB) of a closed door leaf: the SAME convention as a wall crossed by the
 -- transmission trace (P.EvalWalls): the transmitted sound is rendered low-passed, so the
 -- low-frequency loss is used (table minus trans_lf_bonus). Every model of a closed leaf (portal

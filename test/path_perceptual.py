@@ -30,7 +30,7 @@ OPEN_DOORS = "--doors=closed" not in OPTS  # as path_quality.py: pba_demo's room
 SETS = [a[len("--set="):] for a in OPTS if a.startswith("--set=")]
 MAPS = [a for a in OPTS if not a.startswith("--")] or ["d1_town_01", "gm_construct", "pba_demo"]
 
-# Limits, None = report only. Set them from the first in-game baseline (docs/JOURNAL.md), then
+# Limits, None = report only. Set them from the first in-game baseline, then
 # lower them as path features land. Groups: S_warm / L_warm / S_cold / L_cold (walks of the source
 # or of the listener, loop or one-shot), S_stable / L_stable (direction through P.Stable), recip_warm
 # / recip_cold. Metrics: see _perceptual.py.

@@ -1,5 +1,5 @@
 -- NOT a lua_job: include it from a game timer (lua_exec / lua_job install a debug hook, which turns
--- LuaJIT off and makes every Vector-free optimisation look useless). See docs/PERF.md.
+-- LuaJIT off and makes every Vector-free optimisation look useless).
 -- Benchmark run from a game timer (no debug hook: LuaJIT compiles normally).
 -- Returns a function(useRef) -> per-stage ms per call.
 return function(useRef)

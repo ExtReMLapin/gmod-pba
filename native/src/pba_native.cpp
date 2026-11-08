@@ -1,5 +1,5 @@
 // gmcl_pba: Steam Audio simulation backend for pba (Garry's Mod, client).
-// Licence: Apache-2.0 (decision pending, see docs/JOURNAL.md). Steam Audio is Apache-2.0.
+// Licence: MIT (see native/LICENSE). Steam Audio is Apache-2.0.
 //
 // The module only computes; pba's Lua side keeps playing the sounds. Lua API, in the
 // global table `pba_native` after require("pba"):
@@ -522,7 +522,7 @@ bool EnsureSimulator() {
 		rs.maxDuration = win;
 		rs.maxNumSources = 1;
 		rs.maxOrder = 0;
-		rs.maxNumRays = g_optRevRays.load(); // == numRays: full sphere (docs/STEAM_AUDIO_BUGS.md #1)
+		rs.maxNumRays = g_optRevRays.load(); // == numRays: full sphere (Steam Audio issue #592)
 		if (iplSimulatorCreate(g_ctx, &rs, &g_revSim) == IPL_STATUS_SUCCESS) {
 			iplSimulatorSetScene(g_revSim, g_scene);
 			IPLSourceSettings ss{};
@@ -908,7 +908,7 @@ LUA_FUNCTION(Paths) {
 		LUA->SetField(-2, "eh");
 		if (pth.shCoeffs) {
 			// First-order coefficients -> arrival direction in Source axes. Mapping measured in
-			// game (docs/REVERSE.md, "Steam Audio pathing"): x = -sh1, y = sh3, z = sh2 (the
+			// game: x = -sh1, y = sh3, z = sh2 (the
 			// vertical sign is not verified yet).
 			Vector v;
 			v.x = -pth.shCoeffs[1];

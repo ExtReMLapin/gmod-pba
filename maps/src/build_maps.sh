@@ -5,7 +5,7 @@
 # (VVIS_ARGS / VRAD_ARGS override the fast settings, e.g. VRAD_ARGS="-final" for a release build).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GM="D:/SteamLibrary/steamapps/common/GarrysMod"
+GM="${GM:-D:/SteamLibrary/steamapps/common/GarrysMod}"  # override with GM=<GarrysMod folder>
 GAME="$GM/garrysmod"
 BIN="$GM/bin"
 python -I "$HERE/gen_maps.py" "$HERE"

@@ -204,7 +204,7 @@ return {
 			expect(AC.Diffraction(100000, 500, 20)).to.equal(20)
 			expect(AC.Diffraction(50, 1000, 40) > AC.Diffraction(50, 500, 40)).to.beTrue()
 		end },
-		{ name = "Diffraction: angle table (2 m arms) matches ETAT_DE_L_ART", func = function()
+		{ name = "Diffraction: angle table (2 m arms) matches the reference values", func = function()
 			local arm = 2 / 0.01905
 			local function at(deg)
 				local th = math.rad(deg)
@@ -610,7 +610,7 @@ return {
 			local both = P.SelectVoices(L, { p }, t, 75, CFG)
 			expect(#both).to.equal(1) -- 40 dB below: outside the 20 dB window
 		end },
-		-- length / angle guard (ETAT_DE_L_ART_LUA.md 1.2): an implausible detour fades progressively
+		-- length / angle guard: an implausible detour fades progressively
 		{ name = "PathShape: straight-line length and total bend of a path", func = function()
 			local S, L = Vector(0, 0, 0), Vector(100, 100, 0)
 			local d, b = P.PathShape(S, { Vector(100, 0, 0) }, L)

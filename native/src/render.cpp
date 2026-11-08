@@ -10,7 +10,7 @@
 //                  tail) -> ambisonic bus
 //   ambisonic bus -> IPLAmbisonicsDecodeEffect (HRTF / speakers) -> mix
 // The engine still plays every sound pba does not take over (clear line of sight...).
-// Licence: Apache-2.0 (decision pending, see docs/JOURNAL.md).
+// Licence: MIT (see native/LICENSE).
 #define NOMINMAX
 #define MA_NO_ENCODING
 #define MA_NO_GENERATION
@@ -53,7 +53,7 @@ std::atomic<int> g_tailBlocks{(int)(kRate * 2.5 / kBlock)};
 std::atomic<float> g_rtOv[3] = {0, 0, 0};
 std::atomic<bool> g_rtOvOn{false};
 // The hybrid tail EQ and the reverb time include air absorption with our Steam Audio fork
-// (docs/STEAM_AUDIO_BUGS.md #3 and #6): no correction here.
+// (Steam Audio issues #594 and #602): no correction here.
 // tail EQ last applied to the room reverb (Stats: the air absorption must be counted once)
 std::atomic<float> g_roomTailEq[3] = {0, 0, 0};
 
