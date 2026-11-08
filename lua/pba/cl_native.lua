@@ -24,6 +24,57 @@ local ABSORB = {
 	[MAT_GRASS] = { 0.11, 0.26, 0.60 }, [MAT_SAND] = { 0.15, 0.30, 0.45 }, [MAT_PLASTIC] = { 0.10, 0.10, 0.10 },
 }
 
+-- Absorption by surfaceprop NAME (finer than MAT_*: GMod has no "fabric" or "foam" MAT_ type).
+-- Steam Audio's own presets where one exists (carpet); others from usual room-acoustics tables.
+local ABSORB_SURF = {
+	carpet = { 0.24, 0.69, 0.73 },                                   -- Steam Audio preset "carpet"
+	rubber = { 0.04, 0.04, 0.03 }, rubbertire = { 0.04, 0.04, 0.03 }, -- solid rubber reflects (rubber flooring)
+	jeeptire = { 0.04, 0.04, 0.03 }, slidingrubbertire = { 0.04, 0.04, 0.03 },
+	cardboard = { 0.12, 0.10, 0.10 },                                 -- estimate
+	paper = { 0.10, 0.15, 0.20 },                                     -- estimate
+	plaster = { 0.12, 0.06, 0.04 },                                   -- Steam Audio preset "plaster"
+	brick = { 0.03, 0.04, 0.07 },                                     -- Steam Audio preset "brick"
+}
+-- Models whose surfaceprop says nothing of their padding (couches declared "dirt", seats "metal").
+-- Estimates (unoccupied upholstered seating, hay, a stack of tyres with its cavities).
+local ABSORB_MODEL = {
+	{ "couch", { 0.35, 0.65, 0.70 } }, { "sofa", { 0.35, 0.65, 0.70 } }, { "armchair", { 0.35, 0.65, 0.70 } },
+	{ "mattress", { 0.35, 0.65, 0.70 } }, { "carseat", { 0.30, 0.55, 0.60 } }, { "_seat", { 0.30, 0.55, 0.60 } },
+	{ "chair_office", { 0.25, 0.45, 0.50 } }, { "traincar_seats", { 0.30, 0.55, 0.60 } },
+	{ "haybale", { 0.30, 0.60, 0.70 } }, { "tirestack", { 0.10, 0.15, 0.20 } },
+}
+local absorbCache = {}
+local function absorptionFor(model, surf, mat)
+	if model then
+		local a = absorbCache[model]
+		if a == nil then
+			a = false
+			local m = string.lower(model)
+			for _, e in ipairs(ABSORB_MODEL) do if string.find(m, e[1], 1, true) then a = e[2] break end end
+			absorbCache[model] = a
+		end
+		if a then return a end
+	end
+	return ABSORB_SURF[string.lower(surf or "")] or ABSORB[mat] or { 0.10, 0.10, 0.10 }
+end
+
+--- The surfaceprop of an entity on the client: server props have no client physics object, so
+-- the model's declared surfaceprop is read instead (was "default" for every prop).
+local surfCache = {}
+function N.SurfaceOf(e)
+	local phys = e:GetPhysicsObject()
+	if IsValid(phys) then return phys:GetMaterial() end
+	local model = e:GetModel()
+	if not model then return "default" end
+	local s = surfCache[model]
+	if not s then
+		local info = util.GetModelInfo(model)
+		s = info and info.SurfacePropName or "default"
+		surfCache[model] = s
+	end
+	return s
+end
+
 local function skipMaterial(name)
 	for _, p in ipairs(SKIP_PREFIX) do if string.StartWith(name, p) then return true end end
 	return false
@@ -31,14 +82,14 @@ end
 
 --- Steam Audio material for a surfaceprop: transmission derived from pba's own wall
 -- table at a typical wall thickness (16 units), split into bands (LF bonus, -10 dB HF).
-local function saMaterial(surf, cfg)
+local function saMaterial(surf, cfg, model)
 	local idx = util.GetSurfaceIndex(surf or "default")
 	local data = util.GetSurfaceData(idx >= 0 and idx or 0)
 	local mat = data and data.material or MAT_CONCRETE
 	local R = A.AC.WallLoss(mat, surf, 16) * cfg.trans_scale
 	local tm = 10 ^ (-R / 20)
 	return {
-		absorption = ABSORB[mat] or { 0.10, 0.10, 0.10 },
+		absorption = absorptionFor(model, surf, mat),
 		scattering = 0.05,
 		transmission = { math.min(tm * 10 ^ (cfg.trans_lf_bonus / 20), 1), tm, tm * 10 ^ (-10 / 20) },
 	}
@@ -513,9 +564,8 @@ function N.SyncDoors()
 				elseif isProp and big >= PROP_MIN_SIZE and nProps < (A.cfg.native_props_max or 64) then
 					-- material from the physics surface: pba's wall table at the object's
 					-- smallest dimension (hollow objects behave like thin walls)
-					local phys = e:GetPhysicsObject()
-					local surf = IsValid(phys) and phys:GetMaterial() or "default"
-					local m = saMaterial(surf, A.cfg)
+					local surf = N.SurfaceOf(e)
+					local m = saMaterial(surf, A.cfg, e:GetModel())
 					local v, t = boxMesh(mn, mx)
 					pba_native.DynamicAdd(id, v, t, m)
 					d = { prop = true, ent = e }
