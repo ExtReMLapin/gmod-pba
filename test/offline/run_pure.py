@@ -2,7 +2,8 @@
 Offline check only: the in-game suite (run_battery.py) stays the reference.
 Needs `pip install lupa` (or a local copy in test/offline/pylib). Agents use it to prepare code and pure
 tests without the game, in parallel; the in-game suite stays the reference before a merge.
-Usage: python -I test/offline/run_pure.py [repo] [extra.lua]   (repo defaults to this checkout)"""
+Usage: python -I test/offline/run_pure.py [repo] [extra.lua]   (repo defaults to this checkout; extra.lua
+       runs after the suite, with the repo path as `...`, e.g. test/offline/oneshot_follow_sim.lua)"""
 import os
 import sys
 
@@ -56,4 +57,4 @@ ok_static = len(raw) == 1 and raw[0].startswith("lua/pba/sh_core.lua:") and len(
 print("%s static: SoundDuration only via A.SoundDuration, prefix pattern only in A.SoundFile (raw calls %s, patterns %s)"
       % ("PASS" if ok_static else "FAIL", raw, pat))
 if len(sys.argv) > 2:
-    print(L.execute(open(sys.argv[2], encoding="utf-8").read()))
+    print(L.execute(open(sys.argv[2], encoding="utf-8").read(), repo))  # the repo path as `...`
