@@ -121,6 +121,8 @@ steps = [
     # special sounds: a sentence (metrocop radio) behind a wall is relayed and played muffled by the
     # client (EmitSentence), not left to the engine through the wall; pba_sentences 0: not relayed
     ("sentence_relay", lambda: [job("server", "sentence_relay.lua", 30), job("client", "sentence_client.lua", 10)]),
+    # env_microphone in speaker mode: routed before the hook, so pba only processes the speaker copy
+    ("microphone_order", lambda: job("server", "microphone_order.lua", 20)),
     ("loop_removed", lambda: job("server", "loop_removed.lua")),
     ("native_doors", lambda: (native_on(True), job("client", "native_doors.lua"))[1]),
     ("native_features", lambda: job("client", "native_features.lua")),
