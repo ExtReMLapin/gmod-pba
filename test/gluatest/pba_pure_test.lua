@@ -305,6 +305,38 @@ return {
 			expect(inMasked < inFree).to.beTrue()
 			expect(inFree < 1).to.beTrue()
 		end },
+		{ name = "EvalWalls: a hollow prop crossed through has two sheets (vending machine >= the props cap); a thin panel keeps one sheet", func = function()
+			-- hollow surfaceprop: aluminium-like sheet, 0.05 in (one sheet: ~17.7 dB at 500 Hz, ~7.7 dB rendered)
+			local cfg = setmetatable({ prop_max_db = 18, trans_scale = 1, trans_lf_bonus = 10 }, { __index = pba.cfg })
+			local fakeProp = { GetClass = function() return "prop_physics" end }
+			local saved = util.GetSurfaceData
+			local function run(w, noCap)
+				util.GetSurfaceData = function(i) if i == 9999 then return { density = 2700, thickness = 0.05 } end return saved(i) end
+				local ok, loss = pcall(P.EvalWalls, { w }, cfg, noCap)
+				util.GetSurfaceData = saved
+				if not ok then error(loss) end
+				return loss
+			end
+			local single = AC.MassLaw(2700, 0.05, 500) - 10
+			-- vending machine: 43 u crossed, its box 43 x 53 x 97
+			local machine = run({ mat = MAT_METAL, surf = "metal", thickness = 43, surfIdx = 9999, ent = fakeProp, minExtent = 43 })
+			local machineRaw = run({ mat = MAT_METAL, surf = "metal", thickness = 43, surfIdx = 9999, ent = fakeProp, minExtent = 43 }, true)
+			-- a thin panel model (2 u collision hull) of the same surfaceprop: one sheet
+			local panel = run({ mat = MAT_METAL, surf = "metal", thickness = 2, surfIdx = 9999, ent = fakeProp, minExtent = 2 })
+			if not (machine >= 18 - 1e-6 and machineRaw >= 2 * single and near(panel, single, 0.01)) then
+				error(string.format("one sheet %.1f dB; vending machine %.1f dB (uncapped %.1f), want >= 18 (>= %.1f); panel %.1f, want %.1f",
+					single, machine, machineRaw, 2 * single, panel, single))
+			end
+			-- Sharp's double wall: no gap = one wall of the total mass; never below it as the gap grows
+			local both = AC.MassLaw(2700, 0.1, 500)
+			expect(near(AC.DoubleWall(2700, 0.05, 0, 500), both, 1e-9)).to.beTrue()
+			local prev = both
+			for gap = 1, 100 do
+				local r = AC.DoubleWall(2700, 0.05, gap, 500)
+				expect(r >= prev - 1e-9).to.beTrue()
+				prev = r
+			end
+		end },
 		{ name = "SelectVoices: weak paths rejected, far-apart strong paths split", func = function()
 			local L = Vector(0, 0, 0)
 			local mk = function(pos, len, loss) return { pos = pos, length = len, lossDb = loss, lp = 0 } end
