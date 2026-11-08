@@ -1,13 +1,13 @@
 # Third-party sources
 
-audioprop is licensed under the GNU GPL v3 or later. No third-party code is copied verbatim; the
+PBA is licensed under the GNU GPL v3 or later. No third-party code is copied verbatim; the
 works below inspired algorithms that were re-implemented. Their licences allow porting into a
 GPL-3.0 project; attribution is given here and in the header of the concerned files.
 
 | Work | Licence | What was used | Where |
 |---|---|---|---|
-| The Dark Mod — `sound/snd_world.cpp` (`ResolveOrigin`), `game/FrobDoor.cpp` (`UpdateSoundLoss`) — https://github.com/stgatilov/darkmod_src | GPL-3.0-or-later | Virtual sound origin clamped into the portal polygon, volume-weighted origin of several paths; door loss interpolated with the opening | `lua/audioprop/sh_paths.lua`, `lua/audioprop/sh_acoustics.lua` (`DoorGain`) |
-| Sound Physics Remastered — https://github.com/henkelmax/sound-physics-remastered | GPL-3.0 | Idea of an apparent source direction from weighted path directions | `lua/audioprop/sh_paths.lua` (`SelectVoices`) |
+| The Dark Mod — `sound/snd_world.cpp` (`ResolveOrigin`), `game/FrobDoor.cpp` (`UpdateSoundLoss`) — https://github.com/stgatilov/darkmod_src | GPL-3.0-or-later | Virtual sound origin clamped into the portal polygon, volume-weighted origin of several paths; door loss interpolated with the opening | `lua/pba/sh_paths.lua`, `lua/pba/sh_acoustics.lua` (`DoorGain`) |
+| Sound Physics Remastered — https://github.com/henkelmax/sound-physics-remastered | GPL-3.0 | Idea of an apparent source direction from weighted path directions | `lua/pba/sh_paths.lua` (`SelectVoices`) |
 
 Facts only (no code): Source SDK 2013 public headers (BSP lump layouts, sound flags), and
 reverse-engineering of the installed `engine.dll` documented in `docs/REVERSE.md` (gain formula,

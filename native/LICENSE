@@ -1,4 +1,4 @@
-Native backend of audioprop (directory native/): Apache License 2.0
+Native backend of PBA (directory native/): Apache License 2.0
 https://www.apache.org/licenses/LICENSE-2.0
 
 Status: provisional. The official phonon.dll (Steam Audio, Apache-2.0) bundles Intel IPP under a

@@ -1,6 +1,6 @@
 local ply = player.GetAll()[1]
 local rec = {}
-hook.Add("EntityEmitSound", "audioprop_probe_pred", function(t)
+hook.Add("EntityEmitSound", "pba_probe_pred", function(t)
 	local pp = GetPredictionPlayer()
 	rec[#rec + 1] = { n = t.SoundName, o = t.OriginalSoundName, e = IsValid(t.Entity) and t.Entity:GetClass() or "?", pp = IsValid(pp) and (pp:IsBot() and "bot" or "host") or "none" }
 	if t.OriginalSoundName == "COMBINE_TAUNT0" or t.SoundName == "invalid.wav" then rec[#rec].sentence = true return false end
@@ -15,5 +15,5 @@ job:sleep(1)
 local ok = pcall(EmitSentence, "COMBINE_PAIN0", npc:GetPos(), 0, CHAN_AUTO, 1, 90, 0, 100)
 job:sleep(1)
 npc:Remove()
-hook.Remove("EntityEmitSound", "audioprop_probe_pred")
+hook.Remove("EntityEmitSound", "pba_probe_pred")
 return rec, ok

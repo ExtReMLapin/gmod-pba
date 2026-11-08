@@ -1,9 +1,9 @@
--- T-bot-gunfire (server lua_job, ap_tworooms): a bot firing an SMG in the other room must be
+-- T-bot-gunfire (server lua_job, pba_tworooms): a bot firing an SMG in the other room must be
 -- relayed to the human (predicted weapon sounds carry SoundTime = CurTime()). Regression test
 -- for the SoundTime eligibility bug: before the fix every player's gunfire stayed vanilla.
-local A = audioprop
+local A = pba
 local ply = player.GetHumans()[1]
-if not IsValid(ply) or game.GetMap() ~= "ap_tworooms" then return "needs ap_tworooms with a human" end
+if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return "needs pba_tworooms with a human" end
 ply:SetPos(Vector(256, 256, 0))
 local bot = player.GetBots()[1] or player.CreateNextBot("apgun")
 job:sleep(0.5)
@@ -13,7 +13,7 @@ bot:Give("weapon_smg1")
 bot:SelectWeapon("weapon_smg1")
 bot:GiveAmmo(500, "SMG1", true)
 job:sleep(0.5)
--- shots counted by the clip (a probe hook could run after audioprop's, which returns false)
+-- shots counted by the clip (a probe hook could run after pba's, which returns false)
 local wep = bot:GetActiveWeapon()
 wep:SetClip1(45)
 local r0 = A.stats.relayed

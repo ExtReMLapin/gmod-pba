@@ -1,11 +1,11 @@
 -- Compatibility with other sound addons (detected through their convars).
 --   Sound Muffling Effect (sme_*): same job (suppress + re-emit muffled) -> double processing.
---     With audioprop_compat_auto 1 (default) the server turns it off while audioprop is on.
+--     With pba_compat_auto 1 (default) the server turns it off while pba is on.
 --   Dynamic Weapon Reverb (cl_dwr_*): its occlusion rays overlap ours; its reverb tails are
 --     complementary. Warn only (client preference of the player).
 --   Echo/Reverb Everywhere (ere_*): global room DSP, complementary. Nothing to do.
 
-local A = audioprop
+local A = pba
 A.Compat = A.Compat or {}
 local C = A.Compat
 
@@ -31,17 +31,17 @@ function C.Check()
 	for _, f in ipairs(C.found) do
 		local k = f.info
 		if k.overlap == "full" and SERVER and A.Enabled() and A.cfg.compat_auto >= 0.5 and f.cv:GetBool() then
-			MsgN("[audioprop] ", k.name, " detected: it does the same job; turning it off (", k.cvar,
-				" 0). Set audioprop_compat_auto 0 to keep both.")
+			MsgN("[PBA] ", k.name, " detected: it does the same job; turning it off (", k.cvar,
+				" 0). Set pba_compat_auto 0 to keep both.")
 			RunConsoleCommand(k.cvar, "0")
 		elseif k.overlap == "blocking" and SERVER and f.cv:GetBool() then
-			MsgN("[audioprop] ", k.name, " detected: it cancels every server sound (EntityEmitSound -> false) ",
-				"and replays them itself, so audioprop never sees them. Use one or the other (", k.cvar, " 0).")
+			MsgN("[PBA] ", k.name, " detected: it cancels every server sound (EntityEmitSound -> false) ",
+				"and replays them itself, so pba never sees them. Use one or the other (", k.cvar, " 0).")
 		elseif k.overlap == "weapons" and CLIENT and f.cv:GetBool() then
-			MsgN("[audioprop] ", k.name, " detected: it renders gunfire itself (direction, delay, occlusion). ",
+			MsgN("[PBA] ", k.name, " detected: it renders gunfire itself (direction, delay, occlusion). ",
 				"Both together may double-process weapon sounds.")
 		elseif k.overlap == "occlusion" and CLIENT and f.cv:GetInt() > 0 then
-			MsgN("[audioprop] ", k.name, " detected: its occlusion rays overlap audioprop. Consider ",
+			MsgN("[PBA] ", k.name, " detected: its occlusion rays overlap pba. Consider ",
 				k.cvar, " 0 (its reverb can stay on).")
 		end
 	end
@@ -50,7 +50,7 @@ end
 -- Multiplayer Distant Sounds Fix replaces EmitSound with its own global; our server detour
 -- must wrap what is installed when we load, and must not double its copies.
 if SERVER and MPSNDFIX_EMITSOUND then
-	MsgN("[audioprop] Multiplayer Distant Sounds Fix detected: distant sounds it sends to every player may be heard twice.")
+	MsgN("[PBA] Multiplayer Distant Sounds Fix detected: distant sounds it sends to every player may be heard twice.")
 end
 
-hook.Add("InitPostEntity", "audioprop_compat", function() timer.Simple(3, C.Check) end)
+hook.Add("InitPostEntity", "pba_compat", function() timer.Simple(3, C.Check) end)

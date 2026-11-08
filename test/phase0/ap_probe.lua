@@ -1,4 +1,4 @@
--- audioprop phase 0 probe: logs every EntityEmitSound in this realm, plus detours of
+-- pba phase 0 probe: logs every EntityEmitSound in this realm, plus detours of
 -- the Lua sound entry points that bypass the hook. Optional suppression test.
 AP_PROBE = AP_PROBE or {}
 local P = AP_PROBE
@@ -15,7 +15,7 @@ local function add(kind, name, extra)
 end
 P.add = add
 
-hook.Add("EntityEmitSound", "audioprop_probe", function(t)
+hook.Add("EntityEmitSound", "pba_probe", function(t)
 	local e = t.Entity
 	add("hook", t.SoundName, {
 		orig = t.OriginalSoundName,
@@ -55,7 +55,7 @@ if CLIENT and P.orig.surfacePlaySound then
 end
 
 function P.restore()
-	hook.Remove("EntityEmitSound", "audioprop_probe")
+	hook.Remove("EntityEmitSound", "pba_probe")
 	CreateSound = P.orig.CreateSound
 	sound.Play = P.orig.soundPlay
 	EmitSound = P.orig.EmitSound

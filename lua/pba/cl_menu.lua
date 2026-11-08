@@ -1,18 +1,18 @@
--- Options panels: Spawn menu (Q) > Utilities > audioprop, the context-menu (C) window and the
--- console command audioprop_menu. The Q-menu column is narrow and Derma check boxes do not wrap:
+-- Options panels: Spawn menu (Q) > Utilities > pba, the context-menu (C) window and the
+-- console command pba_menu. The Q-menu column is narrow and Derma check boxes do not wrap:
 -- labels stay short, the details are in each control's tooltip (the convar's help text).
 
-local A = audioprop
+local A = pba
 
 --- Tooltip of a setting: its help text from sh_config plus the console variable.
 local function tip(name, extra)
 	local c = A.CONFIG[name]
-	local t = (c and c[5] or extra or "") .. "\n(console: audioprop_" .. name .. ")"
+	local t = (c and c[5] or extra or "") .. "\n(console: pba_" .. name .. ")"
 	return t
 end
 
 local function chk(panel, label, name, extra)
-	local cb = panel:CheckBox(label, "audioprop_" .. name)
+	local cb = panel:CheckBox(label, "pba_" .. name)
 	cb.apTip = tip(name, extra)
 	cb:SetTooltip(cb.apTip)
 	return cb
@@ -20,7 +20,7 @@ end
 
 local function sld(panel, label, name, dec)
 	local c = A.CONFIG[name]
-	local s = panel:NumSlider(label, "audioprop_" .. name, c[2], c[3], dec or 0)
+	local s = panel:NumSlider(label, "pba_" .. name, c[2], c[3], dec or 0)
 	s.apTip = tip(name)
 	s:SetTooltip(s.apTip)
 	return s
@@ -35,8 +35,7 @@ function Build.player(panel)
 	chk(panel, "Enable on this client", "cl_enable")
 	chk(panel, "Speed of sound delay", "delay")
 	chk(panel, "Radios of other addons", "streams")
-	panel.apDeps = { { chk(panel, "Muffle those radios", "streams_filter"), "ready" } }
-	sld(panel, "Debug overlay", "debug")
+	panel.apDeps = { { chk(panel, "Muffle those radios", "streams_filter"), "ready" }, { sld(panel, "Debug overlay", "debug"), "debug" } }
 	sld(panel, "Path budget (ms/frame)", "frame_budget_ms", 1)
 	panel.apPlayer = true
 	A.menuPanels = A.menuPanels or {}
@@ -58,7 +57,7 @@ function Build.native(panel)
 	panel:Help("Rendering (headphones recommended):")
 	dep(chk(panel, "Native rendering", "native_render"), "ready")
 	dep(chk(panel, "All sounds, not only muffled", "native_all"), R)
-	local out, outLabel = panel:ComboBox("Output", "audioprop_native_out")
+	local out, outLabel = panel:ComboBox("Output", "pba_native_out")
 	out:AddChoice("Headphones (HRTF)", 0)
 	out:AddChoice("Speakers", 1)
 	out.apTip = tip("native_out")
@@ -83,10 +82,10 @@ function Build.native(panel)
 	dep(chk(panel, "Render as a sound field", "native_path_fx"), "paths")
 	dep(chk(panel, "Keep the bake on disk", "native_cache"), "paths")
 
-	panel:Help("Custom HRTF: a SOFA file in data/audioprop/hrtf/ (file name below).")
-	local hrtf = panel:TextEntry("HRTF file", "audioprop_native_hrtf")
+	panel:Help("Custom HRTF: a SOFA file in data/pba/hrtf/ (file name below).")
+	local hrtf = panel:TextEntry("HRTF file", "pba_native_hrtf")
 	dep(hrtf, R)
-	dep(panel:Button("Restart native rendering", "audioprop_native_restart"), R)
+	dep(panel:Button("Restart native rendering", "pba_native_restart"), R)
 	panel.apDeps = deps
 	A.menuPanels = A.menuPanels or {}
 	A.menuPanels[#A.menuPanels + 1] = panel
@@ -100,13 +99,14 @@ function Build.server(panel)
 		return
 	end
 	panel:Help("Server settings, for every player. Changes apply immediately. Hover an option for details.")
-	chk(panel, "Enable audioprop", "enable")
+	chk(panel, "Enable pba", "enable")
 	chk(panel, "Props block sound", "trans_props")
 	chk(panel, "Probe graph", "probes")
 	chk(panel, "Looping sounds", "loops")
 	chk(panel, "Long sounds (music)", "long_sounds")
 	chk(panel, "Water muffles sound", "water")
 	chk(panel, "Merge paths", "merge")
+	chk(panel, "Debug overlay for all", "allow_debug")
 
 	panel:Help("Tuning:")
 	sld(panel, "Wall loss x", "trans_scale", 2)
@@ -131,21 +131,21 @@ end
 
 A.MenuBuild = Build -- (tests)
 
--- 1. the standard place: Spawn menu (Q) > Utilities > audioprop
-hook.Add("PopulateToolMenu", "audioprop_menu", function()
-	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_client", "#audioprop.menu.player", "", "", Build.player)
-	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_native", "#audioprop.menu.native", "", "", Build.native)
-	spawnmenu.AddToolMenuOption("Utilities", "audioprop", "audioprop_server", "#audioprop.menu.server", "", "", Build.server)
+-- 1. the standard place: Spawn menu (Q) > Utilities > pba
+hook.Add("PopulateToolMenu", "pba_menu", function()
+	spawnmenu.AddToolMenuOption("Utilities", "Physically Based Audio", "pba_client", "#pba.menu.player", "", "", Build.player)
+	spawnmenu.AddToolMenuOption("Utilities", "Physically Based Audio", "pba_native", "#pba.menu.native", "", "", Build.native)
+	spawnmenu.AddToolMenuOption("Utilities", "Physically Based Audio", "pba_server", "#pba.menu.server", "", "", Build.server)
 end)
 
--- 2. a window with the three pages as tabs: console command audioprop_menu, and an icon in the
+-- 2. a window with the three pages as tabs: console command pba_menu, and an icon in the
 -- context menu (C) next to the other desktop windows
 local function fillWindow(window)
 	local sheet = vgui.Create("DPropertySheet", window)
 	sheet:Dock(FILL)
-	for _, page in ipairs({ { "#audioprop.menu.player", "icon16/user.png", Build.player },
-		{ "#audioprop.menu.native", "icon16/sound.png", Build.native },
-		{ "#audioprop.menu.server", "icon16/server.png", Build.server } }) do
+	for _, page in ipairs({ { "#pba.menu.player", "icon16/user.png", Build.player },
+		{ "#pba.menu.native", "icon16/sound.png", Build.native },
+		{ "#pba.menu.server", "icon16/server.png", Build.server } }) do
 		local scroll = vgui.Create("DScrollPanel", sheet)
 		-- light page background, like the Q menu: the default tab colour is a mid grey on which
 		-- the dark Derma text is unreadable
@@ -166,34 +166,34 @@ function A.OpenMenu()
 	local f = vgui.Create("DFrame")
 	f:SetSize(math.min(620, ScrW() - 40), math.min(800, ScrH() - 40))
 	f:Center()
-	f:SetTitle("audioprop")
+	f:SetTitle("Physically Based Audio")
 	f:SetSizable(true)
 	f:MakePopup()
 	fillWindow(f)
 	A.menuWindow = f
 end
-concommand.Add("audioprop_menu", function() A.OpenMenu() end, nil, "Opens the audioprop settings window.")
+concommand.Add("pba_menu", function() A.OpenMenu() end, nil, "Opens the pba settings window.")
 
-list.Set("DesktopWindows", "audioprop", {
-	title = "audioprop",
+list.Set("DesktopWindows", "pba", {
+	title = "PBA Sound",
 	icon = "icon64/tool.png",
 	width = 620,
 	height = 800,
 	onewindow = true,
 	init = function(icon, window)
-		window:SetTitle("audioprop")
+		window:SetTitle("Physically Based Audio")
 		window:SetSizable(true)
 		fillWindow(window)
 	end,
 })
 
--- 3. one chat hint per client, the first time a map is played with audioprop
-hook.Add("InitPostEntity", "audioprop_menu_hint", function()
-	if cookie.GetNumber("audioprop_menu_hint", 0) >= 1 then return end
+-- 3. one chat hint per client, the first time a map is played with pba
+hook.Add("InitPostEntity", "pba_menu_hint", function()
+	if cookie.GetNumber("pba_menu_hint", 0) >= 1 then return end
 	timer.Simple(8, function()
-		chat.AddText(Color(90, 200, 255), "[audioprop] ", color_white,
-			"realistic sound propagation is on. Settings: context menu (C) > audioprop, Q > Utilities > audioprop, or the console command audioprop_menu.")
-		cookie.Set("audioprop_menu_hint", "1")
+		chat.AddText(Color(90, 200, 255), "[PBA] ", color_white,
+			"Physically Based Audio is on: sound travels through doors and windows. Settings: context menu (C) > PBA Sound, Q > Utilities > Physically Based Audio, or the console command pba_menu.")
+		cookie.Set("pba_menu_hint", "1")
 	end)
 end)
 
@@ -202,25 +202,26 @@ end)
 local GREEN, RED, ORANGE = Color(20, 110, 40), Color(180, 25, 25), Color(170, 90, 0)
 local function nativeState()
 	local N = A.Native or {}
-	if (A.cfg.allow_native or 1) < 0.5 then return "forbidden", RED, "Native backend forbidden by this server (audioprop_allow_native 0)." end
+	if (A.cfg.allow_native or 1) < 0.5 then return "forbidden", RED, "Native backend forbidden by this server (pba_allow_native 0)." end
 	if N.ready then
 		return "ready", GREEN, string.format("Steam Audio module loaded: %d triangles%s%s.", N.tris or 0,
 			N.render and ", native rendering on" or "",
 			N.pathsReady and string.format(", %d path probes%s", N.probes or 0, N.fromCache and " (from cache)" or "") or "")
 	end
 	if N.building then return "module", ORANGE, "Steam Audio module: loading the map geometry..." end
-	if (A.cfg.native or 1) < 0.5 then return "module", ORANGE, "Native backend switched off (audioprop_native 0)." end
+	if (A.cfg.native or 1) < 0.5 then return "module", ORANGE, "Native backend switched off (pba_native 0)." end
 	if N.err == "module not installed" or not N.err then
-		return "missing", RED, "Steam Audio module NOT INSTALLED: these options need gmcl_audioprop_win64.dll and phonon.dll in garrysmod/lua/bin."
+		return "missing", RED, "Steam Audio module NOT INSTALLED: these options need gmcl_pba_win64.dll and phonon.dll in garrysmod/lua/bin."
 	end
 	return "module", RED, "Steam Audio module not available: " .. tostring(N.err)
 end
 
 local WHY = {
-	module = "Needs the Steam Audio module (gmcl_audioprop_win64.dll + phonon.dll in garrysmod/lua/bin), allowed by the server.",
+	module = "Needs the Steam Audio module (gmcl_pba_win64.dll + phonon.dll in garrysmod/lua/bin), allowed by the server.",
 	ready = "Needs the Steam Audio module loaded (see the status line at the top).",
 	render = "Turn on \"Native rendering\" above to use this.",
 	paths = "Turn on \"Steam Audio paths\" above to use this.",
+	debug = "The debug overlay shows sounds through walls: only admins can use it, unless the server allows it for everyone (pba_allow_debug).",
 }
 
 --- Greys out (and re-enables) the options of the open menu panels; called twice a second.
@@ -233,6 +234,7 @@ function A.RefreshMenu()
 		ready = state == "ready",
 		render = state == "ready" and N.render == true,
 		paths = state == "ready" and (A.cfg.native_paths or 0) >= 0.5,
+		debug = not A.DebugAllowed or A.DebugAllowed(),
 	}
 	for i = #panels, 1, -1 do
 		local p = panels[i]
@@ -242,7 +244,7 @@ function A.RefreshMenu()
 			if IsValid(p.apStatus) then
 				if p.apPlayer then
 					local on = A.Enabled()
-					p.apStatus:SetText("audioprop is " .. (on and "ON" or "OFF") .. " on this server (audioprop_enable, admin).  " .. text)
+					p.apStatus:SetText("Physically Based Audio is " .. (on and "ON" or "OFF") .. " on this server (pba_enable, admin).  " .. text)
 					p.apStatus:SetTextColor(on and color or RED)
 				else
 					p.apStatus:SetText(text)
@@ -262,15 +264,15 @@ function A.RefreshMenu()
 		end
 	end
 end
-timer.Create("audioprop_menu_state", 0.5, 0, function() if A.menuPanels and #A.menuPanels > 0 then A.RefreshMenu() end end)
+timer.Create("pba_menu_state", 0.5, 0, function() if A.menuPanels and #A.menuPanels > 0 then A.RefreshMenu() end end)
 
-language.Add("audioprop.menu.player", "Player")
-language.Add("audioprop.menu.server", "Server (admin)")
-language.Add("audioprop.menu.native", "Steam Audio (native)")
+language.Add("pba.menu.player", "Player")
+language.Add("pba.menu.server", "Server (admin)")
+language.Add("pba.menu.native", "Steam Audio (native)")
 
-concommand.Add("audioprop_native_restart", function()
+concommand.Add("pba_native_restart", function()
 	local N = A.Native
-	if not N or not N.ready then MsgN("[audioprop] native backend not loaded") return end
+	if not N or not N.ready then MsgN("[PBA] native backend not loaded") return end
 	N.StopRender()
 	N.StartRender()
 end)

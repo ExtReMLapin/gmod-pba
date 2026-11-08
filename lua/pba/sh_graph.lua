@@ -1,7 +1,7 @@
 -- Propagation graph: BSP areas (nodes) and areaportals (edges with polygon geometry).
 -- Built lazily per map, on both realms (the server only needs the portal <-> door links).
 
-local A = audioprop
+local A = pba
 local G = {}
 A.Graph = G
 
@@ -286,7 +286,7 @@ function G.Get()
 	local bsp, err = A.BSP.Load(map)
 	if not bsp then
 		G.failed = map
-		MsgN("[audioprop] graph unavailable for ", map, ": ", err)
+		MsgN("[PBA] graph unavailable for ", map, ": ", err)
 		return nil
 	end
 	G.current = G.Build(bsp)

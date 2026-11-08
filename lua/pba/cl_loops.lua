@@ -3,7 +3,7 @@
 -- 0.25 s, so walls, doors and movement are followed. Loops are not repositioned: one patch
 -- per loop, attached to its entity. With a clear line the mirror equals the original.
 
-local A = audioprop
+local A = pba
 A.Loops = A.Loops or {}
 local LP = A.Loops
 LP.mirrors = LP.mirrors or {}
@@ -14,7 +14,7 @@ local AC = A.AC
 local function stopMirror(m)
 	if m.patch then m.patch:Stop() end
 	m.patch = nil
-	if m.nativeId and audioprop_native then audioprop_native.StopVoice(m.nativeId) end
+	if m.nativeId and pba_native then pba_native.StopVoice(m.nativeId) end
 	m.nativeId = nil
 	if IsValid(m.anchor) then m.anchor:Remove() end
 	m.anchor = nil
@@ -65,7 +65,7 @@ local function applyNative(m, S, L)
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
 	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
 	if m.nativeId then
-		if not audioprop_native.Update(m.nativeId, pos, gain, el, em, eh, pitch) then m.nativeId = nil end
+		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch) then m.nativeId = nil end
 		return
 	end
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
@@ -74,7 +74,7 @@ local function applyNative(m, S, L)
 		if why == "pending" then return nil end -- decoding: wait for it (no engine fallback meanwhile)
 		return false
 	end
-	local id = audioprop_native.Play(name, pos, gain, el, em, eh, pitch, not m.once)
+	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once)
 	m.started = true
 	m.nativeId = id > 0 and id or nil
 	return m.nativeId ~= nil
@@ -119,7 +119,7 @@ local function apply(m, fade)
 	end
 end
 
-net.Receive("audioprop_loop", function()
+net.Receive("pba_loop", function()
 	local op, key = net.ReadUInt(2), net.ReadString()
 	if op == OP_STOP then
 		local m = LP.mirrors[key]
@@ -161,14 +161,14 @@ function LP.FollowNative(L)
 				local S = ent:WorldSpaceCenter()
 				local d = S:Distance(L)
 				local el, em, eh = N.VoiceEQ(0, d)
-				audioprop_native.Update(m.nativeId, S, AC.EngineGain(d, m.lvl) * m.vol * A.cfg.native_gain, el, em, eh,
+				pba_native.Update(m.nativeId, S, AC.EngineGain(d, m.lvl) * m.vol * A.cfg.native_gain, el, em, eh,
 					m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL))
 			end
 		end
 	end
 end
 
-timer.Create("audioprop_loops_cl", 0.25, 0, function()
+timer.Create("pba_loops_cl", 0.25, 0, function()
 	if not IsValid(LocalPlayer()) then return end
 	for key, m in pairs(LP.mirrors) do
 		if m.done then

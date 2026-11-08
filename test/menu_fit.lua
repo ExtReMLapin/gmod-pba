@@ -1,6 +1,6 @@
--- Client lua_job: builds the three audioprop panels at the Q-menu width (args.width, default 300)
+-- Client lua_job: builds the three pba panels at the Q-menu width (args.width, default 300)
 -- and lists the check-box labels that overflow (Derma check boxes do not wrap).
-local builders = audioprop.MenuBuild
+local builders = pba.MenuBuild
 local res = {}
 for name, fn in pairs(builders) do
 	local cp = vgui.Create("ControlPanel")

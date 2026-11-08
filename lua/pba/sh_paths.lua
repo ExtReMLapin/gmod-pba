@@ -3,7 +3,7 @@
 -- (GPL-3.0, sound/snd_world.cpp ResolveOrigin: virtual point clamped into the portal
 -- polygon, volume-weighted origin); see THIRD_PARTY.md. Re-implemented, not copied.
 
-local A = audioprop
+local A = pba
 local P = {}
 A.Paths = P
 
@@ -226,7 +226,7 @@ function P.Walls(S, L, maxWalls, srcEnt)
 			local dry, wet = wS and L or S, wS and S or L
 			local tr = util.TraceLine({ start = dry, endpos = wet, mask = MASK_WATER })
 			local p = tr.Hit and tr.HitPos or (S + L) * 0.5
-			local ws = { entry = p, exit = p, thickness = 0, mat = MAT_SLOSH, surf = "audioprop_water", water = true }
+			local ws = { entry = p, exit = p, thickness = 0, mat = MAT_SLOSH, surf = "pba_water", water = true }
 			-- keep the walls ordered from S
 			local dS = p:DistToSqr(S)
 			local at = #walls + 1

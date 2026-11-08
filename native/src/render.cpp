@@ -1,4 +1,4 @@
-// Native rendering for audioprop: the module plays the processed sounds itself, through
+// Native rendering for pba: the module plays the processed sounds itself, through
 // miniaudio (default output device, 48 kHz stereo), with Steam Audio:
 //   direct voice : mono -> IPLDirectEffect (3-band EQ) -> IPLBinauralEffect (HRTF) or
 //                  IPLPanningEffect (speakers) -> mix
@@ -9,7 +9,7 @@
 //                  is simulated for that source position (convolution early part + parametric
 //                  tail) -> ambisonic bus
 //   ambisonic bus -> IPLAmbisonicsDecodeEffect (HRTF / speakers) -> mix
-// The engine still plays every sound audioprop does not take over (clear line of sight...).
+// The engine still plays every sound pba does not take over (clear line of sight...).
 // Licence: Apache-2.0 (decision pending, see docs/JOURNAL.md).
 #define NOMINMAX
 #define MA_NO_ENCODING

@@ -1,21 +1,21 @@
--- Lifecycle: install / remove hooks according to audioprop_enable, (re)build state on map
--- start and after an autorefresh. With audioprop_enable 0 no audioprop hook exists at all,
+-- Lifecycle: install / remove hooks according to pba_enable, (re)build state on map
+-- start and after an autorefresh. With pba_enable 0 no pba hook exists at all,
 -- which is the exact vanilla behaviour.
 
-local A = audioprop
+local A = pba
 
-A.hooks = A.hooks or {} -- event -> fn, registered by sv_relay / cl_render under id "audioprop"
+A.hooks = A.hooks or {} -- event -> fn, registered by sv_relay / cl_render under id "pba"
 A.reemitting = false
 
 --- Registers a hook managed by the master switch.
 function A.AddHook(event, fn)
 	A.hooks[event] = fn
-	if A.hooksInstalled then hook.Add(event, "audioprop", fn) end
+	if A.hooksInstalled then hook.Add(event, "pba", fn) end
 end
 
 function A.InstallHooks(on)
 	for event, fn in pairs(A.hooks) do
-		if on then hook.Add(event, "audioprop", fn) else hook.Remove(event, "audioprop") end
+		if on then hook.Add(event, "pba", fn) else hook.Remove(event, "pba") end
 	end
 	A.hooksInstalled = on
 	if SERVER and A.Doors then
@@ -38,7 +38,7 @@ function A.Emit(fn, ...)
 	A.reemitting = true
 	local ok, err = pcall(fn, ...)
 	A.reemitting = false
-	if not ok then ErrorNoHaltWithStack("[audioprop] emit failed: " .. tostring(err)) end
+	if not ok then ErrorNoHaltWithStack("[PBA] emit failed: " .. tostring(err)) end
 end
 
 -- ------------------------------------------------------------------ sound file properties
@@ -80,7 +80,7 @@ function A.IsLooping(name)
 	return loop
 end
 
---- Common eligibility rules for an EntityEmitSound table. Returns true when audioprop may
+--- Common eligibility rules for an EntityEmitSound table. Returns true when pba may
 -- process the sound.
 function A.Eligible(data)
 	local lvl = data.SoundLevel or 75
@@ -98,6 +98,9 @@ function A.Eligible(data)
 	if dur > A.cfg.max_duration then return false end
 	return true
 end
+
+--- The demo map (pba_demo*): debug overlay and HUD indicator switch on by themselves there.
+function A.IsDemoMap() return string.StartWith(game.GetMap() or "", "pba_demo") end
 
 --- World position of a sound.
 function A.SoundPos(data)
@@ -120,8 +123,8 @@ function A.OnMapReady()
 	if CLIENT and A.Doors.RequestSync then A.Doors.RequestSync() end
 end
 
-hook.Add("InitPostEntity", "audioprop_init", function() A.OnMapReady() end)
-hook.Add("PostCleanupMap", "audioprop_cleanup", function()
+hook.Add("InitPostEntity", "pba_init", function() A.OnMapReady() end)
+hook.Add("PostCleanupMap", "pba_cleanup", function()
 	if SERVER then timer.Simple(0, function() if A.Doors then A.Doors.Relink() A.Doors.Poll(true) A.Doors.Apply() A.Doors.SendAll() end end) end
 end)
 
@@ -131,10 +134,10 @@ if A.loadedOnce then
 end
 A.loadedOnce = true
 
-concommand.Add("audioprop_status", function(ply)
+concommand.Add("pba_status", function(ply)
 	if SERVER and IsValid(ply) and not ply:IsAdmin() then return end
 	local g = A.Graph.current
-	print(string.format("[audioprop] %s %s | enabled=%s hooks=%s | map=%s areas=%s portals=%s build=%.1fms",
+	print(string.format("[PBA] %s %s | enabled=%s hooks=%s | map=%s areas=%s portals=%s build=%.1fms",
 		SERVER and "server" or "client", A.VERSION, tostring(A.Enabled()), tostring(A.hooksInstalled),
 		game.GetMap(), g and g.numAreas or "-", g and #g.portals or "-", g and (g.buildTime or 0) * 1000 or 0))
 end)

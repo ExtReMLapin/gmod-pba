@@ -1,8 +1,8 @@
--- Client lua_job (ap_tworooms, door closed, listener 256,256 / source room 784,256): a 3D BASS
+-- Client lua_job (pba_tworooms, door closed, listener 256,256 / source room 784,256): a 3D BASS
 -- stream played by "another addon" (sound.PlayFile "3d") in the other room.
 -- Checks: transparent getters, apparent position + level change, native EQ (GetLevel ignores the
 -- channel volume, so a lower level with the filter on proves the DSP runs).
-local ST = audioprop.Streams
+local ST = pba.Streams
 local res = {}
 local ch
 sound.PlayFile("sound/music/hl2_song20_submix0.mp3", "3d noblock", function(c, err) ch = c res.err = err end)
@@ -36,20 +36,20 @@ local function level(secs)
 	return s / math.max(n, 1)
 end
 res.levelFiltered = level(2)
-RunConsoleCommand("audioprop_streams_filter", "0")
+RunConsoleCommand("pba_streams_filter", "0")
 job:sleep(0.4)
-if r and r.filtered then audioprop_native.StreamFilter(ch, 1, 1, 1) end
+if r and r.filtered then pba_native.StreamFilter(ch, 1, 1, 1) end
 res.levelFlat = level(2)
-RunConsoleCommand("audioprop_streams_filter", "1")
+RunConsoleCommand("pba_streams_filter", "1")
 -- disabled: the owner's values come back
-RunConsoleCommand("audioprop_streams", "0")
+RunConsoleCommand("pba_streams", "0")
 job:sleep(0.6)
 res.offG = r and r.g
 res.offApparent = r and r.apparent ~= nil
-RunConsoleCommand("audioprop_streams", "1")
+RunConsoleCommand("pba_streams", "1")
 hook.Remove("Think", "ap_streams_owner")
 ch:Stop()
 res.pass = res.tracked and res.getPos == tostring(src) and math.abs(res.getVolume - 0.8) < 1e-3 and res.apparent ~= nil
-	and res.g < 0.9 and (not audioprop.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9))
+	and res.g < 0.9 and (not pba.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9))
 	and res.offG == 1 and res.offApparent == false
 return res

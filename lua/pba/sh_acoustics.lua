@@ -2,7 +2,7 @@
 -- volume compensation, low-pass mapping. Unit-tested in test/gluatest/.
 -- Sources and justification: docs/ETAT_DE_L_ART.md (Q1-Q3), docs/REVERSE.md.
 
-local A = audioprop
+local A = pba
 local AC = {}
 A.AC = AC
 
@@ -99,7 +99,7 @@ AC.MAT_DEFAULT_ENTRY = { 10.5, 50, 8, 30, 65, 4 } -- unknown materials: heavy wa
 
 -- Surface-property name overrides (MAT_* alone is ambiguous: plaster/ceiling_tile are MAT_DIRT).
 AC.SURF_TABLE = {
-	audioprop_water = { 1, 24, 0, 24, 24, 4, fixed = true }, -- air / water interface (see audioprop_water_db)
+	pba_water = { 1, 24, 0, 24, 24, 4, fixed = true }, -- air / water interface (see pba_water_db)
 	plaster      = { 8, 35, 6, 25, 45, 3 },
 	ceiling_tile = { 1, 12, 6, 6, 20, 2 },
 	cardboard    = { 1, 12, 6, 6, 20, 2 },
@@ -126,7 +126,7 @@ end
 --- Transmission loss (dB) and low-pass level of one wall.
 -- matType: MAT_* ; surf: surfaceprop name (may be nil) ; thickness: units.
 function AC.WallLoss(matType, surf, thickness)
-	if surf == "audioprop_water" then return (audioprop.cfg.water_db or 24), 4 end
+	if surf == "pba_water" then return (pba.cfg.water_db or 24), 4 end
 	local e = surf and AC.SURF_TABLE[string.lower(surf)] or AC.MAT_TABLE[matType] or AC.MAT_DEFAULT_ENTRY
 	return evalEntry(e, thickness)
 end

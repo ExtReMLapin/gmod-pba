@@ -1,12 +1,12 @@
 -- Client lua_job on a map with water (gm_construct): (1) OGG Vorbis decoding by the module;
--- Needs garrysmod/sound/audioprop_test/tone.ogg (removed after the test run), e.g.:
---   ffmpeg -f lavfi -i "sine=frequency=440:duration=2" -c:a libvorbis garrysmod/sound/audioprop_test/tone.ogg
+-- Needs garrysmod/sound/pba_test/tone.ogg (removed after the test run), e.g.:
+--   ffmpeg -f lavfi -i "sine=frequency=440:duration=2" -c:a libvorbis garrysmod/sound/pba_test/tone.ogg
 -- (2) a source under water heard from above crosses the air / water interface (one fixed wall of
--- audioprop_water_db, heavily low-passed); both in the water: no interface.
-local A, N = audioprop, audioprop.Native
+-- pba_water_db, heavily low-passed); both in the water: no interface.
+local A, N = pba, pba.Native
 local res = {}
--- 1. OGG (test file generated into garrysmod/sound/audioprop_test/, not shipped)
-local ok, name = N.EnsureSound("audioprop_test/tone.ogg")
+-- 1. OGG (test file generated into garrysmod/sound/pba_test/, not shipped)
+local ok, name = N.EnsureSound("pba_test/tone.ogg")
 res.ogg = { ok = ok, name = name }
 -- 2. find a water column: sample a coarse grid around the map for a point inside water
 local wet

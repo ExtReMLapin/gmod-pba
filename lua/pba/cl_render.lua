@@ -1,11 +1,11 @@
 -- Client side: computes the paths from a sound to the local listener and re-emits one
 -- voice per selected path at its apparent position, with compensated volume and DSP.
 -- Handles both client-born sounds (EntityEmitSound on the client) and sounds relayed by
--- the server (net "audioprop_snd").
+-- the server (net "pba_snd").
 
-local A = audioprop
+local A = pba
 local AC = A.AC
-local NET = "audioprop_snd"
+local NET = "pba_snd"
 
 A.active = A.active or {}      -- list of { t_end, gain } for the voice budget
 A.lastResults = A.lastResults or {}
@@ -41,7 +41,7 @@ end
 
 local SPEED = 343 / 0.01905 -- speed of sound, units per second
 
---- Propagation delay of a voice (audioprop_delay), seconds.
+--- Propagation delay of a voice (pba_delay), seconds.
 local function voiceDelay(v, L)
 	if (A.cfg.delay or 0) < 0.5 then return 0 end
 	return (v.len or v.pos:Distance(L)) / SPEED
@@ -76,7 +76,7 @@ local function emitVoice(data, v, L, src)
 	return true
 end
 
---- Processes one sound. Returns true when audioprop took charge of it (the original must
+--- Processes one sound. Returns true when pba took charge of it (the original must
 -- not be played), even if every voice ended up inaudible; false = play it as vanilla.
 function A.Process(data, relayed)
 	local L, ang = listenerPos()
@@ -173,9 +173,9 @@ end)
 -- relayed server sounds: always played by us (the server suppressed the original)
 A.dict = A.dict or {}
 local pendingAcks = {}
-timer.Create("audioprop_ack", 0.2, 0, function()
+timer.Create("pba_ack", 0.2, 0, function()
 	if #pendingAcks == 0 then return end
-	net.Start("audioprop_snd_ack")
+	net.Start("pba_snd_ack")
 	local n = math.min(#pendingAcks, 64)
 	net.WriteUInt(n, 8)
 	for i = 1, n do net.WriteUInt(table.remove(pendingAcks, 1), 16) end

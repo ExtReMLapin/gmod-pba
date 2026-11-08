@@ -1,8 +1,25 @@
--- audioprop_debug 1: draws areaportals (green open, yellow partly open, red closed) and the
+-- pba_debug 1: draws areaportals (green open, yellow partly open, red closed) and the
 -- paths of the last processed sounds (portal paths blue, voices white spheres, transmission
--- red); audioprop_debug 2 adds dB labels.
+-- red); pba_debug 2 adds dB labels.
 
-local A = audioprop
+local A = pba
+
+--- The overlay shows where sounds come from through walls (a wallhack): only when the server
+-- allows it (pba_allow_debug), for admins, in single player, or on the demo map.
+function A.DebugAllowed()
+	if (A.cfg.allow_debug or 0) >= 0.5 or game.SinglePlayer() then return true end
+	if A.IsDemoMap and A.IsDemoMap() then return true end
+	local ply = LocalPlayer()
+	return IsValid(ply) and ply:IsAdmin()
+end
+
+--- Effective debug level: the player's choice, forced to 1 on the demo map, 0 when not allowed.
+function A.DebugLevel()
+	if not A.DebugAllowed() then return 0 end
+	local lvl = A.cfg.debug or 0
+	if lvl < 1 and A.IsDemoMap and A.IsDemoMap() then lvl = 1 end
+	return lvl
+end
 
 local function portalColor(p)
 	local o = p.open or 1
@@ -13,8 +30,8 @@ end
 
 local labels = {}
 
-hook.Add("PostDrawTranslucentRenderables", "audioprop_debug", function(depth, sky)
-	if sky or (A.cfg.debug or 0) < 1 then return end
+hook.Add("PostDrawTranslucentRenderables", "pba_debug", function(depth, sky)
+	if sky or A.DebugLevel() < 1 then return end
 	labels = {}
 	local g = A.Graph.current
 	if g then
@@ -60,16 +77,16 @@ hook.Add("PostDrawTranslucentRenderables", "audioprop_debug", function(depth, sk
 	end
 end)
 
-hook.Add("HUDPaint", "audioprop_debug", function()
-	if (A.cfg.debug or 0) < 1 then return end
+hook.Add("HUDPaint", "pba_debug", function()
+	if A.DebugLevel() < 1 then return end
 	for _, l in ipairs(labels) do
 		local s = l[1]:ToScreen()
-		if s.visible and (A.cfg.debug >= 2 or string.sub(l[2], 1, 1) == "#") then
+		if s.visible and (A.DebugLevel() >= 2 or string.sub(l[2], 1, 1) == "#") then
 			draw.SimpleTextOutlined(l[2], "DermaDefault", s.x, s.y, l[3], TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 1, color_black)
 		end
 	end
 	local st = A.stats
-	draw.SimpleTextOutlined(string.format("audioprop %s  processed %d  vanilla %d  voices %d  relayed %d  dropped %d",
+	draw.SimpleTextOutlined(string.format("PBA %s  processed %d  vanilla %d  voices %d  relayed %d  dropped %d",
 		A.Enabled() and "ON" or "OFF", st.processed or 0, st.vanilla or 0, st.voices or 0, st.relayedIn or 0, st.dropped or 0),
 		"DermaDefault", 10, 10, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, 1, color_black)
 end)

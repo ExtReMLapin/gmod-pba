@@ -1,6 +1,6 @@
-# audioprop
+# Physically Based Audio (PBA)
 
-Sound in Garry's Mod goes straight through walls. audioprop makes it travel the way it would in
+Sound in Garry's Mod goes straight through walls. PBA makes it travel the way it would in
 a building: through doors, corridors and windows. If a gunshot happens in the next room and the
 door is on your right, you hear it on your right, muffled; the wall in front of you only lets a
 dull rumble through.
@@ -37,58 +37,58 @@ Server (admin, replicated):
 
 | Convar | Default | |
 |---|---|---|
-| `audioprop_enable` | 1 | 0 = exact vanilla behaviour |
-| `audioprop_loops` | 1 | Handle looping sounds |
-| `audioprop_trans_props` | 1 | Props obstruct sound |
-| `audioprop_probes` | 1 | Probe graph on maps without areaportals |
-| `audioprop_max_paths` | 3 | Paths kept per sound |
-| `audioprop_merge` | 1 | Merge paths into one voice |
-| `audioprop_diff_freq` | 500 | Diffraction reference frequency (lower = gentler doors) |
-| `audioprop_trans_scale` | 1 | Multiplier on wall losses |
-| `audioprop_fullscale_db` | 90 | Lower = loud sounds get through walls more |
-| `audioprop_compat_auto` | 1 | Turn off Sound Muffling Effect while audioprop is on |
+| `pba_enable` | 1 | 0 = exact vanilla behaviour |
+| `pba_loops` | 1 | Handle looping sounds |
+| `pba_trans_props` | 1 | Props obstruct sound |
+| `pba_probes` | 1 | Probe graph on maps without areaportals |
+| `pba_max_paths` | 3 | Paths kept per sound |
+| `pba_merge` | 1 | Merge paths into one voice |
+| `pba_diff_freq` | 500 | Diffraction reference frequency (lower = gentler doors) |
+| `pba_trans_scale` | 1 | Multiplier on wall losses |
+| `pba_fullscale_db` | 90 | Lower = loud sounds get through walls more |
+| `pba_compat_auto` | 1 | Turn off Sound Muffling Effect while PBA is on |
 
-All the other acoustic constants are convars too (`find audioprop_`). Client: `audioprop_cl_enable`,
-`audioprop_debug 1` (draws portals and paths). Menu: Spawn menu > Utilities > audioprop.
+All the other acoustic constants are convars too (`find pba_`). Client: `pba_cl_enable`,
+`pba_debug 1` (draws portals and paths). Menu: Spawn menu > Utilities > Physically Based Audio.
 
 ## Optional native backend (Steam Audio)
 
-`native/` builds `gmcl_audioprop_win64.dll`, an optional binary module using Valve's Steam Audio.
+`native/` builds `gmcl_pba_win64.dll`, an optional binary module using Valve's Steam Audio.
 It cannot be shipped through the Workshop: copy it with `phonon.dll` (Steam Audio's runtime)
-into `garrysmod/lua/bin`. Without it, audioprop runs in pure Lua as described above.
+into `garrysmod/lua/bin`. Without it, PBA runs in pure Lua as described above.
 
 With the module installed:
 
 - the world (brushes and terrain displacements) is loaded into a Steam Audio scene; occlusion of
   the direct line becomes volumetric, so transitions around door frames are smooth;
-- `audioprop_native_render 1` (experimental): processed sounds are played by the module itself,
+- `pba_native_render 1` (experimental): processed sounds are played by the module itself,
   with a real 3-band EQ, air absorption, weapon directivity and HRTF binaural rendering
-  (headphones) or stereo panning (speakers, `audioprop_native_out 1`), loops included;
-- room reverb (`audioprop_native_reverb`) and **echoes of loud sounds** (`audioprop_native_echo`):
+  (headphones) or stereo panning (speakers, `pba_native_out 1`), loops included;
+- room reverb (`pba_native_reverb`) and **echoes of loud sounds** (`pba_native_echo`):
   Steam Audio reflections simulated on a background thread, for the room around the listener
   and for each gunshot / explosion position (convolution + parametric tail, first-order
   ambisonics decoded to HRTF). Echoes also apply to sounds the engine plays directly: the
   server relays loud sounds only to clients that render echoes;
-- `audioprop_native_paths 1` (experimental): Steam Audio's baked pathing replaces the probe graph,
+- `pba_native_paths 1` (experimental): Steam Audio's baked pathing replaces the probe graph,
   rendered as a sound field (several arrival directions), bake kept on disk;
-- doors are moving objects of the Steam Audio scene (`audioprop_native_doors`): reflections,
+- doors are moving objects of the Steam Audio scene (`pba_native_doors`): reflections,
   echoes and baked paths see them closed or open;
-- custom HRTF: a SOFA file in `data/audioprop/hrtf/`, named by `audioprop_native_hrtf`.
+- custom HRTF: a SOFA file in `data/pba/hrtf/`, named by `pba_native_hrtf`.
 
-- `audioprop_native_all 1` (default with native rendering): every sound, also in clear sight, is
+- `pba_native_all 1` (default with native rendering): every sound, also in clear sight, is
   played by the module (HRTF, reverb); the server relays them to that client only
-  (`audioprop_native_relay`, admin).
+  (`pba_native_relay`, admin).
 
 - radios and music players of other addons (`sound.PlayURL` / `PlayFile` 3D channels) are
-  heard through openings and attenuated by walls (transparent detour, `audioprop_streams`);
-  with the module they are also really muffled (`audioprop_streams_filter`, BASS DSP EQ).
+  heard through openings and attenuated by walls (transparent detour, `pba_streams`);
+  with the module they are also really muffled (`pba_streams_filter`, BASS DSP EQ).
 
-Settings: **context menu (C) > audioprop** (a window with the Player, Steam Audio and Server
-tabs), the console command `audioprop_menu`, or Spawn menu (Q) > Utilities > audioprop. Steam
+Settings: **context menu (C) > PBA Sound** (a window with the Player, Steam Audio and Server
+tabs), the console command `pba_menu`, or Spawn menu (Q) > Utilities > Physically Based Audio. Steam
 Audio options are greyed out when the module is not installed or the server forbids it.
-Server admins can forbid the native backend with `audioprop_allow_native 0`. Long sounds (music,
-speeches, beyond `audioprop_max_duration`) are followed like loops (`audioprop_long_sounds`).
-`audioprop_delay 1` (pure Lua, any renderer) delays processed sounds by the speed of sound.
+Server admins can forbid the native backend with `pba_allow_native 0`. Long sounds (music,
+speeches, beyond `pba_max_duration`) are followed like loops (`pba_long_sounds`).
+`pba_delay 1` (pure Lua, any renderer) delays processed sounds by the speed of sound.
 
 Build: `python native/fetch_deps.py`, then `native/build.bat` (Visual Studio C++ tools, CMake,
 Ninja). Licence of `native/` is pending (see `native/LICENSE`).
@@ -110,7 +110,7 @@ Ninja). Licence of `native/` is pending (see `native/LICENSE`).
 ## Compatibility
 
 - **Sound Muffling Effect** does the same job and is turned off automatically
-  (`audioprop_compat_auto 0` to keep both).
+  (`pba_compat_auto 0` to keep both).
 - **Dynamic Weapon Reverb**: its reverb is fine; its occlusion rays overlap (`cl_dwr_occlusion_rays 0`).
 - **Echo/Reverb Everywhere**: complementary.
 
@@ -118,7 +118,7 @@ Ninja). Licence of `native/` is pending (see `native/LICENSE`).
 
 `docs/` holds the research (`ETAT_DE_L_ART.md`), the engine facts found by reverse engineering
 (`REVERSE.md`), the coverage study, the test matrix, performance numbers and the listening
-protocol. `maps/src/gen_maps.py` generates the test maps; `audioprop_demo <scenario>` (repository
+protocol. `maps/src/gen_maps.py` generates the test maps; `pba_demo <scenario>` (repository
 only, not in the Workshop package) runs the test bench.
 
 Licence: GPL-3.0-or-later. See `THIRD_PARTY.md` for attributions.

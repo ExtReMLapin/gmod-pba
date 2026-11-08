@@ -1,14 +1,14 @@
 -- Looping sounds (vehicles, fire, alarms, NPC engine loops, CSoundPatch) and LONG one-shot
--- sounds (music, speeches: longer than audioprop_max_duration). They cannot be
+-- sounds (music, speeches: longer than pba_max_duration). They cannot be
 -- re-emitted as one-shots, so the server takes them over entirely: every start / volume /
 -- pitch change / stop event is suppressed and relayed (reliably) to the players in range,
 -- whose client plays a mirror loop on the same entity and muffles it in place (see
 -- cl_loops.lua). Players entering or leaving the range are (un)subscribed periodically.
 
-local A = audioprop
+local A = pba
 A.Loops = A.Loops or {}
 local LP = A.Loops
-local NET = "audioprop_loop"
+local NET = "pba_loop"
 util.AddNetworkString(NET)
 
 LP.active = LP.active or {} -- key -> { ent, idx, chan, name, vol, pitch, lvl, flags, dsp, pos, subs = {ply=true} }
@@ -99,7 +99,7 @@ function LP.Handle(data)
 end
 
 -- (un)subscribe players moving in / out of range, drop loops of removed entities
-timer.Create("audioprop_loops", 0.5, 0, function()
+timer.Create("pba_loops", 0.5, 0, function()
 	for key, l in pairs(LP.active) do
 		if l.idx ~= 0 and not IsValid(l.ent) then
 			LP.active[key] = nil
@@ -119,7 +119,7 @@ timer.Create("audioprop_loops", 0.5, 0, function()
 	end
 end)
 
---- Turning audioprop off: hand the running loops back to the engine.
+--- Turning pba off: hand the running loops back to the engine.
 function LP.Release()
 	for key, l in pairs(LP.active) do
 		local plys = {}

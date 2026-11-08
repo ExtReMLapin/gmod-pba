@@ -1,11 +1,11 @@
 -- Door / areaportal state. The server reads it (door geometry + func_areaportal m_state) and
 -- replicates per-portal openness (0..1) and closed-door loss to the clients.
 
-local A = audioprop
+local A = pba
 local D = {}
 A.Doors = D
 
-local NET = "audioprop_doors"
+local NET = "pba_doors"
 local POLL = 0.1
 
 -- ------------------------------------------------------------------ pure helpers
@@ -26,8 +26,8 @@ if SERVER then
 		if cls == "prop_door_rotating" then
 			-- reference = the largest rotation distance seen (SetRotationDistance can shrink it)
 			local cur = ent:GetInternalVariable("m_flDistance") or 90
-			ent.audioprop_refDist = math.max(ent.audioprop_refDist or 0, cur)
-			local dist = ent.audioprop_refDist
+			ent.pba_refDist = math.max(ent.pba_refDist or 0, cur)
+			local dist = ent.pba_refDist
 			local closed = ent:GetInternalVariable("m_angRotationClosed")
 			if not closed or dist <= 0 then return nil end
 			return math.Clamp(angDist(ent:GetLocalAngles(), vecToAng(closed)) / dist, 0, 1)
@@ -174,7 +174,7 @@ if SERVER then
 		D.Poll(true)
 		D.Apply()
 		D.SendAll() -- clients may hold a stale state (doors moved while disabled)
-		timer.Create("audioprop_doors", POLL, 0, function()
+		timer.Create("pba_doors", POLL, 0, function()
 			local changed = D.Poll(false)
 			if #changed > 0 then D.Apply() end
 			if #changed > 0 or #D.entChanged > 0 then send(changed, nil, D.entChanged) end
@@ -182,7 +182,7 @@ if SERVER then
 	end
 
 	function D.Stop()
-		timer.Remove("audioprop_doors")
+		timer.Remove("pba_doors")
 	end
 
 	function D.SendAll(ply)
@@ -193,8 +193,8 @@ if SERVER then
 	end
 
 	net.Receive(NET, function(_, ply) -- client asks for a full sync
-		if IsValid(ply) and (ply.audioprop_lastSync or 0) < CurTime() - 1 then
-			ply.audioprop_lastSync = CurTime()
+		if IsValid(ply) and (ply.pba_lastSync or 0) < CurTime() - 1 then
+			ply.pba_lastSync = CurTime()
 			D.SendAll(ply)
 		end
 	end)

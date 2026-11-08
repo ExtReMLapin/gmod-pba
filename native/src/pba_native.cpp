@@ -1,8 +1,8 @@
-// gmcl_audioprop: Steam Audio simulation backend for audioprop (Garry's Mod, client).
+// gmcl_pba: Steam Audio simulation backend for pba (Garry's Mod, client).
 // Licence: Apache-2.0 (decision pending, see docs/JOURNAL.md). Steam Audio is Apache-2.0.
 //
-// The module only computes; audioprop's Lua side keeps playing the sounds. Lua API, in the
-// global table `audioprop_native` after require("audioprop"):
+// The module only computes; pba's Lua side keeps playing the sounds. Lua API, in the
+// global table `pba_native` after require("pba"):
 //   Version() -> number (Steam Audio version, MMmmpp)
 //   Init() -> true | false, err
 //   LoadWorld(verts, tris, matIdx, materials) -> numTriangles
@@ -396,7 +396,7 @@ LUA_FUNCTION(Init) {
 }
 
 LUA_FUNCTION(LoadWorld) {
-	if (!g_ctx) LUA->ThrowError("audioprop_native.Init() first");
+	if (!g_ctx) LUA->ThrowError("pba_native.Init() first");
 	LUA->CheckType(1, Type::Table);
 	LUA->CheckType(2, Type::Table);
 	LUA->CheckType(3, Type::Table);
@@ -517,7 +517,7 @@ LUA_FUNCTION(BakePaths) {
 	if (g_bakeState == 1) LUA->ThrowError("a bake is already running");
 	JoinBake();
 	if (g_bakeBatch) iplProbeBatchRelease(&g_bakeBatch);
-	// probes are given by Lua (audioprop's probe graph: inside the playable volume). Steam
+	// probes are given by Lua (pba's probe graph: inside the playable volume). Steam
 	// Audio's own UNIFORMFLOOR generation also puts probes on roofs, seen from above.
 	if (iplProbeBatchCreate(g_ctx, &g_bakeBatch) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplProbeBatchCreate failed");
 	const int np = TableLen(LUA, 1);
@@ -914,7 +914,7 @@ static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 
 // AudioStart([sofaBytes]) -> true | false, err
 LUA_FUNCTION(AudioStart) {
-	if (!g_ctx) LUA->ThrowError("audioprop_native.Init() first");
+	if (!g_ctx) LUA->ThrowError("pba_native.Init() first");
 	unsigned int sofaLen = 0;
 	const char* sofa = LUA->IsType(1, Type::String) ? LUA->GetString(1, &sofaLen) : nullptr;
 	std::string err = render::Start(g_ctx, sofa, sofaLen);
@@ -1295,7 +1295,7 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "StreamFilter");
 	LUA->PushCFunction(StreamCollect);
 	LUA->SetField(-2, "StreamCollect");
-	LUA->SetField(-2, "audioprop_native");
+	LUA->SetField(-2, "pba_native");
 	LUA->Pop();
 	return 0;
 }

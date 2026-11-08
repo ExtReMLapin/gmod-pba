@@ -1,4 +1,4 @@
--- audioprop phase 0: scripted coverage scenario (server realm, run with lua_job).
+-- pba phase 0: scripted coverage scenario (server realm, run with lua_job).
 -- Each category runs inside a time window; windows are returned for correlation with
 -- the probe logs and the client's snd_showstart output.
 local ply = player.GetAll()[1]
@@ -29,7 +29,7 @@ local function spawn(class, pos, kv)
 end
 
 local botAct = nil
-hook.Add("StartCommand", "audioprop_probe_bots", function(p, cmd)
+hook.Add("StartCommand", "pba_probe_bots", function(p, cmd)
 	if not p:IsBot() or not botAct then return end
 	cmd:ClearButtons()
 	cmd:ClearMovement()
@@ -179,7 +179,7 @@ window("vehicle", function()
 	ply:ExitVehicle()
 end)
 
-hook.Remove("StartCommand", "audioprop_probe_bots")
+hook.Remove("StartCommand", "pba_probe_bots")
 for _, e in ipairs(spawned) do if IsValid(e) then e:Remove() end end
 for _, b in ipairs(bots) do if IsValid(b) then b:Kick("done") end end
 ply:SetPos(base)

@@ -1,8 +1,8 @@
-"""Generate the audioprop test maps (.vmf) with exactly known geometry.
+"""Generate the pba test maps (.vmf) with exactly known geometry.
 
 Every map is built from "spaces" (hollow rooms: interior box + 16-unit walls) and
 "holes" (boxes subtracted from every wall brush they intersect: doorways, windows).
-Geometry reference for each map is printed as JSON (positions used by audioprop_demo).
+Geometry reference for each map is printed as JSON (positions used by pba_demo).
 
 Usage: python gen_maps.py <outdir>
 """
@@ -139,10 +139,10 @@ def prop_door(m, name, hinge, yaw=0, **kv):
 
 # ---------------------------------------------------------------- maps
 
-def ap_tworooms():
+def pba_tworooms():
     """Listener room A (west) and source room B (east), concrete wall 16 u, door offset south.
     Listener at A centre facing +x (the wall): the door is on its RIGHT."""
-    m = Map("ap_tworooms")
+    m = Map("pba_tworooms")
     m.space(0, 0, 0, 512, 512, 192)
     m.space(528, 0, 0, 1040, 512, 192)
     door = (512, 64, 0, 528, 112, 112)
@@ -155,10 +155,10 @@ def ap_tworooms():
     return m
 
 
-def ap_noportal():
-    """Same layout as ap_tworooms but the doorway has no areaportal and no door: a single BSP
+def pba_noportal():
+    """Same layout as pba_tworooms but the doorway has no areaportal and no door: a single BSP
     area, exercised through the probe graph. The opening is on the listener's right."""
-    m = Map("ap_noportal")
+    m = Map("pba_noportal")
     m.space(0, 0, 0, 512, 512, 192)
     m.space(528, 0, 0, 1040, 512, 192)
     m.hole(512, 64, 0, 528, 112, 112)
@@ -167,9 +167,9 @@ def ap_noportal():
     return m
 
 
-def ap_lcorridor():
+def pba_lcorridor():
     """Source room A, corridor east then north, listener room B. Openings are open areaportals."""
-    m = Map("ap_lcorridor")
+    m = Map("pba_lcorridor")
     m.space(0, 0, 0, 384, 384, 160)                  # A (source)
     m.space(400, 128, 0, 912, 256, 128)              # corridor east
     m.space(784, 272, 0, 912, 784, 128)              # corridor north
@@ -184,10 +184,10 @@ def ap_lcorridor():
     return m
 
 
-def ap_twodoors():
+def pba_twodoors():
     """Listener room A and source room B sharing a wall with two doors (func_door_rotating
     south, func_door north). Listener faces the wall: one door left, one right."""
-    m = Map("ap_twodoors")
+    m = Map("pba_twodoors")
     m.space(0, 0, 0, 512, 768, 192)
     m.space(528, 0, 0, 1040, 768, 192)
     south = (512, 96, 0, 528, 144, 112)
@@ -209,9 +209,9 @@ def ap_twodoors():
     return m
 
 
-def ap_window():
+def pba_window():
     """Two rooms, no door: an open window (open areaportal) in the shared wall, offset north."""
-    m = Map("ap_window")
+    m = Map("pba_window")
     m.space(0, 0, 0, 512, 512, 192)
     m.space(528, 0, 0, 1040, 512, 192)
     win = (512, 336, 48, 528, 448, 128)
@@ -227,9 +227,9 @@ MATS = [("concrete", "concrete/concretewall008a"), ("brick", "brick/brickwall003
         ("glass", "glass/glasswindow007a"), ("plaster", "plaster/plasterwall003a")]
 
 
-def ap_materials():
+def pba_materials():
     """Listener corridor (south) and six sealed cells (north), each behind a 16 u wall of one material."""
-    m = Map("ap_materials")
+    m = Map("pba_materials")
     n = len(MATS)
     m.space(0, 0, 0, n * 272 - 16, 256, 160, walls={"y1": None})
     cells = {}
@@ -245,7 +245,7 @@ def ap_materials():
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
     refs = {}
-    for fn in (ap_tworooms, ap_noportal, ap_lcorridor, ap_twodoors, ap_window, ap_materials):
+    for fn in (pba_tworooms, pba_noportal, pba_lcorridor, pba_twodoors, pba_window, pba_materials):
         m = fn()
         with open(os.path.join(out, m.name + ".vmf"), "w", encoding="ascii", newline="\n") as f:
             f.write(m.vmf())

@@ -1,7 +1,7 @@
 -- Sweep over every areaportal of the current map (client, lua_exec_file / lua_job): source a
 -- few units behind the opening, listener in front; the computed path must cross that portal
 -- (apparent position within the opening). Works on any map: real-map sanity check.
-local A = audioprop
+local A = pba
 local g = A.Graph.current
 if not g then return "no graph" end
 local res = { total = 0, tested = 0, ok = 0, skipped = 0, fails = {} }

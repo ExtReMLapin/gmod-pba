@@ -1,6 +1,6 @@
--- GLuaTest suite for audioprop's pure functions (run with the gmod-mcp `tests_run` tool,
+-- GLuaTest suite for pba's pure functions (run with the gmod-mcp `tests_run` tool,
 -- realm client: the client has every module loaded).
-local A = audioprop
+local A = pba
 local AC, G, P = A.AC, A.Graph, A.Paths
 
 local function near(a, b, tol) return math.abs(a - b) <= (tol or 1e-3) end
@@ -33,7 +33,7 @@ CFG.lp1_db, CFG.lp2_db, CFG.lp3_db, CFG.lp4_db = 2, 6, 11, 16
 CFG.dsp_lp1, CFG.dsp_lp2, CFG.dsp_lp3, CFG.dsp_lp4 = 30, 30, 31, 31
 
 return {
-	groupName = "audioprop pure functions",
+	groupName = "pba pure functions",
 	cases = {
 		{ name = "EngineGain: 1 near the source, decreasing, level 0 = no attenuation", func = function()
 			expect(AC.EngineGain(0, 75) <= 1).to.beTrue()

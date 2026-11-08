@@ -36,7 +36,7 @@ EmitSound("buttons/button5.wav", pos, 0, CHAN_AUTO, 0.8, 75, 0, 100, 0, f0)
 job:sleep(0.5)
 
 -- 5. SoundTime in the future (server): emit with hook modifying SoundTime
-hook.Add("EntityEmitSound", "audioprop_probe_delay", function(t)
+hook.Add("EntityEmitSound", "pba_probe_delay", function(t)
 	if t.SoundName == "buttons/button6.wav" then t.SoundTime = CurTime() + 0.3 return true end
 	if t.SoundName == "buttons/button7.wav" then t.SoundTime = CurTime() + 2 return true end
 end)
@@ -46,7 +46,7 @@ job:sleep(1)
 R.t_emit7 = RealTime()
 ply:EmitSound("buttons/button7.wav")
 job:sleep(3)
-hook.Remove("EntityEmitSound", "audioprop_probe_delay")
+hook.Remove("EntityEmitSound", "pba_probe_delay")
 
 -- 6. client re-emission (client-side EmitSound with position, world, dsp) + re-entrance on client
 ply:SendLua([[local n=#AP_PROBE.log EmitSound("buttons/button8.wav", LocalPlayer():GetPos()+Vector(150,0,40), 0, CHAN_AUTO, 0.8, 75, 0, 100, 30) AP_PROBE.reent=#AP_PROBE.log>n]])

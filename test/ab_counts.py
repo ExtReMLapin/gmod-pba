@@ -1,4 +1,4 @@
-"""A/B check: same scripted sequence with audioprop_enable 0 and 1; counts the sounds the
+"""A/B check: same scripted sequence with pba_enable 0 and 1; counts the sounds the
 client engine really starts (snd_showstart) and how many emissions the source made.
 Usage: python -I ab_counts.py <mcp.py> <scenario> [sound] [seconds]
 """
@@ -28,37 +28,37 @@ def cursor():
 rx = re.compile(r"^\w+Sound\s+(\S+)\s*:\s*src\s+(-?\d+).*?vol\s+([\d.]+)")
 # the scenario may change the map, which resets sv_cheats (and snd_showstart with it): get there
 # first, then enable the counters
-call("console_exec", {"realm": "server", "cmd": f"audioprop_demo {SC} {SOUND} 5"})
+call("console_exec", {"realm": "server", "cmd": f"pba_demo {SC} {SOUND} 5"})
 for _ in range(60):
     time.sleep(1)
     st = call("status", {})
     if st.get("realms", {}).get("client", {}).get("available") and not st.get("loading"):
         break
 time.sleep(2)
-call("console_exec", {"realm": "server", "cmd": "audioprop_demo stop"})
+call("console_exec", {"realm": "server", "cmd": "pba_demo stop"})
 call("console_exec", {"realm": "server", "cmd": "sv_cheats 1"})
 # engine starts are counted: the native renderer (which plays voices itself) must be off
-saved_render = call("lua_exec", {"realm": "client", "code": "return audioprop.cfg.native_render"}).get("values", [0])[0]
-call("console_exec", {"realm": "client", "cmd": "audioprop_native_render 0"})
+saved_render = call("lua_exec", {"realm": "client", "code": "return pba.cfg.native_render"}).get("values", [0])[0]
+call("console_exec", {"realm": "client", "cmd": "pba_native_render 0"})
 call("console_exec", {"realm": "client", "cmd": "developer 1"})
 call("console_exec", {"realm": "client", "cmd": "snd_showstart 1"})
 res = {}
 for mode in ("0", "1"):
-    call("console_exec", {"realm": "server", "cmd": f"audioprop_enable {mode}"})
+    call("console_exec", {"realm": "server", "cmd": f"pba_enable {mode}"})
     time.sleep(1.2)
     c0 = cursor()
-    call("lua_exec", {"realm": "server", "code": "audioprop.Demo.emits = 0"})
-    call("console_exec", {"realm": "server", "cmd": f"audioprop_demo {SC} {SOUND} 0.5"})
+    call("lua_exec", {"realm": "server", "code": "pba.Demo.emits = 0"})
+    call("console_exec", {"realm": "server", "cmd": f"pba_demo {SC} {SOUND} 0.5"})
     time.sleep(SECS)
-    call("console_exec", {"realm": "server", "cmd": "audioprop_demo stop"})
+    call("console_exec", {"realm": "server", "cmd": "pba_demo stop"})
     time.sleep(0.5)
-    emits = call("lua_exec", {"realm": "server", "code": "return audioprop.Demo.emits"})["values"][0]
+    emits = call("lua_exec", {"realm": "server", "code": "return pba.Demo.emits"})["values"][0]
     lines = call("console_read", {"cursor": c0, "limit": 5000})["lines"]
     starts = [rx.match(l["text"]) for l in lines]
     starts = [m for m in starts if m and m.group(1).replace("\\", "/").lower().lstrip("^)*#@<>!?") == target]
     res[mode] = {"emits": emits, "starts": len(starts), "vols": sorted({m.group(3) for m in starts})}
     print(f"enable={mode}: source emissions={emits} engine starts={len(starts)} volumes={res[mode]['vols']}", flush=True)
-call("console_exec", {"realm": "server", "cmd": "audioprop_enable 1"})
+call("console_exec", {"realm": "server", "cmd": "pba_enable 1"})
 call("console_exec", {"realm": "client", "cmd": "snd_showstart 0"})
-call("console_exec", {"realm": "client", "cmd": f"audioprop_native_render {saved_render}"})
+call("console_exec", {"realm": "client", "cmd": f"pba_native_render {saved_render}"})
 print(json.dumps(res))

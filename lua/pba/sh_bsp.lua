@@ -1,9 +1,9 @@
--- Minimal Source BSP reader: only the lumps audioprop needs.
+-- Minimal Source BSP reader: only the lumps pba needs.
 --   0 ENTITIES (func_areaportal links), 1 PLANES, 5 NODES, 10 LEAFS (area of each leaf), 14 MODELS,
 --   20 AREAS, 21 AREAPORTALS, 41 CLIPPORTALVERTS (portal polygons).
 -- Layouts from the public Source SDK 2013 bspfile.h (facts only).
 
-local A = audioprop
+local A = pba
 local BSP = {}
 A.BSP = BSP
 

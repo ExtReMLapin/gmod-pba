@@ -3,9 +3,9 @@
 -- re-emits). Players with a clear line of sight get the original sound re-emitted
 -- unchanged. If nobody is obstructed nothing is touched (vanilla).
 
-local A = audioprop
-local NET = "audioprop_snd"
-local NET_ACK = "audioprop_snd_ack"
+local A = pba
+local NET = "pba_snd"
+local NET_ACK = "pba_snd_ack"
 util.AddNetworkString(NET)
 util.AddNetworkString(NET_ACK)
 
@@ -23,8 +23,8 @@ local function nameId(name)
 end
 
 net.Receive(NET_ACK, function(_, ply)
-	ply.audioprop_known = ply.audioprop_known or {}
-	for _ = 1, math.min(net.ReadUInt(8), 64) do ply.audioprop_known[net.ReadUInt(16)] = true end
+	ply.pba_known = ply.pba_known or {}
+	for _ = 1, math.min(net.ReadUInt(8), 64) do ply.pba_known[net.ReadUInt(16)] = true end
 end)
 
 -- Lua callers passing an explicit recipient filter: leave those sounds alone (we cannot
@@ -92,13 +92,13 @@ A.AddHook("EntityEmitSound", function(data)
 	local clear, blocked = {}, {}
 	-- audience by distance, not PAS: a sealed room is outside the PAS (the engine would not
 	-- send the sound at all) but its sound still transmits through the walls
-	-- clients rendering every sound natively (userinfo audioprop_native_all_want) get the relay
+	-- clients rendering every sound natively (userinfo pba_native_all_want) get the relay
 	-- even with a clear line: their module plays the sound instead of the engine
 	for _, ply in ipairs(player.GetHumans()) do
 		if ply ~= predicted then
 			local eye = ply:EyePos()
 			if eye:DistToSqr(pos) <= radius * radius then
-				if A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("audioprop_native_all_want", 0) >= 1 then
+				if A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1 then
 					blocked[#blocked + 1] = ply
 				else
 					local walls = A.Paths.Walls(pos, eye, 1, data.Entity)
@@ -111,13 +111,13 @@ A.AddHook("EntityEmitSound", function(data)
 	if A.cfg.echo_relay >= 0.5 and A.cfg.allow_native >= 0.5 and lvl >= A.cfg.echo_min_level and #clear > 0 then
 		local want = {}
 		for _, ply in ipairs(clear) do
-			if ply:GetInfoNum("audioprop_echo_want", 0) >= 1 then want[#want + 1] = ply end
+			if ply:GetInfoNum("pba_echo_want", 0) >= 1 then want[#want + 1] = ply end
 		end
 		if #want > 0 then
 			local id = nameId(data.SoundName)
 			local full = false
 			for _, ply in ipairs(want) do
-				if not (ply.audioprop_known and ply.audioprop_known[id]) then full = true break end
+				if not (ply.pba_known and ply.pba_known[id]) then full = true break end
 			end
 			net.Start(NET, true)
 			writeSound(data, pos, id, full, true)
@@ -144,7 +144,7 @@ A.AddHook("EntityEmitSound", function(data)
 	local id = nameId(data.SoundName)
 	local full = false
 	for _, ply in ipairs(blocked) do
-		if not (ply.audioprop_known and ply.audioprop_known[id]) then full = true break end
+		if not (ply.pba_known and ply.pba_known[id]) then full = true break end
 	end
 	net.Start(NET, true) -- unreliable: a lost sound is better than a late one
 	writeSound(data, pos, id, full)

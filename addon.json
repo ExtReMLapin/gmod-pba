@@ -1,5 +1,5 @@
 {
-	"title": "audioprop - Sound Propagation",
+	"title": "Physically Based Audio - Realistic Sound Propagation",
 	"type": "effects",
 	"tags": [ "realism", "fun" ],
 	"ignore": [
@@ -14,7 +14,7 @@
 		"test/*",
 		"maps/*",
 		"third_party_study/*",
-		"lua/audioprop/dev/*",
+		"lua/pba/dev/*",
 		"native/*"
 	]
 }

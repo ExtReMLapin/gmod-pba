@@ -1,7 +1,7 @@
--- audioprop configuration: every acoustic constant lives here, exposed as a convar.
+-- pba configuration: every acoustic constant lives here, exposed as a convar.
 -- Server (admin) settings are replicated; player preferences are client-side and archived.
 
-local A = audioprop
+local A = pba
 
 -- name -> { default, min, max, scope ("sv" = admin/replicated, "cl" = player pref), help }
 A.CONFIG = {
@@ -10,7 +10,7 @@ A.CONFIG = {
 	cl_enable       = { 1, 0, 1, "cl", "Player preference: process sounds on this client." },
 	debug           = { 0, 0, 2, "cl", "Debug overlay: 1 = graph + active paths, 2 = + text." },
 	report          = { 0, 0, 1, "cl", "Publish computed paths on the mcpagent report channel (dev)." },
-	compat_auto     = { 1, 0, 1, "sv", "Turn off addons that do the same job (Sound Muffling Effect) while audioprop is on." },
+	compat_auto     = { 1, 0, 1, "sv", "Turn off addons that do the same job (Sound Muffling Effect) while pba is on." },
 
 	-- path search / selection
 	max_paths       = { 3, 1, 6, "sv", "Portal paths kept per sound (distinct last portals)." },
@@ -20,7 +20,7 @@ A.CONFIG = {
 	split_angle     = { 60, 0, 180, "sv", "...and at least this many degrees apart (seen from the listener)." },
 	trans_window_db = { 20, 0, 60, "sv", "Transmission voice kept if within this many dB of the dominant voice." },
 	max_voices      = { 3, 1, 6, "sv", "Voices per processed sound." },
-	max_active      = { 24, 4, 60, "sv", "Global budget of audioprop voices alive at once (per client)." },
+	max_active      = { 24, 4, 60, "sv", "Global budget of pba voices alive at once (per client)." },
 	max_depth       = { 8, 1, 16, "sv", "Max portals crossed by a path." },
 	probe_spacing   = { 128, 32, 512, "sv", "Probe grid spacing (units) of the fallback graph." },
 	probes          = { 1, 0, 1, "sv", "Use the probe graph when no areaportal path exists." },
@@ -55,7 +55,7 @@ A.CONFIG = {
 	-- level of detail
 	lod_dist        = { 6000, 500, 30000, "sv", "Beyond this distance sounds are left untouched." },
 	probe_dist      = { 3000, 0, 30000, "sv", "Beyond this distance no probe path search (transmission only)." },
-	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_audioprop is installed." },
+	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_pba is installed." },
 	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },
 	native_render   = { 0, 0, 1, "cl", "Experimental: the native module plays processed sounds itself (Steam Audio HRTF + 3-band EQ)." },
 	native_reverb   = { 0.15, 0, 2, "cl", "Room reverb level of natively rendered sounds (Steam Audio reflections simulated at the listener)." },
@@ -72,10 +72,10 @@ A.CONFIG = {
 	native_air      = { 1, 0, 1, "cl", "Air absorption (high frequencies fade with distance) on natively rendered sounds." },
 	native_dir      = { 0.3, 0, 1, "cl", "Directivity of weapon sounds (dipole weight): quieter behind the shooter. 0 = omnidirectional." },
 	native_path_fx  = { 1, 0, 1, "cl", "Render Steam Audio baked paths as a spatial sound field (several arrival directions) instead of one point." },
-	native_cache    = { 1, 0, 1, "cl", "Keep the Steam Audio path bake on disk (data/audioprop) to skip it next time." },
-	delay           = { 0, 0, 1, "cl", "Propagation delay (speed of sound, 343 m/s) on the sounds audioprop renders." },
+	native_cache    = { 1, 0, 1, "cl", "Keep the Steam Audio path bake on disk (data/pba) to skip it next time." },
+	delay           = { 0, 0, 1, "cl", "Propagation delay (speed of sound, 343 m/s) on the sounds pba renders." },
 	allow_native    = { 1, 0, 1, "sv", "Allow players to use the optional native Steam Audio backend (HRTF, reflections...) on this server." },
-	native_relay    = { 1, 0, 1, "sv", "Relay every sound to players who render everything natively (audioprop_native_all): more traffic, only to them." },
+	native_relay    = { 1, 0, 1, "sv", "Relay every sound to players who render everything natively (pba_native_all): more traffic, only to them." },
 	echo_relay      = { 1, 0, 1, "sv", "Send loud server sounds to clients that render echoes natively (small extra traffic, only to those clients)." },
 	echo_min_level  = { 95, 60, 160, "sv", "Server: minimum sound level relayed for client-side echoes." },
 	native_gain     = { 1, 0, 4, "cl", "Loudness of natively rendered sounds relative to the engine's (tune by ear)." },
@@ -87,6 +87,7 @@ A.CONFIG = {
 	hysteresis      = { 0.3, 0, 2, "sv", "Seconds before the voice layout of a repeating source may change." },
 	max_duration    = { 8, 0.5, 60, "sv", "Sounds longer than this (s) are left untouched." },
 	long_sounds     = { 1, 0, 1, "sv", "Follow long sounds (music, speeches: longer than max_duration) like loops: their path is updated while they play." },
+	allow_debug     = { 0, 0, 1, "sv", "Let every player use the debug overlay (it shows where sounds come from through walls: a wallhack). Admins can always use it." },
 	water           = { 1, 0, 1, "sv", "Water surfaces between source and listener muffle sound heavily (air / water interface)." },
 	water_db        = { 24, 0, 60, "sv", "Loss of the air / water interface (dB)." },
 	loops           = { 1, 0, 1, "sv", "Take over looping sounds (vehicles, fire, alarms) and muffle them in place on each client." },
@@ -96,7 +97,7 @@ A.cv = A.cv or {}
 A.cfg = A.cfg or {}
 
 for name, c in pairs(A.CONFIG) do
-	local cvname = "audioprop_" .. name
+	local cvname = "pba_" .. name
 	local def, mn, mx, scope, help = c[1], c[2], c[3], c[4], c[5]
 	local cv = GetConVar(cvname)
 	if not cv then
@@ -112,13 +113,13 @@ for name, c in pairs(A.CONFIG) do
 		cvars.AddChangeCallback(cvname, function(_, _, new)
 			A.cfg[name] = tonumber(new) or def
 			if A.OnConfigChanged then A.OnConfigChanged(name) end
-		end, "audioprop_cfg")
+		end, "pba_cfg")
 	end
 end
 
 -- Change callbacks do not fire on the client for replicated convars: poll them.
 if CLIENT then
-	timer.Create("audioprop_cfgpoll", 0.5, 0, function()
+	timer.Create("pba_cfgpoll", 0.5, 0, function()
 		for name, c in pairs(A.CONFIG) do
 			local cv = A.cv[name]
 			if c[4] == "sv" and cv then
@@ -141,5 +142,5 @@ end
 
 --- Dev-only structured report (gmod-mcp agent), never a hard dependency.
 function A.Report(channel, value)
-	if mcpagent and mcpagent.report then mcpagent.report("audioprop." .. channel, value) end
+	if mcpagent and mcpagent.report then mcpagent.report("pba." .. channel, value) end
 end

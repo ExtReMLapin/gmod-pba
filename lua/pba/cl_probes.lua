@@ -2,11 +2,11 @@
 -- without areaportals (frequent on the Workshop). A grid of probes (spacing `probe_spacing`)
 -- is flood-filled from the player spawns through the open world volume; neighbours are
 -- linked when the straight segment between them is clear of world geometry. Built in the
--- background on first load and cached in data/audioprop/<map>.json with a BSP hash.
+-- background on first load and cached in data/pba/<map>.json with a BSP hash.
 -- Path query: A* between probes visible from the source and from the listener, then string
 -- pulling; the last pulled vertex is the apparent position (the "opening").
 
-local A = audioprop
+local A = pba
 local PR = {}
 A.Probes = PR
 
@@ -154,7 +154,7 @@ function PR.Deserialize(text, hash)
 	return g
 end
 
-local function cachePath(map) return "audioprop/" .. map .. ".txt" end
+local function cachePath(map) return "pba/" .. map .. ".txt" end
 
 --- Starts loading or building the probe graph for the current map (client, background).
 function PR.Start()
@@ -169,7 +169,7 @@ function PR.Start()
 	if cached then
 		cached.map, cached.hash, cached.fromCache = map, hash, true
 		PR.current = cached
-		MsgN("[audioprop] probe graph loaded from cache: ", #cached.nodes, " probes")
+		MsgN("[PBA] probe graph loaded from cache: ", #cached.nodes, " probes")
 		return
 	end
 	local seeds = {}
@@ -192,24 +192,24 @@ function PR.Start()
 		end)
 	end)
 	PR.building = { co = co, map = map, hash = hash, t0 = t0 }
-	hook.Add("Think", "audioprop_probes_build", function()
+	hook.Add("Think", "pba_probes_build", function()
 		local b = PR.building
-		if not b or b.map ~= game.GetMap() then hook.Remove("Think", "audioprop_probes_build") return end
+		if not b or b.map ~= game.GetMap() then hook.Remove("Think", "pba_probes_build") return end
 		local ok, res = coroutine.resume(b.co)
 		if not ok then
-			hook.Remove("Think", "audioprop_probes_build")
+			hook.Remove("Think", "pba_probes_build")
 			PR.building = nil
-			ErrorNoHaltWithStack("[audioprop] probe build failed: " .. tostring(res))
+			ErrorNoHaltWithStack("[PBA] probe build failed: " .. tostring(res))
 			return
 		end
 		if coroutine.status(b.co) == "dead" then
-			hook.Remove("Think", "audioprop_probes_build")
+			hook.Remove("Think", "pba_probes_build")
 			res.map, res.hash = b.map, b.hash
 			res.buildTime = SysTime() - b.t0
 			PR.current, PR.building = res, nil
-			file.CreateDir("audioprop")
+			file.CreateDir("pba")
 			file.Write(cachePath(b.map), PR.Serialize(res, b.hash))
-			MsgN(string.format("[audioprop] probe graph built: %d probes in %.1f s%s", #res.nodes, res.buildTime,
+			MsgN(string.format("[PBA] probe graph built: %d probes in %.1f s%s", #res.nodes, res.buildTime,
 				res.truncated and " (truncated)" or ""))
 			if A.Paths then A.Paths.InvalidateCache() end
 		end
@@ -371,7 +371,7 @@ local function pulledPaths(g, S, L, k)
 	return {}
 end
 
-hook.Add("Think", "audioprop_probes_solve", function()
+hook.Add("Think", "pba_probes_solve", function()
 	if not PR.current or not next(PR.queue) then return end
 	PR.deadline = SysTime() + PR.SLICE_MS / 1000
 	while SysTime() < PR.deadline do
@@ -387,7 +387,7 @@ hook.Add("Think", "audioprop_probes_solve", function()
 			local ok, res = coroutine.resume(job.co)
 			if not ok then
 				PR.queue[ck] = nil
-				ErrorNoHaltWithStack("[audioprop] probe search failed: " .. tostring(res))
+				ErrorNoHaltWithStack("[PBA] probe search failed: " .. tostring(res))
 			elseif coroutine.status(job.co) == "dead" then
 				PR.queue[ck] = nil
 				PR.pathCache[ck] = res
@@ -426,7 +426,7 @@ function PR.Paths(S, L, k, cfg)
 	return out
 end
 
-hook.Add("InitPostEntity", "audioprop_probes", function() timer.Simple(2, function() if A.Enabled() then PR.Start() end end) end)
+hook.Add("InitPostEntity", "pba_probes", function() timer.Simple(2, function() if A.Enabled() then PR.Start() end end) end)
 -- autorefresh while a map is running: restart (the cache makes it instant)
 if A.probesLoaded then timer.Simple(1, function() if A.Enabled() then PR.Start() end end) end
 A.probesLoaded = true

@@ -1,5 +1,5 @@
-"""Scenario campaign: runs audioprop_demo scenarios in the game through the gmod-mcp server
-and checks numeric assertions on the audioprop.paths reports.
+"""Scenario campaign: runs pba_demo scenarios in the game through the gmod-mcp server
+and checks numeric assertions on the pba.paths reports.
 
 Usage: python -I run_scenarios.py <path to mcp.py client> [scenario ...]
 """
@@ -31,7 +31,7 @@ def ensure_map(m):
     st = call("status", {})
     if st.get("map") != m:
         call("map_load", {"map": m, "maxplayers": 4})
-        lua("client", 'RunConsoleCommand("audioprop_report","1")')
+        lua("client", 'RunConsoleCommand("pba_report","1")')
 
 
 def run(name, map_, wait=2.5, sound="click"):
@@ -41,13 +41,13 @@ def run(name, map_, wait=2.5, sound="click"):
 def run_snd(name, map_, wait=2.5, sound="click"):
     ensure_map(map_)
     call("reports_clear", {})
-    srv0 = lua("server", "return audioprop.stats.relayed")
-    call("console_exec", {"realm": "server", "cmd": f"audioprop_demo {name} {sound} 0.7"})
+    srv0 = lua("server", "return pba.stats.relayed")
+    call("console_exec", {"realm": "server", "cmd": f"pba_demo {name} {sound} 0.7"})
     time.sleep(wait)
-    rep = call("reports_read", {"channel": "audioprop.paths", "limit": 50})
+    rep = call("reports_read", {"channel": "pba.paths", "limit": 50})
     items = [i["value"] for i in rep.get("items", [])]
-    srv1 = lua("server", "return audioprop.stats.relayed")
-    call("console_exec", {"realm": "server", "cmd": "audioprop_demo stop"})
+    srv1 = lua("server", "return pba.stats.relayed")
+    call("console_exec", {"realm": "server", "cmd": "pba_demo stop"})
     return items[-1] if items else None, items, (srv1 or 0) - (srv0 or 0)
 
 
@@ -68,18 +68,18 @@ def dom(r):
 
 
 if want("tworooms_open"):
-    r, _, _ = run("tworooms_open", "ap_tworooms")
+    r, _, _ = run("tworooms_open", "pba_tworooms")
     v = dom(r)
     check("P3-door-right", v and v["kind"] == "portal" and v["az"] > 15, f"dominant={v}")
     open_level = v["level_db"] if v else None
 
 if want("tworooms_left"):
-    r, _, _ = run("tworooms_left", "ap_tworooms")
+    r, _, _ = run("tworooms_left", "pba_tworooms")
     v = dom(r)
     check("P3-door-left", v and v["az"] < -15, f"dominant={v}")
 
 if want("tworooms_closed"):
-    r, _, _ = run("tworooms_closed", "ap_tworooms", wait=3.5)
+    r, _, _ = run("tworooms_closed", "pba_tworooms", wait=3.5)
     p = r["paths"][0] if r and r.get("paths") else None
     check("P3-door-closed-loss", p and p["door_db"] > 10, f"path={p} trans={r and r.get('trans')}")
     v = dom(r)
@@ -87,32 +87,32 @@ if want("tworooms_closed"):
         check("P3-door-closed-quieter", v["level_db"] < open_level - 10, f"closed={v['level_db']} open={open_level}")
 
 if want("tworooms_half"):
-    r, _, _ = run("tworooms_half", "ap_tworooms", wait=3.5)
+    r, _, _ = run("tworooms_half", "pba_tworooms", wait=3.5)
     p = r["paths"][0] if r and r.get("paths") else None
     check("P3-door-half", p and 0 < p["door_db"] < 10, f"path={p}")
 
 if want("noportal"):
-    r, _, _ = run("noportal", "ap_noportal", wait=6)
+    r, _, _ = run("noportal", "pba_noportal", wait=6)
     v = dom(r)
     check("P3-probe-right", v and v["kind"] == "portal" and v["az"] > 15, f"dominant={v} paths={r and r.get('paths')}")
 
 if want("twodoors"):
-    r, _, _ = run("twodoors", "ap_twodoors", wait=3.5)
+    r, _, _ = run("twodoors", "pba_twodoors", wait=3.5)
     azs = sorted(v["az"] for v in (r or {}).get("voices", []) if v["kind"] == "portal")
     check("P3-two-doors", len(azs) >= 2 and azs[0] < -15 and azs[-1] > 15, f"voice az={azs} paths={r and r.get('paths')}")
 
 if want("twodoors_south"):
-    r, _, _ = run("twodoors_south", "ap_twodoors", wait=3.5)
+    r, _, _ = run("twodoors_south", "pba_twodoors", wait=3.5)
     v = dom(r)
     check("P3-two-doors-south-only", v and v["az"] > 15, f"dominant={v} paths={r and r.get('paths')}")
 
 if want("window"):
-    r, _, _ = run("window", "ap_window")
+    r, _, _ = run("window", "pba_window")
     v = dom(r)
     check("P3-window-left", v and v["az"] < -15, f"dominant={v}")
 
 if want("lcorridor"):
-    r, _, _ = run("lcorridor", "ap_lcorridor")
+    r, _, _ = run("lcorridor", "pba_lcorridor")
     p = r["paths"][0] if r and r.get("paths") else None
     v = dom(r)
     check("P3-lcorridor", p and len(p["portals"]) == 3 and v and abs(v["az"]) < 30, f"path={p} dominant={v}")
@@ -120,7 +120,7 @@ if want("lcorridor"):
 mats = {}
 for m in ["concrete", "brick", "wood", "metal", "glass", "plaster"]:
     if want("mat_" + m):
-        r, _, _ = run("mat_" + m, "ap_materials")
+        r, _, _ = run("mat_" + m, "pba_materials")
         t = r and r.get("trans")
         v = dom(r)
         mats[m] = t["loss_db"] if t else None
@@ -136,8 +136,8 @@ if want("prop_wall"):
           f"trans={t} voice={v}")
 
 if want("loud_through_concrete"):
-    rv, _, _ = run_snd("mat_concrete", "ap_materials", 3, "voice")
-    rg, _, _ = run_snd("mat_concrete", "ap_materials", 3, "gun")
+    rv, _, _ = run_snd("mat_concrete", "pba_materials", 3, "voice")
+    rg, _, _ = run_snd("mat_concrete", "pba_materials", 3, "gun")
     vv, vg = dom(rv), dom(rg)
     check("P3-loud-headroom", vv and vg and vg["level_db"] > vv["level_db"] + 15 and (vg.get("vol") or 0) > 0.01,
           f"voice={vv} gun={vg}")
@@ -172,13 +172,13 @@ if want("obs_crowd"):
     check("O-crowd-untouched", not items and relayed == 0, f"reports={len(items)} relayed={relayed}")
 
 if want("loop_door"):
-    ensure_map("ap_tworooms")
+    ensure_map("pba_tworooms")
     lua("server", "local p=player.GetHumans()[1] p:SetPos(Vector(256,256,0)) for _,d in ipairs(ents.FindByName('door1')) do d:Fire('Close') end "
         "local a=ents.Create('ambient_generic') a:SetKeyValue('message','ambient/alarms/alarm1.wav') a:SetKeyValue('health','10') "
         "a:SetKeyValue('radius','2000') a:SetKeyValue('spawnflags','16') a:SetPos(Vector(784,256,40)) a:Spawn() a:Activate() AP_AMB=a "
         "timer.Simple(0.5,function() a:Fire('PlaySound') end)")
     time.sleep(3.5)
-    q = "local m=next(audioprop.Loops.mirrors) and select(2,next(audioprop.Loops.mirrors)) return m and m.g, m and m.curDsp"
+    q = "local m=next(pba.Loops.mirrors) and select(2,next(pba.Loops.mirrors)) return m and m.g, m and m.curDsp"
     closed = call("lua_exec", {"realm": "client", "code": q}).get("values", [])
     lua("server", "for _,d in ipairs(ents.FindByName('door1')) do d:Fire('Open') end")
     time.sleep(2.5)
@@ -188,7 +188,7 @@ if want("loop_door"):
     same = call("lua_exec", {"realm": "client", "code": q}).get("values", [])
     lua("server", "AP_AMB:Fire('StopSound')")
     time.sleep(1)
-    left = lua("client", "return table.Count(audioprop.Loops.mirrors)")
+    left = lua("client", "return table.Count(pba.Loops.mirrors)")
     lua("server", "AP_AMB:Remove()")
     ok = (len(closed) == 2 and len(opened) == 2 and len(same) == 2 and closed[0] < opened[0] < 1 and same[0] == 1
           and same[1] == 0 and left == 0)

@@ -1,9 +1,9 @@
--- Client sampler while perf_bots runs on the server: frame cost of audioprop and native module
+-- Client sampler while perf_bots runs on the server: frame cost of pba and native module
 -- load (audio thread, reflection thread), echoes played. args: { secs = 20 }
-local NA, N = audioprop_native, audioprop.Native
+local NA, N = pba_native, pba.Native
 local secs = job.args.secs or 20
 NA.Stats()
-audioprop.ResetPerf()
+pba.ResetPerf()
 N.echoes = 0
 local t0 = SysTime()
 local maxAudio, maxRefl, sumAudio, nAudio, frames0 = 0, 0, 0, 0, FrameNumber()
@@ -16,7 +16,7 @@ while SysTime() - t0 < secs do
 	sumAudio, nAudio = sumAudio + st.audioAvgMs, nAudio + 1
 	reflSamples[#reflSamples + 1] = math.Round(st.reflMs, 1)
 end
-local pf = audioprop.perf
+local pf = pba.perf
 local st = NA.Stats()
 return {
 	fps = (FrameNumber() - frames0) / (SysTime() - t0),

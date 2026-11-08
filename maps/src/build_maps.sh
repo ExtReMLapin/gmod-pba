@@ -1,5 +1,5 @@
 #!/bin/sh
-# Generate and compile the audioprop test maps into ../ (addon maps/ folder).
+# Generate and compile the pba test maps into ../ (addon maps/ folder).
 # Usage: sh build_maps.sh [mapname ...]
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -7,7 +7,7 @@ GM="D:/SteamLibrary/steamapps/common/GarrysMod"
 GAME="$GM/garrysmod"
 BIN="$GM/bin"
 python -I "$HERE/gen_maps.py" "$HERE"
-MAPS="${*:-ap_tworooms ap_noportal ap_lcorridor ap_twodoors ap_window ap_materials}"
+MAPS="${*:-pba_tworooms pba_noportal pba_lcorridor pba_twodoors pba_window pba_materials}"
 set -- $MAPS
 total=$#
 i=0

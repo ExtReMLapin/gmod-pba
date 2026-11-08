@@ -1,19 +1,19 @@
--- Optional native backend (gmcl_audioprop + Steam Audio, installed by hand in
--- garrysmod/lua/bin). Feature set (client options, Spawn menu > Utilities > audioprop):
+-- Optional native backend (gmcl_pba + Steam Audio, installed by hand in
+-- garrysmod/lua/bin). Feature set (client options, Spawn menu > Utilities > pba):
 --   * native rendering (HRTF or speakers, EQ, air absorption, directivity, delay);
 --   * room reverb and per-source echoes (Steam Audio reflections, background thread);
 --   * baked paths rendered as a sound field, bake kept on disk.
 -- When present it also replaces two Lua estimates:
 --   * world transmission and occlusion of the direct line (volumetric: smooth near edges,
 --     per-band transmission -> loss and low-pass);
---   * (experimental, audioprop_native_paths 1) baked pathing around the world geometry.
+--   * (experimental, pba_native_paths 1) baked pathing around the world geometry.
 -- Without the module, nothing changes: the Lua model runs as before.
 
-local A = audioprop
+local A = pba
 local N = A.Native or {}
 A.Native = N
 
-local MODULE = "lua/bin/gmcl_audioprop_" .. (jit.arch == "x64" and "win64" or "win32") .. ".dll"
+local MODULE = "lua/bin/gmcl_pba_" .. (jit.arch == "x64" and "win64" or "win32") .. ".dll"
 local SKIP_PREFIX = { "tools/toolsclip", "tools/toolsplayerclip", "tools/toolsnpcclip", "tools/toolstrigger",
 	"tools/toolshint", "tools/toolsskip", "tools/toolsskybox", "tools/toolsfog", "tools/toolsoccluder" }
 
@@ -29,7 +29,7 @@ local function skipMaterial(name)
 	return false
 end
 
---- Steam Audio material for a surfaceprop: transmission derived from audioprop's own wall
+--- Steam Audio material for a surfaceprop: transmission derived from pba's own wall
 -- table at a typical wall thickness (16 units), split into bands (LF bonus, -10 dB HF).
 local function saMaterial(surf, cfg)
 	local idx = util.GetSurfaceIndex(surf or "default")
@@ -95,13 +95,13 @@ end
 function N.Start()
 	N.ready, N.pathsReady, N.err = false, false, nil
 	if (A.cfg.native or 1) < 0.5 then return end
-	if (A.cfg.allow_native or 1) < 0.5 then N.err = "disabled by the server (audioprop_allow_native 0)" return end
+	if (A.cfg.allow_native or 1) < 0.5 then N.err = "disabled by the server (pba_allow_native 0)" return end
 	if not file.Exists(MODULE, "GAME") then N.err = "module not installed" return end
-	if not audioprop_native then
-		local ok, err = pcall(require, "audioprop")
-		if not ok or not audioprop_native then N.err = "require failed: " .. tostring(err) return end
+	if not pba_native then
+		local ok, err = pcall(require, "pba")
+		if not ok or not pba_native then N.err = "require failed: " .. tostring(err) return end
 	end
-	local ok, err = audioprop_native.Init()
+	local ok, err = pba_native.Init()
 	if not ok then N.err = err return end
 	-- the world is gathered in a coroutine, 4 ms per frame (large maps: seconds of Lua work),
 	-- then handed to the module in one call
@@ -114,7 +114,7 @@ function N.Start()
 	N.buildStart = SysTime()
 end
 
-hook.Add("Think", "audioprop_native_build", function()
+hook.Add("Think", "pba_native_build", function()
 	local co = N.building
 	if not co then return end
 	local deadline = SysTime() + 0.004
@@ -124,7 +124,7 @@ hook.Add("Think", "audioprop_native_build", function()
 	N.Yield, A.BSP.Yield = nil, nil
 	if not ok then
 		N.building, N.err = nil, "world build failed: " .. tostring(verts)
-		MsgN("[audioprop] native backend: ", N.err)
+		MsgN("[PBA] native backend: ", N.err)
 		return
 	end
 	if coroutine.status(co) ~= "dead" then return end
@@ -134,60 +134,60 @@ end)
 
 function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	local t0 = SysTime()
-	local nt = audioprop_native.LoadWorld(verts, tris, matIdx, mats)
+	local nt = pba_native.LoadWorld(verts, tris, matIdx, mats)
 	N.doors = {} -- the module released its dynamic objects with the old world
 	N.loadMs = (SysTime() - t0) * 1000
 	N.tris, N.mins, N.maxs = nt, mins, maxs
 	N.ready = nt > 0
-	MsgN(string.format("[audioprop] native backend: Steam Audio %d, %d triangles, %d materials, gathered in %.0f ms over %.1f s, loaded in %.0f ms",
-		audioprop_native.Version(), nt, #mats, N.buildMs or 0, SysTime() - (N.buildStart or SysTime()), N.loadMs))
+	MsgN(string.format("[PBA] native backend: Steam Audio %d, %d triangles, %d materials, gathered in %.0f ms over %.1f s, loaded in %.0f ms",
+		pba_native.Version(), nt, #mats, N.buildMs or 0, SysTime() - (N.buildStart or SysTime()), N.loadMs))
 	if N.ready then N.StartRender() end
 	if N.ready and (A.cfg.native_paths or 0) >= 0.5 then
 		-- the probe graph is built in the background: bake once it is there
-		timer.Create("audioprop_native_bake", 1, 120, function()
-			if A.Probes and A.Probes.current then timer.Remove("audioprop_native_bake") N.Bake() end
+		timer.Create("pba_native_bake", 1, 120, function()
+			if A.Probes and A.Probes.current then timer.Remove("pba_native_bake") N.Bake() end
 		end)
 	end
 	if A.Paths then A.Paths.InvalidateCache() end
 end
 
 local SA_CACHE_VERSION = 1
-local function bakeCachePath() return "audioprop/" .. game.GetMap() .. "_sa.dat" end
+local function bakeCachePath() return "pba/" .. game.GetMap() .. "_sa.dat" end
 local function bakeCacheKey(nProbes)
 	local pr = A.Probes and A.Probes.current
 	local hash = (pr and pr.hash) or "?"
-	return string.format("audioprop-sa v%d %s %d %d %d\n", SA_CACHE_VERSION, hash, audioprop_native.Version(), nProbes,
+	return string.format("pba-sa v%d %s %d %d %d\n", SA_CACHE_VERSION, hash, pba_native.Version(), nProbes,
 		A.cfg.native_probe_spacing)
 end
 
 --- Disk cache of the bake (iplProbeBatchSave): first line = key, then the serialized batch.
 function N.SaveBake(nProbes)
-	if (A.cfg.native_cache or 1) < 0.5 or not audioprop_native.SavePaths then return end
-	local bytes = audioprop_native.SavePaths()
+	if (A.cfg.native_cache or 1) < 0.5 or not pba_native.SavePaths then return end
+	local bytes = pba_native.SavePaths()
 	if not bytes then return end
-	file.CreateDir("audioprop")
+	file.CreateDir("pba")
 	file.Write(bakeCachePath(), bakeCacheKey(nProbes) .. bytes)
 	N.bakeCached = #bytes
 end
 
 function N.LoadBake(nProbes)
-	if (A.cfg.native_cache or 1) < 0.5 or not audioprop_native.LoadPaths then return false end
+	if (A.cfg.native_cache or 1) < 0.5 or not pba_native.LoadPaths then return false end
 	local data = file.Read(bakeCachePath(), "DATA")
 	if not data then return false end
 	local key = bakeCacheKey(nProbes)
 	if data:sub(1, #key) ~= key then return false end
 	local t0 = SysTime()
-	local n, err = audioprop_native.LoadPaths(data:sub(#key + 1))
-	if not n then MsgN("[audioprop] native paths cache rejected: ", err) return false end
+	local n, err = pba_native.LoadPaths(data:sub(#key + 1))
+	if not n then MsgN("[PBA] native paths cache rejected: ", err) return false end
 	N.pathsReady, N.bakeMs, N.bakeBytes, N.fromCache = true, (SysTime() - t0) * 1000, #data - #key, true
-	MsgN(string.format("[audioprop] native paths: %d probes loaded from cache in %.0f ms", n, N.bakeMs))
+	MsgN(string.format("[PBA] native paths: %d probes loaded from cache in %.0f ms", n, N.bakeMs))
 	if A.Paths then A.Paths.InvalidateCache() end
 	return true
 end
 
 function N.Bake()
-	-- probe positions: audioprop's own probe graph (inside the playable volume), thinned until
-	-- there are at most audioprop_native_max_probes of them (large open maps)
+	-- probe positions: pba's own probe graph (inside the playable volume), thinned until
+	-- there are at most pba_native_max_probes of them (large open maps)
 	local pr = A.Probes and A.Probes.current
 	if not pr then N.err = "probe graph not ready" return end
 	local step = math.max(math.Round(A.cfg.native_probe_spacing / pr.spacing), 1)
@@ -204,23 +204,23 @@ function N.Bake()
 	local t0 = SysTime()
 	N.pathsReady = false
 	N.fromCache = false
-	local ok, err = pcall(audioprop_native.BakePaths, pts, pr.spacing * (step - 1) * 0.75)
+	local ok, err = pcall(pba_native.BakePaths, pts, pr.spacing * (step - 1) * 0.75)
 	if not ok then N.err = err return end
 	N.probes = #pts
 	-- the bake runs on a worker thread: poll it
-	timer.Create("audioprop_native_bakepoll", 0.25, 0, function()
-		if not audioprop_native then timer.Remove("audioprop_native_bakepoll") return end
-		local st, info = audioprop_native.BakeStatus()
+	timer.Create("pba_native_bakepoll", 0.25, 0, function()
+		if not pba_native then timer.Remove("pba_native_bakepoll") return end
+		local st, info = pba_native.BakeStatus()
 		if st == "ready" then
-			timer.Remove("audioprop_native_bakepoll")
+			timer.Remove("pba_native_bakepoll")
 			N.pathsReady, N.bakeMs, N.bakeBytes = true, (SysTime() - t0) * 1000, info
-			MsgN(string.format("[audioprop] native paths: %d probes baked in %.0f ms (%d KB)", N.probes, N.bakeMs, (info or 0) / 1024))
+			MsgN(string.format("[PBA] native paths: %d probes baked in %.0f ms (%d KB)", N.probes, N.bakeMs, (info or 0) / 1024))
 			N.SaveBake(N.probes)
 			if A.Paths then A.Paths.InvalidateCache() end
 		elseif st == "error" then
-			timer.Remove("audioprop_native_bakepoll")
+			timer.Remove("pba_native_bakepoll")
 			N.err = "bake failed: " .. tostring(info)
-			MsgN("[audioprop] native paths: ", N.err)
+			MsgN("[PBA] native paths: ", N.err)
 		end
 	end)
 end
@@ -228,14 +228,14 @@ end
 --- Direct line through the world: occlusion (1 = clear) and per-band transmission.
 function N.Direct(S, L)
 	if not N.ready then return nil end
-	local r = audioprop_native.Direct({ S }, L, 16)
+	local r = pba_native.Direct({ S }, L, 16)
 	return r and r[1]
 end
 
 --- Baked path from S to L: eq gains (low, mid, high) and arrival direction at L.
 function N.Path(S, L)
 	if not N.pathsReady then return nil end
-	local r = audioprop_native.Paths({ S }, L)
+	local r = pba_native.Paths({ S }, L)
 	return r and r[1]
 end
 
@@ -247,36 +247,36 @@ N.failed = N.failed or {}
 
 function N.StartRender()
 	N.render = false
-	if not N.ready or (A.cfg.native_render or 0) < 0.5 or not audioprop_native.AudioStart then return end
+	if not N.ready or (A.cfg.native_render or 0) < 0.5 or not pba_native.AudioStart then return end
 	local sofa
 	local hname = N.hrtfCvar and N.hrtfCvar:GetString() or ""
 	if hname ~= "" then
-		sofa = file.Read("audioprop/hrtf/" .. hname, "DATA")
-		if not sofa then MsgN("[audioprop] HRTF file not found: data/audioprop/hrtf/", hname) end
+		sofa = file.Read("pba/hrtf/" .. hname, "DATA")
+		if not sofa then MsgN("[PBA] HRTF file not found: data/pba/hrtf/", hname) end
 	end
-	local ok, err = audioprop_native.AudioStart(sofa)
-	if not ok then N.err = err MsgN("[audioprop] native audio: ", err) return end
+	local ok, err = pba_native.AudioStart(sofa)
+	if not ok then N.err = err MsgN("[PBA] native audio: ", err) return end
 	N.render = true
 	N.ApplySettings()
-	local st = audioprop_native.Stats and audioprop_native.Stats()
-	MsgN("[audioprop] native rendering on (Steam Audio, HRTF: ", st and st.hrtf or "default", ")")
+	local st = pba_native.Stats and pba_native.Stats()
+	MsgN("[PBA] native rendering on (Steam Audio, HRTF: ", st and st.hrtf or "default", ")")
 end
 
 --- Pushes the client options to the module (output mode, reflection levels and quality).
 function N.ApplySettings()
-	if not N.render or not audioprop_native.SetReflections then return end
-	audioprop_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
-	audioprop_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays)
+	if not N.render or not pba_native.SetReflections then return end
+	pba_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
+	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays)
 end
 
-N.hrtfCvar = N.hrtfCvar or CreateClientConVar("audioprop_native_hrtf", "", true, false,
-	"SOFA HRTF file in data/audioprop/hrtf/ for native rendering (empty = Steam Audio default). Restart native rendering to apply.")
+N.hrtfCvar = N.hrtfCvar or CreateClientConVar("pba_native_hrtf", "", true, false,
+	"SOFA HRTF file in data/pba/hrtf/ for native rendering (empty = Steam Audio default). Restart native rendering to apply.")
 -- tells the server that this client renders echoes (loud server sounds are then relayed to it)
-N.echoCvar = N.echoCvar or CreateClientConVar("audioprop_echo_want", "0", false, true, "Internal: native echoes active.")
-N.allCvar = N.allCvar or CreateClientConVar("audioprop_native_all_want", "0", false, true, "Internal: every sound rendered natively.")
+N.echoCvar = N.echoCvar or CreateClientConVar("pba_echo_want", "0", false, true, "Internal: native echoes active.")
+N.allCvar = N.allCvar or CreateClientConVar("pba_native_all_want", "0", false, true, "Internal: every sound rendered natively.")
 
 function N.StopRender()
-	if N.render and audioprop_native then audioprop_native.AudioStop() end
+	if N.render and pba_native then pba_native.AudioStop() end
 	N.render = false
 end
 
@@ -289,8 +289,8 @@ end
 function N.EnsureSound(name)
 	local n = cleanName(name)
 	if N.failed[n] then return false end
-	if audioprop_native.HasSound(n) then return true, n end
-	if audioprop_native.SoundPending and audioprop_native.SoundPending(n) then return false, nil, "pending" end
+	if pba_native.HasSound(n) then return true, n end
+	if pba_native.SoundPending and pba_native.SoundPending(n) then return false, nil, "pending" end
 	if N.loading and N.loading[n] then
 		-- the worker finished without a sound: undecodable
 		N.loading[n] = nil
@@ -299,13 +299,13 @@ function N.EnsureSound(name)
 	end
 	local data = file.Read("sound/" .. n, "GAME")
 	if not data or #data > 48 * 1024 * 1024 then N.failed[n] = true return false end
-	if #data > 512 * 1024 and audioprop_native.LoadSoundAsync then
-		audioprop_native.LoadSoundAsync(n, data)
+	if #data > 512 * 1024 and pba_native.LoadSoundAsync then
+		pba_native.LoadSoundAsync(n, data)
 		N.loading = N.loading or {}
 		N.loading[n] = true
 		return false, nil, "pending"
 	end
-	local secs = audioprop_native.LoadSound(n, data)
+	local secs = pba_native.LoadSound(n, data)
 	if not secs then N.failed[n] = true return false end
 	return true, n
 end
@@ -345,7 +345,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local l, m, h = N.VoiceEQ(lp, opt.len)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and opt.sh or nil
-	local id = audioprop_native.Play(n, pos, gain * A.cfg.native_gain, l, m, h, pitch or 100, false, opt.delay or 0, sh)
+	local id = pba_native.Play(n, pos, gain * A.cfg.native_gain, l, m, h, pitch or 100, false, opt.delay or 0, sh)
 	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100
@@ -401,7 +401,7 @@ function N.UpdateFollowers(L)
 			local g = f.vol * A.AC.EngineGain(math.max(d, 1), f.lvl) * N.Directivity(e, L) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)
 			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
-			if not audioprop_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil end
+			if not pba_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil end
 		end
 	end
 end
@@ -411,7 +411,7 @@ N.echoSkip = N.echoSkip or {}
 local function skip(why) N.echoSkip[why] = (N.echoSkip[why] or 0) + 1 end
 
 function N.Echo(data, pos)
-	if not N.render or (A.cfg.native_echo or 0) <= 0 or not audioprop_native.Echo then return skip("off") end
+	if not N.render or (A.cfg.native_echo or 0) <= 0 or not pba_native.Echo then return skip("off") end
 	local lvl = data.SoundLevel or 75
 	if lvl < A.cfg.native_echo_lvl then return skip("level") end
 	local ok, n = N.EnsureSound(data.SoundName)
@@ -421,14 +421,14 @@ function N.Echo(data, pos)
 	local gain = (data.Volume or 1) * A.AC.EngineGain(52.5, lvl)
 	local e = data.Entity
 	local key = IsValid(e) and e:EntIndex() or (data.EntIndex or 0)
-	audioprop_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, 0)
+	pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, 0)
 	N.echoes = (N.echoes or 0) + 1
 end
 
 -- ------------------------------------------------------------------ doors in the scene
 -- Doors are instanced into the Steam Audio scene (one oriented box per door, moved with it):
 -- reflections, echoes and baked-path validation then see a closed door. The direct sound keeps
--- audioprop's own door model (sh_doors), the world occlusion still ignores entities.
+-- pba's own door model (sh_doors), the world occlusion still ignores entities.
 local DOOR_CLASSES = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
 -- other moving brush geometry of real maps (RP: garage doors, lifts, bridges, rotating parts)
 local MOVER_CLASSES = { func_movelinear = true, func_tracktrain = true, func_rotating = true, func_physbox = true,
@@ -467,7 +467,7 @@ local function boxMesh(mn, mx)
 end
 
 function N.SyncDoors()
-	if not N.ready or not audioprop_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
+	if not N.ready or not pba_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
 	local seen, nProps = {}, 0
 	local wantProps = (A.cfg.native_props or 0) >= 0.5
 	for id in pairs(N.doors) do if N.doors[id].prop then nProps = nProps + 1 end end
@@ -481,7 +481,7 @@ function N.SyncDoors()
 			seen[id] = true
 			local d = N.doors[id]
 			if d and d.ent ~= e then -- entity index reused by another entity: rebuild
-				audioprop_native.DynamicRemove(id)
+				pba_native.DynamicRemove(id)
 				N.doors[id], d = nil, nil
 			end
 			if not d then
@@ -492,22 +492,22 @@ function N.SyncDoors()
 					local v, t = boxMesh(mn, mx)
 					if isMover then
 						-- lifts, bridges, shutters: usually metal or concrete
-						audioprop_native.DynamicAdd(id, v, t, saMaterial("metal", A.cfg))
+						pba_native.DynamicAdd(id, v, t, saMaterial("metal", A.cfg))
 					else
 						local tm = 10 ^ (-A.cfg.door_closed_db / 20)
-						audioprop_native.DynamicAdd(id, v, t, { absorption = { 0.11, 0.07, 0.06 }, scattering = 0.05,
+						pba_native.DynamicAdd(id, v, t, { absorption = { 0.11, 0.07, 0.06 }, scattering = 0.05,
 							transmission = { math.min(tm * 10 ^ (A.cfg.trans_lf_bonus / 20), 1), tm, tm * 0.3 } })
 					end
 					d = { ent = e }
 					N.doors[id] = d
 				elseif isProp and big >= PROP_MIN_SIZE and nProps < PROP_MAX then
-					-- material from the physics surface: audioprop's wall table at the object's
+					-- material from the physics surface: pba's wall table at the object's
 					-- smallest dimension (hollow objects behave like thin walls)
 					local phys = e:GetPhysicsObject()
 					local surf = IsValid(phys) and phys:GetMaterial() or "default"
 					local m = saMaterial(surf, A.cfg)
 					local v, t = boxMesh(mn, mx)
-					audioprop_native.DynamicAdd(id, v, t, m)
+					pba_native.DynamicAdd(id, v, t, m)
 					d = { prop = true, ent = e }
 					N.doors[id] = d
 					nProps = nProps + 1
@@ -518,7 +518,7 @@ function N.SyncDoors()
 			if d then
 				local p, a = e:GetPos(), e:GetAngles()
 				if not d.p or d.p ~= p or d.a ~= a then
-					audioprop_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
+					pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
 					d.p, d.a = p, a
 				end
 			end
@@ -526,16 +526,16 @@ function N.SyncDoors()
 	end
 	for id, d in pairs(N.doors) do
 		if not seen[id] or (d.prop and not wantProps) then
-			audioprop_native.DynamicRemove(id)
+			pba_native.DynamicRemove(id)
 			N.doors[id] = nil
 		end
 	end
 	-- the module only commits when something changed (and retries itself after a running bake)
-	audioprop_native.DynamicCommit()
+	pba_native.DynamicCommit()
 end
-timer.Create("audioprop_native_doors", 0.1, 0, function() N.SyncDoors() end)
+timer.Create("pba_native_doors", 0.1, 0, function() N.SyncDoors() end)
 
-hook.Add("Think", "audioprop_native_listener", function()
+hook.Add("Think", "pba_native_listener", function()
 	if not N.render then return end
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
@@ -544,33 +544,33 @@ hook.Add("Think", "audioprop_native_listener", function()
 	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
 	local eL, eR
 	local L = ply:EyePos()
-	N.live, eL, eR = audioprop_native.SetListener(L, ang:Forward(), ang:Up(), master)
+	N.live, eL, eR = pba_native.SetListener(L, ang:Forward(), ang:Up(), master)
 	N.UpdateFollowers(L)
 	-- head under water: the engine applies its own water DSP to the sounds it plays; same for ours
 	local uw = A.cfg.water >= 0.5 and bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
-	if uw ~= N.underwater and audioprop_native.SetUnderwater then
+	if uw ~= N.underwater and pba_native.SetUnderwater then
 		N.underwater = uw
-		audioprop_native.SetUnderwater(uw and 1 or 0)
+		pba_native.SetUnderwater(uw and 1 or 0)
 	end
 	if A.Loops and A.Loops.FollowNative then A.Loops.FollowNative(L) end
 	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
 end)
 
-cvars.AddChangeCallback("audioprop_native_render", function(_, _, new)
+cvars.AddChangeCallback("pba_native_render", function(_, _, new)
 	if tonumber(new) == 1 then N.StartRender() else N.StopRender() end
-end, "audioprop_native")
+end, "pba_native")
 
 -- paths switched on during the game: bake (or load the cache) now; off: back to the probe graph
-cvars.AddChangeCallback("audioprop_native_paths", function(_, _, new)
+cvars.AddChangeCallback("pba_native_paths", function(_, _, new)
 	if tonumber(new) == 1 then
 		if N.ready and not N.pathsReady and A.Probes and A.Probes.current then N.Bake() end
 	else
 		N.pathsReady = false
 	end
 	if A.Paths then A.Paths.InvalidateCache() end
-end, "audioprop_native")
+end, "pba_native")
 
-cvars.AddChangeCallback("audioprop_native", function(_, _, new)
+cvars.AddChangeCallback("pba_native", function(_, _, new)
 	if tonumber(new) == 1 then
 		N.Start()
 	else
@@ -579,32 +579,32 @@ cvars.AddChangeCallback("audioprop_native", function(_, _, new)
 		N.ready, N.pathsReady = false, false
 	end
 	if A.Paths then A.Paths.InvalidateCache() end
-end, "audioprop_native")
+end, "pba_native")
 
-hook.Add("ShutDown", "audioprop_native", function() N.StopRender() end)
+hook.Add("ShutDown", "pba_native", function() N.StopRender() end)
 
 -- reflections run on the module's own thread; keep its settings and the server flag in sync
-timer.Create("audioprop_native_reverb", 0.5, 0, function()
+timer.Create("pba_native_reverb", 0.5, 0, function()
 	-- the server may forbid the native backend at any time (replicated, polled)
 	if (A.cfg.allow_native or 1) < 0.5 and (N.ready or N.building) then
 		N.StopRender()
 		N.building, N.ready, N.pathsReady = nil, false, false
-		N.err = "disabled by the server (audioprop_allow_native 0)"
+		N.err = "disabled by the server (pba_allow_native 0)"
 		if A.Paths then A.Paths.InvalidateCache() end
 	elseif (A.cfg.allow_native or 1) >= 0.5 and not N.ready and not N.building
-		and N.err == "disabled by the server (audioprop_allow_native 0)" then
+		and N.err == "disabled by the server (pba_allow_native 0)" then
 		N.Start()
 	end
 	local want = N.render and (A.cfg.native_echo or 0) > 0 and A.Enabled() or false
-	if N.echoCvar and N.echoCvar:GetBool() ~= want then RunConsoleCommand("audioprop_echo_want", want and "1" or "0") end
+	if N.echoCvar and N.echoCvar:GetBool() ~= want then RunConsoleCommand("pba_echo_want", want and "1" or "0") end
 	local all = N.render and (A.cfg.native_all or 0) >= 0.5 and A.Enabled() or false
-	if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("audioprop_native_all_want", all and "1" or "0") end
-	if not N.render or not audioprop_native or not audioprop_native.RoomReverb then return end
+	if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("pba_native_all_want", all and "1" or "0") end
+	if not N.render or not pba_native or not pba_native.RoomReverb then return end
 	N.ApplySettings()
-	local ok, l, m, h = pcall(audioprop_native.RoomReverb)
+	local ok, l, m, h = pcall(pba_native.RoomReverb)
 	if ok then N.rt = { l, m, h } end
 end)
 
-hook.Add("InitPostEntity", "audioprop_native", function() timer.Simple(1, N.Start) end)
+hook.Add("InitPostEntity", "pba_native", function() timer.Simple(1, N.Start) end)
 if A.nativeLoaded then timer.Simple(0.5, N.Start) end
 A.nativeLoaded = true

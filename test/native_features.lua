@@ -1,7 +1,7 @@
--- Native feature checks (client lua_job, native rendering on, ap_tworooms):
+-- Native feature checks (client lua_job, native rendering on, pba_tworooms):
 -- echoes, output modes, start delay, path-effect field, bake disk cache, reflection thread load.
-local N = audioprop.Native
-local NA = audioprop_native
+local N = pba.Native
+local NA = pba_native
 local ply = LocalPlayer()
 local res = {}
 local function cvar(n, v) RunConsoleCommand(n, tostring(v)) end
@@ -24,7 +24,7 @@ res.sound = ok
 
 -- 1. echoes: loud clear sound in front, A/B
 do
-	cvar("audioprop_native_echo", 1)
+	cvar("pba_native_echo", 1)
 	job:sleep(0.6)
 	local pos = eye + ang:Forward() * 150
 	local data = { SoundName = "weapons/ar2/fire1.wav", SoundLevel = 140, Volume = 1, Pitch = 100 }
@@ -44,20 +44,20 @@ local function playRight(opt)
 	NA.Play(name, right, 0.3, 1, 1, 1, 100, false, opt and opt.delay or 0, opt and opt.sh)
 end
 do
-	cvar("audioprop_native_echo", 0)
-	cvar("audioprop_native_reverb", 0)
+	cvar("pba_native_echo", 0)
+	cvar("pba_native_reverb", 0)
 	job:sleep(0.7)
-	cvar("audioprop_native_out", 0)
+	cvar("pba_native_out", 0)
 	job:sleep(0.7)
 	playRight()
 	local l, r, lag = measure(1.2)
 	res.headphones = { L = l, R = r, lag = lag }
-	cvar("audioprop_native_out", 1)
+	cvar("pba_native_out", 1)
 	job:sleep(0.7)
 	playRight()
 	l, r, lag = measure(1.2)
 	res.speakers = { L = l, R = r, lag = lag }
-	cvar("audioprop_native_out", 0)
+	cvar("pba_native_out", 0)
 	job:sleep(0.7)
 end
 
@@ -79,19 +79,19 @@ do
 	local l, r, lag = measure(1.2)
 	res.pathfx = { L = l, R = r, lag = lag }
 end
-cvar("audioprop_native_reverb", 0.3)
-cvar("audioprop_native_echo", 1)
+cvar("pba_native_reverb", 0.3)
+cvar("pba_native_echo", 1)
 
 -- 5. bake disk cache
 do
-	cvar("audioprop_native_paths", 1)
+	cvar("pba_native_paths", 1)
 	job:wait(function() return N.pathsReady end, 30)
 	res.bake1 = { ready = N.pathsReady, fromCache = N.fromCache, ms = N.bakeMs, cached = N.bakeCached }
 	N.pathsReady = false
 	N.Bake()
 	job:wait(function() return N.pathsReady end, 30)
 	res.bake2 = { ready = N.pathsReady, fromCache = N.fromCache, ms = N.bakeMs }
-	res.file = file.Size("audioprop/" .. game.GetMap() .. "_sa.dat", "DATA")
-	cvar("audioprop_native_paths", 0)
+	res.file = file.Size("pba/" .. game.GetMap() .. "_sa.dat", "DATA")
+	cvar("pba_native_paths", 0)
 end
 return res

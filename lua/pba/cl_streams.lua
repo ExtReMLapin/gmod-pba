@@ -3,15 +3,15 @@
 -- metatable discovers every 3D channel the first time its owner positions it:
 --   * SetPos / SetVolume remember the values the owner wants; GetPos / GetVolume return them,
 --     so the owner sees nothing changed;
---   * every 0.25 s, audioprop computes the paths as for a loop and applies, through the
+--   * every 0.25 s, pba computes the paths as for a loop and applies, through the
 --     original methods: the apparent position (the opening) and the level (losses, plus a
 --     correction for BASS's own distance law at the apparent position);
 --   * with the native module, a 3-band EQ is attached to the channel as a BASS DSP: the radio
---     behind a wall is really muffled (cl_native: audioprop_native.StreamFilter).
--- Everything is in pcall with a fallback to the original call; audioprop_streams 0 restores the
+--     behind a wall is really muffled (cl_native: pba_native.StreamFilter).
+-- Everything is in pcall with a fallback to the original call; pba_streams 0 restores the
 -- owners' values and the original methods. See docs/SITREP_STREAMS.md.
 
-local A = audioprop
+local A = pba
 local AC = A.AC
 local ST = A.Streams or {}
 A.Streams = ST
@@ -20,7 +20,7 @@ local meta = FindMetaTable("IGModAudioChannel")
 if not meta then return end
 
 ST.chans = ST.chans or setmetatable({}, { __mode = "k" }) -- channel -> record
--- methods in place when audioprop installed its detour (another addon may have detoured first)
+-- methods in place when pba installed its detour (another addon may have detoured first)
 ST.orig = ST.orig or { SetPos = meta.SetPos, GetPos = meta.GetPos, SetVolume = meta.SetVolume, GetVolume = meta.GetVolume }
 local O = ST.orig
 
@@ -105,11 +105,11 @@ end
 
 local function filter(ch, r)
 	local N = A.Native
-	if not (N and N.ready and audioprop_native and audioprop_native.StreamFilter) then return end
+	if not (N and N.ready and pba_native and pba_native.StreamFilter) then return end
 	if (A.cfg.streams_filter or 0) < 0.5 then return end
 	if r.filterFailed then return end
 	local e = r.eq
-	local ok, done, why = pcall(audioprop_native.StreamFilter, ch, e[1], e[2], e[3])
+	local ok, done, why = pcall(pba_native.StreamFilter, ch, e[1], e[2], e[3])
 	if not ok or not done then
 		r.filterFailed = tostring(why or done)
 		ST.lastFilterError = r.filterFailed
@@ -122,10 +122,10 @@ local function release(ch, r)
 	r.apparent, r.g, r.eq = nil, 1, { 1, 1, 1 }
 	pcall(applyPos, ch, r)
 	pcall(applyVol, ch, r)
-	if r.filtered then pcall(audioprop_native.StreamFilter, ch, 1, 1, 1) end
+	if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) end
 end
 
-timer.Create("audioprop_streams", 0.25, 0, function()
+timer.Create("pba_streams", 0.25, 0, function()
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
 	local L = ply:EyePos()
@@ -148,5 +148,5 @@ timer.Create("audioprop_streams", 0.25, 0, function()
 		end
 	end
 	ST.count = n
-	if audioprop_native and audioprop_native.StreamCollect then pcall(audioprop_native.StreamCollect) end
+	if pba_native and pba_native.StreamCollect then pcall(pba_native.StreamCollect) end
 end)

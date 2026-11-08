@@ -3,8 +3,8 @@
 -- "echo only" message, a quiet one must not.
 local ply = player.GetHumans()[1]
 if not IsValid(ply) then return "no player" end
-local want = ply:GetInfoNum("audioprop_echo_want", 0)
-local A = audioprop
+local want = ply:GetInfoNum("pba_echo_want", 0)
+local A = pba
 local b0 = A.stats.echoBytes or 0
 local pos = ply:EyePos() + ply:GetForward() * 120
 for _ = 1, 3 do

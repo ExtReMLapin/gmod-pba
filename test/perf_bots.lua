@@ -28,7 +28,7 @@ for i, b in ipairs(bots) do
 	b:GiveAmmo(9999, "SMG1", true)
 	b.apYaw = math.random(0, 359)
 end
-hook.Add("StartCommand", "audioprop_perf_bots", function(p, cmd)
+hook.Add("StartCommand", "pba_perf_bots", function(p, cmd)
 	if not p:IsBot() then return end
 	cmd:ClearButtons()
 	cmd:ClearMovement()
@@ -44,5 +44,5 @@ while CurTime() - t0 < secs do
 	job:progress(math.floor(CurTime() - t0), secs, "bots firing")
 	job:sleep(1)
 end
-hook.Remove("StartCommand", "audioprop_perf_bots")
-return { bots = #bots, relayed = audioprop.stats.relayed, seen = audioprop.stats.seen, untouched = audioprop.stats.untouched }
+hook.Remove("StartCommand", "pba_perf_bots")
+return { bots = #bots, relayed = pba.stats.relayed, seen = pba.stats.seen, untouched = pba.stats.untouched }
