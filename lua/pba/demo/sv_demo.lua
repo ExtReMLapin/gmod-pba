@@ -202,34 +202,34 @@ local function placeObstacle(r, kind)
 end
 
 -- ------------------------------------------------------------------ crates in a doorway (room 3)
--- A stack of crates in front of the open doorway, over the strip that the ajar leaf covers
--- (r.crate_cover, from the generator): same gap left, so it should sound like the ajar door.
--- Doorway in a y-normal wall (r.doorway). The crates go on the side the open leaf is not on.
+-- A thin panel (a loose door leaf) in the plane of the open doorway, over the strip that the ajar
+-- leaf covers (r.crate_cover, from the generator): same gap left, so it should sound like the ajar
+-- door. A thin panel, not crates: 40 u deep crates turn the 10 u gap into a long slot that the radio
+-- does not see (measured: ajar door 9.9 dB, crates 20.4 dB, no free part left for the direct sound).
+-- Doorway in a y-normal wall (r.doorway); the panel overlaps into the wall beyond cov[1].
 
-local CRATE = "models/props_junk/wood_crate001a.mdl"
+local PANEL = "models/props_c17/door01_left.mdl"
 
 local function placeCrates(r, st)
 	clearProps(st)
-	local d, dw, cov = doorEnt(r, "door"), r.doorway, r.crate_cover
-	if not (IsValid(d) and dw and cov) then return end
-	local mid = (dw[2] + dw[5]) / 2
-	local north = d:WorldSpaceCenter().y < mid
-	local x, z = (cov[1] + cov[2]) / 2, dw[3]
-	while z < dw[6] do
-		local e = ents.Create("prop_physics")
-		if not IsValid(e) then return end
-		e:SetModel(CRATE)
-		e:SetPos(Vector(x, north and dw[5] + 22 or dw[2] - 22, z + 21)) -- about there, then exactly
-		e:Spawn()
-		local phys = e:GetPhysicsObject()
-		if IsValid(phys) then phys:EnableMotion(false) end
-		e.pba_demo = true
-		st.props[#st.props + 1] = e
-		local mn, mx = e:OBBMins(), e:OBBMaxs()
-		if mx.z - mn.z < 1 then return end
-		e:SetPos(Vector(x - (mn.x + mx.x) / 2, north and dw[5] + 1 - mn.y or dw[2] - 1 - mx.y, z - mn.z))
-		z = z + mx.z - mn.z
-	end
+	local dw, cov = r.doorway, r.crate_cover
+	if not (dw and cov) then return end
+	local e = ents.Create("prop_physics")
+	if not IsValid(e) then return end
+	e:SetModel(PANEL)
+	e:SetPos(Vector((cov[1] + cov[2]) / 2, (dw[2] + dw[5]) / 2, dw[3] + 60))
+	e:Spawn()
+	e:SetAngles(Angle(0, 270, 0)) -- after Spawn (set before, it did not hold): width along x
+	local phys = e:GetPhysicsObject()
+	if IsValid(phys) then phys:EnableMotion(false) end
+	e.pba_demo = true
+	st.props[#st.props + 1] = e
+	-- right edge where the ajar leaf's gap starts: PBA measures the 40 u portal (x -3232..-3192) with
+	-- the leaf at 20 degrees leaving its last ~9 u free (aperture [11.1, 20] in portal coordinates),
+	-- i.e. cov[2] - 8 (the generator's estimate); centred in the wall's thickness, on the floor
+	local mn, mx = e:WorldSpaceAABB()
+	local p = e:GetPos()
+	e:SetPos(p + Vector(cov[2] - 8 - mx.x, (dw[2] + dw[5]) / 2 - (mn.y + mx.y) / 2, dw[3] - mn.z))
 end
 
 --- Opens a door wide from any state (an ajar door is closed first, as setDoor does for "half").
