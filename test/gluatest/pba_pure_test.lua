@@ -789,5 +789,155 @@ return {
 			expect(P.RampAt(s, 0.25, L)).to.equal(0.5)
 			expect(s.pending).to.equal(false) -- sent once, then nothing until something changes
 		end },
+		{ name = "LowpassHold: a loss oscillating +-0.5 dB around any threshold never flips the level", func = function()
+			expect(AC.LowpassHold ~= nil).to.beTrue()
+			for k = 1, 4 do
+				local T = CFG["lp" .. k .. "_db"]
+				local function run(margin)
+					local held, flips
+					for i = 0, 40 do
+						local db = T + (i % 2 == 0 and 0.5 or -0.5)
+						local h = AC.LowpassHold(AC.LowpassLevel(db, CFG), db, held, margin, CFG)
+						if held and h ~= held then flips = (flips or 0) + 1 end
+						held = h
+					end
+					return flips or 0
+				end
+				expect(run(0) >= 40).to.beTrue() -- the scenario flickers without hysteresis
+				expect(run(1)).to.equal(0)
+				expect(run(1.5)).to.equal(0)
+			end
+		end },
+		{ name = "LowpassHold: a real crossing beyond the margin switches; two levels or a discrete cause at once", func = function()
+			local m = 1.5
+			-- up from 1 past lp2_db (6): held within the margin, switched beyond it
+			expect(AC.LowpassHold(2, 6.4, 1, m, CFG)).to.equal(1)
+			expect(AC.LowpassHold(2, 7.6, 1, m, CFG)).to.equal(2)
+			-- down from 2 under lp2_db
+			expect(AC.LowpassHold(1, 5.6, 2, m, CFG)).to.equal(2)
+			expect(AC.LowpassHold(1, 4.4, 2, m, CFG)).to.equal(1)
+			-- level 0 / 1 (lp1_db 2) and 3 / 4 (lp4_db 16)
+			expect(AC.LowpassHold(1, 2.4, 0, m, CFG)).to.equal(0)
+			expect(AC.LowpassHold(0, 1.0, 1, m, CFG)).to.equal(1)
+			expect(AC.LowpassHold(0, 0.4, 1, m, CFG)).to.equal(0)
+			expect(AC.LowpassHold(4, 16.4, 3, m, CFG)).to.equal(3)
+			-- two levels at once: no hold, even near a threshold
+			expect(AC.LowpassHold(3, 11.2, 1, m, CFG)).to.equal(3)
+			-- the level is not the one of the loss (closed leaf, material, masking object, cap): at once
+			expect(AC.LowpassHold(3, 7, 2, m, CFG)).to.equal(3)
+			expect(AC.LowpassHold(1, 12, 2, m, CFG)).to.equal(1)
+			-- no loss known, no previous level, or off: the level as computed
+			expect(AC.LowpassHold(2, nil, 1, m, CFG)).to.equal(2)
+			expect(AC.LowpassHold(2, 6.4, nil, m, CFG)).to.equal(2)
+			expect(AC.LowpassHold(2, 6.4, 1, 0, CFG)).to.equal(2)
+		end },
+		{ name = "LowpassHold: never lags more than the margin, nor more than one level", func = function()
+			local m = 1.5
+			local held, worst, seed = nil, 0, 12345
+			local function rnd() seed = (seed * 1103515245 + 12345) % 2147483648 return seed / 2147483648 end
+			for step = 0, 2000 do
+				-- slow sweeps 0 -> 20 -> 0 dB with +-1 dB of jitter
+				local ph = (step % 400) / 200
+				local db = math.max((ph <= 1 and ph or 2 - ph) * 20 + (rnd() - 0.5) * 2, 0)
+				local lvl = AC.LowpassLevel(db, CFG)
+				held = AC.LowpassHold(lvl, db, held, m, CFG)
+				if held ~= lvl then
+					expect(math.abs(held - lvl)).to.equal(1)
+					local T = CFG["lp" .. math.max(held, lvl) .. "_db"] -- the threshold between them
+					worst = math.max(worst, math.abs(db - T))
+				end
+			end
+			expect(worst > 0).to.beTrue() -- it did hold at times
+			expect(worst < m).to.beTrue()
+		end },
+		{ name = "Stable: the lowpass level of a continuous sound holds near a threshold, cached voices untouched", func = function()
+			local L = Vector(0, 0, 0)
+			local function result(db)
+				local v = { kind = "portal", pos = Vector(100, 0, 0), level = -10, gain = 0.3, lp = AC.LowpassLevel(db, CFG), lpDb = db, members = {} }
+				return { L = L, clear = false, voices = { v } }
+			end
+			local function run(margin)
+				local cfg = setmetatable({ lp_hyst_db = margin }, { __index = CFG })
+				local st, prev, flips = {}, nil, 0
+				for i = 0, 40 do
+					local r = result(6 + (i % 2 == 0 and 0.5 or -0.5))
+					local own = r.voices[1].lp
+					local out = P.Stable(st, r, cfg)
+					expect(r.voices[1].lp).to.equal(own) -- the cached result is never modified
+					local lp = out.voices[1].lp
+					if prev and lp ~= prev then flips = flips + 1 end
+					prev = lp
+				end
+				return flips
+			end
+			expect(run(0)).to.equal(40) -- 0 = off: as before
+			expect(run(1.5)).to.equal(0)
+			-- a real step beyond the margin goes through
+			local cfg = setmetatable({ lp_hyst_db = 1.5 }, { __index = CFG })
+			local st = {}
+			expect(P.Stable(st, result(5.5), cfg).voices[1].lp).to.equal(1)
+			expect(P.Stable(st, result(6.5), cfg).voices[1].lp).to.equal(1)
+			expect(P.Stable(st, result(8), cfg).voices[1].lp).to.equal(2)
+			-- in clear sight nothing is muffled (level 0): a path just past lp1_db right after stays at 0
+			local c = {}
+			P.Stable(c, { L = L, clear = true }, cfg)
+			expect(P.Stable(c, result(2.5), cfg).voices[1].lp).to.equal(0)
+		end },
+		{ name = "Lowpass loss carried: a path's lpDb gives its level, a one-path voice keeps it", func = function()
+			local g = G.Build(synthBsp())
+			local S = Vector(150, 125, 50)
+			local seen = {}
+			for y = 125, -200, -5 do
+				local L = Vector(260, y, 50)
+				local p = P.EvalChain(S, L, { g.byKey[2] }, CFG)
+				expect(p.lpDb ~= nil).to.beTrue()
+				expect(AC.LowpassLevel(p.lpDb, CFG)).to.equal(p.lp)
+				seen[p.lp] = true
+				local v = P.SelectVoices(L, { p }, nil, 75, CFG)
+				expect(near(v[1].lpDb, p.lpDb, 1e-9)).to.beTrue()
+				expect(v[1].lp).to.equal(p.lp)
+			end
+			expect(seen[0] and seen[1] and seen[2]).to.beTrue() -- the sweep crossed thresholds
+			local pts = { Vector(0, 0, 0), Vector(100, 100, 0), Vector(200, 0, 0) }
+			local saved = P.SegmentDoorLoss
+			P.SegmentDoorLoss = function() return 0, 0 end -- no game traces in the pure suite
+			local ok, q = pcall(P.EvalPolyline, pts, CFG)
+			P.SegmentDoorLoss = saved
+			expect(ok).to.beTrue()
+			expect(near(q.lpDb, q.diffDb, 1e-9)).to.beTrue()
+		end },
+		{ name = "Lowpass hysteresis end to end: a listener stepping 2 u back and forth across a threshold", func = function()
+			local g = G.Build(synthBsp())
+			local S = Vector(150, 125, 50)
+			local function at(y)
+				local L = Vector(260, y, 50)
+				local p = P.EvalChain(S, L, { g.byKey[2] }, CFG)
+				return { L = L, clear = false, voices = P.SelectVoices(L, { p }, nil, 75, CFG) }, p
+			end
+			-- first 1 u step where the level changes along the sweep
+			local y0
+			for y = 125, -200, -1 do
+				local _, a = at(y)
+				local _, b = at(y - 1)
+				if a.lp ~= b.lp then y0 = y break end
+			end
+			expect(y0 ~= nil).to.beTrue()
+			local _, a = at(y0)
+			local _, b = at(y0 - 1)
+			expect(math.abs((a.lpDb or a.diffDb) - (b.lpDb or b.diffDb)) < 1).to.beTrue() -- a small change of loss, a whole level
+			local function flips(margin)
+				local cfg = setmetatable({ lp_hyst_db = margin }, { __index = CFG })
+				local st, prev, n = {}, nil, 0
+				for i = 0, 20 do
+					local r = at(i % 2 == 0 and y0 or y0 - 1)
+					local lp = P.Stable(st, r, cfg).voices[1].lp
+					if prev and lp ~= prev then n = n + 1 end
+					prev = lp
+				end
+				return n
+			end
+			expect(flips(0)).to.equal(20)
+			expect(flips(1.5)).to.equal(0)
+		end },
 	},
 }

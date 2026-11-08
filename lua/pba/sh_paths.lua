@@ -231,6 +231,7 @@ function P.EvalChain(S, L, chain, cfg, masks)
 	local len, diff, loss = 0, 0, 0
 	local allOpen = true
 	local openDiff, leafLp, tiltLp = 0, 0, 0 -- what muffles: diffraction, door leaves, a narrow gap
+	local tiltDb = 0 -- the gap's tilt (dB) that set tiltLp
 	local fd = cfg.portal_diffuse_db or 60
 	local prev = S
 	for i, p in ipairs(chain) do
@@ -300,7 +301,9 @@ function P.EvalChain(S, L, chain, cfg, masks)
 			if gm > go then
 				leafLp = math.max(leafLp, m.lp)
 			elseif rHigh > 0 and rLow > rHigh then
-				tiltLp = math.max(tiltLp, AC.LowpassLevel(AC.GainToDb(rLow / rHigh) , cfg))
+				local tilt = AC.GainToDb(rLow / rHigh)
+				tiltLp = math.max(tiltLp, AC.LowpassLevel(tilt, cfg))
+				tiltDb = math.max(tiltDb, tilt)
 			end
 		end
 		loss = loss - AC.GainToDb(math.max(g, 1e-6))
@@ -313,8 +316,9 @@ function P.EvalChain(S, L, chain, cfg, masks)
 	-- every opening wide open: the diffuse part carries the treble through
 	if allOpen then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
 	local direct, bend = P.PathShape(S, pts, L)
+	-- lpDb: the continuous loss behind the level (AC.LowpassHold); a leaf or the cap may set lp instead
 	return { chain = chain, points = pts, length = len, diffDb = diff, doorDb = loss - diff, lossDb = loss,
-		pos = pts[#pts], lp = lp, direct = direct, bendDeg = bend }
+		pos = pts[#pts], lp = lp, lpDb = math.max(openDiff, tiltDb), direct = direct, bendDeg = bend }
 end
 
 --- Door loss (dB) of the door entities crossed by segment a -> b (game state).
@@ -352,7 +356,7 @@ function P.EvalPolyline(pts, cfg)
 	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
 	local direct, bend = P.PathShape(pts[1], inner, pts[#pts])
 	return { chain = {}, points = inner, length = len, diffDb = diff, doorDb = door, lossDb = diff + door,
-		pos = pts[#pts - 1], lp = math.max(AC.LowpassLevel(diff, cfg), doorLp), direct = direct, bendDeg = bend }
+		pos = pts[#pts - 1], lp = math.max(AC.LowpassLevel(diff, cfg), doorLp), lpDb = diff, direct = direct, bendDeg = bend }
 end
 
 -- ------------------------------------------------------------------ portal search
@@ -852,7 +856,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 
 	-- position / gain / low-pass of each portal voice (energy-weighted)
 	for _, v in ipairs(voices) do
-		local sum, pw, lpw = Vector(0, 0, 0), 0, 0
+		local sum, pw, lpw, dbw = Vector(0, 0, 0), 0, 0, 0
 		local dom = v.members[1]
 		for _, p in ipairs(v.members) do
 			local g = AC.EngineGain(p.length, sndlvl) * 10 ^ (-p.lossDb / 20)
@@ -860,6 +864,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 			sum:Add(dirOf(p) * w)
 			pw = pw + w
 			lpw = lpw + p.lp * w
+			dbw = dbw and p.lpDb and dbw + p.lpDb * w or nil
 		end
 		v.gain = math.sqrt(pw)
 		local dist = dom.pos:Distance(L)
@@ -869,6 +874,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 			v.pos = dom.pos
 		end
 		v.lp = math.Round(lpw / math.max(pw, 1e-12))
+		v.lpDb = dbw and dbw / math.max(pw, 1e-12) -- loss behind the level, when every member has one
 		v.level = AC.GainToDb(v.gain)
 		v.len = dom.length -- path length (propagation delay, air absorption)
 		v.sh = dom.sh       -- Steam Audio baked path field (native rendering)
@@ -922,12 +928,18 @@ end
 -- apparent direction (and muffling) jumps back and forth as the listener moves a few units. The
 -- voice heard so far (the one closest to the previous dominant direction, within 30 degrees) stays
 -- first unless the new best beats it by path_hyst_db. `state` is a table the caller keeps per sound.
--- Returns r, or a copy with the voices reordered: the cached result is shared and never modified.
+-- The low-pass level of the voice heard first holds near a threshold the same way (lp_hyst_db,
+-- AC.LowpassHold): the engine DSP preset or the native EQ no longer flips as the listener steps.
+-- Returns r, or a copy with the voices reordered or relabelled: the cached result is shared and
+-- never modified.
 local COS30 = math.cos(math.rad(30))
 function P.Stable(state, r, cfg)
 	cfg = cfg or A.cfg
 	local vs = r and r.voices
-	if not vs or #vs == 0 or not r.L then return r end
+	if not vs or #vs == 0 or not r.L then
+		if state then state.lp = r and r.clear and 0 or nil end -- clear sight: heard without low-pass
+		return r
+	end
 	local L = r.L
 	local function dir(v) return v.pos and (v.pos - L):GetNormalized() end
 	local hyst = cfg.path_hyst_db or 2
@@ -944,6 +956,17 @@ function P.Stable(state, r, cfg)
 		end
 	end
 	state.dir = dir(r.voices[1]) or state.dir
+	local v1 = r.voices[1]
+	local lp = AC.LowpassHold(v1.lp or 0, v1.lpDb, state.lp, cfg.lp_hyst_db or 0, cfg)
+	if lp ~= (v1.lp or 0) then
+		local held = {}
+		for k, x in pairs(v1) do held[k] = x end
+		held.lp = lp
+		local nv = { held }
+		for i = 2, #r.voices do nv[i] = r.voices[i] end
+		r = setmetatable({ voices = nv }, { __index = r })
+	end
+	state.lp = lp
 	return r
 end
 
@@ -1373,6 +1396,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				local loss = -AC.GainToDb(math.max(np.em, 1e-4))
 				r.paths[1] = { chain = {}, points = {}, length = S:Distance(L) * 1.2, diffDb = loss, doorDb = 0,
 					lossDb = loss, pos = L + dir * dist, lp = AC.LowpassLevel(-AC.GainToDb(math.max(np.eh, 1e-4)), cfg),
+					lpDb = -AC.GainToDb(math.max(np.eh, 1e-4)),
 					native = true }
 				-- first-order field of the baked paths, normalized to a unit omni component (the
 				-- level is carried by the voice gain): several arrival directions blur the field
