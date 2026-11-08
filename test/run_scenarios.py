@@ -32,6 +32,8 @@ def ensure_map(m):
     if st.get("map") != m:
         call("map_load", {"map": m, "maxplayers": 4})
         lua("client", 'RunConsoleCommand("pba_report","1")')
+        # the probe graph is built in the background on a map's first load (no cache yet)
+        call("wait_for", {"realm": "client", "condition": "pba.Probes == nil or pba.Probes.current ~= nil", "timeout_s": 120})
 
 
 def run(name, map_, wait=2.5, sound="click"):
