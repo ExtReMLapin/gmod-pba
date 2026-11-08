@@ -10,7 +10,8 @@
 -- law over its length minus PBA's own diffraction formula (P.EvalPolyline): same physics, independent
 -- search. Pairs with no single-bend path are counted apart (multi-bend, out of the reference's scope).
 -- Metrics on the kept pairs, excess = reference level - PBA level (dB, > 0: PBA too muffled):
---   over6: share of pairs with excess > 6 dB, median: median excess, silent: share where PBA has
+--   over6: share of pairs with excess > 6 dB (too muffled), under6: excess < -6 dB (too loud), best: the
+--   lowest excess, median: median excess, silent: share where PBA has
 --   no path at all (transmission only) although the reference found one.
 -- Each pair is measured COLD (first evaluation: what a one-shot sound gets, probe paths not solved
 -- yet are queued for a background solve) and WARM (after that solve: what a loop gets).
@@ -108,16 +109,17 @@ while #rows < N and tries < N * 400 do
 end
 
 local function stats(field, silentField)
-	local ex, over6, silent = {}, 0, 0
+	local ex, over6, under6, silent = {}, 0, 0, 0
 	for _, r in ipairs(rows) do
 		ex[#ex + 1] = r[field]
 		if r[field] > 6 then over6 = over6 + 1 end
+		if r[field] < -6 then under6 = under6 + 1 end
 		if r[silentField] then silent = silent + 1 end
 	end
 	table.sort(ex)
 	local n = #ex
 	if n == 0 then return {} end
-	return { over6 = math.Round(over6 / n, 3), silent = math.Round(silent / n, 3), median = math.Round(ex[math.ceil(n / 2)], 1),
+	return { over6 = math.Round(over6 / n, 3), under6 = math.Round(under6 / n, 3), best = math.Round(ex[1], 1), silent = math.Round(silent / n, 3), median = math.Round(ex[math.ceil(n / 2)], 1),
 		p90 = math.Round(ex[math.ceil(n * 0.9)], 1), worst = math.Round(ex[n], 1) }
 end
 local n = #rows
