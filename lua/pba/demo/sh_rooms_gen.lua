@@ -200,7 +200,8 @@ pba.DemoGen = {
 		panel_yaw = 143.7,
 		sources = {
 			music = "pba_detour_src"
-		}
+		},
+		stream_pos = { 6448, -512, 40 }
 	}, {
 		id = "exit",
 		boxes = { { 6544, 0, 0, 7056, 512, 192 } },

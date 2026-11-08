@@ -423,8 +423,14 @@ end
 
 -- the diffuse model is switched by each client in the room (cl_demo, DM.ApplyDiffuse): paths are
 -- computed on the client; the server only keeps and sends the selection
+-- the music is the boombox's 3D stream (Caramelldansen), louder (stream_min), so that it is heard
+-- well at the far end of the corridor
 H.detour = {
-	music = function(r, st, ply, force) toggleLoop(r, src(r, "music"), "detour", force) end,
+	music = function(r, st, ply, force)
+		if st.stream and not force then setStream(r, false) st.active = false return end
+		if force and st.stream then setStream(r, false) end
+		setStream(r, true)
+	end,
 }
 for _, k in ipairs({ "diffuse_on", "diffuse_off" }) do
 	H.detour[k] = function(r, st)
@@ -560,7 +566,7 @@ timer.Create("pba_demo_rooms", 0.25, 0, function()
 		local occ = occupants(r)
 		if #occ > 0 then
 			st.empty = now
-			if r.autostart and not st.autostarted and not st.loop then
+			if r.autostart and not st.autostarted and not st.loop and not st.stream then
 				st.autostarted = true
 				local main = H[r.id] and H[r.id][r.main]
 				if main then main(r, st, occ[1], true) end

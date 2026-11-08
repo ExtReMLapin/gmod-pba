@@ -426,7 +426,8 @@ def build():
                           (DX0 - 16 - W, SBOT, 0, DX0 - 16, LTOP, 128),
                           (DX0 - 16 - W, SBOT - 16 - W, 0, DX1 + 16 + W, SBOT - 16, 128),
                           (DX1 + 16, SBOT, 0, DX1 + 16 + W, STOP, 128)],
-               (C, (LTOP + LBOT) / 2, 0), 270, sources={"music": "pba_detour_src"})
+               (C, (LTOP + LBOT) / 2, 0), 270, sources={"music": "pba_detour_src"},
+               stream_pos=[C, (SBOT + STOP) / 2, 40])
 
     # ---------------------------------------------------------------- 15 exit
     m.space(X, 0, 0, X + 512, 512, 192, wall=DEV, floor=CONC_FLOOR, ceil=DEV)

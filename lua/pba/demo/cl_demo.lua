@@ -202,7 +202,8 @@ function DM.StartStream(r)
 				return try(i + 1)
 			end
 			ch:SetPos(p)
-			ch:Set3DFadeDistance(250, 10000)
+			-- full volume up to stream_min units (BASS distance law min / d beyond): louder rooms set it higher
+			ch:Set3DFadeDistance(r.stream_min or 250, 10000)
 			ch:EnableLooping(true)
 			ch:SetVolume(1)
 			DM.streamStart = path == DM.STREAM_URL and DM.STREAM_URL_START or nil

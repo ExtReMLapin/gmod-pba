@@ -80,7 +80,7 @@ end
 local function nativeUpdate(ch, r, L)
 	if not r.nativeId then return end
 	local pos, gain, el, em, eh = nativeParams(ch, r, L)
-	if not pba_native.Update(r.nativeId, pos, gain, el, em, eh, 100) then r.nativeId = nil end
+	if not pba_native.Update(r.nativeId, pos, gain, el, em, eh, 100, r.diffuse or 0) then r.nativeId = nil end
 end
 
 local function nativeStart(ch, r, L)
@@ -168,13 +168,22 @@ local function evaluate(ch, r, L)
 	if res.provisional and r.reeval then r.reeval.force = true end -- probe search still running
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
-		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len = nil, 1, { 1, 1, 1 }, 1, 0, nil
+		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len, r.diffuse = nil, 1, { 1, 1, 1 }, 1, 0, nil, 0
 		return
 	end
-	local p = 0
-	for _, v in ipairs(res.voices) do p = p + v.gain * v.gain end
+	-- each voice keeps its own losses (walls, doors, corners, absorption) but its distance law is the
+	-- channel's (BASS min / d), not the engine's at 75 dB: a long detour of a stream heard from far
+	-- (Set3DFadeDistance) lost tens of dB it never would have (room 14: -47 dB instead of -16)
+	local p, pd = 0, 0
 	local dS = S:Distance(L)
-	local g = math.sqrt(p) / math.max(AC.EngineGain(dS, 75), 1e-6)
+	for _, v in ipairs(res.voices) do
+		local len = v.len or dS
+		local gv = v.gain / math.max(AC.EngineGain(len, 75), 1e-6) * bassGain(ch, len)
+		p, pd = p + gv * gv, pd + gv * gv * (v.diffuse or 0)
+	end
+	-- energy-weighted diffuse share (diffuse model): rendered by the native module only (BASS has no DSP)
+	r.diffuse = pd / math.max(p, 1e-12)
+	local g = math.sqrt(p) / math.max(bassGain(ch, dS), 1e-6)
 	local apparent = res.voices[1].pos
 	-- BASS attenuates from the apparent (closer) position: compensate to the real distance
 	local corr = bassGain(ch, dS) / math.max(bassGain(ch, apparent:Distance(L)), 1e-6)
@@ -220,7 +229,7 @@ local function retarget(ch, r, L) A.Paths.Retarget(r.ramp, rampTarget(ch, r, L))
 local function applyRamp(ch, r, L, now)
 	local g, e1, e2, e3, pos = A.Paths.RampAt(r.ramp, now, L)
 	if r.nativeId then
-		if not pba_native.Update(r.nativeId, pos, g, e1, e2, e3, 100) then r.nativeId = nil end
+		if not pba_native.Update(r.nativeId, pos, g, e1, e2, e3, 100, r.diffuse or 0) then r.nativeId = nil end
 		return
 	end
 	r.hG, r.hPos = g, pos
