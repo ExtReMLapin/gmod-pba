@@ -79,6 +79,7 @@ if want("tworooms_open"):
     v = dom(r)
     check("P3-door-right", v and v["kind"] == "portal" and v["az"] > 15, f"dominant={v}")
     open_level = v["level_db"] if v else None
+    open_lp = v.get("lp", 0) if v else 0
 
 if want("tworooms_left"):
     r, _, _ = run("tworooms_left", "pba_tworooms")
@@ -88,10 +89,14 @@ if want("tworooms_left"):
 if want("tworooms_closed"):
     r, _, _ = run("tworooms_closed", "pba_tworooms", wait=3.5)
     p = r["paths"][0] if r and r.get("paths") else None
-    check("P3-door-closed-loss", p and p["door_db"] > 10, f"path={p} trans={r and r.get('trans')}")
+    # Reference validated by ear (2026-11-08): a closed leaf follows the same convention as any wall
+    # (low-frequency loss, rendered low-passed by its material). Closing the door costs ~7 dB of level
+    # AND more muffling; the old >10 dB thresholds came from the generic 28 dB mid-band leaf.
+    check("P3-door-closed-loss", p and p["door_db"] > 5, f"path={p} trans={r and r.get('trans')}")
     v = dom(r)
     if v and want("tworooms_open"):
-        check("P3-door-closed-quieter", v["level_db"] < open_level - 10, f"closed={v['level_db']} open={open_level}")
+        check("P3-door-closed-quieter", v["level_db"] < open_level - 5 and v.get("lp", 0) > open_lp,
+              f"closed={v['level_db']} lp{v.get('lp')} open={open_level} lp{open_lp}")
 
 if want("tworooms_half"):
     r, _, _ = run("tworooms_half", "pba_tworooms", wait=3.5)
