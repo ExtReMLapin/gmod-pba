@@ -100,7 +100,7 @@ AC.MAT_DEFAULT_ENTRY = { 10.5, 50, 8, 30, 65, 4 } -- unknown materials: heavy wa
 -- Surface-property name overrides (MAT_* alone is ambiguous: plaster/ceiling_tile are MAT_DIRT).
 AC.SURF_TABLE = {
 	pba_water = { 1, 24, 0, 24, 24, 4, fixed = true }, -- air / water interface (see pba_water_db)
-	plaster      = { 8, 35, 6, 25, 45, 3 },
+	plaster      = { 8, 27, 6, 16, 37, 2 }, -- 2026-11-08: 35 dB made a voice behind a plaster wall nearly inaudible (user)
 	ceiling_tile = { 1, 12, 6, 6, 20, 2 },
 	cardboard    = { 1, 12, 6, 6, 20, 2 },
 	wood_panel   = { 2, 24, 6, 18, 34, 3 },

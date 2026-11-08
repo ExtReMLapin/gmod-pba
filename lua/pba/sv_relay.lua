@@ -64,6 +64,8 @@ end
 function ENT:StopSound(name)
 	A.orig.EntStopSound(self, name)
 	if A.RelayStop then pcall(A.RelayStop, self, name) end
+	-- loops and long sounds followed by sv_loops: their client mirrors stop too
+	if A.Loops and A.Loops.Stop and IsValid(self) and not self:IsWorld() then pcall(A.Loops.Stop, self:EntIndex(), name) end
 end
 
 local function audibleRadius(lvl)

@@ -72,6 +72,10 @@ local function emit(r, ent, key, flash)
 	local s = DM.SND[key]
 	if not s or not IsValid(ent) then return end
 	ent:EmitSound(s[1], s[2], s[3], 1, CHAN_AUTO)
+	-- remembered so that leaving the room or changing mode really stops it (long voices, music)
+	local st0 = state(r)
+	st0.emitted = st0.emitted or {}
+	st0.emitted[#st0.emitted + 1] = { ent = ent, path = s[1] }
 	local occ = occupants(r)
 	if #occ > 0 then
 		net.Start(NET_EMIT)
@@ -120,11 +124,15 @@ local function setStream(r, on)
 	if on then st.active = true end
 end
 
---- Stops everything a room plays (sequence, loop, stream).
+--- Stops everything a room plays (sequence, loop, stream, sounds already started).
 function DM.StopRoom(r)
 	local st = state(r)
 	st.token = st.token + 1
 	stopLoop(r)
+	for _, x in ipairs(st.emitted or {}) do
+		if IsValid(x.ent) then x.ent:StopSound(x.path) end
+	end
+	st.emitted = {}
 	if st.stream then setStream(r, false) end
 	st.active = false
 end
@@ -405,7 +413,8 @@ function DM.Press(r, b, ply)
 		-- the clients apply the mode on reception: leave them a moment before the sound starts
 		local main = r.main and H[r.id] and H[r.id][r.main]
 		if main then
-			if changed and r.loop then DM.StopRoom(r) end
+			-- new mode: what played in the old one stops, the room's sound starts again
+			if changed then DM.StopRoom(r) end
 			timer.Simple(0.3, function()
 				if r.loop then
 					if changed or not (st.loop or st.stream) then main(r, st, ply, true) end

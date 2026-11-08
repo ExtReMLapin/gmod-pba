@@ -59,10 +59,29 @@ function LP.IsLong(data)
 	return dur > A.cfg.max_duration and dur <= 1800, dur
 end
 
+--- Stops the loops / long sounds `name` of entity idx (any channel: a stop may come on another
+-- channel than the start). Returns true when one was running.
+function LP.Stop(idx, name)
+	local found = false
+	for k, x in pairs(LP.active) do
+		if x.idx == idx and (name == nil or name == "" or x.name == name) then
+			local plys = {}
+			for p in pairs(x.subs) do if IsValid(p) then plys[#plys + 1] = p end end
+			send(OP_STOP, x, plys)
+			LP.active[k] = nil
+			found = true
+		end
+	end
+	return found
+end
+
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
 function LP.Handle(data)
 	if A.cfg.loops < 0.5 then return false end
 	local e = data.Entity
+	-- players' own loops (underwater ambience...) are started and stopped by the engine's C++
+	-- code: that StopSound never reaches Lua, a mirror would play forever. Left to the engine.
+	if IsValid(e) and e:IsPlayer() then return false end
 	local idx = IsValid(e) and e:EntIndex() or 0
 	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
 	local l = LP.active[key]
@@ -78,19 +97,7 @@ function LP.Handle(data)
 
 	-- stop events carry no sound level: test them first
 	if bit.band(flags, SND_STOP) ~= 0 then
-		if not l then
-			-- a stop may come on another channel than the start: same entity and same name is enough
-			for k, x in pairs(LP.active) do
-				if x.idx == idx and x.name == data.SoundName then l, key = x, k break end
-			end
-		end
-		if l then
-			local plys = {}
-			for p in pairs(l.subs) do if IsValid(p) then plys[#plys + 1] = p end end
-			send(OP_STOP, l, plys)
-			LP.active[key] = nil
-		end
-		return l ~= nil
+		return LP.Stop(idx, data.SoundName)
 	end
 	if not l and (data.SoundLevel or 75) <= 0 then return false end -- 2D loops: leave to the engine
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0

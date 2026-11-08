@@ -48,7 +48,7 @@ DESK = "dev/dev_measuregeneric01"
 SAS_LEN = 160          # airlock interior length (x)
 SAS_Y = (192, 320)     # airlock interior width (y); doorway 48 u centred on y = 256
 DOOR_Y = (232, 280)
-DOOR_H = 112
+DOOR_H = 108  # door01_left is 108.5 high: a taller doorway shows the closed portal above it
 
 RADIO = "models/props_lab/citizenradio.mdl"
 SPEAKER = "models/props_wasteland/speakercluster01a.mdl"
@@ -74,7 +74,17 @@ class Demo(Map):
 
     def portal(self, b, target=None, start_open=False):
         self.hole(*b)
-        self.areaportal(b, target=target, start_open=start_open)
+        # the areaportal is a 2-unit slab in the middle of the wall, not the whole doorway: a door
+        # leaf (about 2.5 u thick) entirely inside the portal volume belongs to neither room's area
+        # and is not drawn while the portal is closed (a black hole instead of the door)
+        x0, y0, z0, x1, y1, z1 = b
+        if x1 - x0 <= y1 - y0:
+            c = (x0 + x1) / 2
+            pb = (c - 1, y0, z0, c + 1, y1, z1)
+        else:
+            c = (y0 + y1) / 2
+            pb = (x0, c - 1, z0, x1, c + 1, z1)
+        self.areaportal(pb, target=target, start_open=start_open)
         self.n_portals += 1
 
     def door(self, name, hinge, yaw, returndelay=-1):
