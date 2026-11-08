@@ -67,6 +67,7 @@ DM.SND = {
 	kl5 = { "vo/k_lab/kl_diditwork.wav", 75, 100 },
 	kl6 = { "vo/k_lab/kl_dearme.wav", 75, 100 },
 	knock = { "physics/wood/wood_crate_impact_hard2.wav", 85, 100 }, -- short impulse: the tail is heard alone
+	detour = { "music/hl1_song3.mp3", 95, 100 },                  -- 132 s, long sound
 }
 -- 3D stream of "another addon" (sound.PlayFile, like 3D Stream Radio)
 DM.STREAM = "sound/music/hl2_song26_trainstation1.mp3"
@@ -320,8 +321,27 @@ DM.ROOMS = {
 		},
 		defaults = { mat = "concrete" },
 	},
+	detour = {
+		num = "14", title = T("THE LONG WAY ROUND", "LE GRAND DÉTOUR"),
+		listen = T("where the music comes from, and how loud it is.", "d'où vient la musique, et à quel volume."),
+		a = T("straight ahead, through the wall, almost intact.", "droit devant, à travers le mur, presque intacte."),
+		b = T("from the corridor door on your right, faint; the thick wall lets a little through.",
+			"de la porte du couloir, à votre droite, faible ; le mur épais en laisse passer un peu."),
+		c = T("the same, in 3D on headphones.", "pareil, en 3D au casque."),
+		try = T("Switch the long-way fade on and off, then walk the corridor to the speaker. The architect was paid by the metre.",
+			"Activez puis coupez l'atténuation des grands détours, puis suivez le couloir jusqu'à l'enceinte. L'architecte était payé au mètre."),
+		note = T("The only way round is the corridor: almost 4 times the straight line, 4 corners. Fade on: such a detour loses up to 12 dB more (pba_path_guard_db), the wall counts for more. Which one sounds right to you?",
+			"Le seul passage est le couloir : presque 4 fois la ligne droite, 4 coins. Atténuation active : un tel détour perd jusqu'à 12 dB de plus (pba_path_guard_db), le mur compte davantage. Lequel vous semble juste ?"),
+		main = "music", loop = true, autostart = true,
+		buttons = {
+			{ id = "guard_on", label = T("Long-way fade: on", "Atténuation : active"), kind = "select", group = "guard" },
+			{ id = "guard_off", label = T("Long-way fade: off", "Atténuation : coupée"), kind = "select", group = "guard" },
+			{ id = "music", label = T("Music on / off", "Musique on / off"), kind = "toggle" },
+		},
+		defaults = { guard = "guard_on" },
+	},
 	exit = {
-		num = "14", title = T("THE END", "FIN DU PARCOURS"),
+		num = "15", title = T("THE END", "FIN DU PARCOURS"),
 		listen = T("what you keep from here.", "ce que vous gardez en partant."),
 		a = T("your usual game.", "votre jeu habituel."),
 		b = T("PBA Light: what the Workshop version gives you.", "PBA Light : ce que donne la version Workshop."),

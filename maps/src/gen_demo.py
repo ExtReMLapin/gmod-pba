@@ -382,7 +382,53 @@ def build():
                sources={"speaker": "pba_reverb_src"}, door_y=list(DOOR_Y), door_h=DOOR_H)
     X = next_room(X + 768)
 
-    # ---------------------------------------------------------------- 14 exit
+    # ---------------------------------------------------------------- 14 the long detour (length / angle guard)
+    # A side branch south of the airlock 13 -> exit (nothing else moves): a side door in the
+    # airlock's south wall, a passage, then a listening room (north) and a source room (south)
+    # with a thick concrete wall between them. The only opening between the two rooms is a
+    # corridor round the source room: west lane, south lane, east lane, one open areaportal at
+    # every corner (the portal model bends only at portals). Straight line ~340 u, corridor
+    # ~1 900 u (3.7x the 512 u floor of pba_path_guard_near), total bend ~360 degrees.
+    C = X - 96                      # airlock centre (its interior is x C-80..C+80)
+    W = 96                          # corridor lane width
+    DX0, DX1 = C - 192, C + 192     # both rooms
+    LTOP, LBOT = -32, -320          # listening room (y), north of the wall
+    TW = 64                         # thick wall
+    STOP, SBOT = LBOT - TW, LBOT - TW - 256   # source room (y), south of the wall
+    m.ydoor("pba_detour_door", C - 24, SAS_Y[0] - 16, returndelay=4)
+    # passage from the airlock: bounded by the walls of rooms 13 and exit and by the airlock
+    m.space(C - 80, -16, 0, C + 80, SAS_Y[0] - 16, 128, wall=DEV,
+            walls={"x0": None, "x1": None, "y0": None, "y1": None}, floor=CONC_FLOOR, ceil=DEV, light=False)
+    m.light(C, 80, 100, "200 220 255", 80)
+    m.hole(C - 80, LTOP, 0, C + 80, LTOP + 16, 128)
+    m.space(DX0, LBOT, 0, DX1, LTOP, 192, wall=DEV, walls={"y0": None}, floor=CONC_FLOOR, ceil=DEV)
+    m.wbox((DX0 - 16, STOP, 0, DX1 + 16, LBOT, 192), CONC_THICK)
+    m.space(DX0, SBOT, 0, DX1, STOP, 192, wall=CONC, walls={"y1": None}, floor=CONC_FLOOR,
+            ceil=CONC_CEIL, light=False)
+    m.light(C, (SBOT + STOP) / 2, 168, "255 200 150", 120)
+    # lanes (128 high); the south lane's north wall continues the source room's south wall
+    m.space(DX0 - 16 - W, SBOT, 0, DX0 - 16, LTOP, 128, wall=CONC, walls={"x1": None, "y0": None},
+            floor=CONC_FLOOR, ceil=CONC_CEIL, light=False)
+    m.space(DX0 - 16 - W, SBOT - 16 - W, 0, DX1 + 16 + W, SBOT - 16, 128, wall=CONC, floor=CONC_FLOOR,
+            ceil=CONC_CEIL, light=False)
+    m.space(DX1 + 16, SBOT, 0, DX1 + 16 + W, STOP, 128, wall=CONC, walls={"x0": None, "y0": None},
+            floor=CONC_FLOOR, ceil=CONC_CEIL, light=False)
+    for (lx, ly) in ((DX0 - 16 - W / 2, LTOP - 96), (DX0 - 16 - W / 2, (LTOP + SBOT) / 2),
+                     (DX0 - 16 - W / 2, SBOT - 16 - W / 2), (C, SBOT - 16 - W / 2),
+                     (DX1 + 16 + W / 2, SBOT - 16 - W / 2), (DX1 + 16 + W / 2, (SBOT + STOP) / 2)):
+        m.light(lx, ly, 104, bright=70)
+    m.portal((DX0 - 16, LTOP - 112, 0, DX0, LTOP - 16, 112), start_open=True)               # room -> west lane
+    m.portal((DX0 - 16 - W, SBOT - 16, 0, DX0 - 16, SBOT, 112), start_open=True)           # west -> south lane
+    m.portal((DX1 + 16, SBOT - 16, 0, DX1 + 16 + W, SBOT, 112), start_open=True)           # south -> east lane
+    m.portal((DX1, STOP - 144, 0, DX1 + 16, STOP - 48, 112), start_open=True)              # east lane -> source
+    m.prop("pba_detour_src", SPEAKER, C, (SBOT + STOP) / 2, 15, yaw=90)
+    m.add_room("detour", [(DX0, LBOT, 0, DX1, LTOP, 192), (DX0, SBOT, 0, DX1, STOP, 192),
+                          (DX0 - 16 - W, SBOT, 0, DX0 - 16, LTOP, 128),
+                          (DX0 - 16 - W, SBOT - 16 - W, 0, DX1 + 16 + W, SBOT - 16, 128),
+                          (DX1 + 16, SBOT, 0, DX1 + 16 + W, STOP, 128)],
+               (C, (LTOP + LBOT) / 2, 0), 270, sources={"music": "pba_detour_src"})
+
+    # ---------------------------------------------------------------- 15 exit
     m.space(X, 0, 0, X + 512, 512, 192, wall=DEV, floor=CONC_FLOOR, ceil=DEV)
     m.add_room("exit", [(X, 0, 0, X + 512, 512, 192)], (X + 128, 256, 0), 0)
 
