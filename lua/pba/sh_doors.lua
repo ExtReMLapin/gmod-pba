@@ -59,10 +59,19 @@ if SERVER then
 		local mins, maxs = ent:OBBMins(), ent:OBBMaxs()
 		local size = maxs - mins
 		local thick = math.min(size.x, size.y, size.z)
+		-- the leaf's real thickness, measured like the transmission trace does (the box includes
+		-- handles and frames): two traces through its centre along the thinnest axis
+		local axis = size.x <= size.y and size.x <= size.z and ent:GetForward()
+			or (size.y <= size.z and ent:GetRight() or ent:GetUp())
+		local c = ent:WorldSpaceCenter()
+		local only = function(e) return e == ent end
+		local a = util.TraceLine({ start = c + axis * 64, endpos = c, filter = only, ignoreworld = true })
+		local b = util.TraceLine({ start = c - axis * 64, endpos = c, filter = only, ignoreworld = true })
+		if a.Hit and b.Hit and a.Entity == ent and b.Entity == ent then thick = a.HitPos:Distance(b.HitPos) end
 		thick = math.Clamp(thick, 1, 4) -- door leaves are thin; models are often padded
-		if not mat then return A.cfg.door_closed_db end
-		local db = A.AC.WallLoss(mat, surf, thick)
-		return db
+		if not mat then return A.cfg.door_closed_db, 3 end
+		local db, lp = A.AC.WallLoss(mat, surf, thick)
+		return db, lp -- table (mid-band) loss and the material's lowpass level
 	end
 
 	-- portal key -> { ent list, areaportal entity }
@@ -97,18 +106,18 @@ if SERVER then
 		-- engine truth first: a closed areaportal blocks everything
 		local apOpen = true
 		if IsValid(l.ap) then apOpen = (l.ap:GetInternalVariable("m_state") or 1) ~= 0 end
-		local frac, closedDb = apOpen and 1 or 0, A.cfg.door_closed_db
+		local frac, closedDb, closedLp = apOpen and 1 or 0, A.cfg.door_closed_db, 3
 		local best
 		for _, e in ipairs(l.doors) do
 			if IsValid(e) then
 				local f = D.Fraction(e)
 				if f then best = math.max(best or 0, f) end -- double doors: the most open leaf
-				closedDb = D.ClosedLoss(e)
+				closedDb, closedLp = D.ClosedLoss(e)
 			end
 		end
 		if best then frac = best end
 		if not apOpen then frac = 0 end
-		return frac, closedDb
+		return frac, closedDb, closedLp
 	end
 
 	function D.Poll(force)
@@ -121,17 +130,18 @@ if SERVER then
 				local idx = e:EntIndex()
 				local s = D.entState[idx]
 				if force or not s or s.q ~= q then
-					D.entState[idx] = { q = q, frac = f, closedDb = math.Round(s and s.closedDb or D.ClosedLoss(e)) }
+					local cdb, clp = D.ClosedLoss(e)
+					D.entState[idx] = { q = q, frac = f, closedDb = math.Round(s and s.closedDb or cdb), closedLp = s and s.closedLp or clp }
 					D.entChanged[#D.entChanged + 1] = idx
 				end
 			end
 		end
 		for key, l in pairs(D.links) do
-			local frac, closedDb = portalState(key, l)
+			local frac, closedDb, closedLp = portalState(key, l)
 			local q = math.Round(frac * 255)
 			local s = D.state[key]
 			if force or not s or s.q ~= q or s.closedDb ~= math.Round(closedDb) then
-				D.state[key] = { q = q, frac = frac, closedDb = math.Round(closedDb) }
+				D.state[key] = { q = q, frac = frac, closedDb = math.Round(closedDb), closedLp = closedLp }
 				changed[#changed + 1] = key
 			end
 		end
@@ -148,6 +158,7 @@ if SERVER then
 			net.WriteUInt(key, 16)
 			net.WriteUInt(s.q, 8)
 			net.WriteUInt(math.Clamp(s.closedDb, 0, 255), 8)
+			net.WriteUInt(math.Clamp(s.closedLp or 3, 0, 4), 3)
 		end
 		net.WriteUInt(#entKeys, 12)
 		for _, idx in ipairs(entKeys) do
@@ -155,6 +166,7 @@ if SERVER then
 			net.WriteUInt(idx, 16)
 			net.WriteUInt(s.q, 8)
 			net.WriteUInt(math.Clamp(s.closedDb, 0, 255), 8)
+			net.WriteUInt(math.Clamp(s.closedLp or 3, 0, 4), 3)
 		end
 		if target then net.Send(target) else net.Broadcast() end
 	end
@@ -164,7 +176,7 @@ if SERVER then
 		if not g then return end
 		for key, s in pairs(D.state) do
 			local p = g.byKey[key]
-			if p then p.open, p.closedDb = s.frac, s.closedDb end
+			if p then p.open, p.closedDb, p.closedLp = s.frac, s.closedDb, s.closedLp end
 		end
 		if A.Paths then A.Paths.InvalidateCache() end
 	end
@@ -205,13 +217,13 @@ else
 	net.Receive(NET, function()
 		local n = net.ReadUInt(12)
 		for _ = 1, n do
-			local key, q, closedDb = net.ReadUInt(16), net.ReadUInt(8), net.ReadUInt(8)
-			D.pending[key] = { frac = q / 255, closedDb = closedDb }
+			local key, q, closedDb, closedLp = net.ReadUInt(16), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(3)
+			D.pending[key] = { frac = q / 255, closedDb = closedDb, closedLp = closedLp }
 		end
 		local m = net.ReadUInt(12)
 		for _ = 1, m do
-			local idx, q, closedDb = net.ReadUInt(16), net.ReadUInt(8), net.ReadUInt(8)
-			D.byEnt[idx] = { frac = q / 255, closedDb = closedDb }
+			local idx, q, closedDb, closedLp = net.ReadUInt(16), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(3)
+			D.byEnt[idx] = { frac = q / 255, closedDb = closedDb, closedLp = closedLp }
 		end
 		D.Apply()
 	end)
@@ -221,7 +233,7 @@ else
 		if not g then return end
 		for key, s in pairs(D.pending) do
 			local p = g.byKey[key]
-			if p then p.open, p.closedDb = s.frac, s.closedDb end
+			if p then p.open, p.closedDb, p.closedLp = s.frac, s.closedDb, s.closedLp end
 		end
 		if A.Paths then A.Paths.InvalidateCache() end
 	end

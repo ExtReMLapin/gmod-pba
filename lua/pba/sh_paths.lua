@@ -42,6 +42,7 @@ function P.EvalChain(S, L, chain, cfg)
 	local pts = P.RelaxPoints(S, L, chain)
 	local len, diff, loss = 0, 0, 0
 	local allOpen = true
+	local openDiff, leafLp = 0, 0 -- what muffles: diffraction of the open parts, material of the leaves
 	local prev = S
 	for i, p in ipairs(chain) do
 		local pt = pts[i]
@@ -58,14 +59,17 @@ function P.EvalChain(S, L, chain, cfg)
 		-- itself (transmission only, no diffraction). Mixed by sqrt(opening), as DoorGain.
 		local sf = math.sqrt(math.Clamp(p.open or 1, 0, 1))
 		if sf < 0.99 then allOpen = false end
-		local g = sf * 10 ^ (-d / 20) + (1 - sf) * 10 ^ (-(p.closedDb or cfg.door_closed_db) / 20)
+		-- the leaf: same rendered loss and lowpass as when the straight trace crosses it
+		local go, gc = sf * 10 ^ (-d / 20), (1 - sf) * 10 ^ (-AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg) / 20)
+		if gc > go then leafLp = math.max(leafLp, p.closedLp or 3) else openDiff = openDiff + d end
+		local g = go + gc
 		loss = loss - AC.GainToDb(g)
 		prev = pt
 	end
 	len = len + prev:Distance(L)
 	diff = math.min(diff, cfg.diff_max_total)
 	loss = math.min(loss, cfg.diff_max_total + cfg.door_closed_db * #chain)
-	local lp = AC.LowpassLevel(loss, cfg)
+	local lp = math.max(AC.LowpassLevel(openDiff, cfg), leafLp)
 	-- every opening wide open: the diffuse part carries the treble through
 	if allOpen then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
 	return { chain = chain, points = pts, length = len, diffDb = diff, doorDb = loss - diff, lossDb = loss,
@@ -80,17 +84,19 @@ function P.SegmentDoorLoss(a, b, cfg)
 	if not tr.Hit or not IsValid(tr.Entity) then return 0 end
 	local st = A.Doors.byEnt and A.Doors.byEnt[tr.Entity:EntIndex()]
 	local frac, closedDb = st and st.frac or 0, st and st.closedDb or cfg.door_closed_db
-	return -AC.GainToDb(AC.DoorGain(frac, closedDb))
+	return -AC.GainToDb(AC.DoorGain(frac, AC.LeafDb(closedDb, cfg))), frac < 0.5 and (st and st.closedLp or 3) or 0
 end
 
 --- Evaluates a polyline S, v1 .. vn, L (probe paths): diffraction at each inner vertex,
 -- door entities crossed by the segments; apparent position = vn.
 function P.EvalPolyline(pts, cfg)
 	cfg = cfg or A.cfg
-	local len, diff, door = 0, 0, 0
+	local len, diff, door, doorLp = 0, 0, 0, 0
 	for i = 1, #pts - 1 do
 		len = len + pts[i]:Distance(pts[i + 1])
-		door = door + P.SegmentDoorLoss(pts[i], pts[i + 1], cfg)
+		local dl, dlp = P.SegmentDoorLoss(pts[i], pts[i + 1], cfg)
+		door = door + dl
+		doorLp = math.max(doorLp, dlp or 0)
 	end
 	for i = 2, #pts - 1 do
 		local delta = pts[i - 1]:Distance(pts[i]) + pts[i]:Distance(pts[i + 1]) - pts[i - 1]:Distance(pts[i + 1])
@@ -100,7 +106,7 @@ function P.EvalPolyline(pts, cfg)
 	local inner = {}
 	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
 	return { chain = {}, points = inner, length = len, diffDb = diff, doorDb = door, lossDb = diff + door,
-		pos = pts[#pts - 1], lp = AC.LowpassLevel(diff + door, cfg) }
+		pos = pts[#pts - 1], lp = math.max(AC.LowpassLevel(diff, cfg), doorLp) }
 end
 
 -- ------------------------------------------------------------------ portal search
@@ -111,7 +117,7 @@ function P.FindChains(g, S, aS, L, aL, cfg)
 	cfg = cfg or A.cfg
 	local DOOR_UNITS_PER_DB = 40
 	local function pcost(p) -- penalty of crossing p
-		local gdoor = AC.DoorGain(p.open or 1, p.closedDb or cfg.door_closed_db)
+		local gdoor = AC.DoorGain(p.open or 1, AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg))
 		return -AC.GainToDb(gdoor) * DOOR_UNITS_PER_DB
 	end
 	local dist, prev, depth, done = {}, {}, {}, {}

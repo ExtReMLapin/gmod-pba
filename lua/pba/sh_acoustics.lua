@@ -141,6 +141,16 @@ end
 
 --- Gain multiplier of a door at opening fraction `frac` (0 closed .. 1 open) whose closed
 -- transmission loss is `closedDb`. TDM-style interpolation (sqrt), see ETAT_DE_L_ART Q5.
+--- Rendered loss (dB) of a closed door leaf: the SAME convention as a wall crossed by the
+-- transmission trace (P.EvalWalls): the transmitted sound is rendered low-passed, so the
+-- low-frequency loss is used (table minus trans_lf_bonus). Every model of a closed leaf (portal
+-- chain, probe polyline, straight trace) must go through this, or the sound changes when the
+-- straight line slides off the leaf onto the wall although it still comes through the leaf.
+function AC.LeafDb(closedDb, cfg)
+	cfg = cfg or pba.cfg
+	return math.max(closedDb * (cfg.trans_scale or 1) - (cfg.trans_lf_bonus or 0), 0)
+end
+
 function AC.DoorGain(frac, closedDb)
 	local gc = 10 ^ (-closedDb / 20)
 	frac = min(max(frac, 0), 1)

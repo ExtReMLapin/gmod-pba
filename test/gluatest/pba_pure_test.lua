@@ -181,6 +181,15 @@ return {
 			local closed = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, c2)
 			expect(closed.lp > 1).to.beTrue()
 		end },
+		{ name = "EvalChain: a closed leaf sounds like the straight trace through it (loss and lowpass)", func = function()
+			local g = G.Build(synthBsp())
+			g.byKey[1].open, g.byKey[1].closedDb, g.byKey[1].closedLp = 0, 30, 2
+			-- straight line through portal 1: no diffraction, only the leaf
+			local S, L = Vector(50, 25, 50), Vector(150, 25, 50)
+			local p = P.EvalChain(S, L, { g.byKey[1] }, CFG)
+			expect(near(p.lossDb, AC.LeafDb(30, CFG), 0.5)).to.beTrue()
+			expect(p.lp).to.equal(2) -- the leaf material's lowpass, not the diffraction scale (lp4 at 20 dB)
+		end },
 		{ name = "SelectVoices: weak paths rejected, far-apart strong paths split", func = function()
 			local L = Vector(0, 0, 0)
 			local mk = function(pos, len, loss) return { pos = pos, length = len, lossDb = loss, lp = 0 } end

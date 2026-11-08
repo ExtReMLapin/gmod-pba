@@ -137,9 +137,29 @@ end
 
 --- Path from the stream's position to the listener: apparent position, gain relative to the
 -- direct line (BASS law corrected), EQ.
+-- A stream has no entity, but it is played AT one (the radio's model): without this the radio
+-- would occlude its own sound like a wall. The object whose box contains the stream position.
+local function emitterAt(S)
+	local best, bestD
+	for _, e in ipairs(ents.FindInSphere(S, 48)) do
+		if IsValid(e) and not e:IsPlayer() and not e:IsWorld() and e:GetModel() then
+			local lp = e:WorldToLocal(S)
+			local mn, mx = e:OBBMins() - Vector(8, 8, 8), e:OBBMaxs() + Vector(8, 8, 8)
+			if lp.x >= mn.x and lp.y >= mn.y and lp.z >= mn.z and lp.x <= mx.x and lp.y <= mx.y and lp.z <= mx.z then
+				local d = e:WorldSpaceCenter():DistToSqr(S)
+				if not bestD or d < bestD then best, bestD = e, d end
+			end
+		end
+	end
+	return best
+end
+
 local function evaluate(ch, r, L)
 	local S = r.pos
-	local res = A.Paths.Compute(S, L, 75)
+	if not r.emitterPos or r.emitterPos:DistToSqr(S) > 1 or (r.emitter ~= nil and not IsValid(r.emitter)) then
+		r.emitter, r.emitterPos = emitterAt(S) or false, S
+	end
+	local res = A.Paths.Compute(S, L, 75, nil, r.emitter or nil)
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len = nil, 1, { 1, 1, 1 }, 1, 0, nil
