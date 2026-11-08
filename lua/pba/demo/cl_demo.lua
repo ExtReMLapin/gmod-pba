@@ -146,6 +146,12 @@ end
 DM.musicCvar = DM.musicCvar or CreateClientConVar("pba_demo_music", "", true, false,
 	"Demo map, boombox room: your own music instead of the default one (data/... or sound/... file, or an http(s) URL). Stays on your computer.")
 
+-- the default music skips its intro at each loop too (BASS loops back to 0)
+hook.Add("Think", "pba_demo_stream_start", function()
+	local ch, t0 = DM.stream, DM.streamStart
+	if t0 and IsValid(ch) and ch:GetTime() < t0 - 0.5 then ch:SetTime(t0) end
+end)
+
 function DM.StartStream(r)
 	DM.StopStream()
 	local tok = DM.streamTok
@@ -174,6 +180,8 @@ function DM.StartStream(r)
 			ch:Set3DFadeDistance(250, 10000)
 			ch:EnableLooping(true)
 			ch:SetVolume(1)
+			DM.streamStart = path == DM.STREAM_URL and DM.STREAM_URL_START or nil
+			if DM.streamStart then ch:SetTime(DM.streamStart) end
 			ch:Play()
 			DM.stream = ch
 		end)
