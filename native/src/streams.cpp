@@ -38,11 +38,16 @@ constexpr DWORD BASS_SAMPLE_8BITS = 1, BASS_SAMPLE_3D = 8, BASS_SAMPLE_FLOAT = 2
 constexpr DWORD BASS_CONFIG_FLOATDSP = 3;
 typedef BOOL(WINAPI* PFN_GetInfo)(DWORD, BASS_CHANNELINFO*);
 typedef HDSP(WINAPI* PFN_SetDSP)(DWORD, DSPPROC*, void*, int);
+typedef HDSP(WINAPI* PFN_SetDSPEx)(DWORD, DSPPROC*, void*, int, DWORD);
+// BASS 2.4.18: request floating-point data whatever the channel's format and the global
+// BASS_CONFIG_FLOATDSP (which other modules may change); BASS converts before and after.
+constexpr DWORD BASS_DSP_FLOAT = 2;
 typedef BOOL(WINAPI* PFN_RemoveDSP)(DWORD, HDSP);
 typedef DWORD(WINAPI* PFN_GetConfig)(DWORD);
 
 PFN_GetInfo pGetInfo = nullptr;
 PFN_SetDSP pSetDSP = nullptr;
+PFN_SetDSPEx pSetDSPEx = nullptr;
 PFN_RemoveDSP pRemoveDSP = nullptr;
 PFN_GetConfig pGetConfig = nullptr;
 uintptr_t g_audioBase = 0, g_audioEnd = 0; // gmod_audio.dll image (vtable check)
@@ -56,6 +61,7 @@ bool Resolve() {
 	if (!bass || !audio) return false;
 	pGetInfo = (PFN_GetInfo)GetProcAddress(bass, "BASS_ChannelGetInfo");
 	pSetDSP = (PFN_SetDSP)GetProcAddress(bass, "BASS_ChannelSetDSP");
+	pSetDSPEx = (PFN_SetDSPEx)GetProcAddress(bass, "BASS_ChannelSetDSPEx");
 	pRemoveDSP = (PFN_RemoveDSP)GetProcAddress(bass, "BASS_ChannelRemoveDSP");
 	pGetConfig = (PFN_GetConfig)GetProcAddress(bass, "BASS_GetConfig");
 	// image size from the PE header of gmod_audio.dll
@@ -74,6 +80,7 @@ struct Fx {
 	DWORD chans = 1, freq = 44100;
 	int format = 0; // 0 float, 1 int16, 2 uint8
 	std::atomic<float> g[3];
+	float cur[3] = {1, 1, 1}; // gains applied at the end of the last buffer (ramped, no clicks)
 	float aL = 0, aH = 0;
 	float lo[8] = {}, hi[8] = {};
 	Fx() {
@@ -92,30 +99,38 @@ inline float Process(Fx& f, int c, float x, float gl, float gm, float gh) {
 
 void CALLBACK Dsp(HDSP, DWORD, void* buffer, DWORD length, void* user) {
 	Fx& f = *(Fx*)user;
-	const float gl = f.g[0].load(), gm = f.g[1].load(), gh = f.g[2].load();
-	if (gl > 0.999f && gm > 0.999f && gh > 0.999f) {
-		// transparent: nothing to do
+	const float t[3] = {f.g[0].load(), f.g[1].load(), f.g[2].load()};
+	const bool flatNow = f.cur[0] > 0.999f && f.cur[1] > 0.999f && f.cur[2] > 0.999f;
+	const bool flatNext = t[0] > 0.999f && t[1] > 0.999f && t[2] > 0.999f;
+	if (flatNow && flatNext) {
+		// transparent: the filter states restart from silence-free values next time
+		for (int c = 0; c < 8; ++c) f.lo[c] = f.hi[c] = 0;
 		return;
 	}
 	const int ch = (int)std::min<DWORD>(f.chans, 8);
-	if (f.format == 0) {
-		float* s = (float*)buffer;
-		const DWORD n = length / sizeof(float);
-		for (DWORD i = 0; i < n; ++i) s[i] = Process(f, (int)(i % ch), s[i], gl, gm, gh);
-	} else if (f.format == 1) {
-		int16_t* s = (int16_t*)buffer;
-		const DWORD n = length / sizeof(int16_t);
-		for (DWORD i = 0; i < n; ++i) {
-			float y = Process(f, (int)(i % ch), s[i] / 32768.0f, gl, gm, gh) * 32767.0f;
+	const DWORD bytes = f.format == 0 ? 4 : f.format == 1 ? 2 : 1;
+	const DWORD n = length / bytes;
+	const DWORD frames = std::max<DWORD>(n / (DWORD)ch, 1);
+	// gains ramp linearly from the previous buffer's values over this buffer
+	for (DWORD i = 0; i < n; ++i) {
+		const float k = (float)(i / ch) / (float)frames;
+		const float gl = f.cur[0] + (t[0] - f.cur[0]) * k, gm = f.cur[1] + (t[1] - f.cur[1]) * k,
+		            gh = f.cur[2] + (t[2] - f.cur[2]) * k;
+		const int c = (int)(i % ch);
+		if (f.format == 0) {
+			float* s = (float*)buffer;
+			s[i] = Process(f, c, s[i], gl, gm, gh);
+		} else if (f.format == 1) {
+			int16_t* s = (int16_t*)buffer;
+			const float y = Process(f, c, s[i] / 32768.0f, gl, gm, gh) * 32767.0f;
 			s[i] = (int16_t)std::max(-32768.0f, std::min(32767.0f, y));
-		}
-	} else {
-		uint8_t* s = (uint8_t*)buffer;
-		for (DWORD i = 0; i < length; ++i) {
-			float y = Process(f, (int)(i % ch), (s[i] - 128) / 128.0f, gl, gm, gh) * 127.0f + 128.0f;
+		} else {
+			uint8_t* s = (uint8_t*)buffer;
+			const float y = Process(f, c, (s[i] - 128) / 128.0f, gl, gm, gh) * 127.0f + 128.0f;
 			s[i] = (uint8_t)std::max(0.0f, std::min(255.0f, y));
 		}
 	}
+	for (int b = 0; b < 3; ++b) f.cur[b] = t[b];
 }
 
 // Validated BASS handle of an IGModAudioChannel object, 0 if anything looks wrong.
@@ -150,11 +165,20 @@ std::string Filter(void* obj, unsigned freq, bool is3D, float gl, float gm, floa
 		fx->handle = h;
 		fx->chans = info.chans ? info.chans : 1;
 		fx->freq = info.freq ? info.freq : 44100;
-		const bool floatDsp = pGetConfig(BASS_CONFIG_FLOATDSP) != 0;
-		fx->format = (floatDsp || (info.flags & BASS_SAMPLE_FLOAT)) ? 0 : (info.flags & BASS_SAMPLE_8BITS) ? 2 : 1;
 		fx->aL = 1.0f - std::exp(-2.0f * 3.14159265f * 300.0f / fx->freq);
 		fx->aH = 1.0f - std::exp(-2.0f * 3.14159265f * 3000.0f / fx->freq);
-		fx->dsp = pSetDSP(h, &Dsp, fx.get(), 0);
+		if (pSetDSPEx) {
+			// explicit float data: no guess about the format (the global FLOATDSP setting can be
+			// changed by other modules, e.g. gm_bass3)
+			fx->format = 0;
+			fx->dsp = pSetDSPEx(h, &Dsp, fx.get(), 0, BASS_DSP_FLOAT);
+		}
+		if (!fx->dsp) {
+			const DWORD fdsp = pGetConfig(BASS_CONFIG_FLOATDSP);
+			const bool floatDsp = fdsp != 0 && fdsp != (DWORD)-1;
+			fx->format = (floatDsp || (info.flags & BASS_SAMPLE_FLOAT)) ? 0 : (info.flags & BASS_SAMPLE_8BITS) ? 2 : 1;
+			fx->dsp = pSetDSP(h, &Dsp, fx.get(), 0);
+		}
 		if (!fx->dsp) return "BASS_ChannelSetDSP failed";
 		it = g_fx.emplace(h, std::move(fx)).first;
 	}
