@@ -102,6 +102,11 @@ end
 timer.Create("pba_loops", 0.5, 0, function()
 	for key, l in pairs(LP.active) do
 		if l.idx ~= 0 and not IsValid(l.ent) then
+			-- entity removed (a rocket that exploded...): its sounds stopped without any STOP
+			-- event; the clients' mirrors must stop too
+			local plys = {}
+			for p in pairs(l.subs) do if IsValid(p) then plys[#plys + 1] = p end end
+			send(OP_STOP, l, plys)
 			LP.active[key] = nil
 		elseif l.once and CurTime() > l.endT then
 			LP.active[key] = nil -- finished: the client mirrors end by themselves

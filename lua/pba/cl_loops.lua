@@ -83,6 +83,13 @@ end
 local function apply(m, fade)
 	if m.done then return end
 	local ent = m.ent
+	if IsValid(ent) and ent ~= m.anchor then m.seen = true end
+	if not IsValid(ent) and m.seen then
+		-- the entity existed and is gone (removed, e.g. a rocket that exploded): the loop dies with
+		-- it. Only entities the client never received (server-only) get an anchor.
+		m.done = true
+		return
+	end
 	if not IsValid(ent) then
 		-- not networked (yet?): after a grace period, fall back to an anchor at the position
 		m.waited = (m.waited or 0) + 1
@@ -174,8 +181,9 @@ timer.Create("pba_loops_cl", 0.25, 0, function()
 		if m.done then
 			stopMirror(m)
 			LP.mirrors[key] = nil
-		elseif m.idx ~= 0 and not IsValid(m.ent) and not m.anchor then
-			m.ent = Entity(m.idx) -- may become valid once networked
+		elseif m.idx ~= 0 and not IsValid(m.ent) and not m.anchor and not m.seen then
+			m.ent = Entity(m.idx) -- may become valid once networked (never after a removal: the index
+			-- can be reused by another entity)
 		end
 		apply(m)
 	end
