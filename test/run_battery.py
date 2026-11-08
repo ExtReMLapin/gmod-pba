@@ -118,6 +118,8 @@ steps = [
     ("native_options", lambda: py("native_options.py")),
     # props on the paths through openings (portal and probe paths), not only on the straight line
     ("path_obstruction", lambda: py("path_obstruction.py")),
+    # one model for a partly blocked opening: a prop covering part of a doorway = a leaf covering the same part
+    ("mask_equivalence", lambda: py("mask_equivalence.py")),
     # path quality against an independent single-bend reference (maps without areaportals: probes)
     ("path_quality", lambda: py("path_quality.py", "--check", "d1_town_01", "gm_construct")),
     # the path SEARCH through pba_demo's doorways (doors opened) against the single-bend reference, same
