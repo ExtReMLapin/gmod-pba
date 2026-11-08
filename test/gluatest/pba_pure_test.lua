@@ -975,5 +975,81 @@ return {
 			A.loopCache["pba_test/no_such.wav"] = nil
 			expect(hit).to.equal(false)
 		end },
+		{ name = "ReevalDue: a still loop and listener are re-evaluated only by the slow fallback (reeval_max_s)", func = function()
+			expect(P.ReevalDue ~= nil).to.beTrue()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			expect(P.ReevalDue(st, S, L, 10, cfg)).to.beTrue() -- first evaluation
+			expect(P.ReevalDue(st, S, L, 10.25, cfg)).to.equal(false)
+			expect(P.ReevalDue(st, S + Vector(7, 0, 0), L, 10.5, cfg)).to.equal(false) -- below reeval_move
+			expect(P.ReevalDue(st, S, L + Vector(0, 0, 7), 10.75, cfg)).to.equal(false)
+			expect(P.ReevalDue(st, S, L, 11, cfg)).to.beTrue() -- fallback: props pushed into a path send no event
+			expect(P.ReevalDue(st, S, L, 11.25, cfg)).to.equal(false)
+			expect(st.n).to.equal(2) -- evaluations counted (game test)
+		end },
+		{ name = "ReevalDue: the source or the listener moving more than reeval_move since the LAST evaluation re-evaluates", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			P.ReevalDue(st, S, L, 0, cfg)
+			expect(P.ReevalDue(st, S + Vector(9, 0, 0), L, 0.25, cfg)).to.beTrue()
+			S = S + Vector(9, 0, 0)
+			expect(P.ReevalDue(st, S, L + Vector(0, 9, 0), 0.5, cfg)).to.beTrue()
+			L = L + Vector(0, 9, 0)
+			-- a slow drift adds up against the last evaluation, not step by step
+			expect(P.ReevalDue(st, S, L + Vector(0, 5, 0), 0.75, cfg)).to.equal(false)
+			expect(P.ReevalDue(st, S, L + Vector(0, 10, 0), 1.0, cfg)).to.beTrue()
+		end },
+		{ name = "ReevalDue: a world change (door state, map, settings: anything calling InvalidateCache) re-evaluates", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			P.ReevalDue(st, S, L, 0, cfg)
+			expect(P.ReevalDue(st, S, L, 0.25, cfg)).to.equal(false)
+			P.InvalidateCache() -- what the client's door tracking does on every door message (sh_doors D.Apply)
+			expect(P.ReevalDue(st, S, L, 0.5, cfg)).to.beTrue()
+			expect(P.ReevalDue(st, S, L, 0.75, cfg)).to.equal(false) -- once
+			st.force = true -- provisional result (probe search running), owner volume change...
+			expect(P.ReevalDue(st, S, L, 1.0, cfg)).to.beTrue()
+			expect(P.ReevalDue(st, S, L, 1.25, cfg)).to.equal(false)
+		end },
+		{ name = "ReevalDue: never twice within half an update_interval, whatever changed", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 0.1, update_interval = 1 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			P.ReevalDue(st, S, L, 0, cfg)
+			P.InvalidateCache()
+			st.force = true
+			expect(P.ReevalDue(st, S + Vector(500, 0, 0), L, 0.4, cfg)).to.equal(false)
+			expect(P.ReevalDue(st, S + Vector(500, 0, 0), L, 1.0, cfg)).to.beTrue()
+		end },
+		{ name = "ReevalDue: reeval_adaptive 0 re-evaluates at every call (former behaviour)", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 0, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			for i = 0, 8 do expect(P.ReevalDue(st, S, L, i * 0.25, cfg)).to.beTrue() end
+		end },
+		{ name = "Compute: a result whose probe search is unfinished (frame budget spent, search queued) is provisional", func = function()
+			local savedWalls, savedGet, PR = P.Walls, A.Graph.Get, A.Probes
+			local savedPaths, savedBudget = PR.Paths, A.FrameBudgetExceeded
+			local over, queued = false, false
+			P.Walls = function(a, b)
+				local e, x = a + (b - a) * 0.45, a + (b - a) * 0.55
+				return { { t = 0.45, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" } }
+			end
+			A.Graph.Get = function() return nil end
+			PR.Paths = function() PR.provisional = queued or nil return {} end
+			A.FrameBudgetExceeded = function() return over end
+			local cfg = setmetatable({ probes = 1, probe_dist = 1e6, path_props = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local S, L = Vector(0, 0, 0), Vector(300, 0, 0)
+				P.InvalidateCache()
+				expect(P.Compute(S, L, 75, cfg).provisional).to.beNil() -- search done: final
+				over = true P.InvalidateCache()
+				expect(P.Compute(S, L, 75, cfg).provisional).to.beTrue()
+				over, queued = false, true P.InvalidateCache()
+				expect(P.Compute(S, L, 75, cfg).provisional).to.beTrue()
+			end)
+			P.Walls, A.Graph.Get, PR.Paths, A.FrameBudgetExceeded = savedWalls, savedGet, savedPaths, savedBudget
+			PR.provisional = nil
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
 	},
 }

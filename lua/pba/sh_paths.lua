@@ -1048,6 +1048,33 @@ function P.InvalidateCache()
 	P.cacheGen = P.cacheGen + 1
 end
 
+--- Adaptive re-evaluation of a continuous sound (loop, long sound, radio: reeval_adaptive). Its path
+-- only changes when the source or the listener moves, or when the world model changes: P.cacheGen,
+-- bumped by everything that calls P.InvalidateCache (door states, map, probe graph, native scene,
+-- settings). True when the sound must be re-evaluated now, and then stamps `state` (a table the
+-- caller keeps per sound). Re-evaluated when the source or the listener moved more than reeval_move
+-- since the last evaluation, the world changed, state.force is set (provisional result, owner volume
+-- change...), or reeval_max_s elapsed (a prop pushed into a path sends no event); never twice within
+-- half an update_interval (the callers' own rate is one interval). reeval_adaptive 0: always true.
+function P.ReevalDue(state, S, L, now, cfg)
+	cfg = cfg or A.cfg
+	local t = state.t
+	if t and (cfg.reeval_adaptive or 0) >= 0.5 then
+		if now - t < 0.5 * math.max(cfg.update_interval or 0.25, 0.05) then return false end
+		if not state.force and state.gen == P.cacheGen and now - t < (cfg.reeval_max_s or 1) then
+			local mv = cfg.reeval_move or 8
+			local mv2 = mv * mv
+			local dx, dy, dz = S.x - state.sx, S.y - state.sy, S.z - state.sz
+			local ex, ey, ez = L.x - state.lx, L.y - state.ly, L.z - state.lz
+			if dx * dx + dy * dy + dz * dz <= mv2 and ex * ex + ey * ey + ez * ez <= mv2 then return false end
+		end
+	end
+	-- numbers, not the vectors: an owner may move the same Vector object in place
+	state.t, state.gen, state.force, state.n = now, P.cacheGen, nil, (state.n or 0) + 1
+	state.sx, state.sy, state.sz, state.lx, state.ly, state.lz = S.x, S.y, S.z, L.x, L.y, L.z
+	return true
+end
+
 local function q(v) return math.floor(v.x / 32) .. "," .. math.floor(v.y / 32) .. "," .. math.floor(v.z / 32) end
 
 --- Full computation for one sound. S, L: positions; returns result table:
@@ -1407,10 +1434,16 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				r.viaNative = true
 			end
 		end
-		if worldBlocked and #r.paths == 0 and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist
-			and not (A.FrameBudgetExceeded and A.FrameBudgetExceeded()) then
-			r.paths = A.Probes.Paths(S, L, cfg.max_paths, cfg)
-			r.viaProbes = #r.paths > 0
+		if worldBlocked and #r.paths == 0 and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+			if A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
+				r.provisional = true -- searched later: a continuous sound re-evaluates at its next turn
+			else
+				A.Probes.provisional = nil
+				r.paths = A.Probes.Paths(S, L, cfg.max_paths, cfg)
+				r.viaProbes = #r.paths > 0
+				-- the search goes on in the background (answered by the listener field or nothing yet)
+				r.provisional = A.Probes.provisional or nil
+			end
 		end
 		if (cfg.path_props or 1) >= 0.5 then
 			for _, p in ipairs(r.paths) do

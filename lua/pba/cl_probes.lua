@@ -583,7 +583,9 @@ local function pulledPaths(g, S, L, k)
 		if res then return res end
 	end
 	-- not solved in time: the listener field answers at once (its best route; the k-path search, with
-	-- the alternative routes, goes on in the background)
+	-- the alternative routes, goes on in the background). PR.provisional tells P.Compute the answer
+	-- will change once the search is solved (a continuous sound then re-evaluates at its next turn).
+	PR.provisional = true
 	local f = fieldUsable(g, L)
 	if f then return fieldPaths(f, starts, S) end
 	return {}
