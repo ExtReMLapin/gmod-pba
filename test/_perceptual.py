@@ -1,5 +1,5 @@
 """Metrics of the perceptual bench (path_perceptual.py), pure: they read the samples the Lua job
-returns, nothing else. Thresholds are the audible ones (docs/ETAT_DE_L_ART_RECHERCHE.md section 6.4):
+returns, nothing else. Thresholds are the audible ones:
 a broadband level change of about 1 dB (JND) between two positions is audible.
 
 A walk is a list of samples, one per position, each a dict: level keys ("c" cold, "w" warm, dB)

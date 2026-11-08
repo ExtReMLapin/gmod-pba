@@ -2,7 +2,7 @@
 -- from sh_rooms_gen.lua (generated with the map); this file adds everything that is not
 -- geometry. Loaded on both realms, only on the demo map.
 --
--- Card rules (docs/DEMO_ROOM_PLAN.md): "Listen" = one cue; one line per mode saying what you
+-- Card rules: "Listen" = one cue; one line per mode saying what you
 -- SHOULD hear, honest; "Try" = the action that makes the difference obvious. At most one
 -- joke per room, in the title or the "Try" line, never in the A / B / C lines.
 

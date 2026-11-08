@@ -5,7 +5,7 @@
 -- and back. The loop is re-evaluated every update_interval; each frame records what is HEARD, i.e.
 -- the last values sent to the native voice (pba_native.Update: gain, high band, position) or,
 -- engine rendering, the patch volume. Largest change between two consecutive frames:
---   gain <= MAX_GAIN_DB (level JND ~1 dB, docs/ETAT_DE_L_ART_RECHERCHE.md 6.4),
+--   gain <= MAX_GAIN_DB (level JND ~1 dB),
 --   high band <= MAX_HIGH_DB (2-octave band change: 3.5-7 dB), direction <= MAX_DIR_DEG.
 -- Also the largest change between two successive re-evaluations (target meter m.g): it must be
 -- >= MIN_EVAL_DB, or the walk had no step to smooth and the test proves nothing.

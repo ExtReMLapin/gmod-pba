@@ -1,6 +1,6 @@
 -- Pure acoustic functions (no game state): engine gain model, diffraction, transmission,
 -- volume compensation, low-pass mapping. Unit-tested in test/gluatest/.
--- Sources and justification: docs/ETAT_DE_L_ART.md (Q1-Q3), docs/REVERSE.md.
+-- Engine facts (gain formula, presets) were measured in game; see THIRD_PARTY.md for sources.
 
 local A = pba
 local AC = {}

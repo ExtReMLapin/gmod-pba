@@ -9,7 +9,7 @@
 --   * with the native module, a 3-band EQ is attached to the channel as a BASS DSP: the radio
 --     behind a wall is really muffled (cl_native: pba_native.StreamFilter).
 -- Everything is in pcall with a fallback to the original call; pba_streams 0 restores the
--- owners' values and the original methods. See docs/SITREP_STREAMS.md.
+-- owners' values and the original methods.
 
 local A = pba
 local AC = A.AC

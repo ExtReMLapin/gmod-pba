@@ -1,7 +1,7 @@
 """Spectral tilt of the room reverb TAIL (hybrid reverb EQ, pba_native.Stats tailEqLow/High) in
 pba_demo room 13 (concrete), listener at the centre: the air absorption must be counted once.
 Steam Audio 4.8.1 took the hybrid tail EQ from the energy field without air while the IR it
-continues has it (docs/STEAM_AUDIO_BUGS.md, bug 6); the native module compensated with kAirTailEq.
+continues has it (Steam Audio issue #602); the native module compensated with kAirTailEq.
 With the fork's fix (v4.8.1-pba.2) that compensation counts the air twice (~10 dB darker highs).
 The reference tilt is recorded once with the compensated state (pba.1 DLL + kAirTailEq):
   python -I -u native_tail_eq.py <mcp.py> --record
