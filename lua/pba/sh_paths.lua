@@ -209,7 +209,9 @@ function P.EvalChain(S, L, chain, cfg)
 		local go = math.sqrt(gDirect * gDirect + gDiffuse * gDiffuse * area)
 		local gc = math.sqrt(1 - area) * 10 ^ (-AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg) / 20)
 		local g = math.sqrt(go * go + gc * gc)
-		if go > 0 then diff = diff - AC.GainToDb(go) end
+		-- diffDb = the doorway itself wide open (edge diffraction + diffuse leak); doorDb = loss - diffDb is
+		-- what the door's state adds (gap, leaf), as before the aperture model
+		diff = diff - AC.GainToDb(math.sqrt(gEdge * gEdge + gDiffuse * gDiffuse))
 		if gc > go then
 			leafLp = math.max(leafLp, p.closedLp or 3)
 		else

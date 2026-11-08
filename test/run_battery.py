@@ -1,0 +1,103 @@
+"""Full PBA test battery, sequential (about 15 min; the game changes maps). Prints one ##progress line
+per step and a summary. Usage: python -I -u run_battery.py <path to mcp.py>. Needs ffmpeg on PATH."""
+import json, os, subprocess, sys, time
+HERE = os.path.dirname(os.path.abspath(__file__))
+MCP = os.path.join(HERE, "mcp.py")
+TEST = r"D:\dev\audioprop\test"
+sys.path.insert(0, TEST)
+
+def call(tool, args, mx=200000, timeout=600):
+    out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), str(mx)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+    try:
+        return json.loads(out)
+    except ValueError:
+        return {"raw": out}
+
+import _cvsnap
+_cvsnap.guard(call)
+
+def load(m, mp=4):
+    st = call("status", {})
+    if st.get("map") != m or st.get("maxplayers") != mp:
+        call("map_load", {"map": m, "maxplayers": mp}, timeout=300)
+        time.sleep(4)
+    for _ in range(60):
+        r = call("lua_exec", {"realm": "client", "code": "return pba.Native == nil or pba.Native.ready == true or pba_native == nil"})
+        if r.get("values") == [True]:
+            break
+        time.sleep(2)
+
+def job(realm, file, timeout_s=120):
+    code = open(os.path.join(TEST, file), encoding="utf-8").read()
+    r = call("lua_job", {"realm": realm, "code": code, "timeout_s": timeout_s}, timeout=timeout_s + 60)
+    return r.get("values", [r])[0] if isinstance(r, dict) else r
+
+def py(script, *args, timeout=1500):
+    p = subprocess.run([sys.executable, "-I", os.path.join(TEST, script), MCP, *args], capture_output=True,
+                       text=True, encoding="utf-8", timeout=timeout)
+    return (p.stdout + p.stderr)[-2500:]
+
+results = []
+def step(i, n, label, fn):
+    print(f'##progress step={i}/{n} label="Battery" msg="{label}"', flush=True)
+    t0 = time.time()
+    try:
+        out = fn()
+    except Exception as e:
+        out = f"EXCEPTION {e!r}"
+    dt = time.time() - t0
+    txt = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+    results.append((label, round(dt), txt))
+    print(f"=== {label} ({dt:.0f}s)\n{txt[-1500:]}\n", flush=True)
+
+def native_on(on):
+    call("console_exec", {"realm": "client", "cmd": f"pba_native_render {1 if on else 0}"})
+    time.sleep(1.5)
+
+def make_ogg():
+    d = os.path.join(GAME, "sound", "pba_test")
+    os.makedirs(d, exist_ok=True)
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                    "-c:a", "libvorbis", os.path.join(d, "tone.ogg")], check=False)
+
+def drop_ogg():
+    import shutil
+    shutil.rmtree(os.path.join(GAME, "sound", "pba_test"), ignore_errors=True)
+
+def pure():
+    code = open(os.path.join(TEST, "gluatest", "run_pure.lua"), encoding="utf-8").read()
+    import shutil
+    shutil.copy(os.path.join(TEST, "gluatest", "pba_pure_test.lua"),
+                os.path.join(GAME, "lua", "mcpagent_tmp", "pba_pure_test.lua"))
+    return call("lua_exec", {"realm": "client", "code": code}).get("values")
+
+steps = [
+    ("load pba_tworooms", lambda: load("pba_tworooms") or "ok"),
+    ("GLuaTest pure suite", pure),
+    ("menu_fit", lambda: job("client", "menu_fit.lua")),
+    # engine rendering: with "everything native" the server relays every sound to this client and the
+    # "untouched" scenarios cannot hold (by design)
+    ("run_scenarios", lambda: (native_on(False), py("run_scenarios.py"))[1]),
+    ("ab_counts tworooms_open", lambda: (load("pba_tworooms"), py("ab_counts.py", "tworooms_open"))[1]),
+    ("ab_counts lcorridor", lambda: py("ab_counts.py", "lcorridor")),
+    ("native_lr", lambda: py("native_lr.py")),
+    ("long_and_all", lambda: py("long_and_all.py")),
+    ("moving_source", lambda: py("moving_source.py")),
+    ("predicted_fire", lambda: py("predicted_fire.py")),
+    ("lifecycle", lambda: py("lifecycle.py")),
+    ("bot_gunfire", lambda: (load("pba_tworooms"), job("server", "bot_gunfire.lua"))[1]),
+    ("loop_removed", lambda: job("server", "loop_removed.lua")),
+    ("native_doors", lambda: (native_on(True), job("client", "native_doors.lua"))[1]),
+    ("native_features", lambda: job("client", "native_features.lua")),
+    ("streams_test", lambda: job("client", "streams_test.lua")),
+    ("portal_sweep tworooms", lambda: job("client", "portal_sweep.lua")),
+    ("water_ogg gm_construct", lambda: (load("gm_construct", 1), native_on(True), make_ogg(), job("client", "water_ogg.lua"), drop_ogg())[3]),
+    ("paths_numeric_equiv pba_demo", lambda: (load("pba_demo", 1), job("client", "paths_numeric_equiv.lua"))[1]),
+]
+for i, (label, fn) in enumerate(steps, 1):
+    step(i, len(steps), label, fn)
+print("##progress done=ok", flush=True)
+print("\n===== SUMMARY =====")
+for label, dt, txt in results:
+    print(f"{label} ({dt}s): {txt[-300:]}")
