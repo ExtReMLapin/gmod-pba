@@ -35,11 +35,30 @@ local function level(secs)
 	end
 	return s / math.max(n, 1)
 end
+-- spectrum shape (FFT is taken after the DSP): a low-pass keeps the bass and removes the treble;
+-- a broken filter (wrong sample format) gives noise: more treble, not less
+local function hiLoRatio(secs)
+	local lo, hi = 0, 0
+	local t = SysTime()
+	local bins = {}
+	while SysTime() - t < secs do
+		local n = ch:FFT(bins, FFT_2048) -- 1024 bins up to Nyquist
+		for i = 1, n do
+			local f = (i - 1) * ch:GetSamplingRate() / 2048
+			if f >= 60 and f < 250 then lo = lo + bins[i] elseif f >= 3000 and f < 10000 then hi = hi + bins[i] end
+		end
+		job:frames(2)
+	end
+	return hi / math.max(lo, 1e-9)
+end
+res.info = pba_native and pba_native.StreamInfo and pba_native.StreamInfo(ch)
+res.ratioFiltered = hiLoRatio(2)
 res.levelFiltered = level(2)
 RunConsoleCommand("pba_streams_filter", "0")
 job:sleep(0.4)
 if r and r.filtered then pba_native.StreamFilter(ch, 1, 1, 1) end
 res.levelFlat = level(2)
+res.ratioFlat = hiLoRatio(2)
 RunConsoleCommand("pba_streams_filter", "1")
 -- disabled: the owner's values come back
 RunConsoleCommand("pba_streams", "0")
@@ -50,6 +69,7 @@ RunConsoleCommand("pba_streams", "1")
 hook.Remove("Think", "ap_streams_owner")
 ch:Stop()
 res.pass = res.tracked and res.getPos == tostring(src) and math.abs(res.getVolume - 0.8) < 1e-3 and res.apparent ~= nil
-	and res.g < 0.9 and (not pba.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9))
+	and res.g < 0.9 and (not pba.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9
+		and res.ratioFiltered < res.ratioFlat * 0.3)) -- treble really removed, not replaced by noise
 	and res.offG == 1 and res.offApparent == false
 return res

@@ -79,6 +79,9 @@ struct Fx {
 	HDSP dsp = 0;
 	DWORD chans = 1, freq = 44100;
 	int format = 0; // 0 float, 1 int16, 2 uint8
+	// what was read at runtime when the DSP was attached (diagnostics, StreamInfo)
+	bool viaEx = false;
+	DWORD floatDspConfig = 0, channelFlags = 0;
 	std::atomic<float> g[3];
 	float cur[3] = {1, 1, 1}; // gains applied at the end of the last buffer (ramped, no clicks)
 	float aL = 0, aH = 0;
@@ -167,11 +170,14 @@ std::string Filter(void* obj, unsigned freq, bool is3D, float gl, float gm, floa
 		fx->freq = info.freq ? info.freq : 44100;
 		fx->aL = 1.0f - std::exp(-2.0f * 3.14159265f * 300.0f / fx->freq);
 		fx->aH = 1.0f - std::exp(-2.0f * 3.14159265f * 3000.0f / fx->freq);
+		fx->floatDspConfig = pGetConfig(BASS_CONFIG_FLOATDSP);
+		fx->channelFlags = info.flags;
 		if (pSetDSPEx) {
 			// explicit float data: no guess about the format (the global FLOATDSP setting can be
 			// changed by other modules, e.g. gm_bass3)
 			fx->format = 0;
 			fx->dsp = pSetDSPEx(h, &Dsp, fx.get(), 0, BASS_DSP_FLOAT);
+			fx->viaEx = fx->dsp != 0;
 		}
 		if (!fx->dsp) {
 			const DWORD fdsp = pGetConfig(BASS_CONFIG_FLOATDSP);
@@ -186,6 +192,30 @@ std::string Filter(void* obj, unsigned freq, bool is3D, float gl, float gm, floa
 	it->second->g[1] = gm;
 	it->second->g[2] = gh;
 	return "";
+#else
+	return "windows only";
+#endif
+}
+
+std::string Info(void* obj, unsigned freq, bool is3D) {
+#ifdef _WIN32
+	if (!Resolve()) return "unresolved";
+	BASS_CHANNELINFO info{};
+	const DWORD h = HandleOf(obj, freq, is3D, &info);
+	if (!h) return "handle not validated";
+	std::lock_guard<std::mutex> lk(g_mtx);
+	auto it = g_fx.find(h);
+	char buf[256];
+	const DWORD cfg = pGetConfig(BASS_CONFIG_FLOATDSP);
+	if (it == g_fx.end()) {
+		snprintf(buf, sizeof buf, "no filter; chans=%lu freq=%lu flags=0x%lx floatdsp_now=%ld", info.chans, info.freq, info.flags, (long)cfg);
+	} else {
+		const Fx& f = *it->second;
+		snprintf(buf, sizeof buf, "filter via %s, format=%s; chans=%lu freq=%lu flags_at_attach=0x%lx floatdsp_at_attach=%ld floatdsp_now=%ld",
+		         f.viaEx ? "SetDSPEx(FLOAT)" : "SetDSP", f.format == 0 ? "float" : f.format == 1 ? "int16" : "uint8",
+		         f.chans, f.freq, f.channelFlags, (long)f.floatDspConfig, (long)cfg);
+	}
+	return buf;
 #else
 	return "windows only";
 #endif

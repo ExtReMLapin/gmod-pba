@@ -1060,6 +1060,31 @@ LUA_FUNCTION(StreamFilter) {
 	return 1;
 }
 
+// StreamInfo(channel) -> string : format really received by the filter, BASS settings (diagnostics)
+LUA_FUNCTION(StreamInfo) {
+	void* obj = LUA->GetUserType<void>(1, Type::SoundHandle);
+	if (!obj) LUA->ThrowError("StreamInfo: IGModAudioChannel expected");
+	unsigned freq = 0;
+	bool is3D = true;
+	LUA->Push(1);
+	LUA->GetField(-1, "GetSamplingRate");
+	if (LUA->IsType(-1, Type::Function)) {
+		LUA->Push(-2);
+		LUA->Call(1, 1);
+		freq = (unsigned)LUA->GetNumber(-1);
+	}
+	LUA->Pop();
+	LUA->GetField(-1, "Is3D");
+	if (LUA->IsType(-1, Type::Function)) {
+		LUA->Push(-2);
+		LUA->Call(1, 1);
+		is3D = LUA->GetBool(-1);
+	}
+	LUA->Pop(2);
+	LUA->PushString(streams::Info(obj, freq, is3D).c_str());
+	return 1;
+}
+
 LUA_FUNCTION(StreamCollect) {
 	LUA->PushNumber(streams::Collect());
 	return 1;
@@ -1303,6 +1328,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "StreamCollect");
 	LUA->PushCFunction(SetPaused);
 	LUA->SetField(-2, "SetPaused");
+	LUA->PushCFunction(StreamInfo);
+	LUA->SetField(-2, "StreamInfo");
 	LUA->SetField(-2, "pba_native");
 	LUA->Pop();
 	return 0;
