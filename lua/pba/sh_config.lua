@@ -129,6 +129,8 @@ A.CONFIG = {
 	reeval_adaptive = { 1, 0, 1, "cl", "Loops, long sounds and radios are re-evaluated only when something changed since their last evaluation: the source or you moved more than pba_reeval_move, a door changed state (or the map, the settings), or pba_reeval_max_s elapsed (an object pushed into a path sends no event). Still sounds then cost almost nothing. 0 = every update_interval." },
 	reeval_move     = { 8, 0, 256, "cl", "Units the source or you must move since a sound's last evaluation to re-evaluate it (pba_reeval_adaptive)." },
 	reeval_max_s    = { 1, 0.05, 10, "cl", "Seconds after which a still sound is re-evaluated anyway (pba_reeval_adaptive): how late a prop pushed into a path, or another change that sends no event, can be heard." },
+	oneshot_follow  = { 1, 0, 1, "cl", "Short sounds (voices, shots...: shorter than max_duration) that still play are re-evaluated every update_interval like loops: their apparent position and level follow you and the source (walk round an obstacle into clear sight and the voice comes from the source). The engine DSP preset of a copy cannot change mid-sound. 0 = path computed once, at emission." },
+	oneshot_follow_max = { 16, 1, 64, "cl", "Max short sounds followed at once while they play. Beyond it the one ending soonest is no longer followed (it plays on as computed)." },
 	debug_max       = { 48, 1, 512, "cl", "Max sources drawn by the debug overlay." },
 	native_max_voices = { 64, 4, 128, "cl", "Max sounds played at once by the native module (the quietest is dropped beyond)." },
 	native_mem_mb   = { 512, 16, 4096, "cl", "Memory for sounds decoded by the native module (MB). Least recently played sounds are dropped to make room; a sound larger than this is left to the engine." },

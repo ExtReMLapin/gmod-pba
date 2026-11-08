@@ -1038,6 +1038,89 @@ function P.RampTo(state, now, dur, L, g, e1, e2, e3, pos, pitch)
 	P.Retarget(state, g, e1, e2, e3, pos, pitch)
 end
 
+-- ------------------------------------------------------------------ one-shots followed while they play
+
+--- A one-shot (shorter than max_duration) has its path computed once, at emission: a voice beside an
+-- obstacle stayed there while the listener walked round it into clear sight. Those still playing are
+-- re-evaluated like loops (oneshot_follow, cl_render.lua). Worth it when the sound still plays
+-- minLeft seconds after its first re-evaluation (dur: seconds it plays, pitch and delay included).
+function P.FollowWorth(dur, interval, minLeft)
+	return dur >= (interval or 0.25) + (minLeft or 0.5)
+end
+
+--- Slot of a new followed one-shot ending at tEnd among `recs` (each with .tEnd), `cap` at most: a
+-- record with less than minLeft to play is no longer followed and gives its slot first; then a free
+-- slot; then the record ending soonest, if it ends before the new one. Returns the index to (re)use,
+-- or nil: the new sound is not followed (it plays as computed at emission, as before).
+function P.FollowSlot(recs, now, cap, tEnd, minLeft)
+	if (cap or 0) < 1 then return nil end
+	local soon, soonEnd
+	for i, rec in ipairs(recs) do
+		if rec.tEnd - now < minLeft then return i end
+		if not soonEnd or rec.tEnd < soonEnd then soon, soonEnd = i, rec.tEnd end
+	end
+	if #recs < cap then return #recs + 1 end
+	if soonEnd and soonEnd < tEnd then return soon end
+	return nil
+end
+
+--- New targets of the voices of a followed one-shot. olds: apparent positions of its voices still
+-- playing, the first one the dominant; voices: the new selection (P.Stable keeps the dominant first).
+-- A playing voice can be moved, made louder or quieter, but not split, and a new one cannot start
+-- midway: the new voices map onto the ones heard. The dominant goes to the dominant, each other voice
+-- to the free new voice closest in direction (no swap across the head); a voice left without one
+-- fades out (a path becoming clear sight: one voice, from the source); a new voice left over adds its
+-- power to the voice closest in direction (no energy lost or counted twice). Returns, per old voice,
+-- { pos, gain, lp, len, sh } (position, low-pass, length of its first new voice; gain = power sum),
+-- or false: fade it out.
+function P.FollowAssign(L, olds, voices)
+	local out, n, k = {}, #olds, #voices
+	if n == 0 then return out end
+	local function dir(p)
+		local d = p - L
+		local l = d:Length()
+		return l > 1e-6 and d * (1 / l) or d
+	end
+	local groups, used = {}, {}
+	for i = 1, n do groups[i] = {} end
+	if k > 0 then groups[1][1], used[1] = 1, true end
+	for i = 2, n do
+		local di, best, bj = dir(olds[i]), -math.huge, nil
+		for j = 2, k do
+			if not used[j] then
+				local c = di:Dot(dir(voices[j].pos))
+				if c > best then best, bj = c, j end
+			end
+		end
+		if bj then groups[i][1], used[bj] = bj, true end
+	end
+	for j = 2, k do
+		if not used[j] then
+			local dj, best, bi = dir(voices[j].pos), -math.huge, 1
+			for i = 1, n do
+				local g = groups[i][1]
+				if g then
+					local c = dj:Dot(dir(voices[g].pos))
+					if c > best then best, bi = c, i end
+				end
+			end
+			groups[bi][#groups[bi] + 1] = j
+		end
+	end
+	for i = 1, n do
+		local g = groups[i]
+		if #g == 0 then
+			out[i] = false
+		else
+			local p = 0
+			for _, j in ipairs(g) do p = p + voices[j].gain * voices[j].gain end
+			local v = voices[g[1]]
+			out[i] = { pos = v.pos, gain = math.sqrt(p), lp = v.lp or 0, len = v.len, sh = v.sh }
+		end
+	end
+	return out
+end
+
 -- ------------------------------------------------------------------ top level
 
 P.cache = P.cache or {}
