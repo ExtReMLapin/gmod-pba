@@ -24,11 +24,15 @@ local native = A.Native and A.Native.render or false
 local function db(a, b) return 20 * math.log10(math.max(a, 1e-6) / math.max(b, 1e-6)) end
 
 -- L2: a point in clear sight of the radio, round the container (the same height as L1)
-local L2
-for _, x in ipairs({ L1.x, L1.x + 120, L1.x + 240 }) do
-	for _, y in ipairs({ 660, 700, 740, 300, 260, 220 }) do
+-- (a 32 u grid over the courtyard's box, the clear-sight point nearest L1: a short walk round it)
+local L2, best
+local room = A.DemoMap and A.DemoMap.byId and A.DemoMap.byId.court
+local box = room and room.boxes[1] or { L1.x - 512, L1.y - 512, 0, L1.x + 512, L1.y + 512, 0 }
+for x = box[1] + 32, box[4] - 32, 32 do
+	for y = box[2] + 32, box[5] - 32, 32 do
 		local p = Vector(x, y, L1.z)
-		if not L2 and #A.Paths.Walls(S, p, 4, SRC) == 0 then L2 = p end
+		local d = p:DistToSqr(L1)
+		if (not best or d < best) and p:DistToSqr(S) > 96 * 96 and #A.Paths.Walls(S, p, 4, SRC) == 0 then L2, best = p, d end
 	end
 end
 if not L2 then return { pass = false, why = "no point in clear sight of the radio found (inconclusive)" } end
