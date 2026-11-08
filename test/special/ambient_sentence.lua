@@ -49,5 +49,7 @@ for _, c in ipairs(calls) do
 end
 -- measured 2026-11-09: an ambient_generic playing "!NAME" never reaches EntityEmitSound (no call at
 -- all): a known limit, not something pba can take over. Report only when unseen.
-return { pass = (not seen) and nil or taken, note = (not seen) and "never reaches EntityEmitSound: known limit" or nil, seen = seen, taken = taken, calls = calls,
+local pass, note = taken, nil
+if not seen then pass, note = nil, "never reaches EntityEmitSound: known limit" end
+return { pass = pass, note = note, seen = seen, taken = taken, calls = calls,
 	expected = "seen = true and taken = true (muffled behind the closed door)" }
