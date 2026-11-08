@@ -649,6 +649,78 @@ return {
 			expect(b[1].level - a[1].level > 3).to.beTrue()
 			expect(b[1].level - a[1].level <= 12 + 1e-6).to.beTrue()
 		end },
+		-- one wavefront: two routes past the same jamb (two openings either side of a thin post, or a doorway
+		-- and the clear part of the source blended into the transmission) are not two sources. Each is
+		-- modelled at up to the free-field level (shadow boundary = 0 dB, plus the diffuse leak); summed in
+		-- power they made the sound louder than with no obstacle at all (door_sweep, room 12: -1.1 dB)
+		{ name = "SelectVoices: routes summed never louder than the free field; one route, or weak ones, unchanged", func = function()
+			-- openings in the plane x = 100 between areas 1 and 2, one per { y0, y1 }
+			local function openings(list)
+				local areas, ents = { [0] = {}, [1] = {}, [2] = {} }, {}
+				for k, iv in ipairs(list) do
+					local poly = rect(100, iv[1], iv[2], 0, 100)
+					table.insert(areas[1], { key = k, other = 2, poly = poly })
+					table.insert(areas[2], { key = k, other = 1, poly = poly })
+					ents[k] = { classname = "func_areaportal", portalnumber = tostring(k), startopen = "1" }
+				end
+				return G.Build({ map = "synthetic", numAreas = 3, areas = areas, entities = ents })
+			end
+			local function heard(vs) -- total power at the listener (as cl_streams / door_sweep sum the voices)
+				local pw = 0
+				for _, v in ipairs(vs) do pw = pw + v.gain * v.gain end
+				return pw
+			end
+			local function lossDb(vs, direct) -- below the free field at the straight-line distance (> 0 = quieter)
+				return AC.GainToDb(AC.EngineGain(direct, 75)) - 10 * math.log10(math.max(heard(vs), 1e-12))
+			end
+			local function select(S, L, g, cfg, trans)
+				local paths = {}
+				for _, chain in ipairs(P.FindChains(g, S, 1, L, 2, cfg)) do paths[#paths + 1] = P.EvalChain(S, L, chain, cfg) end
+				return P.SelectVoices(L, paths, trans, 75, cfg, S:Distance(L)), paths
+			end
+			local leak = table.Copy(CFG)
+			leak.portal_diffuse_db = 8 -- the default: the diffuse leak on top of the edge diffraction
+			local bad = {}
+			-- a 4 u post between two openings, on the straight line: both routes graze it (path difference 0.04 u)
+			local S, L = Vector(0, 50, 50), Vector(200, 50, 50)
+			for _, c in ipairs({ { "edge only", CFG }, { "with the diffuse leak", leak } }) do
+				local vs, paths = select(S, L, openings({ { 0, 48 }, { 52, 100 } }), c[2])
+				expect(#paths).to.equal(2)
+				local d = lossDb(vs, S:Distance(L))
+				if d < -0.01 then bad[#bad + 1] = string.format("post, %s: %.2f dB", c[1], d) end
+			end
+			-- a doorway grazed by the line, its jamb's clear part also in the transmission (native volumetric
+			-- occlusion near a frame: half the source visible = 6 dB)
+			local g1 = openings({ { 0, 48 } })
+			local S2, L2 = Vector(0, 50, 50), Vector(200, 47, 50)
+			local trans = { walls = { {} }, lossDb = 6, lp = 1, length = S2:Distance(L2), pos = Vector(102, 49, 50) }
+			local vt = select(S2, L2, g1, leak, trans)
+			expect(#vt).to.equal(2)
+			local dt = lossDb(vt, S2:Distance(L2))
+			if dt < -0.01 then bad[#bad + 1] = string.format("doorway + clear part of the jamb: %.2f dB", dt) end
+			-- the fix only lowers what exceeded the free field, all voices alike (same balance)
+			if #bad == 0 then
+				local ratio = vt[2].gain / vt[1].gain
+				local raw = AC.EngineGain(S2:Distance(L2), 75) * 10 ^ (-6 / 20)
+				local _, ps = select(S2, L2, g1, leak, nil)
+				local p1 = ps[1]
+				local g1raw = AC.EngineGain(p1.length, 75) * 10 ^ (-p1.lossDb / 20)
+				expect(near(ratio, raw / g1raw, 1e-6)).to.beTrue()
+			end
+			-- unchanged: one route alone (loss clamped at 0 dB on its own), and two openings far apart, each well
+			-- below the free field, whose sum stays below it
+			local v1, p1 = select(S2, L2, g1, leak, nil)
+			expect(#v1).to.equal(1)
+			expect(near(v1[1].gain, AC.EngineGain(p1[1].length, 75) * 10 ^ (-p1[1].lossDb / 20), 1e-9)).to.beTrue()
+			local S3, L3 = Vector(0, 174, 50), Vector(200, 174, 50)
+			local vf, pf = select(S3, L3, openings({ { 0, 48 }, { 300, 348 } }), leak, nil)
+			expect(#pf).to.equal(2)
+			local raw = 0
+			for _, p in ipairs(pf) do raw = raw + (AC.EngineGain(p.length, 75) * 10 ^ (-p.lossDb / 20)) ^ 2 end
+			expect(near(heard(vf), raw, 1e-9)).to.beTrue()
+			expect(lossDb(vf, S3:Distance(L3)) > 3).to.beTrue()
+			if #bad > 0 then error(table.concat(bad, "; "), 0) end
+		end },
 		{ name = "Ramp: a new target is reached one interval later in equal dB steps, never in one jump", func = function()
 			local s, L, pos = {}, Vector(0, 0, 0), Vector(100, 0, 0)
 			P.RampTo(s, 0, 0.25, L, 1, 1, 1, 1, pos, 100)
