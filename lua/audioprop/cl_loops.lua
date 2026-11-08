@@ -61,14 +61,14 @@ local function applyNative(m, S, L)
 	m.g = math.min(gain / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6), 1)
 	m.curDsp = AC.DSPForLevel(lp or 0)
 	gain = gain * m.vol * A.cfg.native_gain
-	local eq = N.EQ[math.Clamp(lp or 0, 0, 4)]
+	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
 	if m.nativeId then
-		if not audioprop_native.Update(m.nativeId, pos, gain, eq[1], eq[2], eq[3], m.pitch) then m.nativeId = nil end
+		if not audioprop_native.Update(m.nativeId, pos, gain, el, em, eh, m.pitch) then m.nativeId = nil end
 		return
 	end
 	local ok, name = N.EnsureSound(m.name)
 	if not ok then return false end
-	local id = audioprop_native.Play(name, pos, gain, eq[1], eq[2], eq[3], m.pitch, true)
+	local id = audioprop_native.Play(name, pos, gain, el, em, eh, m.pitch, true)
 	m.nativeId = id > 0 and id or nil
 	return m.nativeId ~= nil
 end

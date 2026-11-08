@@ -1,5 +1,7 @@
 """T-predicted: the local player's own (predicted) gunfire must not be doubled by audioprop.
-Counts engine starts of the SMG sound for 1 s of fire with audioprop_enable 0 and 1.
+Counts engine starts of the SMG sound for 1 s of fire with audioprop_enable 0 and 1, and compares
+them with the rounds actually fired (clip delta): the number of shots varies with the frame rate,
+one start per shot must hold in both modes.
 Usage: python -I predicted_fire.py <mcp.py>
 """
 import json
@@ -27,12 +29,14 @@ for mode in ("0", "1"):
     call("console_exec", {"realm": "server", "cmd": f"audioprop_enable {mode}"})
     time.sleep(1.5)
     c0 = call("console_read", {"limit": 1})["next_cursor"]
-    call("lua_exec", {"realm": "server", "code": "local p=player.GetHumans()[1] p:SetAmmo(500,'SMG1') p:ConCommand('+attack') timer.Simple(1,function() p:ConCommand('-attack') end)"})
-    time.sleep(2.5)
+    call("lua_exec", {"realm": "server", "code": "local p=player.GetHumans()[1] p:SetAmmo(500,'SMG1') p:GetActiveWeapon():SetClip1(45) p:ConCommand('+attack') timer.Simple(1,function() p:ConCommand('-attack') end)"})
+    time.sleep(4)
+    shots = 45 - call("lua_exec", {"realm": "server", "code": "return player.GetHumans()[1]:GetActiveWeapon():Clip1()"})["values"][0]
     lines = call("console_read", {"cursor": c0, "limit": 5000})["lines"]
     n = sum(1 for l in lines if (m := rx.match(l["text"])) and "smg1_fire" in m.group(1).replace("\\", "/"))
-    res[mode] = n
-    print(f"enable={mode}: smg starts={n}", flush=True)
+    res[mode] = {"starts": n, "shots": shots}
+    print(f"enable={mode}: smg starts={n} shots={shots}", flush=True)
 call("console_exec", {"realm": "server", "cmd": "audioprop_enable 1"})
 call("console_exec", {"realm": "client", "cmd": "snd_showstart 0"})
-print("PASS" if res["0"] == res["1"] and res["0"] > 0 else "FAIL", json.dumps(res))
+ok = all(r["starts"] == r["shots"] and r["shots"] > 0 for r in res.values())
+print("PASS" if ok else "FAIL", json.dumps(res))

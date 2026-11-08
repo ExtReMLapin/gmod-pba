@@ -11,8 +11,15 @@
 //       { absorption = {l,m,h}, scattering = s, transmission = {l,m,h} }
 //   Direct(sources, listener [, radius]) -> array of { occlusion, tl, tm, th }
 //       sources: array of Vector, listener: Vector, radius: volumetric source radius (units)
-//   BakePaths(points, radius) -> numProbes, bytes   (probe spheres at the given positions)
-//   Paths(sources, listener) -> array of { el, em, eh, dx, dy, dz } (eq gains + arrival dir)
+//   BakePaths(points, radius) -> numProbes   (worker thread; poll BakeStatus())
+//   BakeStatus() -> "idle" | "baking" | "ready", bytes | "error", message
+//   SavePaths() -> bytes | nil ; LoadPaths(bytes) -> numProbes | false, err   (disk cache)
+//   Paths(sources, listener) -> array of { el, em, eh, w, sh1..3, dx, dy, dz } (eq + arrival field)
+//   Rendering (render.cpp): AudioStart([sofaBytes]), AudioStop(), HasSound(name),
+//     LoadSound(name, bytes), Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh]),
+//     Update(id, ...), StopVoice(id), SetListener(pos, fwd, up, master), SetOutputMode(0|1),
+//     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays]),
+//     RoomReverb() -> rt low/mid/high, Stats() -> table
 //   Shutdown()
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -22,7 +29,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cmath>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -50,6 +60,138 @@ IPLProbeBatch g_probes = nullptr;
 std::vector<IPLSource> g_sources;
 IPLSource g_reverbSource = nullptr; // placed at the listener: room reverb estimation
 bool g_pathsReady = false;
+
+// ---- reflection simulation thread (room reverb at the listener + per-source echoes)
+// RunReflections takes milliseconds (thousands of rays): it runs on its own thread, every
+// ~40 ms, from a staged copy of the listener and echo-slot positions. g_simMtx serializes it
+// with iplSimulatorCommit (bake swap / world release) on the main thread.
+struct EchoSlot {
+	IPLSource src = nullptr;
+	IPLVector3 pos{};
+	int gen = 0;
+	int key = 0;
+	double last = -1e9;
+};
+EchoSlot g_echo[render::kEchoSlots];
+std::mutex g_stageMtx, g_simMtx;
+std::condition_variable g_reflCv; // woken by Echo() (with g_stageMtx)
+int g_simulatedGen[render::kEchoSlots] = {}; // last generation simulated per slot (reflection thread)
+IPLCoordinateSpace3 g_stageLis{};
+bool g_stageLisOk = false;
+std::thread g_reflThread;
+std::atomic<bool> g_reflRun{false}, g_reflWanted{false};
+std::atomic<int> g_reflRays{2048}, g_reflRuns{0}, g_reflErrors{0};
+std::atomic<float> g_reflMs{0}, g_reflMaxMs{0};
+float g_rt[3] = {0, 0, 0}; // smoothed room reverb times (under g_stageMtx)
+
+double Now() {
+	return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Runs when an echo slot waits for its first simulation (woken at once by Echo), otherwise every
+// 250 ms (the room changes slowly). Slots unused for 3 s are left out of the simulation.
+void ReflectionLoop() {
+	while (g_reflRun.load()) {
+		const auto t0 = std::chrono::steady_clock::now();
+		IPLCoordinateSpace3 lis{};
+		IPLVector3 pos[render::kEchoSlots];
+		int gen[render::kEchoSlots];
+		bool active[render::kEchoSlots];
+		bool ok;
+		{
+			std::lock_guard<std::mutex> lk(g_stageMtx);
+			ok = g_stageLisOk && g_reflWanted.load() && render::Running();
+			lis = g_stageLis;
+			const double now = Now();
+			for (int k = 0; k < render::kEchoSlots; ++k) {
+				pos[k] = g_echo[k].pos;
+				gen[k] = g_echo[k].gen;
+				active[k] = gen[k] > 0 && now - g_echo[k].last < 3.0;
+			}
+		}
+		if (ok && g_sim && g_reverbSource) {
+			bool failed = false;
+			{
+				std::lock_guard<std::mutex> lk(g_simMtx);
+				IPLSimulationSharedInputs sh{};
+				sh.listener = lis;
+				sh.numRays = g_reflRays.load();
+				sh.numBounces = 16;
+				sh.duration = render::kIRSeconds;
+				sh.order = 1;
+				sh.irradianceMinDistance = 1.0f;
+				iplSimulatorSetSharedInputs(g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
+				auto setSrc = [](IPLSource s, IPLVector3 p, bool on) {
+					IPLSimulationInputs in{};
+					in.flags = on ? IPL_SIMULATIONFLAGS_REFLECTIONS : (IPLSimulationFlags)0;
+					in.source.right = {1, 0, 0};
+					in.source.up = {0, 1, 0};
+					in.source.ahead = {0, 0, -1};
+					in.source.origin = p;
+					in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+					in.hybridReverbTransitionTime = render::kIRSeconds;
+					in.hybridReverbOverlapPercent = 0.25f;
+					iplSourceSetInputs(s, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
+				};
+				setSrc(g_reverbSource, {lis.origin.x, lis.origin.y + 0.1f, lis.origin.z}, true);
+				for (int k = 0; k < render::kEchoSlots; ++k)
+					if (g_echo[k].src) setSrc(g_echo[k].src, pos[k], active[k]);
+				try {
+					iplSimulatorRunReflections(g_sim);
+				} catch (...) {
+					failed = true;
+				}
+			}
+			if (failed) {
+				g_reflErrors++;
+				std::lock_guard<std::mutex> lk(g_stageMtx); // do not spin on a failing slot
+				for (int k = 0; k < render::kEchoSlots; ++k)
+					if (active[k]) g_simulatedGen[k] = gen[k];
+			} else {
+				render::PublishSimulated(-1, 1);
+				for (int k = 0; k < render::kEchoSlots; ++k)
+					if (active[k]) {
+						render::PublishSimulated(k, gen[k]);
+						g_simulatedGen[k] = gen[k];
+					}
+				float now[3];
+				render::RoomReverbTimes(now);
+				std::lock_guard<std::mutex> lk(g_stageMtx);
+				for (int b = 0; b < 3; ++b) {
+					const float v = now[b];
+					g_rt[b] = g_rt[b] <= 0 ? v : g_rt[b] * 0.7f + v * 0.3f;
+				}
+				g_reflRuns++;
+			}
+			const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+			g_reflMs = g_reflMs * 0.9f + ms * 0.1f;
+			g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
+		}
+		std::unique_lock<std::mutex> lk(g_stageMtx);
+		g_reflCv.wait_until(lk, t0 + std::chrono::milliseconds(250), [] {
+			if (!g_reflRun.load()) return true;
+			for (int k = 0; k < render::kEchoSlots; ++k)
+				if (g_echo[k].gen > g_simulatedGen[k]) return true;
+			return false;
+		});
+	}
+}
+
+void StopReflections() {
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		g_reflRun = false;
+		for (int& g : g_simulatedGen) g = 0;
+	}
+	g_reflCv.notify_all();
+	if (g_reflThread.joinable()) g_reflThread.join();
+}
+
+void StartReflections() {
+	if (g_reflThread.joinable()) return;
+	g_reflRun = true;
+	g_reflThread = std::thread(ReflectionLoop);
+}
 
 // Source (x fwd, y left, z up) -> Steam Audio (right-handed, y up, -z ahead)
 IPLVector3 ToSA(const Vector& v) { return {v.x * kUnit, v.z * kUnit, -v.y * kUnit}; }
@@ -117,6 +259,8 @@ float FieldIndex(ILuaBase* LUA, int tableIdx, const char* field, int i, float de
 
 void ReleaseWorld() {
 	JoinBakeThread();
+	StopReflections();
+	render::SetReflectionSources(nullptr, nullptr, 0);
 	if (g_sim) {
 		for (auto& s : g_sources) {
 			iplSourceRemove(s, g_sim);
@@ -126,6 +270,13 @@ void ReleaseWorld() {
 		if (g_reverbSource) {
 			iplSourceRemove(g_reverbSource, g_sim);
 			iplSourceRelease(&g_reverbSource);
+		}
+		for (auto& e : g_echo) {
+			if (e.src) {
+				iplSourceRemove(e.src, g_sim);
+				iplSourceRelease(&e.src);
+			}
+			e = EchoSlot{};
 		}
 		if (g_probes) iplSimulatorRemoveProbeBatch(g_sim, g_probes);
 		iplSimulatorCommit(g_sim);
@@ -146,16 +297,16 @@ bool EnsureSimulator() {
 	sim.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING |
 	                                 IPL_SIMULATIONFLAGS_REFLECTIONS);
 	sim.sceneType = IPL_SCENETYPE_DEFAULT;
-	sim.reflectionType = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
-	sim.maxNumRays = 512;
+	sim.reflectionType = IPL_REFLECTIONEFFECTTYPE_HYBRID;
+	sim.maxNumRays = 8192;
 	sim.numDiffuseSamples = 32;
-	sim.maxDuration = 2.0f;
-	sim.maxNumSources = kMaxSources + 1;
+	sim.maxDuration = render::kIRSeconds;
+	sim.maxNumSources = kMaxSources + 1 + render::kEchoSlots;
 	sim.numThreads = 2;
 	sim.rayBatchSize = 1;
 	sim.maxNumOcclusionSamples = 32;
 	sim.samplingRate = 48000;
-	sim.frameSize = 1024;
+	sim.frameSize = 512; // must equal the audio block size: impulse responses are partitioned per frame
 	sim.maxOrder = 1; // first-order ambisonics: needed for the pathing arrival direction
 	if (iplSimulatorCreate(g_ctx, &sim, &g_sim) != IPL_STATUS_SUCCESS) return false;
 	iplSimulatorSetScene(g_sim, g_scene);
@@ -171,8 +322,16 @@ bool EnsureSimulator() {
 		IPLSourceSettings rs{};
 		rs.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
 		if (iplSourceCreate(g_sim, &rs, &g_reverbSource) == IPL_STATUS_SUCCESS) iplSourceAdd(g_reverbSource, g_sim);
+		IPLSource es[render::kEchoSlots] = {};
+		for (int k = 0; k < render::kEchoSlots; ++k) {
+			g_echo[k] = EchoSlot{};
+			if (iplSourceCreate(g_sim, &rs, &g_echo[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_echo[k].src, g_sim);
+			es[k] = g_echo[k].src;
+		}
+		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots);
 	}
 	iplSimulatorCommit(g_sim);
+	StartReflections();
 	return true;
 }
 
@@ -382,14 +541,17 @@ LUA_FUNCTION(BakeStatus) {
 	const int st = g_bakeState.load();
 	if (st == 2) {
 		JoinBake();
-		if (g_probes) {
-			iplSimulatorRemoveProbeBatch(g_sim, g_probes);
-			iplProbeBatchRelease(&g_probes);
+		{
+			std::lock_guard<std::mutex> lk(g_simMtx);
+			if (g_probes) {
+				iplSimulatorRemoveProbeBatch(g_sim, g_probes);
+				iplProbeBatchRelease(&g_probes);
+			}
+			g_probes = g_bakeBatch;
+			g_bakeBatch = nullptr;
+			iplSimulatorAddProbeBatch(g_sim, g_probes);
+			iplSimulatorCommit(g_sim);
 		}
-		g_probes = g_bakeBatch;
-		g_bakeBatch = nullptr;
-		iplSimulatorAddProbeBatch(g_sim, g_probes);
-		iplSimulatorCommit(g_sim);
 		g_pathsReady = true;
 		g_bakeState = 0;
 		LUA->PushString("ready");
@@ -405,6 +567,82 @@ LUA_FUNCTION(BakeStatus) {
 		return 2;
 	}
 	LUA->PushString(st == 1 ? "baking" : "idle");
+	return 1;
+}
+
+static IPLBakedDataIdentifier PathingId() {
+	IPLBakedDataIdentifier id{};
+	id.type = IPL_BAKEDDATATYPE_PATHING;
+	id.variation = IPL_BAKEDDATAVARIATION_DYNAMIC;
+	return id;
+}
+
+// SavePaths() -> bytes | nil : the baked probe batch, serialized (disk cache, Lua writes it)
+LUA_FUNCTION(SavePaths) {
+	if (!g_probes || !g_pathsReady) {
+		LUA->PushNil();
+		return 1;
+	}
+	IPLSerializedObjectSettings ss{};
+	IPLSerializedObject so = nullptr;
+	if (iplSerializedObjectCreate(g_ctx, &ss, &so) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplSerializedObjectCreate failed");
+	iplProbeBatchSave(g_probes, so);
+	const size_t n = (size_t)iplSerializedObjectGetSize(so);
+	LUA->PushString((const char*)iplSerializedObjectGetData(so), (unsigned int)n);
+	iplSerializedObjectRelease(&so);
+	return 1;
+}
+
+// LoadPaths(bytes) -> numProbes | false, err : restores a baked probe batch from the disk cache
+LUA_FUNCTION(LoadPaths) {
+	if (!g_sim) LUA->ThrowError("no world loaded");
+	unsigned int len = 0;
+	const char* data = LUA->GetString(1, &len);
+	if (!data || len < 16) {
+		LUA->PushBool(false);
+		LUA->PushString("no data");
+		return 2;
+	}
+	if (g_bakeState == 1) {
+		LUA->PushBool(false);
+		LUA->PushString("a bake is running");
+		return 2;
+	}
+	std::vector<IPLbyte> buf((const IPLbyte*)data, (const IPLbyte*)data + len);
+	IPLSerializedObjectSettings ss{};
+	ss.data = buf.data();
+	ss.size = buf.size();
+	IPLSerializedObject so = nullptr;
+	IPLProbeBatch batch = nullptr;
+	bool ok = iplSerializedObjectCreate(g_ctx, &ss, &so) == IPL_STATUS_SUCCESS;
+	if (ok) {
+		try {
+			ok = iplProbeBatchLoad(g_ctx, so, &batch) == IPL_STATUS_SUCCESS;
+		} catch (...) {
+			ok = false;
+		}
+		iplSerializedObjectRelease(&so);
+	}
+	IPLBakedDataIdentifier id = PathingId();
+	if (!ok || !batch || iplProbeBatchGetNumProbes(batch) <= 0 || iplProbeBatchGetDataSize(batch, &id) == 0) {
+		if (batch) iplProbeBatchRelease(&batch);
+		LUA->PushBool(false);
+		LUA->PushString("invalid probe batch");
+		return 2;
+	}
+	iplProbeBatchCommit(batch);
+	{
+		std::lock_guard<std::mutex> lk(g_simMtx);
+		if (g_probes) {
+			iplSimulatorRemoveProbeBatch(g_sim, g_probes);
+			iplProbeBatchRelease(&g_probes);
+		}
+		g_probes = batch;
+		iplSimulatorAddProbeBatch(g_sim, g_probes);
+		iplSimulatorCommit(g_sim);
+	}
+	g_pathsReady = true;
+	LUA->PushNumber(iplProbeBatchGetNumProbes(g_probes));
 	return 1;
 }
 
@@ -500,9 +738,21 @@ static render::VoiceParams ReadVoice(ILuaBase* LUA, int first) {
 	return p;
 }
 
+// optional trailing arguments of Play: delay (seconds), sh {w, sh1, sh2, sh3} (baked path field)
+static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
+	if (LUA->IsType(first, Type::Number)) p.delay = (float)LUA->GetNumber(first);
+	if (LUA->IsType(first + 1, Type::Table)) {
+		for (int i = 0; i < 4; ++i) p.sh[i] = (float)TableNumber(LUA, first + 1, i + 1);
+		p.hasSH = true;
+	}
+}
+
+// AudioStart([sofaBytes]) -> true | false, err
 LUA_FUNCTION(AudioStart) {
 	if (!g_ctx) LUA->ThrowError("audioprop_native.Init() first");
-	std::string err = render::Start(g_ctx);
+	unsigned int sofaLen = 0;
+	const char* sofa = LUA->IsType(1, Type::String) ? LUA->GetString(1, &sofaLen) : nullptr;
+	std::string err = render::Start(g_ctx, sofa, sofaLen);
 	LUA->PushBool(err.empty());
 	if (!err.empty()) {
 		LUA->PushString(err.c_str());
@@ -538,13 +788,112 @@ LUA_FUNCTION(LoadSound) {
 	return 1;
 }
 
-// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop]]) -> voice id (0 = failed)
+// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh]]]]) -> voice id (0 = failed)
 LUA_FUNCTION(Play) {
 	const char* name = LUA->CheckString(1);
 	LUA->CheckType(2, Type::Vector);
 	render::VoiceParams p = ReadVoice(LUA, 2);
 	const bool loop = LUA->IsType(8, Type::Bool) && LUA->GetBool(8);
+	ReadVoiceExtra(LUA, 9, p);
 	LUA->PushNumber(render::Play(name, p, loop));
+	return 1;
+}
+
+// Echo(name, pos, gain [, key [, pitch [, delay]]]) -> voice id, slot. Reflections only (no direct
+// sound): the source position gets one of the echo slots, whose impulse response is simulated
+// by the reflection thread; the voice starts once it is ready. key: source identity (entity
+// index) so that repeated sounds of one source share a slot.
+LUA_FUNCTION(Echo) {
+	const char* name = LUA->CheckString(1);
+	LUA->CheckType(2, Type::Vector);
+	const float gain = (float)LUA->CheckNumber(3);
+	const int key = LUA->IsType(4, Type::Number) ? (int)LUA->GetNumber(4) : 0;
+	const float pitch = LUA->IsType(5, Type::Number) ? (float)LUA->GetNumber(5) : 100.0f;
+	const float delay = LUA->IsType(6, Type::Number) ? (float)LUA->GetNumber(6) : 0.0f;
+	if (!g_sim || !g_echo[0].src) {
+		LUA->PushNumber(0);
+		return 1;
+	}
+	const IPLVector3 p = ToSA(LUA->GetVector(2));
+	auto d2 = [](IPLVector3 a, IPLVector3 b) {
+		return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
+	};
+	int slot = -1, gen = 0;
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		const double now = Now();
+		// same source, or a source within 1 m: share its slot (no new simulation if it did not move)
+		for (int k = 0; k < render::kEchoSlots && slot < 0; ++k)
+			if (g_echo[k].gen > 0 && ((key != 0 && g_echo[k].key == key) || d2(g_echo[k].pos, p) < 1.0f)) slot = k;
+		if (slot < 0) { // least recently used
+			slot = 0;
+			for (int k = 1; k < render::kEchoSlots; ++k)
+				if (g_echo[k].last < g_echo[slot].last) slot = k;
+		}
+		EchoSlot& e = g_echo[slot];
+		if (e.gen == 0 || d2(e.pos, p) > 0.25f) {
+			e.pos = p;
+			e.gen++;
+		}
+		e.key = key;
+		e.last = now;
+		gen = e.gen;
+	}
+	g_reflCv.notify_one();
+	LUA->PushNumber(render::PlayEcho(name, slot, gen, gain, pitch, delay));
+	LUA->PushNumber(slot);
+	return 2;
+}
+
+// SetOutputMode(0 headphones | 1 speakers)
+LUA_FUNCTION(SetOutputMode) {
+	render::SetOutputMode((int)LUA->CheckNumber(1));
+	return 0;
+}
+
+// SetReflections(roomWet, echoWet [, rays]) : levels of the room reverb and of the echoes;
+// the reflection thread only simulates while one of them is > 0
+LUA_FUNCTION(SetReflections) {
+	const float room = (float)LUA->CheckNumber(1), echo = (float)LUA->CheckNumber(2);
+	if (LUA->IsType(3, Type::Number)) g_reflRays = std::clamp((int)LUA->GetNumber(3), 256, 8192);
+	render::SetWet(room, echo);
+	g_reflWanted = room > 0 || echo > 0;
+	return 0;
+}
+
+// Stats() -> table: reflection thread and audio thread load, reverb times, HRTF
+LUA_FUNCTION(Stats) {
+	double avg = 0, mx = 0;
+	int blocks = 0;
+	render::Load(&avg, &mx, &blocks);
+	float rt[3];
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		std::copy(g_rt, g_rt + 3, rt);
+	}
+	LUA->CreateTable();
+	LUA->PushNumber(avg);
+	LUA->SetField(-2, "audioAvgMs");
+	LUA->PushNumber(mx);
+	LUA->SetField(-2, "audioMaxMs");
+	LUA->PushNumber(blocks);
+	LUA->SetField(-2, "audioBlocks");
+	LUA->PushNumber(g_reflMs.load());
+	LUA->SetField(-2, "reflMs");
+	LUA->PushNumber(g_reflMaxMs.exchange(0));
+	LUA->SetField(-2, "reflMaxMs");
+	LUA->PushNumber(g_reflRuns.load());
+	LUA->SetField(-2, "reflRuns");
+	LUA->PushNumber(g_reflErrors.load());
+	LUA->SetField(-2, "reflErrors");
+	LUA->PushNumber(g_reflRays.load());
+	LUA->SetField(-2, "rays");
+	for (int b = 0; b < 3; ++b) {
+		LUA->PushNumber(rt[b]);
+		LUA->SetField(-2, b == 0 ? "rtLow" : b == 1 ? "rtMid" : "rtHigh");
+	}
+	LUA->PushString(render::HrtfInfo().c_str());
+	LUA->SetField(-2, "hrtf");
 	return 1;
 }
 
@@ -568,8 +917,16 @@ LUA_FUNCTION(SetListener) {
 	LUA->CheckType(3, Type::Vector);
 	const float master = LUA->IsType(4, Type::Number) ? (float)LUA->GetNumber(4) : 1.0f;
 	double eL = 0, eR = 0;
-	LUA->PushNumber(render::SetListener(ToSA(LUA->GetVector(1)), DirToSA(LUA->GetVector(2)),
-	                                    DirToSA(LUA->GetVector(3)), master, &eL, &eR));
+	const IPLVector3 pos = ToSA(LUA->GetVector(1)), ahead = DirToSA(LUA->GetVector(2)), up = DirToSA(LUA->GetVector(3));
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		g_stageLis.origin = pos;
+		g_stageLis.ahead = ahead;
+		g_stageLis.up = up;
+		g_stageLis.right = {ahead.y * up.z - ahead.z * up.y, ahead.z * up.x - ahead.x * up.z, ahead.x * up.y - ahead.y * up.x};
+		g_stageLisOk = true;
+	}
+	LUA->PushNumber(render::SetListener(pos, ahead, up, master, &eL, &eR));
 	LUA->PushNumber(eL);
 	LUA->PushNumber(eR);
 	return 3;
@@ -611,44 +968,16 @@ LUA_FUNCTION(RenderDebug) {
 	return 3;
 }
 
-// RoomReverb(listenerPos [, wet]) -> rtLow, rtMid, rtHigh (seconds). Simulates reflections for a
-// source at the listener (parametric) and hands the reverb times to the renderer.
+// RoomReverb(listenerPos [, wet]) -> rtLow, rtMid, rtHigh (seconds). Compatibility entry: the
+// reflections now run on their own thread (SetReflections); this sets the room level and
+// returns the smoothed reverb times simulated at the listener.
 LUA_FUNCTION(RoomReverb) {
 	if (!g_sim || !g_reverbSource) LUA->ThrowError("no world loaded");
-	LUA->CheckType(1, Type::Vector);
-	const float wet = LUA->IsType(2, Type::Number) ? (float)LUA->GetNumber(2) : 0.25f;
-	IPLVector3 L = ToSA(LUA->GetVector(1));
-	IPLSimulationSharedInputs sh{};
-	sh.listener = At(L);
-	sh.numRays = 512; // parametric reverb times only: 512 rays are enough (2048 = 3.4 ms on the main thread)
-	sh.numBounces = 8;
-	sh.duration = 2.0f;
-	sh.order = 1;
-	sh.irradianceMinDistance = 1.0f;
-	iplSimulatorSetSharedInputs(g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
-	IPLSimulationInputs in{};
-	in.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
-	in.source = At({L.x, L.y + 0.1f, L.z});
-	in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
-	iplSourceSetInputs(g_reverbSource, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
-	bool failed = false;
-	try {
-		iplSimulatorRunReflections(g_sim);
-	} catch (...) {
-		failed = true;
-	}
-	if (failed) LUA->ThrowError("reflection simulation failed");
-	IPLSimulationOutputs out{};
-	iplSourceGetOutputs(g_reverbSource, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
-	// 512 rays give noisy estimates: smooth them over time (the room changes slowly)
-	static float smooth[3] = {-1, -1, -1};
 	float rt[3];
-	for (int b = 0; b < 3; ++b) {
-		const float v = out.reflections.reverbTimes[b];
-		smooth[b] = smooth[b] < 0 ? v : smooth[b] * 0.6f + v * 0.4f;
-		rt[b] = smooth[b];
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		std::copy(g_rt, g_rt + 3, rt);
 	}
-	render::SetReverb(rt, wet);
 	for (int b = 0; b < 3; ++b) LUA->PushNumber(rt[b]);
 	return 3;
 }
@@ -709,6 +1038,18 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "TestBinaural");
 	LUA->PushCFunction(RenderDebug);
 	LUA->SetField(-2, "RenderDebug");
+	LUA->PushCFunction(SavePaths);
+	LUA->SetField(-2, "SavePaths");
+	LUA->PushCFunction(LoadPaths);
+	LUA->SetField(-2, "LoadPaths");
+	LUA->PushCFunction(Echo);
+	LUA->SetField(-2, "Echo");
+	LUA->PushCFunction(SetOutputMode);
+	LUA->SetField(-2, "SetOutputMode");
+	LUA->PushCFunction(SetReflections);
+	LUA->SetField(-2, "SetReflections");
+	LUA->PushCFunction(Stats);
+	LUA->SetField(-2, "Stats");
 	LUA->SetField(-2, "audioprop_native");
 	LUA->Pop();
 	return 0;

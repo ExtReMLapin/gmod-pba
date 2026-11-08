@@ -35,7 +35,10 @@ for sc, m, want in CASES:
         call("map_load", {"map": m, "maxplayers": 4})
         time.sleep(3)
     call("console_exec", {"realm": "client", "cmd": "audioprop_native_render 1"})
-    time.sleep(0.5)
+    # direction of the direct paths only: reflections (room reverb, echoes) off during the measure
+    call("console_exec", {"realm": "client", "cmd": "audioprop_native_reverb 0"})
+    call("console_exec", {"realm": "client", "cmd": "audioprop_native_echo 0"})
+    time.sleep(1.0)
     call("console_exec", {"realm": "server", "cmd": f"audioprop_demo {sc} voice 1.5"})
     time.sleep(1.5)
     lua("client", "audioprop_native.RenderDebug()")

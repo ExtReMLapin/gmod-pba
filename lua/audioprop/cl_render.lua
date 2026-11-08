@@ -39,12 +39,20 @@ function A.Azimuth(L, viewYaw, pos)
 	return -math.AngleDifference(math.deg(math.atan2(d.y, d.x)), viewYaw)
 end
 
-local function emitVoice(data, v, L)
+local SPEED = 343 / 0.01905 -- speed of sound, units per second
+
+--- Propagation delay of a voice (audioprop_delay), seconds.
+local function voiceDelay(v, L)
+	if (A.cfg.delay or 0) < 0.5 then return 0 end
+	return (v.len or v.pos:Distance(L)) / SPEED
+end
+
+local function emitVoice(data, v, L, src)
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
 	if A.Native and A.Native.render then
-		local g = (data.Volume or 1) * v.gain
+		local g = (data.Volume or 1) * v.gain * A.Native.Directivity(src, L)
 		if g < 0.001 then return false end
-		if A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch) then
+		if A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = voiceDelay(v, L) }) then
 			v.vol, v.dsp, v.native = g, -1, true
 			return true
 		end
@@ -57,7 +65,13 @@ local function emitVoice(data, v, L)
 	local dsp = AC.DSPForLevel(v.lp)
 	if dsp == 0 then dsp = data.DSP or 0 end
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
-	A.Emit(EmitSound, data.SoundName, v.pos, -1, CHAN_AUTO, vol, lvl, flags, data.Pitch or 100, dsp)
+	local delay = voiceDelay(v, L)
+	if delay >= 0.02 then
+		local name, pos, pitch = data.SoundName, v.pos, data.Pitch or 100
+		timer.Simple(delay, function() A.Emit(EmitSound, name, pos, -1, CHAN_AUTO, vol, lvl, flags, pitch, dsp) end)
+	else
+		A.Emit(EmitSound, data.SoundName, v.pos, -1, CHAN_AUTO, vol, lvl, flags, data.Pitch or 100, dsp)
+	end
 	v.vol, v.dsp = vol, dsp
 	return true
 end
@@ -84,7 +98,7 @@ function A.Process(data, relayed)
 	local emitted = 0
 	for i, v in ipairs(r.voices) do
 		if i > 1 and emitted >= budget then A.stats.dropped = A.stats.dropped + 1 break end
-		if emitVoice(data, v, L) then
+		if emitVoice(data, v, L, IsValid(src) and src or nil) then
 			emitted = emitted + 1
 			A.active[#A.active + 1] = now + dur
 		end
@@ -137,6 +151,8 @@ A.AddHook("EntityEmitSound", function(data)
 	if not A.Eligible(data) then return end
 	local pos = A.SoundPos(data)
 	if not pos then return end
+	-- echoes (native reflections) for loud sounds, whoever plays the direct sound
+	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos) end
 	local ply = LocalPlayer()
 	if IsValid(ply) and data.Entity == ply then return end -- own sounds: always clear
 	data.Pos = pos
@@ -156,7 +172,7 @@ timer.Create("audioprop_ack", 0.2, 0, function()
 end)
 
 net.Receive(NET, function()
-	local id, full = net.ReadUInt(16), net.ReadBool()
+	local id, full, echoOnly = net.ReadUInt(16), net.ReadBool(), net.ReadBool()
 	local name
 	if full then
 		name = net.ReadString()
@@ -173,6 +189,9 @@ net.Receive(NET, function()
 		Flags = net.ReadUInt(16), DSP = net.ReadUInt(8), EntIndex = net.ReadUInt(16),
 	}
 	if not name then return end -- id never received (lost first packets): drop
+	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, data.Pos) end
+	-- the engine already plays this one for us (clear line of sight): only the echoes were wanted
+	if echoOnly then return end
 	A.stats.relayedIn = A.stats.relayedIn + 1
 	if A.Enabled() and A.Process(data, true) then return end
 	-- not processed (disabled client, clear path...): play it as the engine would have

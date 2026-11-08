@@ -60,9 +60,10 @@ local function audibleRadius(lvl)
 	return lvl > 50 and 100 * (lvl - 50) or 500
 end
 
-local function writeSound(data, pos, id, full)
+local function writeSound(data, pos, id, full, echoOnly)
 	net.WriteUInt(id, 16)
 	net.WriteBool(full)
+	net.WriteBool(echoOnly or false)
 	if full then net.WriteString(data.SoundName) end
 	net.WriteVector(pos)
 	net.WriteUInt(math.Clamp(math.floor(data.SoundLevel or 75), 0, 511), 9)
@@ -98,6 +99,24 @@ A.AddHook("EntityEmitSound", function(data)
 				local walls = A.Paths.Walls(pos, eye, 1, data.Entity)
 				if #walls == 0 then clear[#clear + 1] = ply else blocked[#blocked + 1] = ply end
 			end
+		end
+	end
+	-- clients rendering echoes natively also want the loud sounds they hear directly
+	if A.cfg.echo_relay >= 0.5 and lvl >= A.cfg.echo_min_level and #clear > 0 then
+		local want = {}
+		for _, ply in ipairs(clear) do
+			if ply:GetInfoNum("audioprop_echo_want", 0) >= 1 then want[#want + 1] = ply end
+		end
+		if #want > 0 then
+			local id = nameId(data.SoundName)
+			local full = false
+			for _, ply in ipairs(want) do
+				if not (ply.audioprop_known and ply.audioprop_known[id]) then full = true break end
+			end
+			net.Start(NET, true)
+			writeSound(data, pos, id, full, true)
+			A.stats.echoBytes = (A.stats.echoBytes or 0) + net.BytesWritten() * #want
+			net.Send(want)
 		end
 	end
 	if #blocked == 0 then

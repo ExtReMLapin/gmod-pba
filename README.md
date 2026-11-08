@@ -62,8 +62,19 @@ With the module installed:
 - the world (brushes and terrain displacements) is loaded into a Steam Audio scene; occlusion of
   the direct line becomes volumetric, so transitions around door frames are smooth;
 - `audioprop_native_render 1` (experimental): processed sounds are played by the module itself,
-  with a real 3-band EQ and HRTF binaural rendering (headphones), loops included;
-- `audioprop_native_paths 1` (experimental): Steam Audio's baked pathing replaces the probe graph.
+  with a real 3-band EQ, air absorption, weapon directivity and HRTF binaural rendering
+  (headphones) or stereo panning (speakers, `audioprop_native_out 1`), loops included;
+- room reverb (`audioprop_native_reverb`) and **echoes of loud sounds** (`audioprop_native_echo`):
+  Steam Audio reflections simulated on a background thread, for the room around the listener
+  and for each gunshot / explosion position (convolution + parametric tail, first-order
+  ambisonics decoded to HRTF). Echoes also apply to sounds the engine plays directly: the
+  server relays loud sounds only to clients that render echoes;
+- `audioprop_native_paths 1` (experimental): Steam Audio's baked pathing replaces the probe graph,
+  rendered as a sound field (several arrival directions), bake kept on disk;
+- custom HRTF: a SOFA file in `data/audioprop/hrtf/`, named by `audioprop_native_hrtf`.
+
+Every option is a client preference in Spawn menu > Utilities > audioprop > Steam Audio (native).
+`audioprop_delay 1` (pure Lua, any renderer) delays processed sounds by the speed of sound.
 
 Build: `python native/fetch_deps.py`, then `native/build.bat` (Visual Studio C++ tools, CMake,
 Ninja). Licence of `native/` is pending (see `native/LICENSE`).

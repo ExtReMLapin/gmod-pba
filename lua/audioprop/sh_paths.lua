@@ -371,6 +371,8 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg)
 		end
 		v.lp = math.Round(lpw / math.max(pw, 1e-12))
 		v.level = AC.GainToDb(v.gain)
+		v.len = dom.length -- path length (propagation delay, air absorption)
+		v.sh = dom.sh       -- Steam Audio baked path field (native rendering)
 	end
 
 	-- transmission voice
@@ -379,7 +381,8 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg)
 		local lvl = AC.GainToDb(g)
 		local dom = voices[1] and voices[1].level or -math.huge
 		if #voices == 0 or lvl >= dom - cfg.trans_window_db then
-			voices[#voices + 1] = { kind = "transmission", pos = trans.pos, gain = g, level = lvl, lp = trans.lp, members = {} }
+			voices[#voices + 1] = { kind = "transmission", pos = trans.pos, gain = g, level = lvl, lp = trans.lp, members = {},
+				len = trans.length }
 		end
 	end
 	while #voices > cfg.max_voices do table.remove(voices) end
@@ -469,6 +472,12 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				r.paths[1] = { chain = {}, points = {}, length = S:Distance(L) * 1.2, diffDb = loss, doorDb = 0,
 					lossDb = loss, pos = L + dir * dist, lp = AC.LowpassLevel(-AC.GainToDb(math.max(np.eh, 1e-4)), cfg),
 					native = true }
+				-- first-order field of the baked paths, normalized to a unit omni component (the
+				-- level is carried by the voice gain): several arrival directions blur the field
+				if np.sh1 then
+					local k = 0.2820948 / np.w
+					r.paths[1].sh = { 0.2820948, np.sh1 * k, np.sh2 * k, np.sh3 * k }
+				end
 				r.viaNative = true
 			end
 		end
