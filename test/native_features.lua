@@ -5,6 +5,9 @@ local NA = pba_native
 local ply = LocalPlayer()
 local res = {}
 local function cvar(n, v) RunConsoleCommand(n, tostring(v)) end
+-- every client pba_* setting is put back at the end: the player's choices must survive the test
+local saved = {}
+for n, c in pairs(pba.CONFIG) do if c[4] == "cl" then saved[n] = GetConVar("pba_" .. n):GetString() end end
 
 -- energies of the native mix over `secs`, per ear
 local function measure(secs)
@@ -94,4 +97,5 @@ do
 	res.file = file.Size("pba/" .. game.GetMap() .. "_sa.dat", "DATA")
 	cvar("pba_native_paths", 0)
 end
+for n, v in pairs(saved) do if GetConVar("pba_" .. n):GetString() ~= v then RunConsoleCommand("pba_" .. n, v) end end
 return res

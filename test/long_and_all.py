@@ -21,6 +21,11 @@ def call(tool, args, mx=5_000_000):
     return json.loads(out)
 
 
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+import _cvsnap  # restores every pba_* setting at exit, even on failure
+_cvsnap.guard(call)
+
+
 def lua(realm, code):
     v = call("lua_exec", {"realm": realm, "code": code}).get("values")
     return v[0] if v else None

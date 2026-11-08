@@ -10,7 +10,9 @@ job:wait(function() return ch ~= nil or res.err ~= nil end, 10)
 if not IsValid(ch) then return { fail = "no channel", err = res.err } end
 local src = Vector(784, 256, 40)
 -- engine rendering for the BASS part (filter); the native part switches it on itself
-local savedRender = pba.cfg.native_render
+-- every client pba_* setting is put back at the end: the player's choices must survive the test
+local saved = {}
+for n, c in pairs(pba.CONFIG) do if c[4] == "cl" then saved[n] = GetConVar("pba_" .. n):GetString() end end
 RunConsoleCommand("pba_native_render", "0")
 job:sleep(1)
 ch:Set3DFadeDistance(200, 0)
@@ -91,7 +93,7 @@ res.offG = r and r.g
 res.offApparent = r and r.apparent ~= nil
 RunConsoleCommand("pba_streams", "1")
 hook.Remove("Think", "ap_streams_owner")
-RunConsoleCommand("pba_native_render", tostring(savedRender))
+for n, v in pairs(saved) do if GetConVar("pba_" .. n):GetString() ~= v then RunConsoleCommand("pba_" .. n, v) end end
 ch:Stop()
 res.pass = res.tracked and res.getPos == tostring(src) and math.abs(res.getVolume - 0.8) < 1e-3 and res.apparent ~= nil
 	and res.g < 0.9 and (not pba.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9

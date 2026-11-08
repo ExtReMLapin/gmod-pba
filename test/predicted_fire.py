@@ -19,6 +19,11 @@ def call(tool, args, mx=5_000_000):
     return json.loads(out)
 
 
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+import _cvsnap  # restores every pba_* setting at exit, even on failure
+_cvsnap.guard(call)
+
+
 rx = re.compile(r"^\w+Sound\s+(\S+)")
 call("console_exec", {"realm": "server", "cmd": "sv_cheats 1"})
 call("console_exec", {"realm": "client", "cmd": "developer 1"})
