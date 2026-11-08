@@ -11,6 +11,43 @@ LP.mirrors = LP.mirrors or {}
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 local AC = A.AC
 
+-- Loops born on this client (CreateSound of an addon: vehicle engines...). The hook sees their start
+-- (with SND_CHANGE_VOL), pitch and volume changes, but neither CSoundPatch:Stop / FadeOut nor the
+-- patch being collected: the patches are registered here (weak keys) and those two methods detoured,
+-- so their mirror stops with them. pba's own patches come from the original CreateSound.
+LP.origCreateSound = LP.origCreateSound or CreateSound
+LP.patchInfo = LP.patchInfo or setmetatable({}, { __mode = "k" }) -- patch -> { ent, name }
+function CreateSound(ent, name, filter)
+	local p = LP.origCreateSound(ent, name, filter)
+	if p and IsValid(ent) then LP.patchInfo[p] = { ent = ent, name = name } end
+	return p
+end
+do
+	local PATCH = FindMetaTable("CSoundPatch")
+	-- originals kept across autorefresh, filled one by one (a reload must not save a detour as original)
+	LP.origPatch = LP.origPatch or {}
+	for _, k in ipairs({ "Stop", "FadeOut", "Play", "PlayEx" }) do
+		local f = PATCH[k]
+		if not LP.origPatch[k] and f and debug.getinfo(f, "S").what == "C" then LP.origPatch[k] = f end
+	end
+	local function ended(p)
+		local i = LP.patchInfo[p]
+		if i and IsValid(i.ent) and LP.StopClient then LP.StopClient(i.ent:EntIndex(), nil, i.name, p) end
+	end
+	function PATCH:Stop() LP.origPatch.Stop(self) ended(self) end
+	function PATCH:FadeOut(t) LP.origPatch.FadeOut(self, t) ended(self) end
+	-- the patch being started right now: its start event comes synchronously from these calls
+	function PATCH:Play() LP.playing = self LP.origPatch.Play(self) LP.playing = nil end
+	function PATCH:PlayEx(v, p) LP.playing = self LP.origPatch.PlayEx(self, v, p) LP.playing = nil end
+end
+
+--- The registered client patch starting `name` on entity e right now, if any.
+local function foreignPatch(e, name)
+	local p = LP.playing
+	local i = p and LP.patchInfo[p]
+	if i and i.ent == e and i.name == name then return p end
+end
+
 local function stopMirror(m)
 	if m.patch then m.patch:Stop() end
 	m.patch = nil
@@ -154,7 +191,7 @@ local function apply(m, fade)
 	if not m.patch then
 		if m.once and m.started then m.done = true return end
 		m.started = true
-		m.patch = CreateSound(ent, m.name)
+		m.patch = LP.origCreateSound(ent, m.name)
 		A.reemitting = true
 		m.patch:SetSoundLevel(m.lvl)
 		m.patch:SetDSP(dsp)
@@ -164,7 +201,9 @@ local function apply(m, fade)
 		return
 	end
 	if math.abs(g - (m.g or 1)) > 0.01 then
+		A.reemitting = true -- the mirror's own change must not read as the original's (HandleClient)
 		m.patch:ChangeVolume(m.vol * g, fade or 0.2)
+		A.reemitting = false
 		m.g = g
 	end
 	if dsp ~= m.curDsp then
@@ -181,9 +220,10 @@ local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHA
 
 --- Stops the client-side long-sound mirrors of entity idx (channel chan, or any channel when nil;
 -- name, or any name when nil).
-function LP.StopClient(idx, chan, name)
+function LP.StopClient(idx, chan, name, patch)
 	for key, m in pairs(LP.mirrors) do
-		if m.client and m.idx == idx and (not chan or m.chan == chan) and (not name or name == "" or m.name == name) then
+		if m.client and m.idx == idx and (not chan or m.chan == chan) and (not name or name == "" or m.name == name)
+			and (not patch or not m.src or m.src[1] == patch) then
 			stopMirror(m)
 			LP.mirrors[key] = nil
 		end
@@ -202,27 +242,39 @@ function LP.HandleClient(data)
 	local change = bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	local key = "cl:" .. idx .. ":" .. chan .. ":" .. name
 	local m = LP.mirrors[key]
-	if change then
+	-- a client loop (CSoundPatch:Play arrives as a SND_CHANGE_VOL that starts the sound)
+	local loop = not m and (A.cfg.loops_client or 0) >= 0.5 and (A.cfg.loops or 0) >= 0.5 and A.IsLooping(name)
+	local src = loop and foreignPatch(e, name)
+	if change and not src then
 		if not m then return false end
 		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end
 		if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then m.pitch = data.Pitch or m.pitch end
-		if m.patch then m.patch:ChangeVolume(m.vol * (m.g or 1), 0.1) m.patch:ChangePitch(m.pitch, 0.1) end
+		if m.patch then
+			A.reemitting = true
+			m.patch:ChangeVolume(m.vol * (m.g or 1), 0.1) m.patch:ChangePitch(m.pitch, 0.1)
+			A.reemitting = false
+		end
 		if m.nativeId and m.reeval then m.reeval.force = true end -- applied at its next turn
 		return true
 	end
 	if replacing(chan) then LP.StopClient(idx, chan) end
-	if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 then return false end
 	local lvl = data.SoundLevel or 75
-	if lvl <= 0 or lvl >= 256 or A.IsLooping(name) then return false end
-	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
-	local dur = A.SoundDuration(name) or 0
-	if dur <= A.cfg.max_duration or dur > 1800 then return false end
+	if lvl <= 0 or lvl >= 256 then return false end
+	if src then
+		-- client loop: needs its registered patch (else nothing would ever stop the mirror)
+	else
+		if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 or A.IsLooping(name) then return false end
+		local st = data.SoundTime or 0
+		if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+		local dur = A.SoundDuration(name) or 0
+		if dur <= A.cfg.max_duration or dur > 1800 then return false end
+	end
 	local n = 0
 	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end
 	if n >= (A.cfg.loops_max_cl or 32) then return false end -- cap: left to the engine
 	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
-		dsp = data.DSP or 0, once = true, client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100 }
+		dsp = data.DSP or 0, once = not src, client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
+		src = src and setmetatable({ src }, { __mode = "v" }) or nil }
 	LP.mirrors[key] = m
 	apply(m, 0)
 	return true
@@ -252,8 +304,10 @@ net.Receive("pba_loop", function()
 		return -- applied at the next tick
 	end
 	if m.patch and op == OP_UPDATE then
+		A.reemitting = true
 		m.patch:ChangePitch(pitch, 0.1)
 		m.patch:ChangeVolume(vol * (m.g or 1), 0.1)
+		A.reemitting = false
 	else
 		apply(m, 0)
 	end
@@ -293,6 +347,8 @@ end
 
 -- one pass on a mirror: drop it when done, pick its entity up once networked, re-evaluate
 local function step(key, m)
+	-- a client loop whose patch was collected (the engine stops its sound then, without any event)
+	if m.src and not m.src[1] then m.done = true end
 	if m.done then
 		stopMirror(m)
 		LP.mirrors[key] = nil

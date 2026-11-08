@@ -123,10 +123,14 @@ steps = [
     ("sentence_relay", lambda: [job("server", "sentence_relay.lua", 30), job("client", "sentence_client.lua", 10)]),
     # env_microphone in speaker mode: routed before the hook, so pba only processes the speaker copy
     ("microphone_order", lambda: job("server", "microphone_order.lua", 20)),
+    # lip sync: a citizen speaking behind the glass cell keeps moving his mouth with pba (re-emitted voice)
+    ("lipsync_glass pba_materials", lambda: (load("pba_materials"), [job("server", "lipsync_glass.lua", 30), job("client", "lipsync_client.lua", 10)])[1]),
     ("loop_removed", lambda: job("server", "loop_removed.lua")),
     # a loop playing while pba is turned off then on: back to the engine, then mirrored again (and a still
     # prop_dynamic, MOVETYPE_PUSH like a door, keeps its loop)
     ("loop_reenable", lambda: job("server", "loop_reenable.lua", 20)),
+    # loops born on the client (CreateSound of addons: vehicle engines): mirrored, stopped with Stop, GC, removal
+    ("client_loop", lambda: job("client", "client_loop.lua", 20)),
     ("native_doors", lambda: (native_on(True), job("client", "native_doors.lua"))[1]),
     ("native_features", lambda: job("client", "native_features.lua")),
     ("streams_test", lambda: job("client", "streams_test.lua")),
@@ -184,7 +188,7 @@ steps = [
 # --quick: the fast checks (about 2 minutes, two maps) to run before each commit; the full battery
 # before merging into main or a release
 QUICK = {"load pba_tworooms", "GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire",
-         "loop_removed", "native_doors", "native_features", "path_hysteresis twodoors", "door_sweep open",
+         "loop_removed", "loop_reenable", "client_loop", "native_doors", "native_features", "path_hysteresis twodoors", "door_sweep open",
          "door_sweep closed"}
 if "--quick" in sys.argv[2:]:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
