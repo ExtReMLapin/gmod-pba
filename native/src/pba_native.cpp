@@ -82,6 +82,8 @@ bool g_dynDirty = false;
 struct EchoSlot {
 	IPLSource src = nullptr;
 	IPLVector3 pos{};
+	IPLVector3 ahead{0, 0, -1}; // the shooter's facing (Steam Audio axes)
+	float dipole = 0;           // directivity of the source (0 = omni, as pba_native_dir)
 	int gen = 0;
 	int key = 0;
 	double last = -1e9;
@@ -99,6 +101,30 @@ std::atomic<int> g_reflRays{2048}, g_reflBounces{16}, g_reflRuns{0}, g_reflError
 // maxNumRays (azimuth = 2*pi*i/maxNumRays) and traces the FIRST numRays of them, so numRays below
 // maxNumRays covers only part of the horizon (2048 of 8192 = one fixed quadrant). Both are equal.
 std::atomic<int> g_simMaxRays{2048};
+
+// --- simulation backend (SetSimOptions), applied when the world is (re)loaded
+std::atomic<int> g_optScene{1};           // 0 built-in ray tracer, 1 Embree, 2 Radeon Rays (GPU); falls back
+std::atomic<int> g_optThreads{0};         // 0 = auto
+std::atomic<float> g_optRevWindow{2.5f};  // long-window room reverb estimate (s); <= 0.5 = off
+std::atomic<int> g_optRevRays{512};
+IPLEmbreeDevice g_embree = nullptr;
+IPLOpenCLDevice g_ocl = nullptr;
+IPLRadeonRaysDevice g_rr = nullptr;
+IPLSceneType g_sceneType = IPL_SCENETYPE_DEFAULT;
+std::string g_backend = "default";
+int g_simThreads = 2;
+// Room reverb time: a second, PARAMETRIC simulator with a long window. Steam Audio fits the reverb
+// time on the energy decay within the simulated window only (no truncation compensation): with our
+// 0.5 s convolution window it saturated near 1.2 s and could even rise when absorption was added.
+IPLSimulator g_revSim = nullptr;
+IPLSource g_revSrc = nullptr;
+IPLProbeBatch g_revBatch = nullptr;  // baked room reverb (option), on the same probes as the paths
+std::atomic<bool> g_revBaked{false};
+float g_revRt[3] = {0, 0, 0};       // reflection thread
+std::atomic<float> g_revMs{0};
+// pauses: listener still, scene unchanged, no echo -> the simulation converges; run it less often
+std::atomic<int> g_sceneVersion{0};
+std::atomic<int> g_stillPasses{0};
 std::atomic<float> g_reflMs{0}, g_reflMaxMs{0};
 float g_rt[3] = {0, 0, 0}; // smoothed room reverb times (under g_stageMtx)
 
@@ -112,10 +138,11 @@ void ReflectionLoop() {
 	while (g_reflRun.load()) {
 		const auto t0 = std::chrono::steady_clock::now();
 		IPLCoordinateSpace3 lis{};
-		IPLVector3 pos[render::kEchoSlots];
+		IPLVector3 pos[render::kEchoSlots], ahead[render::kEchoSlots];
+		float dipole[render::kEchoSlots];
 		int gen[render::kEchoSlots];
 		bool active[render::kEchoSlots];
-		bool ok;
+		bool ok, anyEcho = false;
 		{
 			std::lock_guard<std::mutex> lk(g_stageMtx);
 			ok = g_stageLisOk && g_reflWanted.load() && render::Running();
@@ -123,8 +150,11 @@ void ReflectionLoop() {
 			const double now = Now();
 			for (int k = 0; k < render::kEchoSlots; ++k) {
 				pos[k] = g_echo[k].pos;
+				ahead[k] = g_echo[k].ahead;
+				dipole[k] = g_echo[k].dipole;
 				gen[k] = g_echo[k].gen;
 				active[k] = gen[k] > 0 && now - g_echo[k].last < 3.0;
+				anyEcho = anyEcho || active[k];
 			}
 		}
 		if (ok && g_sim && g_reverbSource) {
@@ -144,13 +174,22 @@ void ReflectionLoop() {
 				// walls and the floor of a crouching player (reflection_simulator.cpp, v4.8.1)
 				sh.irradianceMinDistance = 0.25f;
 				iplSimulatorSetSharedInputs(g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
-				auto setSrc = [](IPLSource s, IPLVector3 p, bool on) {
+				auto setSrc = [](IPLSource s, IPLVector3 p, bool on, IPLVector3 a = {0, 0, -1}, float dipole = 0) {
 					IPLSimulationInputs in{};
 					in.flags = on ? IPL_SIMULATIONFLAGS_REFLECTIONS : (IPLSimulationFlags)0;
-					in.source.right = {1, 0, 0};
-					in.source.up = {0, 1, 0};
-					in.source.ahead = {0, 0, -1};
+					// orthonormal frame around the facing (ahead = -z: Steam Audio's dipole points there)
+					IPLVector3 up{0, 1, 0};
+					const float ay = a.x * up.x + a.y * up.y + a.z * up.z;
+					up = {up.x - a.x * ay, up.y - a.y * ay, up.z - a.z * ay};
+					float ul = std::sqrt(up.x * up.x + up.y * up.y + up.z * up.z);
+					if (ul < 1e-3f) { up = {1, 0, 0}; ul = 1; } // facing straight up / down
+					up = {up.x / ul, up.y / ul, up.z / ul};
+					in.source.ahead = a;
+					in.source.up = up;
+					in.source.right = {a.y * up.z - a.z * up.y, a.z * up.x - a.x * up.z, a.x * up.y - a.y * up.x};
 					in.source.origin = p;
+					in.directivity.dipoleWeight = dipole; // weapons: louder where the shooter aims
+					in.directivity.dipolePower = 1.0f;
 					in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
 					in.hybridReverbTransitionTime = render::kIRSeconds;
 					in.hybridReverbOverlapPercent = 0.25f;
@@ -158,7 +197,7 @@ void ReflectionLoop() {
 				};
 				setSrc(g_reverbSource, {lis.origin.x, lis.origin.y + 0.1f, lis.origin.z}, true);
 				for (int k = 0; k < render::kEchoSlots; ++k)
-					if (g_echo[k].src) setSrc(g_echo[k].src, pos[k], active[k]);
+					if (g_echo[k].src) setSrc(g_echo[k].src, pos[k], active[k], ahead[k], dipole[k]);
 				try {
 					iplSimulatorRunReflections(g_sim);
 				} catch (...) {
@@ -190,11 +229,73 @@ void ReflectionLoop() {
 			g_reflMs = g_reflMs * 0.9f + ms * 0.1f;
 			g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
 		}
+		// long-window room reverb time (parametric simulator, or the baked probes)
+		if (ok && g_revSim && g_revSrc) {
+			const auto r0 = std::chrono::steady_clock::now();
+			bool done = false;
+			{
+				std::lock_guard<std::mutex> lk(g_simMtx);
+				const float win = g_optRevWindow.load();
+				IPLSimulationSharedInputs sh{};
+				sh.listener = lis;
+				sh.numRays = g_optRevRays.load();
+				sh.numBounces = 256; // the window bounds the tracing (duration * c), not the bounces
+				sh.duration = win;
+				sh.order = 0;
+				sh.irradianceMinDistance = 0.25f;
+				iplSimulatorSetSharedInputs(g_revSim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
+				IPLSimulationInputs in{};
+				in.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+				in.source.right = {1, 0, 0};
+				in.source.up = {0, 1, 0};
+				in.source.ahead = {0, 0, -1};
+				in.source.origin = {lis.origin.x, lis.origin.y + 0.1f, lis.origin.z};
+				in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+				if (g_revBaked.load()) {
+					in.baked = IPL_TRUE;
+					in.bakedDataIdentifier.type = IPL_BAKEDDATATYPE_REFLECTIONS;
+					in.bakedDataIdentifier.variation = IPL_BAKEDDATAVARIATION_REVERB;
+				}
+				iplSourceSetInputs(g_revSrc, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
+				try {
+					iplSimulatorRunReflections(g_revSim);
+					done = true;
+				} catch (...) {
+				}
+				if (done) {
+					IPLSimulationOutputs o{};
+					iplSourceGetOutputs(g_revSrc, IPL_SIMULATIONFLAGS_REFLECTIONS, &o);
+					for (int b = 0; b < 3; ++b) {
+						const float v = render::AirCorrectRt(o.reflections.reverbTimes[b], b);
+						if (v > 0) g_revRt[b] = g_revRt[b] <= 0 ? v : g_revRt[b] * 0.7f + v * 0.3f;
+					}
+					if (g_revRt[1] > 0) render::SetRoomReverbOverride(g_revRt);
+				}
+			}
+			const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - r0).count();
+			g_revMs = g_revMs * 0.9f + ms * 0.1f;
+		}
+		// still listener + unchanged scene + no echo: the result has converged (Steam Audio averages
+		// successive passes), simulate once a second instead of four times
+		{
+			static IPLVector3 lastLis{};
+			static int lastVersion = -1;
+			const float dx = lis.origin.x - lastLis.x, dy = lis.origin.y - lastLis.y, dz = lis.origin.z - lastLis.z;
+			const bool still = dx * dx + dy * dy + dz * dz < 0.01f && lastVersion == g_sceneVersion.load() && !anyEcho;
+			g_stillPasses = still ? g_stillPasses.load() + 1 : 0;
+			lastLis = lis.origin;
+			lastVersion = g_sceneVersion.load();
+		}
 		// at most ~12 passes per second whatever the rate of new echoes
 		std::this_thread::sleep_until(t0 + std::chrono::milliseconds(80));
 		std::unique_lock<std::mutex> lk(g_stageMtx);
-		g_reflCv.wait_until(lk, t0 + std::chrono::milliseconds(250), [] {
+		const int idleMs = g_stillPasses.load() >= 10 ? 1000 : 250;
+		const IPLVector3 at = lis.origin;
+		g_reflCv.wait_until(lk, t0 + std::chrono::milliseconds(idleMs), [at] {
 			if (!g_reflRun.load()) return true;
+			// a settled listener who starts moving again is simulated at once (SetListener notifies)
+			const IPLVector3 o = g_stageLis.origin;
+			if ((o.x - at.x) * (o.x - at.x) + (o.y - at.y) * (o.y - at.y) + (o.z - at.z) * (o.z - at.z) > 0.25f) return true;
 			for (int k = 0; k < render::kEchoSlots; ++k)
 				if (g_echo[k].gen > g_simulatedGen[k]) return true;
 			return false;
@@ -330,19 +431,82 @@ void ReleaseWorld() {
 	if (g_scene) iplSceneRelease(&g_scene);
 }
 
+// Ray tracer for the scene: Radeon Rays (GPU, OpenCL) or Embree (CPU, faster than the built-in one)
+// when asked and available, otherwise Steam Audio's own. Devices are created once and kept.
+void ChooseBackend() {
+	g_sceneType = IPL_SCENETYPE_DEFAULT;
+	g_backend = "default";
+	const int want = g_optScene.load();
+	std::string note;
+	if (want == 2) {
+		if (!g_rr) {
+			IPLOpenCLDeviceSettings os{};
+			os.type = IPL_OPENCLDEVICETYPE_GPU;
+			os.numCUsToReserve = 0;
+			os.fractionCUsForIRUpdate = 1.0f;
+			os.requiresTAN = IPL_FALSE;
+			IPLOpenCLDeviceList list = nullptr;
+			if (iplOpenCLDeviceListCreate(g_ctx, &os, &list) == IPL_STATUS_SUCCESS && list) {
+				if (iplOpenCLDeviceListGetNumDevices(list) > 0 && iplOpenCLDeviceCreate(g_ctx, list, 0, &g_ocl) == IPL_STATUS_SUCCESS) {
+					IPLRadeonRaysDeviceSettings rs{};
+					if (iplRadeonRaysDeviceCreate(g_ocl, &rs, &g_rr) != IPL_STATUS_SUCCESS) {
+						g_rr = nullptr;
+						iplOpenCLDeviceRelease(&g_ocl);
+					}
+				}
+				iplOpenCLDeviceListRelease(&list);
+			}
+		}
+		if (g_rr) {
+			g_sceneType = IPL_SCENETYPE_RADEONRAYS;
+			g_backend = "radeonrays";
+			return;
+		}
+		note = "radeonrays unavailable; ";
+	}
+	if (want >= 1) {
+		if (!g_embree) {
+			IPLEmbreeDeviceSettings es{};
+			if (iplEmbreeDeviceCreate(g_ctx, &es, &g_embree) != IPL_STATUS_SUCCESS) g_embree = nullptr;
+		}
+		if (g_embree) {
+			g_sceneType = IPL_SCENETYPE_EMBREE;
+			g_backend = note + "embree";
+			return;
+		}
+		note += "embree unavailable; ";
+	}
+	g_backend = note + "default";
+}
+
+IPLSceneSettings SceneSettings() {
+	IPLSceneSettings ss{};
+	ss.type = g_sceneType;
+	ss.embreeDevice = g_sceneType == IPL_SCENETYPE_EMBREE ? g_embree : nullptr;
+	ss.radeonRaysDevice = g_sceneType == IPL_SCENETYPE_RADEONRAYS ? g_rr : nullptr;
+	return ss;
+}
+
 bool EnsureSimulator() {
 	if (g_sim) return true;
 	IPLSimulationSettings sim{};
 	sim.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING |
 	                                 IPL_SIMULATIONFLAGS_REFLECTIONS);
-	sim.sceneType = IPL_SCENETYPE_DEFAULT;
+	sim.sceneType = g_sceneType;
+	sim.openCLDevice = g_sceneType == IPL_SCENETYPE_RADEONRAYS ? g_ocl : nullptr;
+	sim.radeonRaysDevice = g_sceneType == IPL_SCENETYPE_RADEONRAYS ? g_rr : nullptr;
 	sim.reflectionType = IPL_REFLECTIONEFFECTTYPE_HYBRID;
 	g_simMaxRays = g_reflRays.load();
 	sim.maxNumRays = g_simMaxRays.load(); // see g_simMaxRays
-	sim.numDiffuseSamples = 32;
+	sim.numDiffuseSamples = 1024; // as Unity: diffuse bounces pick among this many fixed directions
 	sim.maxDuration = render::kIRSeconds;
 	sim.maxNumSources = kMaxSources + 1 + render::kEchoSlots;
-	sim.numThreads = 2;
+	{
+		const int hc = (int)std::thread::hardware_concurrency();
+		const int opt = g_optThreads.load();
+		g_simThreads = opt > 0 ? opt : std::max(2, hc / 2 - 1); // auto: half the cores, the game keeps the rest
+	}
+	sim.numThreads = g_simThreads;
 	sim.rayBatchSize = 1;
 	sim.maxNumOcclusionSamples = 32;
 	sim.samplingRate = 48000;
@@ -371,6 +535,28 @@ bool EnsureSimulator() {
 		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots);
 	}
 	iplSimulatorCommit(g_sim);
+	// long-window parametric simulator for the room reverb time (see g_revSim)
+	const float win = g_optRevWindow.load();
+	if (win > render::kIRSeconds + 0.01f) {
+		IPLSimulationSettings rs = sim;
+		rs.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+		rs.reflectionType = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
+		rs.maxDuration = win;
+		rs.maxNumSources = 1;
+		rs.maxOrder = 0;
+		rs.maxNumRays = g_optRevRays.load(); // == numRays: full sphere (docs/STEAM_AUDIO_BUGS.md #1)
+		if (iplSimulatorCreate(g_ctx, &rs, &g_revSim) == IPL_STATUS_SUCCESS) {
+			iplSimulatorSetScene(g_revSim, g_scene);
+			IPLSourceSettings ss{};
+			ss.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+			if (iplSourceCreate(g_revSim, &ss, &g_revSrc) == IPL_STATUS_SUCCESS) iplSourceAdd(g_revSrc, g_revSim);
+			if (g_revBatch) iplSimulatorAddProbeBatch(g_revSim, g_revBatch);
+			iplSimulatorCommit(g_revSim);
+		} else {
+			g_revSim = nullptr;
+		}
+	}
+	for (float& v : g_revRt) v = 0;
 	StartReflections();
 	return true;
 }
@@ -1270,6 +1456,7 @@ LUA_FUNCTION(SetListener) {
 		g_stageLis.right = {ahead.y * up.z - ahead.z * up.y, ahead.z * up.x - ahead.x * up.z, ahead.x * up.y - ahead.y * up.x};
 		g_stageLisOk = true;
 	}
+	if (g_stillPasses.load() >= 10) g_reflCv.notify_one(); // settled: let the thread check the move
 	LUA->PushNumber(render::SetListener(pos, ahead, up, master, &eL, &eR));
 	LUA->PushNumber(eL);
 	LUA->PushNumber(eR);
