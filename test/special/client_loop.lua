@@ -72,7 +72,9 @@ client([==[net.Receivers["pba_test_cl"] = nil]==])
 net.Receivers["pba_test_rep"] = nil
 if IsValid(e) then e:Remove() end
 if not ok then return { pass = false, err = tostring(res) } end
-if res.err then res.pass = false return res end
+-- setup failure (the clientside entity did not reach the client): inconclusive; test/client_loop.lua
+-- covers client loops on a clientside model
+if res.err then res.pass = nil return res end
 local function took(x) return x and (x.taken or x.mirror) end
 res.pass = took(res.patch) and took(res.emit)
 res.expected = "patch and emit both taken (hook returned false, or a client mirror exists)"

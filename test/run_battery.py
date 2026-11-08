@@ -129,8 +129,6 @@ steps = [
     ("caption_check", lambda: py("caption_check.py")),
     # a parked vehicle between source and listener stands in the way like a big prop (was ignored)
     ("vehicle_obstacle", lambda: job("server", "vehicle_obstacle.lua", 15)),
-    # lip sync: a citizen speaking behind the glass cell keeps moving his mouth with pba (re-emitted voice)
-    ("lipsync_glass pba_materials", lambda: (load("pba_materials"), [job("server", "lipsync_glass.lua", 30), job("client", "lipsync_client.lua", 10)])[1]),
     ("loop_removed", lambda: job("server", "loop_removed.lua")),
     # a loop playing while pba is turned off then on: back to the engine, then mirrored again (and a still
     # prop_dynamic, MOVETYPE_PUSH like a door, keeps its loop)
@@ -141,6 +139,8 @@ steps = [
     ("native_features", lambda: job("client", "native_features.lua")),
     ("streams_test", lambda: job("client", "streams_test.lua")),
     ("portal_sweep tworooms", lambda: job("client", "portal_sweep.lua")),
+    # (loads pba_materials: last of the pba_tworooms block) lip sync: a citizen speaking behind the glass cell keeps moving his mouth with pba (re-emitted voice)
+    ("lipsync_glass pba_materials", lambda: (load("pba_materials"), [job("server", "lipsync_glass.lua", 30), job("client", "lipsync_client.lua", 10)])[1]),
     ("water_ogg gm_construct", lambda: (load("gm_construct", 1), native_on(True), make_ogg(), job("client", "water_ogg.lua"), drop_ogg())[3]),
     ("paths_numeric_equiv pba_demo", lambda: (load("pba_demo", 1), job("client", "paths_numeric_equiv.lua"))[1]),
     # door leaf crossed by the line = its doorway (one model): no jump at the leaf / wall boundary

@@ -29,7 +29,8 @@ job:sleep(0.4)
 local m = mirrorOf(e)
 steps.started = m ~= nil and not m.once
 p:ChangePitch(150, 0)
-job:sleep(0.4)
+-- the patch's own envelope reaches 150 over a few frames (measured 103..150 at 0.4 s): up to 2 s
+job:wait(function() local x = mirrorOf(e) return x and x.pitch >= 149 end, 2)
 m = mirrorOf(e)
 steps.pitch = m and m.pitch or -1
 p:Stop()
@@ -63,5 +64,5 @@ for _, x in pairs(LP.mirrors) do if x.client and x.name == NAME then left = left
 steps.removed = had and left == 0
 p3:Stop()
 LP.HandleClient = origHandle
-local pass = steps.started and steps.pitch == 150 and steps.stopped and steps.restarted and steps.collected and steps.removed
+local pass = steps.started and steps.pitch >= 149 and steps.stopped and steps.restarted and steps.collected and steps.removed
 return { pass = pass, steps = steps, events = events }

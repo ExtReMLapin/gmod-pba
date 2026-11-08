@@ -20,6 +20,16 @@ local function lumpInfo(f)
 	return info
 end
 
+--- Whether the map has displacements (lump 26 DISPINFO not empty): header only, cheap.
+function BSP.HasDisplacements(map)
+	local f = file.Open("maps/" .. map .. ".bsp", "rb", "GAME")
+	if not f then return false end
+	if f:Read(4) ~= "VBSP" then f:Close() return false end
+	local info = lumpInfo(f)
+	f:Close()
+	return info[26] ~= nil and info[26].len > 0
+end
+
 --- Parses the entity lump text into a list of keyvalue tables, keeping only `keep` classes.
 function BSP.ParseEntities(text, keep)
 	local out = {}

@@ -662,9 +662,25 @@ end
 -- Displacements (terrain) are one-sided for traces: hit from above, crossed from below. Traced from
 -- both ends, the side that meets more walls stands (gm_construct: 3 walls one way, 1 the other, a
 -- 50 dB gap between level(S, L) and level(L, S)).
+-- Only maps with displacements need the reverse pass, and only for a line going up (the reverse pass
+-- everywhere doubled the wall traces).
+local dispMap, dispHas
+local function mapHasDisplacements()
+	local m = game.GetMap()
+	if dispMap ~= m then
+		dispMap = m
+		local ok, has = pcall(A.BSP.HasDisplacements, m)
+		dispHas = ok and has or false
+	end
+	return dispHas
+end
+
+P.HasDisplacements = mapHasDisplacements
+
 function P.Walls(S, L, maxWalls, srcEnt)
 	local w = wallsOneWay(S, L, maxWalls, srcEnt)
-	if #w >= (maxWalls or 6) then return w end
+	-- a trace crosses a displacement only going up through it (its face looks up): from below
+	if #w >= (maxWalls or 6) or S.z >= L.z or not mapHasDisplacements() then return w end
 	local r = wallsOneWay(L, S, maxWalls, srcEnt)
 	if #r <= #w then return w end
 	-- reversed: ordered from S, entry and exit swapped
@@ -1591,6 +1607,19 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if (cfg.path_props or 1) >= 0.5 then
 			for _, p in ipairs(r.paths) do
 				if p.points and #p.points > 0 then pathProps(p, S, L, cfg, srcEnt) end
+			end
+		end
+		-- one end under water: every path crosses the surface, like the transmission voice (which has
+		-- it as a wall). Paths ignored it: a dry point heard an underwater one 44 dB louder one way than
+		-- the other (gm_construct, perceptual bench reciprocity)
+		if cfg.water >= 0.5 and #r.paths > 0 then
+			local wS = bit.band(util.PointContents(S), CONTENTS_WATER) ~= 0
+			local wL = bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
+			if wS ~= wL then
+				local add, lpAdd = AC.WallLoss(nil, "pba_water", 0)
+				for _, p in ipairs(r.paths) do
+					if not p.waterDb then p.lossDb, p.waterDb, p.lp = p.lossDb + add, add, math.max(p.lp or 0, lpAdd) end
+				end
 			end
 		end
 		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))

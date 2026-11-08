@@ -62,9 +62,9 @@ MAP_LIMITS = {
         ("L_warm", "worst"): 60.0,       # 14.2-49.8 dB
         ("S_stable", "dir_p95"): 20.0,   # 8.2-11.2 deg
         ("L_stable", "dir_p95"): 30.0,   # 16.1-20.0 deg
-        ("recip_warm", "over_jnd"): 0.8,  # 0.53-0.60 (8-9 pairs of 15)
-        ("recip_warm", "median"): 6.0,   # 2.05-3.82 dB
-        ("recip_warm", "p90"): 25.0,     # 15.67 dB in every run
+        ("recip_warm", "over_jnd"): 0.1,  # 0 since walls and probe links trace one-sided displacements both ways (was 0.53-0.60)
+        ("recip_warm", "median"): 1.0,   # 0 dB (was 2.05-3.82)
+        ("recip_warm", "p90"): 3.0,      # 0 dB (was 15.67: a through-wall voice heard as clear one way)
     },
     # indoor rooms joined by doors and portals: smooth today, held near the JND
     "pba_demo": {

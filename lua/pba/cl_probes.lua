@@ -10,7 +10,7 @@ local A = pba
 local PR = {}
 A.Probes = PR
 
-local CACHE_VERSION = 7 -- 6: links cross grates; 7: and invisible tool brushes
+local CACHE_VERSION = 8 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways
 local MAX_PROBES = 30000
 local DIRS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 
@@ -40,11 +40,21 @@ local function passThrough(tr, out, trace, b)
 	return not out.Hit
 end
 
+-- Displacements are one-sided for traces (hit from above, crossed from below): a segment going up
+-- is traced back down too, on maps that have them (else a route from a pool bottom up to a ledge
+-- collapsed to a straight line through the terrain: no probe path one way, one the other way).
+local function upThroughDisp(a, b) return a.z < b.z - 1 and A.Paths.HasDisplacements and A.Paths.HasDisplacements() end
+
 local function clearSeg(a, b)
 	segTr.start, segTr.endpos = a, b
 	util.TraceLine(segTr)
-	if not segOut.Hit then return true end
-	return passThrough(segTr, segOut, util.TraceLine, b)
+	if segOut.Hit and not passThrough(segTr, segOut, util.TraceLine, b) then return false end
+	if upThroughDisp(a, b) then
+		segTr.start, segTr.endpos = b, a
+		util.TraceLine(segTr)
+		if segOut.Hit and not passThrough(segTr, segOut, util.TraceLine, a) then return false end
+	end
+	return true
 end
 PR.ClearSeg = clearSeg
 
@@ -400,8 +410,13 @@ local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = LINK_MASK, filter = wor
 local function clearFat(a, b)
 	fatTr.start, fatTr.endpos = a, b
 	util.TraceHull(fatTr)
-	if not fatOut.Hit then return true end
-	return passThrough(fatTr, fatOut, util.TraceHull, b)
+	if fatOut.Hit and not passThrough(fatTr, fatOut, util.TraceHull, b) then return false end
+	if upThroughDisp(a, b) then
+		fatTr.start, fatTr.endpos = b, a
+		util.TraceHull(fatTr)
+		if fatOut.Hit and not passThrough(fatTr, fatOut, util.TraceHull, a) then return false end
+	end
+	return true
 end
 
 --- String pulling: removes vertices while the (fat) shortcut stays clear.
