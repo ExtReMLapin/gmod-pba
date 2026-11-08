@@ -203,6 +203,56 @@ return {
 			local Cv, Sv = AC.Fresnel(1)
 			expect(near(Cv, 0.7799, 3e-3) and near(Sv, 0.4383, 3e-3)).to.beTrue() -- tabulated C(1), S(1)
 		end },
+		{ name = "Masked opening: an object covering half a doorway sounds like a door leaf covering the same half (level +-1 dB, same lowpass)", func = function()
+			-- doorway 48 x 112 in the plane x = 100; u = -(y - 24) along the width, v = -(z - 56) along the height
+			local function doorway(open)
+				return { poly = rect(100, 0, 48, 0, 112), center = Vector(100, 24, 56), normal = Vector(1, 0, 0), open = open,
+					closedDb = 28, closedLp = 3 }
+			end
+			local cfg = table.Copy(CFG)
+			cfg.portal_diffuse_db, cfg.door_aperture, cfg.path_props_slit = 8, 1, 1
+			local wax, vax = Vector(0, -1, 0), Vector(0, 0, -1)
+			-- the leaf leaves y in [24, 48] free (u in [-24, 0]), as P.Aperture measures it
+			local leaf = doorway(0.5)
+			leaf.ap = { key = math.Round(0.5 * 255), w0 = -24, w1 = 24, wax = wax, intervals = { { -24, 0 } }, area = 0.5 }
+			-- the object covers the other half over the whole height; it passes what the leaf passes
+			local h = 112 / 3
+			local free = { { -24, 0 } }
+			local mask = { f = 0.5, g = 10 ^ (-AC.LeafDb(28, cfg) / 20), lp = 3, ap = { w0 = -24, w1 = 24, h0 = -56, h1 = 56,
+				wax = wax, vax = vax, area = 0.5, rows = { { -56, -56 + h, intervals = free }, { -56 + h, 56 - h, intervals = free },
+				{ 56 - h, 56, intervals = free } } } }
+			local cases = {
+				{ "in line with the free half", Vector(0, 36, 56), Vector(200, 36, 56) },
+				{ "in line with the covered half", Vector(0, 12, 56), Vector(200, 12, 56) },
+				{ "oblique through the free half", Vector(0, 70, 40), Vector(200, 0, 70) },
+				{ "bent round the covered jamb", Vector(0, -30, 56), Vector(200, -30, 56) },
+			}
+			local bad = {}
+			for _, c in ipairs(cases) do
+				local S, L = c[2], c[3]
+				local byLeaf = P.EvalChain(S, L, { leaf }, cfg)
+				local base = P.EvalChain(S, L, { doorway(1) }, cfg)
+				local add, lp = P.MaskedDb(base, S, L, { mask }, cfg)
+				local byObj, objLp = base.lossDb + add, math.max(base.lp, lp)
+				if math.abs(byObj - byLeaf.lossDb) > 1 or objLp ~= byLeaf.lp then
+					bad[#bad + 1] = string.format("%s: leaf %.1f dB lp%d, object %.1f dB lp%d", c[1], byLeaf.lossDb, byLeaf.lp, byObj, objLp)
+				end
+			end
+			if #bad > 0 then error(table.concat(bad, "; ")) end
+		end },
+		{ name = "Masked opening: an object in front of a CLOSED door adds nothing (the leaf already covers the opening)", func = function()
+			local closed = { poly = rect(100, 0, 48, 0, 112), center = Vector(100, 24, 56), normal = Vector(1, 0, 0), open = 0,
+				closedDb = 28, closedLp = 3 }
+			local cfg = table.Copy(CFG)
+			cfg.portal_diffuse_db, cfg.path_props_slit = 8, 1
+			local S, L = Vector(0, 12, 56), Vector(200, 12, 56)
+			local base = P.EvalChain(S, L, { closed }, cfg)
+			local free = { { -24, 0 } }
+			local mask = { f = 0.5, g = 10 ^ (-18 / 20), lp = 3, ap = { w0 = -24, w1 = 24, h0 = -56, h1 = 56,
+				wax = Vector(0, -1, 0), vax = Vector(0, 0, -1), area = 0.5, rows = { { -56, 56, intervals = free } } } }
+			local add = P.MaskedDb(base, S, L, { mask }, cfg)
+			if math.abs(add) > 0.01 then error(string.format("closed door %.1f dB, object adds %.1f dB", base.lossDb, add)) end
+		end },
 		{ name = "SelectVoices: weak paths rejected, far-apart strong paths split", func = function()
 			local L = Vector(0, 0, 0)
 			local mk = function(pos, len, loss) return { pos = pos, length = len, lossDb = loss, lp = 0 } end
