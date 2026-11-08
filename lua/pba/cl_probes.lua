@@ -15,8 +15,14 @@ local MAX_PROBES = 30000
 local DIRS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 
 local function worldOnly() return false end
+-- the hot traces reuse their input and result tables (`output`): a new result table per trace was
+-- most of the ~166 KB of garbage per path computation, whose collection made 8-20 ms spikes
+local segOut = {}
+local segTr = { mask = MASK_SOLID_BRUSHONLY, filter = worldOnly, output = segOut }
 local function clearSeg(a, b)
-	return not util.TraceLine({ start = a, endpos = b, mask = MASK_SOLID_BRUSHONLY, filter = worldOnly }).Hit
+	segTr.start, segTr.endpos = a, b
+	util.TraceLine(segTr)
+	return not segOut.Hit
 end
 PR.ClearSeg = clearSeg
 
@@ -336,8 +342,12 @@ end
 
 -- shortcuts must keep a margin: a hull trace, so a path never grazes a door frame
 local HULL_MIN, HULL_MAX = Vector(-4, -4, -4), Vector(4, 4, 4)
+local fatOut = {}
+local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = MASK_SOLID_BRUSHONLY, filter = worldOnly, output = fatOut }
 local function clearFat(a, b)
-	return not util.TraceHull({ start = a, endpos = b, mins = HULL_MIN, maxs = HULL_MAX, mask = MASK_SOLID_BRUSHONLY, filter = worldOnly }).Hit
+	fatTr.start, fatTr.endpos = a, b
+	util.TraceHull(fatTr)
+	return not fatOut.Hit
 end
 
 --- String pulling: removes vertices while the (fat) shortcut stays clear.

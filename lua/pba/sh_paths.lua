@@ -450,6 +450,23 @@ local function traceFilter(ent)
 	return false
 end
 
+-- reused trace tables (input and result, `output`) and fixed filters: a new table per trace and a
+-- closure per filter were garbage on every path computation (GC spikes). A new HitPos Vector is still
+-- made by each trace, so keeping tr.HitPos is safe.
+local wallOut, insideOut, backOut, detOut = {}, {}, {}, {}
+local wallTr = { mask = MASK_SOLID, filter = traceFilter, output = wallOut }
+local insideTr = { mask = MASK_SOLID_BRUSHONLY, filter = traceFilter, output = insideOut }
+local backEnt
+local function onlyBackEnt(e) return e == backEnt end
+local backTr = { mask = MASK_SOLID, filter = onlyBackEnt, output = backOut }
+local function noEnt() return false end
+local detTr = { mask = MASK_SOLID_BRUSHONLY, filter = noEnt, output = detOut }
+local function detClear(a, b)
+	detTr.start, detTr.endpos = a, b
+	util.TraceLine(detTr)
+	return not detOut.Hit
+end
+
 --- Walls crossed by the straight line S -> L (game state: traces). Returns a list of
 -- { entry, exit, thickness, mat, surf }, mirroring the mcp `trace_through` oracle.
 function P.Walls(S, L, maxWalls, srcEnt)
@@ -458,17 +475,26 @@ function P.Walls(S, L, maxWalls, srcEnt)
 	local start = S
 	ignoreEnt = srcEnt
 	for _ = 1, maxWalls or 6 do
-		local tr = util.TraceLine({ start = start, endpos = L, mask = MASK_SOLID, filter = traceFilter })
+		wallTr.start, wallTr.endpos = start, L
+		util.TraceLine(wallTr)
+		local tr = wallOut
 		if not tr.Hit or tr.Fraction >= 1 then break end
 		local entry = tr.HitPos
 		local surf = util.GetSurfacePropName(tr.SurfaceProps)
 		local hitEnt = IsValid(tr.Entity) and not tr.Entity:IsWorld() and tr.Entity or nil
-		local inside = not hitEnt and util.TraceLine({ start = entry + dir * 0.5, endpos = L, mask = MASK_SOLID_BRUSHONLY, filter = traceFilter })
+		local inside = false
+		if not hitEnt then
+			insideTr.start, insideTr.endpos = entry + dir * 0.5, L
+			util.TraceLine(insideTr)
+			inside = insideOut
+		end
 		local exit
 		if hitEnt then
 			-- entity (prop, door): exit face = first hit of that entity seen from the far side
 			local far = entry + dir * math.min(entry:Distance(L), hitEnt:BoundingRadius() * 2 + 8)
-			local back = util.TraceLine({ start = far, endpos = entry, mask = MASK_SOLID, filter = function(e) return e == hitEnt end })
+			backEnt, backTr.start, backTr.endpos = hitEnt, far, entry
+			util.TraceLine(backTr)
+			local back = backOut
 			exit = (back.Hit and not back.StartSolid) and back.HitPos or entry
 		elseif inside.StartSolid then
 			if inside.AllSolid or inside.FractionLeftSolid >= 1 then
@@ -488,9 +514,7 @@ function P.Walls(S, L, maxWalls, srcEnt)
 			local lS, lL = hitEnt:WorldToLocal(S), hitEnt:WorldToLocal(L)
 			w.detour = P.DetourDelta(lS, lL, mn, mx, function(e)
 				local we = hitEnt:LocalToWorld(e)
-				local f = function() return false end
-				return not util.TraceLine({ start = S, endpos = we, mask = MASK_SOLID_BRUSHONLY, filter = f }).Hit
-					and not util.TraceLine({ start = we, endpos = L, mask = MASK_SOLID_BRUSHONLY, filter = f }).Hit
+				return detClear(S, we) and detClear(we, L)
 			end)
 		end
 		walls[#walls + 1] = w

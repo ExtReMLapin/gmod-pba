@@ -241,16 +241,48 @@ function LP.FollowNative(L)
 	end
 end
 
-timer.Create("pba_loops_cl", A.cfg.update_interval or 0.25, 0, A.PerfTimed("loops", function()
-	if not IsValid(LocalPlayer()) then return end
-	for key, m in pairs(LP.mirrors) do
-		if m.done then
-			stopMirror(m)
-			LP.mirrors[key] = nil
-		elseif m.idx ~= 0 and not IsValid(m.ent) and not m.anchor and not m.seen then
-			m.ent = Entity(m.idx) -- may become valid once networked (never after a removal: the index
-			-- can be reused by another entity)
-		end
-		apply(m)
+-- one pass on a mirror: drop it when done, pick its entity up once networked, re-evaluate
+local function step(key, m)
+	if m.done then
+		stopMirror(m)
+		LP.mirrors[key] = nil
+		return
+	end
+	if m.idx ~= 0 and not IsValid(m.ent) and not m.anchor and not m.seen then
+		m.ent = Entity(m.idx) -- may become valid once networked (never after a removal: the index
+		-- can be reused by another entity)
+	end
+	apply(m)
+end
+
+-- Every mirror is re-evaluated each update_interval. loops_stagger spreads them over the frames:
+-- each frame takes its share in turn, instead of all of them in one frame (20 hidden loops on
+-- gm_construct: one 15-55 ms frame every 0.25 s). Same update rate per loop.
+timer.Remove("pba_loops_cl") -- former timer (autorefresh)
+local order, nextIdx, quota, acc, lastT = {}, 1, 0, 0, nil
+hook.Add("Think", "pba_loops_cl", A.PerfTimed("loops", function()
+	if not IsValid(LocalPlayer()) then return false end
+	local now = RealTime()
+	local dt = lastT and math.min(now - lastT, 0.5) or 0
+	lastT = now
+	local interval = math.max(A.cfg.update_interval or 0.25, 0.05)
+	if (A.cfg.loops_stagger or 1) < 0.5 then
+		acc = acc + dt
+		if acc < interval then return false end
+		acc = 0
+		for key, m in pairs(LP.mirrors) do step(key, m) end
+		return
+	end
+	if nextIdx > #order then -- new round over the current mirrors
+		if next(LP.mirrors) == nil then return false end
+		order, nextIdx = table.GetKeys(LP.mirrors), 1
+	end
+	quota = math.min(quota + #order * dt / interval, #order)
+	if quota < 1 then return false end
+	while quota >= 1 and nextIdx <= #order do
+		local key = order[nextIdx]
+		nextIdx, quota = nextIdx + 1, quota - 1
+		local m = LP.mirrors[key]
+		if m then step(key, m) end
 	end
 end))

@@ -8,7 +8,9 @@ Prints the numbers; no thresholds yet (set them from this baseline before each o
 Loops and streams run in timers (pba_loops_cl, pba_streams), not hooks: perf_hook_cost misses them,
 pba.perfTimers (A.PerfTimed) measures them. Known gap: an unfocused game runs at ~20 fps, which hides
 the frame-time overhead (measure with the window focused, or from pba's own counters).
-Usage: python -I -u perf_crowd.py <mcp.py> [map] [n] [secs]
+Measured in both renderings (--render=lua or --render=native for one): with Steam Audio the loops
+are voices of the native module, cheap on the Lua side.
+Usage: python -I -u perf_crowd.py <mcp.py> [map] [n] [secs] [--render=lua|native]
 """
 import json
 import os
@@ -17,9 +19,10 @@ import sys
 import time
 
 MCP = sys.argv[1]
-MAP = sys.argv[2] if len(sys.argv) > 2 else "gm_construct"
-N = int(sys.argv[3]) if len(sys.argv) > 3 else 40
-SECS = float(sys.argv[4]) if len(sys.argv) > 4 else 15
+POS = [a for a in sys.argv[2:] if not a.startswith("--")]
+MAP = POS[0] if len(POS) > 0 else "gm_construct"
+N = int(POS[1]) if len(POS) > 1 else 40
+SECS = float(POS[2]) if len(POS) > 2 else 15
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -73,32 +76,102 @@ def pba_entries(res):
     return rows
 
 
-# PBA off, then on (same scene)
-call("console_exec", {"realm": "server", "cmd": "pba_enable 0"})
-off = frames("PBA off")
-call("console_exec", {"realm": "server", "cmd": "pba_enable 1"})
-time.sleep(2)
-lua("client", "pba.ResetPerf() pba.stats.processed = 0 return true")
-t_reset = time.time()
-on = frames("PBA on")
-hooks = {}
-for ev in ("Think", "EntityEmitSound"):
-    res = call("perf_hook_cost", {"realm": "client", "event": ev, "duration_s": SECS}, timeout=int(SECS) + 120)
-    hooks[ev] = res
-    total = 0.0
-    for e in pba_entries(res):
-        total += float(e.get("total_ms") or e.get("cumulative_ms") or 0)
-        print(f"  {ev:16s} {e.get('name') or e.get('id')}: {json.dumps({k: e[k] for k in e if k not in ('name', 'id')})}", flush=True)
-    print(f"  {ev}: PBA total {total:.1f} ms over {SECS:.0f} s = {total / SECS:.2f} ms/s", flush=True)
-perf = lua("client", "local p = pba.perf return { calls = p.n, meanCall = p.n > 0 and p.sum / p.n or 0, maxCall = p.maxCall, maxFrame = p.maxFrame, frames = p.frames, processed = pba.stats.processed, queue = table.Count(pba.Probes and pba.Probes.queue or {}), fieldReady = pba.Probes and pba.Probes.field ~= nil, timers = pba.perfTimers }")
-print(f"  one-shots (pba.perf): {json.dumps(perf)}", flush=True)
-for k, t in ((perf or {}).get("timers") or {}).items():  # loops / streams timers (A.PerfTimed)
-    print(f"  timer {k}: {t['n']} runs, mean {t['sum'] / max(t['n'], 1):.2f} ms, max {t['max']:.2f} ms, "
-          f"{t['sum'] / (time.time() - t_reset):.2f} ms/s", flush=True)
-on2 = frames("PBA on (after)")
-over = (on.get("frametime_avg_ms", 0) + on2.get("frametime_avg_ms", 0)) / 2 - off.get("frametime_avg_ms", 0)
-print(f"overhead: {over:+.2f} ms per frame on average (PBA on vs off, same scene)", flush=True)
+CHECK = "--check" in sys.argv[2:]
+# thresholds (TDD, set from the 2026-11-09 baseline: 20 hidden loops on gm_construct cost 14.7 ms per
+# pass of the loop timer, 55 ms worst, all re-evaluated in the same frame every update_interval)
+MAX_LOOPS_FRAME_MS = 15.0  # worst loop work in one frame
+MAX_LOOPS_MEAN_MS = 5.0    # mean loop work per frame where loops run
+# garbage per path computation (KB, GC stopped while measuring): its collection made the 8-20 ms
+# spikes (one computation: 0.9 ms, then 12.7 ms, then 1.5 ms on the same input). Baseline 166 KB,
+# 104 traces per computation at 1.28 KB each (a new result table every time).
+MAX_ALLOC_KB = 80.0
+
+ALLOC_LUA = """PBA_ALLOC = nil
+timer.Simple(0, function()
+  local P = pba.Paths local L = pba.ListenerPos()
+  local srcs = {}
+  for i, p in ipairs(util.JSONToTable([==[%s]==])) do srcs[i] = Vector(p[1], p[2], p[3]) end
+  for _, S in ipairs(srcs) do P.InvalidateCache() P.Compute(S, L, 75) end -- warm (JIT, probe solves)
+  collectgarbage('collect') collectgarbage('stop')
+  local m0, n, t0 = collectgarbage('count'), 0, SysTime()
+  for rep = 1, 3 do for _, S in ipairs(srcs) do P.InvalidateCache() P.Compute(S, L, 75) n = n + 1 end end
+  local ms = (SysTime() - t0) * 1000 / math.max(n, 1)
+  local kb = (collectgarbage('count') - m0) / math.max(n, 1)
+  collectgarbage('restart')
+  PBA_ALLOC = { kb = kb, ms = ms, n = n }
+end) return true"""
+
+
+def alloc_per_compute():
+    pos = lua("server", "local t = {} for _, e in ipairs(PBA_CROWD or {}) do local p = e:WorldSpaceCenter() t[#t+1] = {p.x, p.y, p.z} end return t") or []
+    lua("client", ALLOC_LUA % json.dumps(pos))
+    for _ in range(30):
+        time.sleep(0.5)
+        v = lua("client", "return PBA_ALLOC")
+        if v:
+            print(f"  path computation: {v['kb']:.0f} KB garbage, {v['ms']:.2f} ms without GC (mean of {v['n']})", flush=True)
+            return v
+    return None
+RENDERS = [a.split("=", 1)[1] for a in sys.argv[2:] if a.startswith("--render=")] or ["lua", "native"]
+
+
+def measure(render):
+    """One measurement in a rendering mode (pba_native_render 0 = Lua voices, 1 = Steam Audio)."""
+    print(f"-- render {render}", flush=True)
+    call("console_exec", {"realm": "client", "cmd": f"pba_native_render {1 if render == 'native' else 0}"})
+    # the scene is (re)created with PBA on: loops already playing when PBA is turned on stay with the
+    # engine until they restart (the server cannot tell whether a released loop still plays)
+    call("console_exec", {"realm": "server", "cmd": "pba_enable 0"})
+    off = frames("PBA off")
+    call("console_exec", {"realm": "server", "cmd": "pba_enable 1"})
+    time.sleep(1)
+    call("lua_job", {"realm": "server", "code": code, "args": {"n": N}, "timeout_s": 120})
+    time.sleep(3)
+    lua("client", "pba.ResetPerf() pba.stats.processed = 0 return true")
+    t_reset = time.time()
+    on = frames("PBA on")
+    for ev in ("Think",):
+        res = call("perf_hook_cost", {"realm": "client", "event": ev, "duration_s": SECS}, timeout=int(SECS) + 120)
+        total = 0.0
+        for e in pba_entries(res):
+            total += float(e.get("total_ms") or e.get("cumulative_ms") or 0)
+        print(f"  {ev}: PBA hooks {total / SECS:.2f} ms/s", flush=True)
+    perf = lua("client", "local p = pba.perf local m, nat = 0, 0 for _, x in pairs(pba.Loops.mirrors) do m = m + 1 if x.nativeId then nat = nat + 1 end end "
+               "return { calls = p.n, meanCall = p.n > 0 and p.sum / p.n or 0, maxCall = p.maxCall, maxFrame = p.maxFrame, frames = p.frames, "
+               "processed = pba.stats.processed, mirrors = m, nativeMirrors = nat, timers = pba.perfTimers }")
+    el = time.time() - t_reset
+    print(f"  one-shots: {perf['calls']} calls, mean {perf['meanCall']:.2f} ms, max/call {perf['maxCall']:.1f} ms, max/frame {perf['maxFrame']:.1f} ms, "
+          f"{perf['calls'] * perf['meanCall'] / el:.1f} ms/s", flush=True)
+    print(f"  loops: {perf['mirrors']} mirrors ({perf['nativeMirrors']} native)", flush=True)
+    for k, t in (perf.get("timers") or {}).items():
+        print(f"  timer {k}: {t['n']} runs, mean {t['sum'] / max(t['n'], 1):.2f} ms, max {t['max']:.2f} ms, {t['sum'] / el:.2f} ms/s", flush=True)
+    on2 = frames("PBA on (after)")
+    over = (on.get("frametime_avg_ms", 0) + on2.get("frametime_avg_ms", 0)) / 2 - off.get("frametime_avg_ms", 0)
+    print(f"  frame overhead {over:+.2f} ms (unreliable when the game is unfocused: ~20 fps cap)", flush=True)
+    return {"off": off, "on": on, "perf": perf, "overhead_ms": over}
+
+
+results = {r: measure(r) for r in RENDERS}
+alloc = alloc_per_compute()
+fails = []
+if not alloc:
+    fails.append("allocation not measured")
+elif alloc["kb"] > MAX_ALLOC_KB:
+    fails.append(f"path computation garbage {alloc['kb']:.0f} KB > {MAX_ALLOC_KB:.0f}")
+for r, res in results.items():
+    t = ((res["perf"] or {}).get("timers") or {}).get("loops")
+    if t and t["n"] > 0:
+        mean = t["sum"] / t["n"]
+        if t["max"] > MAX_LOOPS_FRAME_MS:
+            fails.append(f"{r}: loops worst frame {t['max']:.1f} ms > {MAX_LOOPS_FRAME_MS}")
+        if mean > MAX_LOOPS_MEAN_MS:
+            fails.append(f"{r}: loops mean {mean:.2f} ms > {MAX_LOOPS_MEAN_MS}")
+    elif N >= 2:
+        fails.append(f"{r}: no loop work measured")
 
 call("lua_job", {"realm": "server", "code": code, "args": {"stop": True}, "timeout_s": 30})
-out = {"map": MAP, "n": N, "scene": scene, "off": off, "on": on, "perf": perf, "overhead_ms": over}
+out = {"map": MAP, "n": N, "scene": scene, "results": results, "alloc": alloc}
 json.dump(out, open(os.path.join(HERE, "perf_crowd_last.json"), "w"), indent=1)
+if CHECK:
+    print("FAIL: " + "; ".join(fails) if fails else "PASS", flush=True)
+    sys.exit(1 if fails else 0)

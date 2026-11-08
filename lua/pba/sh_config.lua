@@ -118,6 +118,7 @@ A.CONFIG = {
 	streams_max     = { 16, 1, 128, "cl", "Max 3D radios of other addons (BASS) processed at once. Beyond it they play untouched." },
 	max_anchors     = { 48, 0, 256, "cl", "Max invisible client entities used to replay sounds on their channel (copies). Beyond it copies are played at a position instead (no channel replacement)." },
 	update_interval = { 0.25, 0.05, 2, "cl", "Seconds between re-evaluations of loops, long sounds and radios (path, muffling)." },
+	loops_stagger   = { 1, 0, 1, "cl", "Spread the re-evaluation of loops and long sounds over the frames (same rate) instead of all of them in one frame (a hitch every interval with many loops)." },
 	debug_max       = { 48, 1, 512, "cl", "Max sources drawn by the debug overlay." },
 	native_max_voices = { 64, 4, 128, "cl", "Max sounds played at once by the native module (the quietest is dropped beyond)." },
 	native_mem_mb   = { 512, 16, 4096, "cl", "Memory for sounds decoded by the native module (MB). Least recently played sounds are dropped to make room; a sound larger than this is left to the engine." },
