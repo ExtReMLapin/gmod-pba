@@ -299,5 +299,64 @@ return {
 			local both = P.SelectVoices(L, { p }, t, 75, CFG)
 			expect(#both).to.equal(1) -- 40 dB below: outside the 20 dB window
 		end },
+		{ name = "Ramp: a new target is reached one interval later in equal dB steps, never in one jump", func = function()
+			local s, L, pos = {}, Vector(0, 0, 0), Vector(100, 0, 0)
+			P.RampTo(s, 0, 0.25, L, 1, 1, 1, 1, pos, 100)
+			local g = P.RampAt(s, 0, L)
+			expect(g).to.equal(1) -- the first target is heard at once (sound start)
+			P.RampTo(s, 1, 0.25, L, 0.1, 1, 0.5, 0.1, pos, 110) -- -20 dB, highs -20 dB
+			local g0 = P.RampAt(s, 1, L)
+			expect(g0).to.equal(1) -- nothing jumps at the re-evaluation
+			expect(s.pending).to.beTrue()
+			local gh, _, mh, hh, _, ph = P.RampAt(s, 1.125, L)
+			expect(near(AC.GainToDb(gh), -10, 1e-6)).to.beTrue() -- linear in dB
+			expect(near(AC.GainToDb(hh), -10, 1e-6)).to.beTrue()
+			expect(near(mh, math.sqrt(0.5), 1e-6)).to.beTrue()
+			expect(near(ph, 105, 1e-9)).to.beTrue()
+			-- 60 frames per second: 15 frames, 20/15 = 1.33 dB each, not 20 dB at once
+			local prev, worst = g0, 0
+			for k = 1, 30 do
+				local gk = P.RampAt(s, 1 + k / 60, L)
+				worst = math.max(worst, math.abs(AC.GainToDb(gk) - AC.GainToDb(prev)))
+				prev = gk
+			end
+			expect(near(worst, 20 / 15, 1e-6)).to.beTrue()
+			local g1, e1, m1, h1, pos1, p1 = P.RampAt(s, 1.25, L)
+			expect(g1 == 0.1 and e1 == 1 and m1 == 0.5 and h1 == 0.1 and pos1 == pos and p1 == 110).to.beTrue()
+			expect(s.pending).to.equal(false) -- the target was returned once: the caller can stop updating
+			expect(P.RampAt(s, 3, L)).to.equal(0.1)
+		end },
+		{ name = "Ramp: a target changed mid-ramp starts from what is heard then (no jump)", func = function()
+			local s, L, pos = {}, Vector(0, 0, 0), Vector(100, 0, 0)
+			P.RampTo(s, 0, 0.25, L, 1, 1, 1, 1, pos)
+			P.RampTo(s, 1, 0.25, L, 0.01, 1, 1, 1, pos) -- -40 dB
+			local heard = P.RampAt(s, 1.1, L) -- -16 dB
+			P.RampTo(s, 1.1, 0.25, L, 1, 1, 1, 1, pos) -- back up
+			expect(near(P.RampAt(s, 1.1, L), heard, 1e-9)).to.beTrue()
+			expect(P.RampAt(s, 1.35, L)).to.equal(1)
+		end },
+		{ name = "Ramp: the apparent position turns around the listener at constant speed (direction, distance)", func = function()
+			local s, L = {}, Vector(10, 20, 0)
+			P.RampTo(s, 0, 0.25, L, 1, 1, 1, 1, L + Vector(100, 0, 0))
+			P.RampTo(s, 0, 0.25, L, 1, 1, 1, 1, L + Vector(0, 200, 0))
+			local _, _, _, _, half = P.RampAt(s, 0.125, L)
+			local d = half - L
+			expect(near(d:Length(), 150, 1e-6)).to.beTrue()
+			expect(near(math.deg(math.atan2(d.y, d.x)), 45, 1e-6)).to.beTrue()
+			local _, _, _, _, q = P.RampAt(s, 0.0625, L)
+			expect(near(math.deg(math.atan2(q.y - L.y, q.x - L.x)), 22.5, 1e-6)).to.beTrue()
+		end },
+		{ name = "Ramp: a moving target (Retarget) is followed without restarting the ramp; duration 0 = jump", func = function()
+			local s, L = {}, Vector(0, 0, 0)
+			P.RampTo(s, 0, 0.25, L, 1, 1, 1, 1, Vector(100, 0, 0))
+			P.RampTo(s, 1, 0.25, L, 0.5, 1, 1, 1, Vector(100, 0, 0))
+			P.Retarget(s, 0.25, 1, 1, 1, Vector(100, 0, 0)) -- same progress, new end
+			expect(near(AC.GainToDb(P.RampAt(s, 1.125, L)), -6.0206, 1e-3)).to.beTrue()
+			expect(P.RampAt(s, 1.25, L)).to.equal(0.25)
+			local j = {}
+			P.RampTo(j, 0, 0, L, 1, 1, 1, 1, Vector(100, 0, 0))
+			P.RampTo(j, 1, 0, L, 0.1, 1, 1, 1, Vector(100, 0, 0))
+			expect(P.RampAt(j, 1, L)).to.equal(0.1)
+		end },
 	},
 }
