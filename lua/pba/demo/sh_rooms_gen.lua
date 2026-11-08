@@ -51,7 +51,9 @@ pba.DemoGen = {
 		},
 		doors = {
 			door = "pba_direction_door"
-		}
+		},
+		doorway = { -3232, 512, 0, -3184, 528, 108 },
+		crate_cover = { -3234, -3194 }
 	}, {
 		id = "window",
 		boxes = { { -2928, 0, 0, -2416, 512, 256 } },

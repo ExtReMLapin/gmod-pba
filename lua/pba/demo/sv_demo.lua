@@ -201,6 +201,49 @@ local function placeObstacle(r, kind)
 	st.props[#st.props + 1] = e
 end
 
+-- ------------------------------------------------------------------ crates in a doorway (room 3)
+-- A stack of crates in front of the open doorway, over the strip that the ajar leaf covers
+-- (r.crate_cover, from the generator): same gap left, so it should sound like the ajar door.
+-- Doorway in a y-normal wall (r.doorway). The crates go on the side the open leaf is not on.
+
+local CRATE = "models/props_junk/wood_crate001a.mdl"
+
+local function placeCrates(r, st)
+	clearProps(st)
+	local d, dw, cov = doorEnt(r, "door"), r.doorway, r.crate_cover
+	if not (IsValid(d) and dw and cov) then return end
+	local mid = (dw[2] + dw[5]) / 2
+	local north = d:WorldSpaceCenter().y < mid
+	local x, z = (cov[1] + cov[2]) / 2, dw[3]
+	while z < dw[6] do
+		local e = ents.Create("prop_physics")
+		if not IsValid(e) then return end
+		e:SetModel(CRATE)
+		e:SetPos(Vector(x, north and dw[5] + 22 or dw[2] - 22, z + 21)) -- about there, then exactly
+		e:Spawn()
+		local phys = e:GetPhysicsObject()
+		if IsValid(phys) then phys:EnableMotion(false) end
+		e.pba_demo = true
+		st.props[#st.props + 1] = e
+		local mn, mx = e:OBBMins(), e:OBBMaxs()
+		if mx.z - mn.z < 1 then return end
+		e:SetPos(Vector(x - (mn.x + mx.x) / 2, north and dw[5] + 1 - mn.y or dw[2] - 1 - mx.y, z - mn.z))
+		z = z + mx.z - mn.z
+	end
+end
+
+--- Opens a door wide from any state (an ajar door is closed first, as setDoor does for "half").
+-- Returns the delay (s) before it starts opening.
+local function openWide(e)
+	if not IsValid(e) then return 0 end
+	local f = doorFraction(e)
+	local delay = (f > 0.05 and f < 0.95) and 1.0 or 0
+	if delay > 0 then e:Fire("Close") end
+	e:Fire("SetRotationDistance", "90", delay)
+	e:Fire("Open", "", delay + 0.1)
+	return delay
+end
+
 -- the demo props stay where they are: no physgun / gravity gun pick-up
 hook.Add("PhysgunPickup", "pba_demo", function(_, e) if e.pba_demo then return false end end)
 hook.Add("GravGunPickupAllowed", "pba_demo", function(_, e) if e.pba_demo then return false end end)
@@ -253,8 +296,18 @@ for k, mode in pairs({ open = "open", half = "half", closed = "close" }) do
 	H.direction[k] = function(r, st)
 		st.sel.door = k
 		sendSel(r, "door", k)
+		clearProps(st)
 		setDoor(doorEnt(r, "door"), mode)
 	end
+end
+-- door wide open, then crates over the strip the ajar leaf covers, once the leaf has swung away
+-- (90 degrees at 120 degrees/s), on the other side of the wall
+H.direction.crates = function(r, st)
+	st.sel.door = "crates"
+	sendSel(r, "door", "crates")
+	clearProps(st)
+	local delay = openWide(doorEnt(r, "door"))
+	timer.Simple(delay + 1.2, function() if st.sel.door == "crates" then placeCrates(r, st) end end)
 end
 
 H.window = {

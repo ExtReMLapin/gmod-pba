@@ -17,7 +17,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # works under python -I too
-from gen_maps import Map, box, NODRAW, ORIGIN, PORTAL  # noqa: F401  (shared VMF helpers)
+from gen_maps import Map, box, subtract, NODRAW, ORIGIN, PORTAL  # noqa: F401  (shared VMF helpers)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LUA_OUT = os.path.join(HERE, "..", "..", "lua", "pba", "demo", "sh_rooms_gen.lua")
@@ -67,6 +67,20 @@ class Demo(Map):
         self.rooms = []
         self.n_portals = 0
         self.n_doors = 0
+
+    def vmf(self, skyname="sky_day01_01"):
+        """Each brush is cut by the holes it overlaps only. gen_maps.subtract also cuts a brush along
+        the coordinates of holes far away from it (same solid, 2 to 3 times more brushes here)."""
+        def overlaps(b, h):
+            return all(b[a] < h[a + 3] and h[a] < b[a + 3] for a in range(3))
+        world, holes = self.world, self.holes
+        self.world = [(piece, w[1], w[2] if len(w) == 3 else 16) for w in world
+                      for piece in subtract(w[0], [h for h in holes if overlaps(w[0], h)])]
+        self.holes = []
+        try:
+            return super().vmf(skyname)
+        finally:
+            self.world, self.holes = world, holes
 
     # -------------------------------------------------------------- helpers
     def wbox(self, b, tex, lms=16):
@@ -214,8 +228,13 @@ def build():
     m.ydoor("pba_direction_door", X + 400, 512)
     m.pedestal(X + 256, 784)
     m.prop("pba_direction_src", RADIO, X + 256, 784, 40, yaw=270)
+    # crate_cover: x range a stack of crates covers in front of the doorway (Lua, "crates" button):
+    # the strip the ajar leaf (20 degrees) covers as P.Aperture measures it (traces 12 u either side
+    # of the portal plane hit the leaf up to ~38 u from the hinge), so both leave the same gap at
+    # the far jamb and should sound alike
     m.add_room("direction", [(X, 0, 0, X + 512, 512, 192)], (X + 256, 256, 0), 90,
-               sources={"radio": "pba_direction_src"}, doors={"door": "pba_direction_door"})
+               sources={"radio": "pba_direction_src"}, doors={"door": "pba_direction_door"},
+               doorway=[X + 400, 512, 0, X + 448, 528, DOOR_H], crate_cover=[X + 398, X + 438])
     X = next_room(X + 512)
 
     # ---------------------------------------------------------------- 4 window (high, on the left)
