@@ -46,6 +46,8 @@ bool HasSound(const std::string& name);
 std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds);
 // decodes on a worker thread (large files); HasSound() turns true when ready. false if already pending.
 bool LoadSoundAsync(const std::string& name, std::string data);
+void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory budget (LRU eviction)
+void Memory(double* mb, int* sounds, int* voices);
 bool SoundPending(const std::string& name);
 int Play(const std::string& name, const VoiceParams& p, bool loop); // voice id, 0 on failure
 // reflections-only voice: the sound feeds echo slot `slot` once it is simulated at `gen`

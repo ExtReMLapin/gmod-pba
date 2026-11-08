@@ -48,6 +48,22 @@ Server (admin, replicated):
 | `pba_fullscale_db` | 90 | Lower = loud sounds get through walls more |
 | `pba_compat_auto` | 1 | Turn off Sound Muffling Effect while PBA is on |
 
+Safety limits (beyond each, the sound is simply left to the engine):
+
+| Convar | Default | Side | |
+|---|---|---|---|
+| `pba_relay_rate` | 80 | server | Relayed sounds per second per player (burst 1 s) |
+| `pba_loops_max` | 64 | server | Loops / long sounds followed at once |
+| `pba_loops_max_cl` | 32 | client | Long sounds born on the client followed at once |
+| `pba_streams_max` | 16 | client | Other addons' 3D radios processed at once |
+| `pba_max_anchors` | 48 | client | Invisible entities used to replay sounds on their channel |
+| `pba_update_interval` | 0.25 | client | Seconds between re-evaluations of loops and radios |
+| `pba_debug_max` | 48 | client | Sources drawn by the debug overlay |
+| `pba_native_max_voices` | 64 | client | Sounds played at once by the native module |
+| `pba_native_mem_mb` | 512 | client | Memory for decoded sounds (least recently played dropped first) |
+| `pba_native_file_mb` | 48 | client | Largest sound file the native module decodes |
+| `pba_native_props_max` | 64 | client | Props in the Steam Audio scene |
+
 All the other acoustic constants are convars too (`find pba_`). Client: `pba_cl_enable`,
 `pba_debug 1` (draws portals and paths). Menu: Spawn menu > Utilities > Physically Based Audio.
 

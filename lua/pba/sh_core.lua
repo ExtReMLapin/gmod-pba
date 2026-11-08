@@ -79,6 +79,11 @@ end
 
 function A.OnConfigChanged(name)
 	if name == "enable" or name == "cl_enable" then A.Refresh() end
+	if name == "update_interval" and CLIENT then
+		for _, t in ipairs({ "pba_loops_cl", "pba_streams" }) do
+			if timer.Exists(t) then timer.Adjust(t, A.cfg.update_interval) end
+		end
+	end
 	if A.Paths then A.Paths.InvalidateCache() end
 end
 

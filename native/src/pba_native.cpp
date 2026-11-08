@@ -1176,6 +1176,13 @@ LUA_FUNCTION(SetReflections) {
 	return 0;
 }
 
+// SetLimits(maxVoices, memMB): voice cap (quietest dropped beyond), decoded-sound memory budget
+// (least recently played sounds evicted; a sound larger than the budget is refused)
+LUA_FUNCTION(SetLimits) {
+	render::SetLimits((int)LUA->CheckNumber(1), LUA->CheckNumber(2));
+	return 0;
+}
+
 // Stats() -> table: reflection thread and audio thread load, reverb times, HRTF
 LUA_FUNCTION(Stats) {
 	double avg = 0, mx = 0;
@@ -1205,6 +1212,17 @@ LUA_FUNCTION(Stats) {
 	LUA->SetField(-2, "rays");
 	LUA->PushNumber(g_reflBounces.load());
 	LUA->SetField(-2, "bounces");
+	{
+		double mb = 0;
+		int ns = 0, nv = 0;
+		render::Memory(&mb, &ns, &nv);
+		LUA->PushNumber(mb);
+		LUA->SetField(-2, "soundMB");
+		LUA->PushNumber(ns);
+		LUA->SetField(-2, "sounds");
+		LUA->PushNumber(nv);
+		LUA->SetField(-2, "voices");
+	}
 	for (int b = 0; b < 3; ++b) {
 		LUA->PushNumber(rt[b]);
 		LUA->SetField(-2, b == 0 ? "rtLow" : b == 1 ? "rtMid" : "rtHigh");
@@ -1366,6 +1384,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetOutputMode");
 	LUA->PushCFunction(SetReflections);
 	LUA->SetField(-2, "SetReflections");
+	LUA->PushCFunction(SetLimits);
+	LUA->SetField(-2, "SetLimits");
 	LUA->PushCFunction(Stats);
 	LUA->SetField(-2, "Stats");
 	LUA->PushCFunction(DynamicAdd);

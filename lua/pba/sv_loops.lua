@@ -100,6 +100,7 @@ function LP.Handle(data)
 		return LP.Stop(idx, data.SoundName)
 	end
 	if not l and (data.SoundLevel or 75) <= 0 then return false end -- 2D loops: leave to the engine
+	if not l and table.Count(LP.active) >= (A.cfg.loops_max or 64) then return false end -- cap: left to the engine
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	if not l then
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {} }

@@ -108,6 +108,23 @@ function A.RelayStop(e, name)
 end
 
 -- (fallback: a partial autorefresh may reload this file before sh_core)
+--- Relay budget of one player (token bucket: pba_relay_rate per second, burst one second).
+-- Out of tokens: the player gets the original sound (vanilla) instead of a relay, so a huge
+-- firefight cannot flood the network.
+local function relayToken(ply)
+	local rate = A.cfg.relay_rate or 80
+	local now = CurTime()
+	local t = math.min(rate, (ply.pba_tok or rate) + (now - (ply.pba_tokT or now)) * rate)
+	ply.pba_tokT = now
+	if t < 1 then
+		ply.pba_tok = t
+		A.stats.relayCapped = (A.stats.relayCapped or 0) + 1
+		return false
+	end
+	ply.pba_tok = t - 1
+	return true
+end
+
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
 	if A.reemitting or A.explicitFilter then return end
 	A.stats.seen = A.stats.seen + 1
@@ -133,12 +150,13 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 		if ply ~= predicted then
 			local eye = A.PlayerEar(ply)
 			if eye:DistToSqr(pos) <= radius * radius then
+				local relay
 				if A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1 then
-					blocked[#blocked + 1] = ply
+					relay = true
 				else
-					local walls = A.Paths.Walls(pos, eye, 1, data.Entity)
-					if #walls == 0 then clear[#clear + 1] = ply else blocked[#blocked + 1] = ply end
+					relay = #A.Paths.Walls(pos, eye, 1, data.Entity) > 0
 				end
+				if relay and relayToken(ply) then blocked[#blocked + 1] = ply else clear[#clear + 1] = ply end
 			end
 		end
 	end
@@ -146,7 +164,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if A.cfg.echo_relay >= 0.5 and A.cfg.allow_native >= 0.5 and lvl >= A.cfg.echo_min_level and #clear > 0 then
 		local want = {}
 		for _, ply in ipairs(clear) do
-			if ply:GetInfoNum("pba_echo_want", 0) >= 1 then want[#want + 1] = ply end
+			if ply:GetInfoNum("pba_echo_want", 0) >= 1 and relayToken(ply) then want[#want + 1] = ply end
 		end
 		if #want > 0 then
 			local id = nameId(data.SoundName)

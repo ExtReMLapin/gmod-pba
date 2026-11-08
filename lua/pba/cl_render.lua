@@ -84,6 +84,12 @@ end
 local function anchorFor(c, slot)
 	local a = c.anchors[slot]
 	if IsValid(a) then return a end
+	-- cap on client entities: beyond it, the caller plays the copy at a position instead
+	local n = 0
+	for _, cc in pairs(A.copies) do
+		for _, x in pairs(cc.anchors) do if IsValid(x) then n = n + 1 end end
+	end
+	if n >= (A.cfg.max_anchors or 48) then return nil end
 	a = ClientsideModel("models/hunter/blocks/cube025x025x025.mdl", RENDERGROUP_OTHER)
 	if not IsValid(a) then return nil end
 	a:SetNoDraw(true)

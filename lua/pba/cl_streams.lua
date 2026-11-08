@@ -31,6 +31,7 @@ local function record(ch)
 	if r then return r end
 	local ok, is3d = pcall(function() return ch:Is3D() and ch:Get3DEnabled() end)
 	if not ok or not is3d then return nil end -- 2D channels (interface music): untouched
+	if table.Count(ST.chans) >= (A.cfg.streams_max or 16) then return nil end -- cap: untouched
 	local okv, vol = pcall(O.GetVolume, ch)
 	r = { vol = okv and vol or 1, g = 1, apparent = nil, eq = { 1, 1, 1 } }
 	local okf, file = pcall(ch.GetFileName, ch)
@@ -201,7 +202,7 @@ local function release(ch, r)
 	if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) r.filtered = nil end
 end
 
-timer.Create("pba_streams", 0.25, 0, function()
+timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, function()
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
 	local L = A.ListenerPos()

@@ -289,17 +289,22 @@ end
 -- false, nil, "pending" while a large file decodes on the module's worker thread.
 function N.EnsureSound(name)
 	local n = cleanName(name)
-	if N.failed[n] then return false end
-	if pba_native.HasSound(n) then return true, n end
+	-- failures are retried after a while: a sound refused for lack of memory may fit later
+	local f = N.failed[n]
+	if f and (f == true or RealTime() - f < 30) then return false end
+	if pba_native.HasSound(n) then
+		if N.loading then N.loading[n] = nil end -- loaded: a later eviction must not look like a failure
+		return true, n
+	end
 	if pba_native.SoundPending and pba_native.SoundPending(n) then return false, nil, "pending" end
 	if N.loading and N.loading[n] then
 		-- the worker finished without a sound: undecodable
 		N.loading[n] = nil
-		N.failed[n] = true
+		N.failed[n] = RealTime()
 		return false
 	end
 	local data = file.Read("sound/" .. n, "GAME")
-	if not data or #data > 48 * 1024 * 1024 then N.failed[n] = true return false end
+	if not data or #data > (A.cfg.native_file_mb or 48) * 1024 * 1024 then N.failed[n] = RealTime() return false end
 	if #data > 512 * 1024 and pba_native.LoadSoundAsync then
 		pba_native.LoadSoundAsync(n, data)
 		N.loading = N.loading or {}
@@ -307,7 +312,7 @@ function N.EnsureSound(name)
 		return false, nil, "pending"
 	end
 	local secs = pba_native.LoadSound(n, data)
-	if not secs then N.failed[n] = true return false end
+	if not secs then N.failed[n] = RealTime() return false end
 	return true, n
 end
 
@@ -452,7 +457,7 @@ end
 
 local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, prop_dynamic = true, prop_vehicle_jeep = true,
 	prop_vehicle_airboat = true, prop_vehicle_prisoner_pod = false }
-local PROP_MIN_SIZE, PROP_MAX = 64, 64 -- units (largest box dimension), objects
+local PROP_MIN_SIZE = 64 -- units (largest box dimension); the count is capped by pba_native_props_max
 N.doors = N.doors or {}
 N.dynSkip = N.dynSkip or setmetatable({}, { __mode = "k" }) -- entities not to look at again
 
@@ -505,7 +510,7 @@ function N.SyncDoors()
 					end
 					d = { ent = e }
 					N.doors[id] = d
-				elseif isProp and big >= PROP_MIN_SIZE and nProps < PROP_MAX then
+				elseif isProp and big >= PROP_MIN_SIZE and nProps < (A.cfg.native_props_max or 64) then
 					-- material from the physics surface: pba's wall table at the object's
 					-- smallest dimension (hollow objects behave like thin walls)
 					local phys = e:GetPhysicsObject()
@@ -612,6 +617,8 @@ timer.Create("pba_native_reverb", 0.5, 0, function()
 	if N.echoCvar and N.echoCvar:GetBool() ~= want then RunConsoleCommand("pba_echo_want", want and "1" or "0") end
 	local all = N.render and (A.cfg.native_all or 0) >= 0.5 and A.Enabled() or false
 	if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("pba_native_all_want", all and "1" or "0") end
+	-- limits apply whatever renders (decoding also serves echoes)
+	if N.ready and pba_native and pba_native.SetLimits then pba_native.SetLimits(A.cfg.native_max_voices or 64, A.cfg.native_mem_mb or 512) end
 	if not N.render or not pba_native or not pba_native.RoomReverb then return end
 	N.ApplySettings()
 	local ok, l, m, h = pcall(pba_native.RoomReverb)

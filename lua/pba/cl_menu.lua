@@ -38,6 +38,12 @@ function Build.player(panel)
 	panel.apDeps = { { chk(panel, "Muffle those radios", "streams_filter"), "ready" },
 		{ chk(panel, "Radios in 3D (module)", "streams_native"), "render" }, { sld(panel, "Debug overlay", "debug"), "debug" } }
 	sld(panel, "Path budget (ms/frame)", "frame_budget_ms", 1)
+	panel:Help("Limits (what goes beyond is left to the engine):")
+	sld(panel, "Re-evaluation interval (s)", "update_interval", 2)
+	sld(panel, "Max client long sounds", "loops_max_cl")
+	sld(panel, "Max radios processed", "streams_max")
+	sld(panel, "Max replay anchors", "max_anchors")
+	sld(panel, "Debug overlay: max sources", "debug_max")
 	panel.apPlayer = true
 	A.menuPanels = A.menuPanels or {}
 	A.menuPanels[#A.menuPanels + 1] = panel
@@ -78,6 +84,12 @@ function Build.native(panel)
 	dep(sld(panel, "Reverb bounces", "native_bounces"), R)
 	dep(chk(panel, "Doors reflect sound", "native_doors"), "ready")
 	dep(chk(panel, "Big props reflect sound", "native_props"), "ready")
+	dep(sld(panel, "Max props in the scene", "native_props_max"), "ready")
+
+	panel:Help("Limits:")
+	dep(sld(panel, "Max native voices", "native_max_voices"), R)
+	dep(sld(panel, "Decoded sounds memory (MB)", "native_mem_mb"), R)
+	dep(sld(panel, "Largest sound file (MB)", "native_file_mb"), R)
 
 	panel:Help("Baked paths (replace the probe graph):")
 	dep(chk(panel, "Steam Audio paths", "native_paths"), "ready")
@@ -127,6 +139,10 @@ function Build.server(panel)
 	sld(panel, "DSP strong muffle", "dsp_lp3")
 	sld(panel, "Long sound from (s)", "max_duration", 1)
 	sld(panel, "Max distance (units)", "lod_dist")
+
+	panel:Help("Limits (what goes beyond is left to the engine):")
+	sld(panel, "Relayed sounds per second per player", "relay_rate")
+	sld(panel, "Max loops followed", "loops_max")
 
 	panel:Help("Players' Steam Audio module:")
 	chk(panel, "Allow the module", "allow_native")

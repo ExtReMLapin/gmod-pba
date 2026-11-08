@@ -42,7 +42,7 @@ namespace {
 
 constexpr int kRate = 48000;
 constexpr int kBlock = 512;
-constexpr int kMaxVoices = 64;
+constexpr int kMaxVoices = 128; // effect pool size: the hard ceiling of g_maxVoices
 constexpr int kMaxPathVoices = 16;
 constexpr int kIR = (int)(kRate * kIRSeconds);
 constexpr int kAmbi = 4; // first-order ambisonics channels
@@ -51,7 +51,13 @@ constexpr int kTailBlocks = (int)(kRate * 2.5 / kBlock); // keep processing a re
 
 struct Sound {
 	std::vector<float> pcm; // mono, 48 kHz
+	std::atomic<uint64_t> lastUse{0}; // Play counter, for least-recently-used eviction
 };
+
+std::atomic<int> g_maxVoices{64};               // SetLimits
+std::atomic<uint64_t> g_memBudget{512ull << 20}; // decoded PCM bytes kept, SetLimits
+std::atomic<uint64_t> g_useClock{0};
+uint64_t g_soundBytes = 0;                       // under g_mtx
 
 struct Voice {
 	int id = 0;
@@ -448,7 +454,7 @@ void Reap() {
 		                              return true;
 	                              }),
 	               g_voices.end());
-	if ((int)g_voices.size() >= kMaxVoices) {
+	while (!g_voices.empty() && (int)g_voices.size() >= g_maxVoices.load()) {
 		auto q = std::min_element(g_voices.begin(), g_voices.end(),
 		                          [](const auto& a, const auto& b) { return a->gain < b->gain; });
 		ReleaseVoice(**q);
@@ -552,6 +558,7 @@ void Stop() {
 	for (auto& v : g_voices) ReleaseVoice(*v);
 	g_voices.clear();
 	g_sounds.clear();
+	g_soundBytes = 0;
 	for (auto& e : g_pool) {
 		if (e.direct) iplDirectEffectRelease(&e.direct);
 		if (e.binaural) iplBinauralEffectRelease(&e.binaural);
@@ -700,23 +707,50 @@ bool HasSound(const std::string& name) {
 	return g_sounds.count(name) != 0;
 }
 
+// Evicts least-recently-played sounds that no voice holds until at most `target` bytes remain.
+// Lock held. False when it cannot get there (everything left is playing).
+static bool EvictTo(uint64_t target) {
+	while (g_soundBytes > target) {
+		auto victim = g_sounds.end();
+		for (auto it = g_sounds.begin(); it != g_sounds.end(); ++it)
+			if (it->second.use_count() == 1 && (victim == g_sounds.end() || it->second->lastUse < victim->second->lastUse))
+				victim = it;
+		if (victim == g_sounds.end()) return false;
+		g_soundBytes -= victim->second->pcm.size() * sizeof(float);
+		g_sounds.erase(victim);
+	}
+	return true;
+}
+
 std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds) {
 	ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, 1, kRate);
 	ma_decoder dec;
 	if (ma_decoder_init_memory(data, size, &dc, &dec) != MA_SUCCESS) return "cannot decode " + name;
 	auto snd = std::make_shared<Sound>();
+	const uint64_t budget = g_memBudget.load();
 	float buf[4096];
 	for (;;) {
 		ma_uint64 got = 0;
 		ma_decoder_read_pcm_frames(&dec, buf, 4096, &got);
 		if (got == 0) break;
 		snd->pcm.insert(snd->pcm.end(), buf, buf + got);
+		if (snd->pcm.size() * sizeof(float) > budget) { // a single sound larger than the whole budget
+			ma_decoder_uninit(&dec);
+			return "too long for the memory budget: " + name;
+		}
 	}
 	ma_decoder_uninit(&dec);
 	if (snd->pcm.size() < 2) return "empty sound " + name;
 	if (seconds) *seconds = (double)snd->pcm.size() / kRate;
+	const uint64_t bytes = snd->pcm.size() * sizeof(float);
 	std::lock_guard<std::mutex> lk(g_mtx);
+	// evict least-recently-played sounds that no voice holds until the new one fits
+	if (!EvictTo(budget - bytes)) return "memory budget full (every decoded sound is playing): " + name;
+	snd->lastUse = ++g_useClock;
+	auto old = g_sounds.find(name);
+	if (old != g_sounds.end()) g_soundBytes -= old->second->pcm.size() * sizeof(float);
 	g_sounds[name] = snd;
+	g_soundBytes += bytes;
 	return "";
 }
 
@@ -755,6 +789,7 @@ int Play(const std::string& name, const VoiceParams& p, bool loop) {
 	iplPanningEffectReset(g_pool[slot].pan);
 	v->id = g_nextId++;
 	v->snd = it->second;
+	it->second->lastUse = ++g_useClock;
 	v->loop = loop;
 	v->cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
 	SetVoice(*v, p);
@@ -858,3 +893,20 @@ int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, d
 
 #undef STB_VORBIS_HEADER_ONLY
 #include "stb_vorbis.c"
+
+namespace render {
+void SetLimits(int maxVoices, double memMB) {
+	g_maxVoices = std::clamp(maxVoices, 4, kMaxVoices);
+	g_memBudget = (uint64_t)(std::clamp(memMB, 16.0, 16384.0) * 1048576.0);
+	std::lock_guard<std::mutex> lk(g_mtx);
+	EvictTo(g_memBudget.load()); // a lower budget frees memory now, not at the next load
+}
+void Memory(double* mb, int* sounds, int* voices) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	*mb = (double)g_soundBytes / 1048576.0;
+	*sounds = (int)g_sounds.size();
+	int n = 0;
+	for (auto& v : g_voices) n += v->alive.load() ? 1 : 0;
+	*voices = n;
+}
+} // namespace render

@@ -71,7 +71,7 @@ hook.Add("PostDrawTranslucentRenderables", "pba_debug", function(depth, sky)
 		local age = now - rec.t
 		if age > HOLD then
 			A.debugLive[key] = nil
-		elseif shown < 48 then
+		elseif shown < (A.cfg.debug_max or 48) then
 			shown = shown + 1
 			local fade = 1 - age / HOLD
 			local r, S = rec.r, rec.S

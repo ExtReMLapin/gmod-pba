@@ -180,6 +180,9 @@ function LP.HandleClient(data)
 	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 	local dur = SoundDuration(name) or 0
 	if dur <= A.cfg.max_duration or dur > 1800 then return false end
+	local n = 0
+	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end
+	if n >= (A.cfg.loops_max_cl or 32) then return false end -- cap: left to the engine
 	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
 		dsp = data.DSP or 0, once = true, client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100 }
 	LP.mirrors[key] = m
@@ -236,7 +239,7 @@ function LP.FollowNative(L)
 	end
 end
 
-timer.Create("pba_loops_cl", 0.25, 0, function()
+timer.Create("pba_loops_cl", A.cfg.update_interval or 0.25, 0, function()
 	if not IsValid(LocalPlayer()) then return end
 	for key, m in pairs(LP.mirrors) do
 		if m.done then
