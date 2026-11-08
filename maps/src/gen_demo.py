@@ -350,7 +350,20 @@ def build():
                stream_pos=[X + 300, 800, 52])
     X = next_room(X + 512)
 
-    # ---------------------------------------------------------------- 13 exit
+    # ---------------------------------------------------------------- 13 reverb (materials changed on the fly)
+    # Plain concrete shell; the client covers walls, floor and ceiling with panels of the chosen
+    # material (drawn + added to the Steam Audio scene), so the same room reverberates like tile,
+    # wood, metal or acoustic foam. Fixed listening spot facing the speaker.
+    m.space(X, 0, 0, X + 768, 512, 256, wall=CONC, floor=CONC_FLOOR, ceil=CONC_CEIL, light=False)
+    m.light(X + 192, 256, 232, bright=180)
+    m.light(X + 576, 256, 232, bright=180)
+    m.pedestal(X + 640, 256)
+    m.prop("pba_reverb_src", SPEAKER, X + 640, 256, 40, yaw=180)
+    m.add_room("reverb", [(X, 0, 0, X + 768, 512, 256)], (X + 224, 256, 0), 0, panel=(X + 180, 330),
+               sources={"speaker": "pba_reverb_src"}, door_y=list(DOOR_Y), door_h=DOOR_H)
+    X = next_room(X + 768)
+
+    # ---------------------------------------------------------------- 14 exit
     m.space(X, 0, 0, X + 512, 512, 192, wall=DEV, floor=CONC_FLOOR, ceil=DEV)
     m.add_room("exit", [(X, 0, 0, X + 512, 512, 192)], (X + 128, 256, 0), 0)
 

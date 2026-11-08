@@ -665,6 +665,15 @@ hook.Add("HUDPaint", "pba_demo", function()
 	local s = math.max(ScrH(), 480) / 1080
 	drawIndicator(s)
 	drawCard(s)
+	-- reverb room: Steam Audio's reverberation time estimate at the listener
+	if DM.ReverbInfo then
+		local lo, mi, hi = DM.ReverbInfo()
+		if lo ~= nil then
+			local txt = lo and string.format(L({ en = "RT60 (Steam Audio): %.2f s   lows %.2f   highs %.2f", fr = "RT60 (Steam Audio) : %.2f s   graves %.2f   aigus %.2f" }), mi, lo, hi)
+				or L({ en = "RT60: mode C (Steam Audio) only", fr = "RT60 : mode C (Steam Audio) uniquement" })
+			draw.SimpleTextOutlined(txt, "pba_demo_label", ScrW() / 2, math.floor(ScrH() * 0.12), COL_TITLE, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, color_black)
+		end
+	end
 	local ts = DM.toast
 	if ts and RealTime() - ts.t < 3.5 then
 		surface.SetFont("pba_demo_label")
@@ -693,3 +702,120 @@ if DM.clientLoaded then
 	end)
 end
 DM.clientLoaded = true
+
+-- ------------------------------------------------------------------ reverb room: walls of another material
+-- The room is a concrete shell. For another material, the client covers walls, floor and ceiling
+-- with panels: drawn over the walls, and added to its Steam Audio scene as one static mesh with
+-- that material's absorption (Steam Audio's own presets; foam: typical acoustic foam). Only the
+-- native reverb (mode C) hears it: the engine's reverb looks at the room's size, not materials.
+local RV_ID = 61000 -- dynamic-mesh id, far above entity indices
+DM.RV_MATS = {
+	tile = { tex = "tile/tilewall009b", abs = { 0.01, 0.02, 0.02 }, scat = 0.05 },
+	wood = { tex = "wood/woodwall009a", abs = { 0.11, 0.07, 0.06 }, scat = 0.05 },
+	metal = { tex = "metal/metalwall026a", abs = { 0.20, 0.07, 0.06 }, scat = 0.05 },
+	foam = { tex = "models/props_c17/furniturefabric001a", abs = { 0.35, 0.90, 0.95 }, scat = 0.30, tint = 0.35 },
+}
+
+-- panel boxes (2 units thick, against each face) of the reverb room, around the airlock doorways
+local function rvPanels(r)
+	local b = r.boxes[1]
+	local x0, y0, z0, x1, y1, z1 = b[1], b[2], b[3], b[4], b[5], b[6]
+	local dy0, dy1 = r.door_y[1], r.door_y[2]
+	local dh = r.door_h
+	local t = 2
+	local out = {
+		{ x0, y0, z0, x1, y1, z0 + t, "z+" }, { x0, y0, z1 - t, x1, y1, z1, "z-" },
+		{ x0, y0, z0, x1, y0 + t, z1, "y+" }, { x0, y1 - t, z0, x1, y1, z1, "y-" },
+	}
+	for _, side in ipairs({ { x0, x0 + t, "x+" }, { x1 - t, x1, "x-" } }) do
+		out[#out + 1] = { side[1], y0, z0, side[2], dy0, z1, side[3] }
+		out[#out + 1] = { side[1], dy1, z0, side[2], y1, z1, side[3] }
+		out[#out + 1] = { side[1], dy0, z0 + dh, side[2], dy1, z1, side[3] }
+	end
+	return out
+end
+
+local function rvNative(r, key)
+	local N = A.Native
+	if not (N and N.ready and pba_native and pba_native.DynamicAdd and N.BoxMesh) then return false end
+	pba_native.DynamicRemove(RV_ID)
+	local m = DM.RV_MATS[key]
+	if m then
+		local v, t = {}, {}
+		for _, p in ipairs(rvPanels(r)) do
+			local bv, bt = N.BoxMesh(Vector(p[1], p[2], p[3]), Vector(p[4], p[5], p[6]))
+			local base = #v / 3
+			for _, x in ipairs(bv) do v[#v + 1] = x end
+			for _, x in ipairs(bt) do t[#t + 1] = x + base end
+		end
+		pba_native.DynamicAdd(RV_ID, v, t, { absorption = m.abs, scattering = m.scat, transmission = { 0.01, 0.005, 0.002 } })
+		pba_native.DynamicMove(RV_ID, Matrix():ToTable())
+	end
+	pba_native.DynamicCommit()
+	return true
+end
+
+local rvMats = {}
+local function rvMaterial(key)
+	if rvMats[key] then return rvMats[key] end
+	local m = DM.RV_MATS[key]
+	local tint = m.tint or 0.6
+	rvMats[key] = CreateMaterial("pba_demo_rv_" .. key, "UnlitGeneric", {
+		["$basetexture"] = m.tex, ["$color"] = string.format("[%g %g %g]", tint, tint, tint) })
+	return rvMats[key]
+end
+
+DM.rvApplied = DM.rvApplied or {}
+hook.Add("Think", "pba_demo_reverb", function()
+	local r = DM.byId and DM.byId.reverb
+	if not r then return end
+	local key = DM.sel.reverb and DM.sel.reverb.mat or "concrete"
+	local nativeReady = A.Native and A.Native.ready or false
+	-- (re)build the native panels when the material changes or the module (re)loads the world
+	if DM.rvApplied.key ~= key or DM.rvApplied.ready ~= nativeReady or DM.rvApplied.world ~= (A.Native and A.Native.worldGen) then
+		DM.rvApplied.key, DM.rvApplied.ready, DM.rvApplied.world = key, nativeReady, A.Native and A.Native.worldGen
+		rvNative(r, key)
+	end
+end)
+
+-- one textured quad per panel face facing the room, the texture tiled every 128 units
+local function rvQuad(p)
+	local x0, y0, z0, x1, y1, z1, f = p[1], p[2], p[3], p[4], p[5], p[6], p[7]
+	local c -- 4 corners, counter-clockwise seen from the room; u, v sizes
+	if f == "z+" then c = { Vector(x0, y0, z1), Vector(x0, y1, z1), Vector(x1, y1, z1), Vector(x1, y0, z1) }
+	elseif f == "z-" then c = { Vector(x0, y0, z0), Vector(x1, y0, z0), Vector(x1, y1, z0), Vector(x0, y1, z0) }
+	elseif f == "y+" then c = { Vector(x0, y1, z1), Vector(x1, y1, z1), Vector(x1, y1, z0), Vector(x0, y1, z0) }
+	elseif f == "y-" then c = { Vector(x1, y0, z1), Vector(x0, y0, z1), Vector(x0, y0, z0), Vector(x1, y0, z0) }
+	elseif f == "x+" then c = { Vector(x1, y1, z1), Vector(x1, y0, z1), Vector(x1, y0, z0), Vector(x1, y1, z0) }
+	else c = { Vector(x0, y0, z1), Vector(x0, y1, z1), Vector(x0, y1, z0), Vector(x0, y0, z0) } end
+	local w, h = c[1]:Distance(c[2]) / 128, c[2]:Distance(c[3]) / 128
+	mesh.Begin(MATERIAL_QUADS, 1)
+		mesh.Position(c[1]) mesh.TexCoord(0, 0, 0) mesh.Color(255, 255, 255, 255) mesh.AdvanceVertex()
+		mesh.Position(c[2]) mesh.TexCoord(0, w, 0) mesh.Color(255, 255, 255, 255) mesh.AdvanceVertex()
+		mesh.Position(c[3]) mesh.TexCoord(0, w, h) mesh.Color(255, 255, 255, 255) mesh.AdvanceVertex()
+		mesh.Position(c[4]) mesh.TexCoord(0, 0, h) mesh.Color(255, 255, 255, 255) mesh.AdvanceVertex()
+	mesh.End()
+end
+
+hook.Add("PostDrawOpaqueRenderables", "pba_demo_reverb", function(depth, sky)
+	if sky then return end
+	local r = DM.byId and DM.byId.reverb
+	if not r then return end
+	local key = DM.sel.reverb and DM.sel.reverb.mat or "concrete"
+	if not DM.RV_MATS[key] then return end
+	local b = r.boxes[1]
+	if EyePos():DistToSqr(Vector((b[1] + b[4]) / 2, (b[2] + b[5]) / 2, (b[3] + b[6]) / 2)) > 1500 * 1500 then return end
+	render.SetMaterial(rvMaterial(key))
+	for _, p in ipairs(rvPanels(r)) do rvQuad(p) end
+end)
+
+--- RT60 of the room around the listener, as Steam Audio estimates it (mode C), for the HUD.
+function DM.ReverbInfo()
+	local r = DM.byId and DM.byId.reverb
+	local ply = LocalPlayer()
+	if not r or not IsValid(ply) or DM.RoomAt(ply:GetPos()) ~= r then return nil end
+	if not (A.Native and A.Native.render and pba_native and pba_native.Stats) then return false end
+	local ok, st = pcall(pba_native.Stats)
+	if not ok or not st or not st.rtMid then return false end
+	return st.rtLow, st.rtMid, st.rtHigh
+end

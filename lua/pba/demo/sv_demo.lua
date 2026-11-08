@@ -353,6 +353,21 @@ H.boombox = {
 	door = function(r) setDoor(doorEnt(r, "door"), "toggle") end,
 }
 
+H.reverb = {
+	voice = function(r) emit(r, src(r, "speaker"), "voice") end,
+	knock = function(r) emit(r, src(r, "speaker"), "knock") end,
+	shot = function(r) emit(r, src(r, "speaker"), "magnum", true) end,
+}
+-- the walls' material: every client covers the room with it (cl_demo) and its Steam Audio scene
+-- follows; a knock right after so that the change is heard
+for _, k in ipairs({ "tile", "concrete", "wood", "metal", "foam" }) do
+	H.reverb[k] = function(r, st)
+		st.sel.mat = k
+		sendSel(r, "mat", k)
+		timer.Simple(0.4, function() H.reverb.knock(r) end)
+	end
+end
+
 H.exit = {
 	restart = function(r, st, ply)
 		DM.ResetAll()

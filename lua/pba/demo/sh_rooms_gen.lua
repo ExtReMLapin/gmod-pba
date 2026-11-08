@@ -178,13 +178,25 @@ pba.DemoGen = {
 		},
 		stream_pos = { 5180, 800, 52 }
 	}, {
-		id = "exit",
-		boxes = { { 5584, 0, 0, 6096, 512, 192 } },
-		listen = { 5712, 256, 0 },
+		id = "reverb",
+		boxes = { { 5584, 0, 0, 6352, 512, 256 } },
+		listen = { 5808, 256, 0 },
 		yaw = 0,
-		panel = { 5756, 316, 36 },
+		panel = { 5764, 330, 36 },
+		panel_yaw = -59.3,
+		sources = {
+			speaker = "pba_reverb_src"
+		},
+		door_y = { 232, 280 },
+		door_h = 108
+	}, {
+		id = "exit",
+		boxes = { { 6544, 0, 0, 7056, 512, 192 } },
+		listen = { 6672, 256, 0 },
+		yaw = 0,
+		panel = { 6716, 316, 36 },
 		panel_yaw = -126.3
 	} },
-	portals = 33,
-	doors = 30
+	portals = 35,
+	doors = 32
 }

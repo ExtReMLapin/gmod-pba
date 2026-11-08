@@ -66,6 +66,7 @@ DM.SND = {
 	kl4 = { "vo/k_lab/kl_excellent.wav", 75, 100 },
 	kl5 = { "vo/k_lab/kl_diditwork.wav", 75, 100 },
 	kl6 = { "vo/k_lab/kl_dearme.wav", 75, 100 },
+	knock = { "physics/wood/wood_crate_impact_hard2.wav", 85, 100 }, -- short impulse: the tail is heard alone
 }
 -- 3D stream of "another addon" (sound.PlayFile, like 3D Stream Radio)
 DM.STREAM = "sound/music/hl2_song26_trainstation1.mp3"
@@ -295,8 +296,31 @@ DM.ROOMS = {
 			{ id = "door", label = T("Door", "Porte"), kind = "toggle" },
 		},
 	},
+	reverb = {
+		num = "13", title = T("SAME ROOM, OTHER MATERIALS", "MÊME PIÈCE, AUTRES MATÉRIAUX"),
+		listen = T("the tail after each sound (how long the room keeps ringing).", "la traîne après chaque son (combien de temps la pièce résonne)."),
+		a = T("the same for every material (the engine only looks at the room's size).", "pareil pour tous les matériaux (le moteur ne regarde que la taille de la pièce)."),
+		b = T("the same: PBA Light leaves the reverb to the engine.", "pareil : PBA Light laisse la réverb au moteur."),
+		c = T("tile rings for seconds, foam is almost dry: same size, other walls.", "le carrelage résonne des secondes, la mousse est presque sèche : même taille, autres murs."),
+		try = T("Stay on the mark, change the walls, clap again. The RT60 shown is Steam Audio's own estimate.",
+			"Restez sur la marque, changez les murs, refaites un bruit. Le RT60 affiché est l'estimation de Steam Audio."),
+		note = T("Reverberation time ~ room volume / absorption (Sabine). Materials matter as much as size.",
+			"Durée de réverbération ~ volume / absorption (Sabine). Les matériaux comptent autant que la taille."),
+		main = "voice", native = true,
+		buttons = {
+			{ id = "tile", label = T("Tile", "Carrelage"), kind = "select", group = "mat" },
+			{ id = "concrete", label = T("Concrete", "Béton"), kind = "select", group = "mat" },
+			{ id = "wood", label = T("Wood", "Bois"), kind = "select", group = "mat" },
+			{ id = "metal", label = T("Metal", "Métal"), kind = "select", group = "mat" },
+			{ id = "foam", label = T("Acoustic foam", "Mousse acoustique"), kind = "select", group = "mat" },
+			{ id = "voice", label = T("Voice", "Voix") },
+			{ id = "knock", label = T("Knock", "Coup sec") },
+			{ id = "shot", label = T("Shot", "Tir") },
+		},
+		defaults = { mat = "concrete" },
+	},
 	exit = {
-		num = "13", title = T("THE END", "FIN DU PARCOURS"),
+		num = "14", title = T("THE END", "FIN DU PARCOURS"),
 		listen = T("what you keep from here.", "ce que vous gardez en partant."),
 		a = T("your usual game.", "votre jeu habituel."),
 		b = T("PBA Light: what the Workshop version gives you.", "PBA Light : ce que donne la version Workshop."),

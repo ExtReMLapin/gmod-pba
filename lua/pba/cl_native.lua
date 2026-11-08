@@ -136,6 +136,7 @@ function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	local t0 = SysTime()
 	local nt = pba_native.LoadWorld(verts, tris, matIdx, mats)
 	N.doors = {} -- the module released its dynamic objects with the old world
+	N.worldGen = (N.worldGen or 0) + 1 -- others holding dynamic meshes (demo panels) re-add them
 	N.loadMs = (SysTime() - t0) * 1000
 	N.tris, N.mins, N.maxs = nt, mins, maxs
 	N.ready = nt > 0
@@ -266,7 +267,7 @@ end
 function N.ApplySettings()
 	if not N.render or not pba_native.SetReflections then return end
 	pba_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
-	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays)
+	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays, A.cfg.native_bounces or 16)
 end
 
 N.hrtfCvar = N.hrtfCvar or CreateClientConVar("pba_native_hrtf", "", true, false,
@@ -467,6 +468,8 @@ local function boxMesh(mn, mx)
 	local t = { 0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5 }
 	return v, t
 end
+
+N.BoxMesh = boxMesh
 
 function N.SyncDoors()
 	if not N.ready or not pba_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end

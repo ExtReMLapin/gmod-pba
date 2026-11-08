@@ -18,7 +18,7 @@
 //   Rendering (render.cpp): AudioStart([sofaBytes]), AudioStop(), HasSound(name),
 //     LoadSound(name, bytes), Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh]),
 //     Update(id, ...), StopVoice(id), SetListener(pos, fwd, up, master), SetOutputMode(0|1),
-//     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays]),
+//     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table
 //   DynamicAdd(id, verts, tris, material), DynamicMove(id, matrixRows), DynamicRemove(id),
 //     DynamicCommit() -> committed   (doors and other moving objects in the scene)
@@ -94,7 +94,7 @@ IPLCoordinateSpace3 g_stageLis{};
 bool g_stageLisOk = false;
 std::thread g_reflThread;
 std::atomic<bool> g_reflRun{false}, g_reflWanted{false};
-std::atomic<int> g_reflRays{2048}, g_reflRuns{0}, g_reflErrors{0};
+std::atomic<int> g_reflRays{2048}, g_reflBounces{16}, g_reflRuns{0}, g_reflErrors{0};
 std::atomic<float> g_reflMs{0}, g_reflMaxMs{0};
 float g_rt[3] = {0, 0, 0}; // smoothed room reverb times (under g_stageMtx)
 
@@ -130,7 +130,9 @@ void ReflectionLoop() {
 				IPLSimulationSharedInputs sh{};
 				sh.listener = lis;
 				sh.numRays = g_reflRays.load();
-				sh.numBounces = 16;
+				// enough bounces to fill the simulated window: with too few, the energy of a
+				// reflective room stops early and the reverb time estimate is capped (~0.8 s)
+				sh.numBounces = g_reflBounces.load();
 				sh.duration = render::kIRSeconds;
 				sh.order = 1;
 				sh.irradianceMinDistance = 1.0f;
@@ -1163,11 +1165,12 @@ LUA_FUNCTION(SetOutputMode) {
 	return 0;
 }
 
-// SetReflections(roomWet, echoWet [, rays]) : levels of the room reverb and of the echoes;
+// SetReflections(roomWet, echoWet [, rays [, bounces]]) : levels of the room reverb and of the echoes;
 // the reflection thread only simulates while one of them is > 0
 LUA_FUNCTION(SetReflections) {
 	const float room = (float)LUA->CheckNumber(1), echo = (float)LUA->CheckNumber(2);
 	if (LUA->IsType(3, Type::Number)) g_reflRays = std::clamp((int)LUA->GetNumber(3), 256, 8192);
+	if (LUA->IsType(4, Type::Number)) g_reflBounces = std::clamp((int)LUA->GetNumber(4), 4, 256);
 	render::SetWet(room, echo);
 	g_reflWanted = room > 0 || echo > 0;
 	return 0;
@@ -1200,6 +1203,8 @@ LUA_FUNCTION(Stats) {
 	LUA->SetField(-2, "reflErrors");
 	LUA->PushNumber(g_reflRays.load());
 	LUA->SetField(-2, "rays");
+	LUA->PushNumber(g_reflBounces.load());
+	LUA->SetField(-2, "bounces");
 	for (int b = 0; b < 3; ++b) {
 		LUA->PushNumber(rt[b]);
 		LUA->SetField(-2, b == 0 ? "rtLow" : b == 1 ? "rtMid" : "rtHigh");

@@ -75,6 +75,7 @@ function Build.native(panel)
 	dep(sld(panel, "Echoes", "native_echo", 2), R)
 	dep(sld(panel, "Echo threshold (dB)", "native_echo_lvl"), R)
 	dep(sld(panel, "Quality (rays)", "native_rays"), R)
+	dep(sld(panel, "Reverb bounces", "native_bounces"), R)
 	dep(chk(panel, "Doors reflect sound", "native_doors"), "ready")
 	dep(chk(panel, "Big props reflect sound", "native_props"), "ready")
 
