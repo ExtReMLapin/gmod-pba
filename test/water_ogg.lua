@@ -1,4 +1,6 @@
 -- Client lua_job on a map with water (gm_construct): (1) OGG Vorbis decoding by the module;
+-- Needs garrysmod/sound/audioprop_test/tone.ogg (removed after the test run), e.g.:
+--   ffmpeg -f lavfi -i "sine=frequency=440:duration=2" -c:a libvorbis garrysmod/sound/audioprop_test/tone.ogg
 -- (2) a source under water heard from above crosses the air / water interface (one fixed wall of
 -- audioprop_water_db, heavily low-passed); both in the water: no interface.
 local A, N = audioprop, audioprop.Native
