@@ -113,6 +113,8 @@ steps = [
     ("path_hysteresis twodoors", lambda: (doors_open(), job("client", "path_hysteresis.lua"))[1]),
     # continuous sounds glide to each re-evaluation: no gain / EQ / direction step between frames
     ("continuous_ramp twodoors", lambda: py("continuous_ramp.py")),
+    # a loop near a muffling threshold: no DSP flicker while the listener steps (pba_lp_hyst_db)
+    ("lowpass_hysteresis twodoors", lambda: py("lowpass_hysteresis.py")),
     ("door_sweep open", lambda: (load("pba_demo"), door("Open"), job("client", "door_sweep.lua"))[2]),
     ("door_sweep closed", lambda: (door("Close"), job("client", "door_sweep.lua"))[1]),
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
