@@ -68,10 +68,15 @@ end
 local S = Vector(-720, 480, 40)
 local L1, L2 = Vector(-1320, 480, 64), Vector(-1320, 700, 64)
 local BESIDE = Vector(-1020, 570, 64) -- apparent position beside the container
+local OTHER = Vector(-1020, 390, 64) -- the other side of the container
 local lvl = 75
+local TWO = false
 P.Compute = function(s, l)
 	if l.y < 600 then
-		return { S = s, L = l, clear = false, voices = { { pos = BESIDE, gain = AC.EngineGain(s:Distance(l), lvl) * 0.3, lp = 2, lpDb = 8, len = 650, level = -20 } } }
+		local g = AC.EngineGain(s:Distance(l), lvl)
+		local vs = { { pos = BESIDE, gain = g * 0.3, lp = 2, lpDb = 8, len = 650, level = -20 } }
+		if TWO then vs[2] = { pos = OTHER, gain = g * 0.25, lp = 2, lpDb = 9, len = 660, level = -21 } end
+		return { S = s, L = l, clear = false, voices = vs }
 	end
 	return { S = s, L = l, clear = true }
 end
@@ -80,7 +85,9 @@ local function db(a, b) return 20 * math.log10(math.max(a, 1e-9) / math.max(b, 1
 local out = {}
 local function check(ok, msg) out[#out + 1] = (ok and "PASS " or "FAIL ") .. msg return ok end
 
-local function run(native, follow)
+local function run(native, follow, opt)
+	opt = opt or {}
+	TWO = opt.two or false
 	T = T + 100
 	emits, anchors = {}, {}
 	A.OneShots = nil
@@ -104,16 +111,24 @@ local function run(native, follow)
 	loadRender()
 	local t0 = T
 	local data = { SoundName = "vo/npc/male01/question06.wav", Pos = S, SoundLevel = lvl, Pitch = 100, Volume = 1,
-		Channel = CHAN_AUTO, Flags = 0, EntIndex = 0 }
+		Channel = opt.chan or CHAN_AUTO, Flags = 0, EntIndex = opt.chan and 5 or 0 }
 	local taken = A.Process(data, true)
 	local first = native and nextId or #emits
-	local stepT
+	local stepT, cut
 	while T < t0 + 4 do
 		T = T + 1 / 60
 		if not stepT and T >= t0 + 1 then L, stepT = L2, T end
+		if opt.cutAt and not cut and T >= t0 + opt.cutAt then
+			-- a new (short) line of the same entity on the same channel: the engine cuts the first one
+			cut = T
+			SoundDuration = function() return 0.4 end
+			A.Process({ SoundName = "vo/npc/male01/ok01.wav", Pos = S, SoundLevel = lvl, Pitch = 100, Volume = 1,
+				Channel = opt.chan, Flags = 0, EntIndex = 5 }, true)
+			SoundDuration = function() return 3.4 end
+		end
 		if think then think() end
 	end
-	return { taken = taken, updates = updates, first = first, stepT = stepT, t0 = t0, stops = stops }
+	return { taken = taken, updates = updates, first = first, stepT = stepT, t0 = t0, stops = stops, cut = cut }
 end
 
 local tag
@@ -135,7 +150,7 @@ check(maxStep < 1.5, tag .. "glides (largest step " .. math.Round(maxStep, 2) ..
 local lateU = 0
 for _, u in ipairs(r.updates) do if u.t > r.t0 + 3.4 - 0.5 + 1e-6 then lateU = lateU + 1 end end
 check(lateU == 0, tag .. "not driven in its last 0.5 s (" .. lateU .. " updates)")
-check(#A.OneShots.recs == 0, tag .. "record dropped at the end")
+check(A.OneShots ~= nil and #A.OneShots.recs == 0, tag .. "record dropped at the end")
 
 -- engine rendering
 r = run(false, true)
@@ -161,6 +176,36 @@ check(changes > 0 and wrong == 0, tag .. changes .. " volume changes on the same
 check(late == 0, tag .. "no volume change in the last 0.5 s (" .. late .. ")")
 check(lastVol ~= nil and math.abs(lastVol - 1) < 1e-6, tag .. "direct volume at the end (" .. tostring(lastVol) .. ", engine law applies at the anchor)")
 check(firstAt ~= nil and firstAt - r.stepT <= 0.6, tag .. "reached within 0.6 s of the step (" .. (firstAt and math.Round(firstAt - r.stepT, 2) or "never") .. " s)")
+
+-- two voices (both sides of the container) -> clear sight: the second fades out and stops
+r = run(true, true, { two = true })
+tag = "native, two voices: "
+local last1, last2, stopT
+for _, u in ipairs(r.updates) do
+	if u.id == 1 then last1 = u elseif u.id == 2 then last2 = u end
+end
+check(r.first == 2, tag .. "two voices emitted")
+check(last1 ~= nil and last1.pos:Distance(S) < 1, tag .. "the dominant ends at the source")
+check(last2 ~= nil and last2.g < 1e-6 and #r.stops == 1 and r.stops[1] == 2, tag .. "the other fades to 0 then stops (" ..
+	(last2 and string.format("%.4f", last2.g) or "-") .. ", stops " .. #r.stops .. ")")
+local power = (last1 and last1.g or 0)
+check(math.abs(db(power, AC.EngineGain(S:Distance(L2), lvl))) < 0.5, tag .. "total level = direct level")
+r = run(false, true, { two = true })
+local stopsE = 0
+for _, e in ipairs(emits) do if e.stop then stopsE = stopsE + 1 end end
+check(#anchors == 2 and anchors[1].pos:Distance(S) < 1 and stopsE == 1, "engine, two voices: dominant anchor at the source, the other stopped (" .. stopsE .. ")")
+
+-- a replacing channel cut by a new sound of the entity: the first line is no longer driven
+r = run(false, true, { chan = CHAN_VOICE, cutAt = 0.6 })
+local afterCut = 0
+for _, e in ipairs(emits) do
+	if e.flags == SND_CHANGE_VOL and e.name == "vo/npc/male01/question06.wav" and e.t > r.cut then afterCut = afterCut + 1 end
+end
+check(r.cut ~= nil and afterCut == 0, "engine, CHAN_VOICE cut at 0.6 s: no volume change of the cut line after (" .. afterCut .. ")")
+r = run(true, true, { chan = CHAN_VOICE, cutAt = 0.6 })
+local upd = 0
+for _, u in ipairs(r.updates) do if u.id == 1 and u.t > r.cut then upd = upd + 1 end end
+check(upd == 0 and r.stops[1] == 1, "native, CHAN_VOICE cut at 0.6 s: the cut voice is stopped and never updated after (" .. upd .. ")")
 
 -- the bug: computed once at emission
 r = run(true, false)

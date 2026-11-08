@@ -478,7 +478,7 @@ function A.Process(data, relayed)
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
 				-- followed while it plays: walking behind a wall must muffle it too
-				local play = math.max(SoundDuration(data.SoundName) or 0.5, 0.1) * 100 / math.max(data.Pitch or 100, 1)
+				local play = math.max(A.SoundDuration(data.SoundName) or 0.5, 0.1) * 100 / math.max(data.Pitch or 100, 1)
 				if OS.Wanted(play) then
 					OS.Add(data, src, S, L, r, { { h = { id = id, t0 = RealTime() + delay }, v = { pos = S, vol = g, lp = 0, len = d } } }, play)
 				end
