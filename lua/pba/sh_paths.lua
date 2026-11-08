@@ -540,6 +540,13 @@ local function traceFilter(ent)
 	if PROP_CLASSES[cls] and A.cfg.trans_props >= 0.5 then
 		return ent:BoundingRadius() >= A.cfg.trans_prop_min
 	end
+	-- a parked vehicle stands in the way like a big prop; not seats (prisoner pods, addon car seats)
+	-- nor the listener's own vehicle (an open jeep or airboat would muffle everything around him;
+	-- in a closed addon car GetVehicle is the seat, so the body still muffles the outside)
+	if A.cfg.trans_props >= 0.5 and ent:IsVehicle() and cls ~= "prop_vehicle_prisoner_pod" then
+		if CLIENT and ent == LocalPlayer():GetVehicle() then return false end
+		return ent:BoundingRadius() >= A.cfg.trans_prop_min
+	end
 	return false
 end
 
@@ -1422,8 +1429,30 @@ local function pathProps(p, S, L, cfg, srcEnt)
 	p.lossDb, p.propDb, p.lp = p.lossDb + add, add, math.max(p.lp or 0, lpAdd)
 end
 
+-- A source inside the world's solid (an ambient_generic, a speaker or a soundscape position left in
+-- a wall by the mapper): traces starting in the solid give arbitrary losses. The sound is moved to
+-- the nearest free space along the 6 axes (within 64 u); if there is none it stays where it is.
+local freeOut = {}
+local freeTr = { mask = MASK_SOLID_BRUSHONLY, filter = function() return false end, output = freeOut }
+local AXES = { Vector(1, 0, 0), Vector(-1, 0, 0), Vector(0, 1, 0), Vector(0, -1, 0), Vector(0, 0, 1), Vector(0, 0, -1) }
+function P.FreeSource(S)
+	if bit.band(util.PointContents(S), CONTENTS_SOLID) == 0 then return S end
+	local best, bestD
+	for _, d in ipairs(AXES) do
+		freeTr.start, freeTr.endpos = S, S + d * 64
+		util.TraceLine(freeTr)
+		local f = freeOut.FractionLeftSolid
+		if freeOut.StartSolid and not freeOut.AllSolid and f and f < 1 and (not bestD or f * 64 < bestD) then
+			local p = S + d * (f * 64 + 2)
+			if bit.band(util.PointContents(p), CONTENTS_SOLID) == 0 then best, bestD = p, f * 64 end
+		end
+	end
+	return best or S
+end
+
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
+	S = P.FreeSource(S)
 	local key = q(S) .. "|" .. q(L) .. "|" .. sndlvl
 	local now = RealTime()
 	local c = P.cache[key]

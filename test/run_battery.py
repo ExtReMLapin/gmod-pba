@@ -123,6 +123,10 @@ steps = [
     ("sentence_relay", lambda: [job("server", "sentence_relay.lua", 30), job("client", "sentence_client.lua", 10)]),
     # env_microphone in speaker mode: routed before the hook, so pba only processes the speaker copy
     ("microphone_order", lambda: job("server", "microphone_order.lua", 20)),
+    # a source left inside a wall: moved to the nearest free space (was heard clear through the wall)
+    ("source_in_solid", lambda: job("client", "source_in_solid.lua", 15)),
+    # a parked vehicle between source and listener stands in the way like a big prop (was ignored)
+    ("vehicle_obstacle", lambda: job("server", "vehicle_obstacle.lua", 15)),
     # lip sync: a citizen speaking behind the glass cell keeps moving his mouth with pba (re-emitted voice)
     ("lipsync_glass pba_materials", lambda: (load("pba_materials"), [job("server", "lipsync_glass.lua", 30), job("client", "lipsync_client.lua", 10)])[1]),
     ("loop_removed", lambda: job("server", "loop_removed.lua")),
