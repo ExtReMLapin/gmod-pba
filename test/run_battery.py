@@ -38,6 +38,12 @@ def load(m, mp=4):
             break
         time.sleep(2)
 
+def fresh(m, mp=4):
+    """Map loaded anew, even when it is already the current one (map-start state under test)."""
+    call("map_load", {"map": m, "maxplayers": mp}, timeout=300)
+    time.sleep(4)
+    load(m, mp)
+
 def job(realm, file, timeout_s=120):
     code = open(os.path.join(TEST, file), encoding="utf-8").read()
     r = call("lua_job", {"realm": realm, "code": code, "timeout_s": timeout_s}, timeout=timeout_s + 60)
@@ -128,6 +134,9 @@ steps = [
     ("lowpass_hysteresis twodoors", lambda: py("lowpass_hysteresis.py")),
     ("door_sweep open", lambda: (load("pba_demo"), door("Open"), job("client", "door_sweep.lua"))[2]),
     ("door_sweep closed", lambda: (door("Close"), job("client", "door_sweep.lua"))[1]),
+    # special sounds: a moving brush's loop (func_door noise1) is stopped by the engine's C++, never
+    # seen by Lua: the server mirror must stop with the motion
+    ("brush_loop_stop pba_demo", lambda: job("server", "brush_loop_stop.lua", 60)),
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
     ("reverb_rt", lambda: py("reverb_rt.py")),
     ("native_options", lambda: py("native_options.py")),
@@ -137,6 +146,8 @@ steps = [
     ("path_obstruction", lambda: py("path_obstruction.py")),
     # one model for a partly blocked opening: a prop covering part of a doorway = a leaf covering the same part
     ("mask_equivalence", lambda: py("mask_equivalence.py")),
+    # special sounds: looping ambient_generic already playing at map load (before the hooks) taken over
+    ("ambient_start d1_town_01", lambda: (fresh("d1_town_01"), job("server", "ambient_start.lua", 30))[1]),
     # path quality against an independent single-bend reference (maps without areaportals: probes)
     ("path_quality", lambda: py("path_quality.py", "--check", "d1_town_01", "gm_construct")),
     # the path SEARCH through pba_demo's doorways (doors opened) against the single-bend reference, same

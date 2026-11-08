@@ -105,8 +105,12 @@ function LP.Handle(data)
 	if not l then
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {} }
 		if once then l.once, l.endT = true, CurTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
+		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...): their C++
+		-- stops the loop with a StopSound that never reaches Lua; the mirror stops with the motion
+		l.mover = IsValid(e) and e:GetMoveType() == MOVETYPE_PUSH or nil
 		LP.active[key] = l
 	end
+	l.t = CurTime()
 	if not update or bit.band(flags, SND_CHANGE_VOL) ~= 0 then l.vol = data.Volume or 1 end
 	if not update or bit.band(flags, SND_CHANGE_PITCH) ~= 0 then l.pitch = data.Pitch or 100 end
 	if not update then
@@ -124,10 +128,17 @@ function LP.Handle(data)
 	return true
 end
 
+--- A moving brush at rest (no linear nor angular velocity): its movement loop is over.
+function LP.MoverStill(e)
+	return e:GetVelocity():LengthSqr() < 1 and e:GetLocalAngularVelocity():IsZero()
+end
+
 -- (un)subscribe players moving in / out of range, drop loops of removed entities
 timer.Create("pba_loops", 0.5, 0, function()
 	for key, l in pairs(LP.active) do
-		if l.idx ~= 0 and not IsValid(l.ent) then
+		if l.mover and IsValid(l.ent) and CurTime() - l.t > 0.4 and LP.MoverStill(l.ent) then
+			LP.Stop(l.idx, l.name)
+		elseif l.idx ~= 0 and not IsValid(l.ent) then
 			-- entity removed (a rocket that exploded...): its sounds stopped without any STOP
 			-- event; the clients' mirrors must stop too
 			local plys = {}
@@ -149,6 +160,38 @@ timer.Create("pba_loops", 0.5, 0, function()
 		end
 	end
 end)
+
+--- Wave of a sound name (a sound script: its first wave).
+local function waveOf(name)
+	local props = name ~= "" and name:sub(1, 1) ~= "!" and sound.GetProperties(name)
+	if not props then return name end
+	local w = props.sound
+	return istable(w) and (w[1] or "") or w or name
+end
+
+--- Looping ambient_generic already playing when pba's hooks went in: started in Activate() at
+-- map load, before InitPostEntity, they never reached the hook and stayed vanilla (through every
+-- wall). Restarted through their own inputs, so the hook takes them over. Idempotent: an ambient
+-- already mirrored is left alone. Returns how many were restarted.
+function LP.AdoptAmbients()
+	if A.cfg.loops < 0.5 or not A.hooksInstalled then return 0 end
+	local mirrored = {}
+	for _, l in pairs(LP.active) do if IsValid(l.ent) then mirrored[l.ent] = true end end
+	local n = 0
+	for _, e in ipairs(ents.FindByClass("ambient_generic")) do
+		local src = e:GetInternalVariable("m_hSoundSource")
+		if e:GetInternalVariable("m_fActive") and bit.band(e:GetSpawnFlags(), 1) == 0 -- not "play everywhere"
+			and not mirrored[e] and not (IsValid(src) and mirrored[src]) then
+			local wav = waveOf(e:GetInternalVariable("message") or "")
+			if wav ~= "" and wav:sub(1, 1) ~= "!" and A.IsLooping(wav) then
+				e:Input("StopSound")
+				e:Input("PlaySound")
+				n = n + 1
+			end
+		end
+	end
+	return n
+end
 
 --- Turning pba off: hand the running loops back to the engine.
 function LP.Release()

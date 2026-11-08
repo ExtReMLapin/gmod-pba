@@ -85,6 +85,8 @@ function A.InstallHooks(on)
 		if on then A.Doors.Start() else A.Doors.Stop() end
 	end
 	if SERVER and not on and A.Loops and A.Loops.Release then A.Loops.Release() end
+	-- ambiences started at map load, before the hooks: taken over now (next tick, entities ready)
+	if SERVER and on and A.Loops and A.Loops.AdoptAmbients then timer.Simple(0, A.Loops.AdoptAmbients) end
 end
 
 function A.Refresh()
