@@ -13,7 +13,7 @@ from lupa import luajit21 as lj  # noqa: E402
 repo = sys.argv[1] if len(sys.argv) > 1 else os.path.abspath(os.path.join(HERE, "..", ".."))
 L = lj.LuaRuntime(unpack_returned_tuples=True)
 L.execute(open(os.path.join(HERE, "gmshim.lua"), encoding="utf-8").read())
-for f in ("sh_config.lua", "sh_bsp.lua", "sh_acoustics.lua", "sh_graph.lua", "sh_paths.lua", "cl_probes.lua"):
+for f in ("sh_config.lua", "sh_bsp.lua", "sh_acoustics.lua", "sh_graph.lua", "sh_paths.lua", "sh_core.lua", "cl_probes.lua"):
     src = open(os.path.join(repo, "lua", "pba", f), encoding="utf-8").read()
     L.execute(src)
 runner = r"""
@@ -36,5 +36,24 @@ return table.concat(out, "\n")
 """
 src = open(os.path.join(repo, "test", "gluatest", "pba_pure_test.lua"), encoding="utf-8").read()
 print(L.execute(runner, src))
+
+# Static lock (offline only): one model for a sound's file name. SoundDuration is called only by
+# A.SoundDuration, and the sound-character pattern exists only in A.SoundFile (sh_core.lua).
+import re  # noqa: E402
+raw, pat = [], []
+for root, _, names in os.walk(os.path.join(repo, "lua")):
+    for n in names:
+        if not n.endswith(".lua"):
+            continue
+        path = os.path.join(root, n)
+        rel = os.path.relpath(path, repo).replace(os.sep, "/")
+        for i, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
+            if re.search(r"(?<![\w.])SoundDuration\(", line):
+                raw.append("%s:%d" % (rel, i))
+            if "&~`+%%%(" in line:
+                pat.append("%s:%d" % (rel, i))
+ok_static = len(raw) == 1 and raw[0].startswith("lua/pba/sh_core.lua:") and len(pat) == 1 and pat[0].startswith("lua/pba/sh_core.lua:")
+print("%s static: SoundDuration only via A.SoundDuration, prefix pattern only in A.SoundFile (raw calls %s, patterns %s)"
+      % ("PASS" if ok_static else "FAIL", raw, pat))
 if len(sys.argv) > 2:
     print(L.execute(open(sys.argv[2], encoding="utf-8").read()))

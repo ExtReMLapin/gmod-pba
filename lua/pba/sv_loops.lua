@@ -55,7 +55,7 @@ function LP.IsLong(data)
 	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
 	local st = data.SoundTime or 0
 	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
-	local dur = SoundDuration(data.SoundName) or 0
+	local dur = A.SoundDuration(data.SoundName) or 0
 	return dur > A.cfg.max_duration and dur <= 1800, dur
 end
 

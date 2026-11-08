@@ -139,7 +139,7 @@ if SERVER then
 		src:SetName("pba_demo_src")
 		Demo.src = src
 		util.PrecacheSound(snd)
-		local dur = math.max(SoundDuration(snd) or 1, 0.3)
+		local dur = math.max(A.SoundDuration(snd) or 1, 0.3)
 		local lvl = Demo.LEVELS[soundArg or "voice"] or 80
 		timer.Create("pba_demo", math.max(interval or (dur + 0.6), 0.2), 0, function()
 			if IsValid(src) then
