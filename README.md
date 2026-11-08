@@ -133,7 +133,8 @@ Steam Audio integration for GMod was found, on the Workshop or elsewhere.
 | Doors and windows, live state | ✅ | ✅ | — | — | — | — | — | — |
 | Half-open doors: real gap, Fresnel zone | ✅ | ✅ | — | — | — | — | — | — |
 | Open door lets the room's reverberant sound out | ✅ | ✅ | — | — | — | — | — | — |
-| Props shadow and diffract | ✅ | ✅ | — | — | — | — | — | — |
+| Props shadow and diffract, also in front of a doorway | ✅ | ✅ | — | — | — | — | — | — |
+| Water surface between source and listener muffles | ✅ | ✅ also in the reverb scene | ? | ? | ? | — | — | — |
 | Loops and long sounds (music, engines), server and client side | ✅ | ✅ | — | — | ◐ | — | — | its radio |
 | Other addons' 3D radios (BASS) muffled | ◐ level and position | ✅ really filtered, or fully rendered | — | — | — | — | — | ◐ its own, volume |
 | Room reverb | engine | ✅ simulated on the map's geometry and materials¹ | ◐ recorded tails | ◐ recorded tails | — | ◐ one global DSP preset | — | — |
