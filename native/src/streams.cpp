@@ -75,7 +75,35 @@ bool Resolve() {
 	return g_ok;
 }
 
-// 3-band EQ: two one-pole crossovers (300 Hz, 3 kHz); gains set from the Lua thread
+// 3-band muffling EQ: overall gain gl, then two high shelves (RBJ cookbook, S = 1) at 500 Hz
+// (gain gm / gl) and 5 kHz (gain gh / gm). Checked on sines: 0.80 at 100 Hz, 0.20 at 1 kHz, 0.033
+// at 10 kHz for 0.8 / 0.18 / 0.03. (A first version split the bands with one-pole crossovers and
+// subtraction: far too soft, the mids leaked through the low band.)
+struct Biquad {
+	float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+	void HighShelf(float fs, float f0, float gain) {
+		const float A = std::sqrt(std::max(gain, 1e-4f));
+		const float w = 2.0f * 3.14159265f * f0 / fs, c = std::cos(w), s = std::sin(w);
+		const float sa = 2.0f * std::sqrt(A) * (s / 2.0f * std::sqrt(2.0f));
+		const float a0 = (A + 1) - (A - 1) * c + sa;
+		b0 = A * ((A + 1) + (A - 1) * c + sa) / a0;
+		b1 = -2 * A * ((A - 1) + (A + 1) * c) / a0;
+		b2 = A * ((A + 1) + (A - 1) * c - sa) / a0;
+		a1 = 2 * ((A - 1) - (A + 1) * c) / a0;
+		a2 = ((A + 1) - (A - 1) * c - sa) / a0;
+	}
+};
+struct BiquadState {
+	float x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+	float Run(const Biquad& q, float x) {
+		const float y = q.b0 * x + q.b1 * x1 + q.b2 * x2 - q.a1 * y1 - q.a2 * y2;
+		x2 = x1;
+		x1 = x;
+		y2 = y1;
+		y1 = y;
+		return y;
+	}
+};
 struct Fx {
 	DWORD handle = 0;
 	HDSP dsp = 0;
@@ -83,11 +111,13 @@ struct Fx {
 	int format = 0; // 0 float, 1 int16, 2 uint8
 	// what was read at runtime when the DSP was attached (diagnostics, StreamInfo)
 	bool viaEx = false;
+	std::atomic<uint64_t> calls{0};     // DSP invocations (diagnostics)
+	std::atomic<float> peakIn{0}, peakOut{0};
 	DWORD floatDspConfig = 0, channelFlags = 0;
 	std::atomic<float> g[3];
 	float cur[3] = {1, 1, 1}; // gains applied at the end of the last buffer (ramped, no clicks)
 	float aL = 0, aH = 0;
-	float lo[8] = {}, hi[8] = {};
+	BiquadState st1[8], st2[8]; // per audio channel: shelf 500 Hz, shelf 5 kHz
 	// capture to the native renderer (N2): read-only float DSP feeding a ring buffer
 	HDSP capDsp = 0;
 	std::shared_ptr<StreamBuf> buf;
@@ -99,47 +129,68 @@ struct Fx {
 std::mutex g_mtx;
 std::unordered_map<DWORD, std::unique_ptr<Fx>> g_fx; // by BASS handle
 
-inline float Process(Fx& f, int c, float x, float gl, float gm, float gh) {
-	f.lo[c] += f.aL * (x - f.lo[c]);
-	f.hi[c] += f.aH * (x - f.hi[c]);
-	const float low = f.lo[c], high = x - f.hi[c], mid = x - low - high;
-	return gl * low + gm * mid + gh * high;
+inline float Process(Fx& f, int c, float x, float gl, const Biquad& q1, const Biquad& q2) {
+	return gl * f.st2[c].Run(q2, f.st1[c].Run(q1, x));
 }
 
 void CALLBACK Dsp(HDSP, DWORD, void* buffer, DWORD length, void* user) {
 	Fx& f = *(Fx*)user;
+	f.calls++;
+	if (f.format == 0) { // peak before / after (float data only), for diagnostics
+		const float* s = (const float*)buffer;
+		float pk = 0;
+		for (DWORD i = 0; i < length / 4; ++i) pk = std::max(pk, std::fabs(s[i]));
+		f.peakIn = pk;
+	}
 	const float t[3] = {f.g[0].load(), f.g[1].load(), f.g[2].load()};
 	const bool flatNow = f.cur[0] > 0.999f && f.cur[1] > 0.999f && f.cur[2] > 0.999f;
 	const bool flatNext = t[0] > 0.999f && t[1] > 0.999f && t[2] > 0.999f;
 	if (flatNow && flatNext) {
-		// transparent: the filter states restart from silence-free values next time
-		for (int c = 0; c < 8; ++c) f.lo[c] = f.hi[c] = 0;
+		// transparent: the filter states restart from zero next time
+		for (int c = 0; c < 8; ++c) f.st1[c] = f.st2[c] = BiquadState{};
 		return;
 	}
 	const int ch = (int)std::min<DWORD>(f.chans, 8);
 	const DWORD bytes = f.format == 0 ? 4 : f.format == 1 ? 2 : 1;
 	const DWORD n = length / bytes;
 	const DWORD frames = std::max<DWORD>(n / (DWORD)ch, 1);
-	// gains ramp linearly from the previous buffer's values over this buffer
+	// gains move from the previous buffer's values to the new ones in 8 steps over this buffer
+	// (coefficients recomputed per step: no zipper noise, no click)
+	constexpr DWORD kSteps = 8;
+	const DWORD perStep = std::max<DWORD>(frames / kSteps, 1);
+	Biquad q1, q2;
+	float gl = 1;
 	for (DWORD i = 0; i < n; ++i) {
-		const float k = (float)(i / ch) / (float)frames;
-		const float gl = f.cur[0] + (t[0] - f.cur[0]) * k, gm = f.cur[1] + (t[1] - f.cur[1]) * k,
-		            gh = f.cur[2] + (t[2] - f.cur[2]) * k;
+		const DWORD frame = i / ch;
+		if (i % ch == 0 && frame % perStep == 0) {
+			const float k = std::min(1.0f, (float)(frame + perStep) / (float)frames);
+			const float l = f.cur[0] + (t[0] - f.cur[0]) * k, m = f.cur[1] + (t[1] - f.cur[1]) * k,
+			            h = f.cur[2] + (t[2] - f.cur[2]) * k;
+			gl = l;
+			q1.HighShelf((float)f.freq, 500.0f, std::max(m, 1e-3f) / std::max(l, 1e-3f));
+			q2.HighShelf((float)f.freq, 5000.0f, std::max(h, 1e-3f) / std::max(m, 1e-3f));
+		}
 		const int c = (int)(i % ch);
 		if (f.format == 0) {
 			float* s = (float*)buffer;
-			s[i] = Process(f, c, s[i], gl, gm, gh);
+			s[i] = Process(f, c, s[i], gl, q1, q2);
 		} else if (f.format == 1) {
 			int16_t* s = (int16_t*)buffer;
-			const float y = Process(f, c, s[i] / 32768.0f, gl, gm, gh) * 32767.0f;
+			const float y = Process(f, c, s[i] / 32768.0f, gl, q1, q2) * 32767.0f;
 			s[i] = (int16_t)std::max(-32768.0f, std::min(32767.0f, y));
 		} else {
 			uint8_t* s = (uint8_t*)buffer;
-			const float y = Process(f, c, (s[i] - 128) / 128.0f, gl, gm, gh) * 127.0f + 128.0f;
+			const float y = Process(f, c, (s[i] - 128) / 128.0f, gl, q1, q2) * 127.0f + 128.0f;
 			s[i] = (uint8_t)std::max(0.0f, std::min(255.0f, y));
 		}
 	}
 	for (int b = 0; b < 3; ++b) f.cur[b] = t[b];
+	if (f.format == 0) {
+		const float* s = (const float*)buffer;
+		float pk = 0;
+		for (DWORD i = 0; i < length / 4; ++i) pk = std::max(pk, std::fabs(s[i]));
+		f.peakOut = pk;
+	}
 }
 
 void CALLBACK CaptureDsp(HDSP, DWORD, void* buffer, DWORD length, void* user) {
@@ -278,9 +329,10 @@ std::string Info(void* obj, unsigned freq, bool is3D) {
 		snprintf(buf, sizeof buf, "no filter; chans=%lu freq=%lu flags=0x%lx floatdsp_now=%ld", info.chans, info.freq, info.flags, (long)cfg);
 	} else {
 		const Fx& f = *it->second;
-		snprintf(buf, sizeof buf, "%s via %s, format=%s; chans=%lu freq=%lu flags_at_attach=0x%lx floatdsp_at_attach=%ld floatdsp_now=%ld capture=%s",
+		snprintf(buf, sizeof buf, "%s via %s, format=%s; chans=%lu freq=%lu flags_at_attach=0x%lx floatdsp_at_attach=%ld floatdsp_now=%ld capture=%s dsp_calls=%llu peak_in=%.3f peak_out=%.3f gains=%.2f/%.2f/%.2f",
 		         f.dsp ? "filter" : "no filter (capture only)", f.viaEx ? "SetDSPEx(FLOAT)" : "SetDSP", f.format == 0 ? "float" : f.format == 1 ? "int16" : "uint8",
-		         f.chans, f.freq, f.channelFlags, (long)f.floatDspConfig, (long)cfg, f.capDsp ? "on" : "off");
+		         f.chans, f.freq, f.channelFlags, (long)f.floatDspConfig, (long)cfg, f.capDsp ? "on" : "off",
+		         (unsigned long long)f.calls.load(), f.peakIn.load(), f.peakOut.load(), f.g[0].load(), f.g[1].load(), f.g[2].load());
 	}
 	return buf;
 #else

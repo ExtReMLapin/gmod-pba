@@ -39,8 +39,9 @@ local function level(secs)
 	end
 	return s / math.max(n, 1)
 end
--- spectrum shape (FFT is taken after the DSP): a low-pass keeps the bass and removes the treble;
--- a broken filter (wrong sample format) gives noise: more treble, not less
+-- spectrum shape (FFT is taken after the DSP): the muffling EQ keeps the bass and cuts the mids
+-- (0.8 / 0.18 / 0.03); a broken filter (wrong sample format) gives noise: more mids, not less.
+-- Mids rather than treble: this music has almost nothing above 3 kHz (noise floor).
 local function hiLoRatio(secs)
 	local lo, hi = 0, 0
 	local t = SysTime()
@@ -49,7 +50,7 @@ local function hiLoRatio(secs)
 		local n = ch:FFT(bins, FFT_2048) -- 1024 bins up to Nyquist
 		for i = 1, n do
 			local f = (i - 1) * ch:GetSamplingRate() / 2048
-			if f >= 60 and f < 250 then lo = lo + bins[i] elseif f >= 3000 and f < 10000 then hi = hi + bins[i] end
+			if f >= 60 and f < 250 then lo = lo + bins[i] elseif f >= 400 and f < 2000 then hi = hi + bins[i] end
 		end
 		job:frames(2)
 	end
@@ -94,7 +95,7 @@ RunConsoleCommand("pba_native_render", tostring(savedRender))
 ch:Stop()
 res.pass = res.tracked and res.getPos == tostring(src) and math.abs(res.getVolume - 0.8) < 1e-3 and res.apparent ~= nil
 	and res.g < 0.9 and (not pba.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9
-		and res.ratioFiltered < res.ratioFlat * 0.3)) -- treble really removed, not replaced by noise
+		and res.ratioFiltered < res.ratioFlat * 0.5)) -- mids really cut, not replaced by noise
 	and res.offG == 1 and res.offApparent == false
 	and (not res.native or (res.native.voice and res.native.bassVolume == 0 and math.abs(res.native.ownerVolume - 0.8) < 1e-3
 		and res.native.energy > 0 and res.native.levelForVisualisers > 0.01 and not res.native.afterOff.voice

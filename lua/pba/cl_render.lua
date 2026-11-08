@@ -305,6 +305,17 @@ net.Receive(NET, function()
 	end
 end)
 
+-- client-side StopSound (predicted weapons...): our copies of that entity's sound stop too
+do
+	local ENT = FindMetaTable("Entity")
+	A.origCl = A.origCl or { StopSound = ENT.StopSound }
+	function ENT:StopSound(name)
+		A.origCl.StopSound(self, name)
+		local idx = self:EntIndex()
+		if idx > 0 and A.StopCopies then pcall(A.StopCopies, idx, name or "") end
+	end
+end
+
 -- server-side StopSound on a relayed sound: stop our copies
 net.Receive("pba_snd_stop", function()
 	local idx, name = net.ReadUInt(16), net.ReadString()

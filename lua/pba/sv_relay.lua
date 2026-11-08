@@ -35,6 +35,7 @@ end)
 -- see the filter from EntityEmitSound and must not widen their audience).
 local ENT = FindMetaTable("Entity")
 A.orig = A.orig or { EntEmitSound = ENT.EmitSound, EmitSound = EmitSound }
+A.orig.EntStopSound = A.orig.EntStopSound or ENT.StopSound
 A.explicitFilter = false
 
 function ENT:EmitSound(name, lvl, pitch, vol, chan, flags, dsp, filter)
@@ -57,6 +58,12 @@ function EmitSound(name, pos, ent, chan, vol, lvl, flags, pitch, dsp, filter)
 		return
 	end
 	return A.orig.EmitSound(name, pos, ent, chan, vol, lvl, flags, pitch, dsp, filter)
+end
+
+-- StopSound never reaches EntityEmitSound: relay it to the players who got copies (transparent)
+function ENT:StopSound(name)
+	A.orig.EntStopSound(self, name)
+	if A.RelayStop then pcall(A.RelayStop, self, name) end
 end
 
 local function audibleRadius(lvl)
@@ -82,28 +89,29 @@ end
 
 A.stats = A.stats or { seen = 0, relayed = 0, untouched = 0 }
 
+--- The engine stopped `name` on entity e: clients that got relayed copies stop theirs.
+function A.RelayStop(e, name)
+	local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
+	local r = idx > 0 and A.recentTo[idx]
+	if not r then return end
+	local plys, now = {}, CurTime()
+	for p, t in pairs(r) do
+		if IsValid(p) and now - t < 30 then plys[#plys + 1] = p else r[p] = nil end
+	end
+	if #plys == 0 then return end
+	net.Start("pba_snd_stop")
+	net.WriteUInt(idx, 16)
+	net.WriteString(name or "")
+	net.Send(plys)
+end
+
 A.AddHook("EntityEmitSound", function(data)
 	if A.reemitting or A.explicitFilter then return end
 	A.stats.seen = A.stats.seen + 1
 	if A.Loops and A.Loops.Handle(data) then return false end
 	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
-		-- StopSound on a one-shot: the engine stops the original; clients that got a relayed
-		-- copy of this entity's sounds stop theirs
-		local e = data.Entity
-		local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
-		local r = idx > 0 and A.recentTo[idx]
-		if r then
-			local plys, now = {}, CurTime()
-			for p, t in pairs(r) do
-				if IsValid(p) and now - t < 30 then plys[#plys + 1] = p else r[p] = nil end
-			end
-			if #plys > 0 then
-				net.Start("pba_snd_stop")
-				net.WriteUInt(idx, 16)
-				net.WriteString(data.SoundName or "")
-				net.Send(plys)
-			end
-		end
+		-- a stop event (some engine paths do send one): same relay as StopSound
+		A.RelayStop(data.Entity, data.SoundName)
 		return
 	end
 	if not A.Eligible(data) then return end
