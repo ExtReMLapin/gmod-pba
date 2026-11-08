@@ -546,11 +546,15 @@ local function boxMesh(mn, mx)
 end
 
 N.BoxMesh = boxMesh
+local MOVED_NEAR2 = 1024 * 1024 -- units: dynamic objects whose motion re-evaluates the continuous sounds
 
 function N.SyncDoors()
 	if not N.ready or not pba_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
 	local seen, nProps = {}, 0
 	local wantProps = (A.cfg.native_props or 0) >= 0.5
+	-- a door, mover or large prop that moved near the listener changes paths and occlusion: the
+	-- continuous sounds re-evaluate (reeval_adaptive; P.ReevalDue watches the world version)
+	local L, moved = A.ListenerPos(), false
 	for id in pairs(N.doors) do if N.doors[id].prop then nProps = nProps + 1 end end
 	for _, e in ipairs(ents.GetAll()) do
 		local cls = e:GetClass()
@@ -599,6 +603,7 @@ function N.SyncDoors()
 				local p, a = e:GetPos(), e:GetAngles()
 				if not d.p or d.p ~= p or d.a ~= a then
 					pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
+					if d.p and L and p:DistToSqr(L) < MOVED_NEAR2 then moved = true end
 					d.p, d.a = p, a
 				end
 			end
@@ -612,6 +617,7 @@ function N.SyncDoors()
 	end
 	-- the module only commits when something changed (and retries itself after a running bake)
 	pba_native.DynamicCommit()
+	if moved and A.Paths then A.Paths.InvalidateCache() end
 end
 timer.Create("pba_native_doors", 0.1, 0, function() N.SyncDoors() end)
 
