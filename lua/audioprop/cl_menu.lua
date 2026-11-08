@@ -1,112 +1,135 @@
--- Options panel: Spawn menu > Utilities > audioprop. Player preferences for everyone,
--- server settings shown to admins (they are replicated convars, changed via the console).
+-- Options panels: Spawn menu (Q) > Utilities > audioprop, the context-menu (C) window and the
+-- console command audioprop_menu. The Q-menu column is narrow and Derma check boxes do not wrap:
+-- labels stay short, the details are in each control's tooltip (the convar's help text).
 
 local A = audioprop
 
-local function addSlider(panel, label, name, dec)
+--- Tooltip of a setting: its help text from sh_config plus the console variable.
+local function tip(name, extra)
 	local c = A.CONFIG[name]
-	panel:NumSlider(label, "audioprop_" .. name, c[2], c[3], dec or 0)
+	local t = (c and c[5] or extra or "") .. "\n(console: audioprop_" .. name .. ")"
+	return t
+end
+
+local function chk(panel, label, name, extra)
+	local cb = panel:CheckBox(label, "audioprop_" .. name)
+	cb.apTip = tip(name, extra)
+	cb:SetTooltip(cb.apTip)
+	return cb
+end
+
+local function sld(panel, label, name, dec)
+	local c = A.CONFIG[name]
+	local s = panel:NumSlider(label, "audioprop_" .. name, c[2], c[3], dec or 0)
+	s.apTip = tip(name)
+	s:SetTooltip(s.apTip)
+	return s
 end
 
 local Build = {}
 
 function Build.player(panel)
-		panel:ClearControls()
-		panel:Help("audioprop: sound travels through openings (doors, windows) instead of through walls.")
-		panel:CheckBox("Enable on this client", "audioprop_cl_enable")
-		panel:NumSlider("Debug overlay", "audioprop_debug", 0, 2, 0)
-		addSlider(panel, "Path search budget per frame (ms)", "frame_budget_ms", 1)
-		panel.apStatus = panel:Help("")
-		panel:CheckBox("Propagation delay (speed of sound)", "audioprop_delay")
-		panel:CheckBox("Radios / music streams of other addons", "audioprop_streams")
-		panel.apDeps = { { panel:CheckBox("Muffle those streams (native module)", "audioprop_streams_filter"), "ready" } }
-		panel.apPlayer = true
-		A.menuPanels = A.menuPanels or {}
-		A.menuPanels[#A.menuPanels + 1] = panel
-		A.RefreshMenu()
+	panel:ClearControls()
+	panel:Help("Sound travels through openings (doors, windows) and is muffled by walls. Hover an option for details.")
+	panel.apStatus = panel:Help("")
+	chk(panel, "Enable on this client", "cl_enable")
+	chk(panel, "Speed of sound delay", "delay")
+	chk(panel, "Radios of other addons", "streams")
+	panel.apDeps = { { chk(panel, "Muffle those radios", "streams_filter"), "ready" } }
+	sld(panel, "Debug overlay", "debug")
+	sld(panel, "Path budget (ms/frame)", "frame_budget_ms", 1)
+	panel.apPlayer = true
+	A.menuPanels = A.menuPanels or {}
+	A.menuPanels[#A.menuPanels + 1] = panel
+	A.RefreshMenu()
 end
-	-- feature set of the optional native backend: every option is a client preference. Options
-	-- are greyed out while the module is missing / forbidden by the server, and the options that
-	-- depend on another one (native rendering, baked paths) while that one is off.
+
+-- feature set of the optional native backend: every option is a client preference. Options are
+-- greyed out while the module is missing / forbidden by the server, and the options that depend
+-- on another one (native rendering, baked paths) while that one is off.
 function Build.native(panel)
-		panel:ClearControls()
-		local deps = {}
-		local function dep(ctl, need) if IsValid(ctl) then deps[#deps + 1] = { ctl, need } end return ctl end
-		local function slider(label, name, dec, need)
-			local c = A.CONFIG[name]
-			return dep(panel:NumSlider(label, "audioprop_" .. name, c[2], c[3], dec or 0), need)
-		end
-		local R = "render"
-		panel.apStatus = panel:Help("")
-		dep(panel:CheckBox("Use the native backend (occlusion by the map geometry)", "audioprop_native"), "module")
+	panel:ClearControls()
+	local deps = {}
+	local function dep(ctl, need) if IsValid(ctl) then deps[#deps + 1] = { ctl, need } end return ctl end
+	local R = "render"
+	panel.apStatus = panel:Help("")
+	dep(chk(panel, "Use the Steam Audio module", "native"), "module")
 
-		panel:Help("Rendering: the module plays the sounds audioprop processes (headphones recommended).")
-		dep(panel:CheckBox("Native rendering", "audioprop_native_render"), "ready")
-		dep(panel:CheckBox("Render every sound natively (not only obstructed ones)", "audioprop_native_all"), R)
-		local out, outLabel = panel:ComboBox("Output", "audioprop_native_out")
-		out:AddChoice("Headphones (HRTF)", 0)
-		out:AddChoice("Speakers (stereo panning)", 1)
-		dep(out, R)
-		dep(outLabel, R)
-		slider("Loudness vs engine", "native_gain", 2, R)
-		dep(panel:CheckBox("Air absorption", "audioprop_native_air"), R)
-		dep(panel:CheckBox("Doppler effect", "audioprop_native_doppler"), R)
-		slider("Weapon directivity", "native_dir", 2, R)
+	panel:Help("Rendering (headphones recommended):")
+	dep(chk(panel, "Native rendering", "native_render"), "ready")
+	dep(chk(panel, "All sounds, not only muffled", "native_all"), R)
+	local out, outLabel = panel:ComboBox("Output", "audioprop_native_out")
+	out:AddChoice("Headphones (HRTF)", 0)
+	out:AddChoice("Speakers", 1)
+	out.apTip = tip("native_out")
+	out:SetTooltip(out.apTip)
+	dep(out, R)
+	dep(outLabel, R)
+	dep(sld(panel, "Loudness", "native_gain", 2), R)
+	dep(chk(panel, "Air absorption", "native_air"), R)
+	dep(chk(panel, "Doppler effect", "native_doppler"), R)
+	dep(sld(panel, "Weapon directivity", "native_dir", 2), R)
 
-		panel:Help("Reflections (simulated on a background thread).")
-		slider("Room reverb", "native_reverb", 2, R)
-		slider("Echoes of loud sounds", "native_echo", 2, R)
-		slider("Echo threshold (dB)", "native_echo_lvl", 0, R)
-		slider("Rays per simulation", "native_rays", 0, R)
-		dep(panel:CheckBox("Doors in the acoustic scene", "audioprop_native_doors"), "ready")
-		dep(panel:CheckBox("Large props in the acoustic scene", "audioprop_native_props"), "ready")
+	panel:Help("Reflections:")
+	dep(sld(panel, "Room reverb", "native_reverb", 2), R)
+	dep(sld(panel, "Echoes", "native_echo", 2), R)
+	dep(sld(panel, "Echo threshold (dB)", "native_echo_lvl"), R)
+	dep(sld(panel, "Quality (rays)", "native_rays"), R)
+	dep(chk(panel, "Doors reflect sound", "native_doors"), "ready")
+	dep(chk(panel, "Big props reflect sound", "native_props"), "ready")
 
-		panel:Help("Baked paths around the map geometry (replaces the probe graph).")
-		dep(panel:CheckBox("Steam Audio paths (bake on map load)", "audioprop_native_paths"), "ready")
-		dep(panel:CheckBox("Render paths as a sound field", "audioprop_native_path_fx"), "paths")
-		dep(panel:CheckBox("Keep the bake on disk", "audioprop_native_cache"), "paths")
+	panel:Help("Baked paths (replace the probe graph):")
+	dep(chk(panel, "Steam Audio paths", "native_paths"), "ready")
+	dep(chk(panel, "Render as a sound field", "native_path_fx"), "paths")
+	dep(chk(panel, "Keep the bake on disk", "native_cache"), "paths")
 
-		local hrtf, hrtfLabel = panel:TextEntry("Custom HRTF (SOFA file in data/audioprop/hrtf/)", "audioprop_native_hrtf")
-		dep(hrtf, R)
-		dep(hrtfLabel, R)
-		dep(panel:Button("Restart native rendering", "audioprop_native_restart"), R)
-		panel.apDeps = deps
-		A.menuPanels = A.menuPanels or {}
-		A.menuPanels[#A.menuPanels + 1] = panel
-		A.RefreshMenu()
+	panel:Help("Custom HRTF: a SOFA file in data/audioprop/hrtf/ (file name below).")
+	local hrtf = panel:TextEntry("HRTF file", "audioprop_native_hrtf")
+	dep(hrtf, R)
+	dep(panel:Button("Restart native rendering", "audioprop_native_restart"), R)
+	panel.apDeps = deps
+	A.menuPanels = A.menuPanels or {}
+	A.menuPanels[#A.menuPanels + 1] = panel
+	A.RefreshMenu()
 end
+
 function Build.server(panel)
-		panel:ClearControls()
-		if not LocalPlayer():IsAdmin() then
-			panel:Help("Admin only.")
-			return
-		end
-		panel:Help("Server settings (replicated to every player). Changes apply immediately.")
-		panel:CheckBox("Enable audioprop", "audioprop_enable")
-		panel:CheckBox("Merge portal paths into one voice", "audioprop_merge")
-		addSlider(panel, "Max portal paths", "max_paths")
-		addSlider(panel, "Reject paths below strongest (dB)", "reject_db")
-		addSlider(panel, "Diffraction reference frequency (Hz)", "diff_freq")
-		addSlider(panel, "Transmission loss multiplier", "trans_scale", 2)
-		addSlider(panel, "Low-frequency bonus through walls (dB)", "trans_lf_bonus")
-		addSlider(panel, "Full scale (dB SPL)", "fullscale_db")
-		addSlider(panel, "Closed door loss when unknown (dB)", "door_closed_db")
-		addSlider(panel, "DSP preset, light muffling", "dsp_lp1")
-		addSlider(panel, "DSP preset, strong muffling", "dsp_lp3")
-		panel:CheckBox("Props obstruct sound", "audioprop_trans_props")
-		panel:CheckBox("Use the probe graph (maps without areaportals)", "audioprop_probes")
-		panel:CheckBox("Take over looping sounds", "audioprop_loops")
-		panel:CheckBox("Follow long sounds (music, speeches)", "audioprop_long_sounds")
-		panel:CheckBox("Water surfaces muffle sound", "audioprop_water")
-		addSlider(panel, "Air / water interface loss (dB)", "water_db")
-		addSlider(panel, "Long sound threshold (s)", "max_duration", 1)
-		addSlider(panel, "Processing distance (units)", "lod_dist")
-		panel:Help("Optional native backend of the players:")
-		panel:CheckBox("Allow the native backend", "audioprop_allow_native")
-		panel:CheckBox("Relay all sounds to 'everything native' players", "audioprop_native_relay")
-		panel:CheckBox("Relay loud sounds for client echoes", "audioprop_echo_relay")
-		addSlider(panel, "Echo relay threshold (dB)", "echo_min_level")
+	panel:ClearControls()
+	if not LocalPlayer():IsAdmin() then
+		panel:Help("Admin only.")
+		return
+	end
+	panel:Help("Server settings, for every player. Changes apply immediately. Hover an option for details.")
+	chk(panel, "Enable audioprop", "enable")
+	chk(panel, "Props block sound", "trans_props")
+	chk(panel, "Probe graph", "probes")
+	chk(panel, "Looping sounds", "loops")
+	chk(panel, "Long sounds (music)", "long_sounds")
+	chk(panel, "Water muffles sound", "water")
+	chk(panel, "Merge paths", "merge")
+
+	panel:Help("Tuning:")
+	sld(panel, "Wall loss x", "trans_scale", 2)
+	sld(panel, "Bass through walls (dB)", "trans_lf_bonus")
+	sld(panel, "Closed door (dB)", "door_closed_db")
+	sld(panel, "Water surface (dB)", "water_db")
+	sld(panel, "Full scale (dB)", "fullscale_db")
+	sld(panel, "Diffraction freq. (Hz)", "diff_freq")
+	sld(panel, "Max paths", "max_paths")
+	sld(panel, "Path reject (dB)", "reject_db")
+	sld(panel, "DSP light muffle", "dsp_lp1")
+	sld(panel, "DSP strong muffle", "dsp_lp3")
+	sld(panel, "Long sound from (s)", "max_duration", 1)
+	sld(panel, "Max distance (units)", "lod_dist")
+
+	panel:Help("Players' Steam Audio module:")
+	chk(panel, "Allow the module", "allow_native")
+	chk(panel, "Relay all sounds to it", "native_relay")
+	chk(panel, "Relay loud sounds (echoes)", "echo_relay")
+	sld(panel, "Echo relay from (dB)", "echo_min_level")
 end
+
+A.MenuBuild = Build -- (tests)
 
 -- 1. the standard place: Spawn menu (Q) > Utilities > audioprop
 hook.Add("PopulateToolMenu", "audioprop_menu", function()
@@ -233,7 +256,7 @@ function A.RefreshMenu()
 					ctl:SetEnabled(ok)
 					ctl:SetAlpha(ok and 255 or 140)
 					-- say what unlocks a greyed-out option
-					ctl:SetTooltip(not ok and (WHY[d[2]] or "") or nil)
+					ctl:SetTooltip(not ok and (WHY[d[2]] or "") or ctl.apTip)
 				end
 			end
 		end
