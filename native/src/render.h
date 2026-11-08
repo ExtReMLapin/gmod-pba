@@ -48,8 +48,6 @@ std::string LoadSound(const std::string& name, const void* data, size_t size, do
 bool LoadSoundAsync(const std::string& name, std::string data);
 // Room reverb times (s, 3 bands, air-corrected) replacing the main simulator's estimate; nullptr = off.
 void SetRoomReverbOverride(const float* rt);
-// Steam Audio's reverb time with the air absorption it leaves out (s, band 0..2).
-float AirCorrectRt(float raw, int band);
 void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory budget (LRU eviction)
 void Memory(double* mb, int* sounds, int* voices);
 bool SoundPending(const std::string& name);

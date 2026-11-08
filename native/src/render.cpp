@@ -49,14 +49,13 @@ constexpr int kAmbi = 4; // first-order ambisonics channels
 constexpr int kEchoWaitBlocks = 24; // ~250 ms: an echo not simulated by then is dropped
 // keep processing a reflection tail for max(2.5 s, 1.2 x the longest reverb time) after the last sound
 std::atomic<int> g_tailBlocks{(int)(kRate * 2.5 / kBlock)};
-// Room reverb times from the long-window parametric simulator (pba_native.cpp), air-corrected;
-// they replace the main simulator's estimate (biased by its 0.5 s window) for the room reverb.
+// Room reverb times from the long-window parametric simulator (pba_native.cpp); they replace the main simulator's estimate (biased by its 0.5 s window) for the room reverb.
 std::atomic<float> g_rtOv[3] = {0, 0, 0};
 std::atomic<bool> g_rtOvOn{false};
-// Air absorption missing from Steam Audio's reverb estimate and tail EQ (it applies the per-metre
-// coefficients {0.0002, 0.0017, 0.0182} to a time, see docs/STEAM_AUDIO_BUGS.md #3):
-// decay added by air = 10 log10(e) * coef * c dB/s; tail EQ at the 0.375 s crossover = exp(-coef * c * t / 2).
-constexpr float kAirDbPerSec[3] = {0.298f, 2.53f, 27.1f};
+// Air absorption missing from the hybrid tail EQ (to be verified: hybrid_reverb_estimator.cpp takes it
+// from the energy field, which has no air, while the IR it continues has it). The reverb TIME has air
+// with our Steam Audio fork (docs/STEAM_AUDIO_BUGS.md #3). Tail EQ at the 0.375 s crossover =
+// exp(-coef * c * t / 2), coef = {0.0002, 0.0017, 0.0182} per metre.
 constexpr float kAirTailEq[3] = {0.987f, 0.896f, 0.311f};
 
 struct Sound {
@@ -186,14 +185,10 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr) {
 	if (!rtOut && (wet <= 0 || r.idle > tail)) return;
 	IPLSimulationOutputs out{};
 	iplSourceGetOutputs(r.src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
-	// reverb times: the long-window estimate for the room (already air-corrected), else the main
-	// simulator's, corrected for air here
+	// reverb times: the long-window estimate for the room, else the main simulator's
 	float rt[3];
 	const bool ov = rtOut && g_rtOvOn.load();
-	for (int b = 0; b < 3; ++b) {
-		const float raw = out.reflections.reverbTimes[b];
-		rt[b] = ov ? g_rtOv[b].load() : (raw > 0 ? 60.0f / (60.0f / raw + kAirDbPerSec[b]) : raw);
-	}
+	for (int b = 0; b < 3; ++b) rt[b] = ov ? g_rtOv[b].load() : out.reflections.reverbTimes[b];
 	if (rtOut) {
 		for (int b = 0; b < 3; ++b) rtOut[b] = rt[b];
 		const float mx = std::max({rt[0], rt[1], rt[2]});
@@ -941,11 +936,5 @@ void SetRoomReverbOverride(const float* rt) {
 	}
 	for (int b = 0; b < 3; ++b) g_rtOv[b] = rt[b];
 	g_rtOvOn = true;
-}
-} // namespace render
-
-namespace render {
-float AirCorrectRt(float raw, int band) {
-	return raw > 0 ? 60.0f / (60.0f / raw + kAirDbPerSec[band]) : raw;
 }
 } // namespace render

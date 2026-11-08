@@ -19,7 +19,7 @@ local SKIP_PREFIX = { "tools/toolsclip", "tools/toolsplayerclip", "tools/toolsnp
 
 -- Steam Audio absorption (low, mid, high) per MAT_*; defaults from its material presets.
 local ABSORB = {
-	[MAT_CONCRETE] = { 0.05, 0.07, 0.08 }, [MAT_TILE] = { 0.03, 0.04, 0.07 }, [MAT_WOOD] = { 0.11, 0.07, 0.06 },
+	[MAT_CONCRETE] = { 0.05, 0.07, 0.08 }, [MAT_TILE] = { 0.01, 0.02, 0.02 }, [MAT_WOOD] = { 0.11, 0.07, 0.06 },
 	[MAT_METAL] = { 0.20, 0.07, 0.06 }, [MAT_GLASS] = { 0.06, 0.03, 0.02 }, [MAT_DIRT] = { 0.15, 0.25, 0.35 },
 	[MAT_GRASS] = { 0.11, 0.26, 0.60 }, [MAT_SAND] = { 0.15, 0.30, 0.45 }, [MAT_PLASTIC] = { 0.10, 0.10, 0.10 },
 }
@@ -44,6 +44,7 @@ local ABSORB_MODEL = {
 	{ "haybale", { 0.30, 0.60, 0.70 } }, { "tirestack", { 0.10, 0.15, 0.20 } },
 }
 local absorbCache = {}
+-- returns the absorption and whether the model is padded (diffuse surface)
 local function absorptionFor(model, surf, mat)
 	if model then
 		local a = absorbCache[model]
@@ -53,9 +54,9 @@ local function absorptionFor(model, surf, mat)
 			for _, e in ipairs(ABSORB_MODEL) do if string.find(m, e[1], 1, true) then a = e[2] break end end
 			absorbCache[model] = a
 		end
-		if a then return a end
+		if a then return a, true end
 	end
-	return ABSORB_SURF[string.lower(surf or "")] or ABSORB[mat] or { 0.10, 0.10, 0.10 }
+	return ABSORB_SURF[string.lower(surf or "")] or ABSORB[mat] or { 0.10, 0.10, 0.10 }, false
 end
 
 --- The surfaceprop of an entity on the client: server props have no client physics object, so
@@ -88,9 +89,10 @@ local function saMaterial(surf, cfg, model)
 	local mat = data and data.material or MAT_CONCRETE
 	local R = A.AC.WallLoss(mat, surf, 16) * cfg.trans_scale
 	local tm = 10 ^ (-R / 20)
+	local absorption, padded = absorptionFor(model, surf, mat)
 	return {
-		absorption = absorptionFor(model, surf, mat),
-		scattering = 0.05,
+		absorption = absorption,
+		scattering = padded and 0.5 or (cfg.native_scattering or 0.25),
 		transmission = { math.min(tm * 10 ^ (cfg.trans_lf_bonus / 20), 1), tm, tm * 10 ^ (-10 / 20) },
 	}
 end
@@ -99,15 +101,21 @@ end
 function N.BuildWorld()
 	local verts, tris, matIdx, mats, matOf = {}, {}, {}, {}, {}
 	local mins, maxs = Vector(math.huge, math.huge, math.huge), Vector(-math.huge, -math.huge, -math.huge)
+	local withWater = (A.cfg.native_water or 1) >= 0.5
 	for _, s in ipairs(game.GetWorld():GetBrushSurfaces() or {}) do
 		local m = s:GetMaterial()
 		local name = m and m:GetName() or ""
 		if N.Yield then N.Yield() end
-		if not s:IsSky() and not s:IsWater() and not skipMaterial(name) then
-			local surf = m and m:GetString("$surfaceprop") or "default"
+		local water = s:IsWater()
+		if not s:IsSky() and (withWater or not water) and not skipMaterial(name) then
+			local surf = water and "pba_water" or (m and m:GetString("$surfaceprop") or "default")
 			local mi = matOf[surf]
 			if not mi then
-				mats[#mats + 1] = saMaterial(surf, A.cfg)
+				-- air / water interface: ~99.9 % of the energy reflected (impedance ratio ~3600),
+				-- calm surface; transmission = pba's own interface loss (pba_water_db)
+				mats[#mats + 1] = water and { absorption = { 0.01, 0.01, 0.02 }, scattering = 0.05,
+					transmission = { 10 ^ (-(A.cfg.water_db or 24) / 20), 10 ^ (-(A.cfg.water_db or 24) / 20), 10 ^ (-(A.cfg.water_db or 24) / 20) } }
+					or saMaterial(surf, A.cfg)
 				mi = #mats - 1
 				matOf[surf] = mi
 			end
@@ -187,15 +195,19 @@ function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	local t0 = SysTime()
 	-- the simulator is created with the current ray count (it fixes the ray directions)
 	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays, A.cfg.native_bounces or 16)
+	if pba_native.SetSimOptions then
+		pba_native.SetSimOptions(A.cfg.native_scene or 1, A.cfg.native_threads or 0, A.cfg.native_reverb_window or 2.5, 512)
+	end
 	local nt = pba_native.LoadWorld(verts, tris, matIdx, mats)
 	N.doors = {} -- the module released its dynamic objects with the old world
 	N.worldGen = (N.worldGen or 0) + 1 -- others holding dynamic meshes (demo panels) re-add them
 	N.loadMs = (SysTime() - t0) * 1000
-	N.tris, N.mins, N.maxs = nt, mins, maxs
+	N.tris, N.mins, N.maxs, N.nMats = nt, mins, maxs, #mats
 	N.ready = nt > 0
 	MsgN(string.format("[PBA] native backend: Steam Audio %d, %d triangles, %d materials, gathered in %.0f ms over %.1f s, loaded in %.0f ms",
 		pba_native.Version(), nt, #mats, N.buildMs or 0, SysTime() - (N.buildStart or SysTime()), N.loadMs))
 	if N.ready then N.StartRender() end
+	if N.ready then N.WantReverbBake() end
 	if N.ready and (A.cfg.native_paths or 0) >= 0.5 then
 		-- the probe graph is built in the background: bake once it is there
 		timer.Create("pba_native_bake", 1, 120, function()
@@ -482,7 +494,13 @@ function N.Echo(data, pos)
 	local gain = (data.Volume or 1) * A.AC.EngineGain(52.5, lvl)
 	local e = data.Entity
 	local key = IsValid(e) and e:EntIndex() or (data.EntIndex or 0)
-	pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, 0)
+	-- weapon-like source: the echoes are louder where the shooter aims (same rule as N.Directivity)
+	local aim, w = nil, A.cfg.native_dir or 0
+	if w > 0 and IsValid(e) then
+		local owner = (e:IsWeapon() and IsValid(e:GetOwner())) and e:GetOwner() or e
+		if owner:IsPlayer() then aim = owner:GetAimVector() elseif owner:IsNPC() then aim = owner:GetForward() end
+	end
+	pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, 0, aim, aim and w or 0)
 	N.echoes = (N.echoes or 0) + 1
 end
 
@@ -626,10 +644,52 @@ hook.Add("Think", "pba_native_listener", function()
 	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
 end)
 
--- the ray count fixes the simulator's ray directions: a new count rebuilds the scene (seconds)
-cvars.AddChangeCallback("pba_native_rays", function()
-	if N.ready and not N.building then N.Start() end
-end, "pba_native_rays_rebuild")
+-- the ray count fixes the simulator's ray directions: a new count rebuilds the scene (seconds);
+-- so do the options read when the simulator is created
+for _, cv in ipairs({ "rays", "scene", "threads", "reverb_window", "scattering", "water" }) do
+	cvars.AddChangeCallback("pba_native_" .. cv, function()
+		-- also while the demo map holds the module aside (modes A / B): the scene must be current when it comes back
+		if (N.ready or N.pba_demoHeld) and not N.building then N.Start() end
+	end, "pba_native_" .. cv .. "_rebuild")
+end
+
+--- Room reverb time baked at the probe positions (pba_native_baked_reverb): once the probe graph
+-- exists, on the same points as the paths (worker thread in the module).
+function N.WantReverbBake()
+	timer.Remove("pba_native_revbake")
+	if (A.cfg.native_baked_reverb or 0) < 0.5 or not pba_native.BakeReverb or (A.cfg.native_reverb_window or 0) <= 0.5 then return end
+	timer.Create("pba_native_revbake", 1, 120, function()
+		local pr = A.Probes and A.Probes.current
+		if not (pr and N.ready) then return end
+		timer.Remove("pba_native_revbake")
+		local step = math.max(math.Round(A.cfg.native_probe_spacing / pr.spacing), 1)
+		local pts
+		repeat
+			pts = {}
+			for _, n in ipairs(pr.nodes) do
+				if n.i % step == 0 and n.j % step == 0 then pts[#pts + 1] = n.pos end
+			end
+			step = step + 1
+		until #pts <= A.cfg.native_max_probes or step > 64
+		local t0 = SysTime()
+		local ok, err = pcall(pba_native.BakeReverb, pts, pr.spacing * (step - 1) * 0.75)
+		if not ok then MsgN("[PBA] reverb bake: ", err) return end
+		N.revBake = "baking"
+		timer.Create("pba_native_revbakepoll", 0.5, 0, function()
+			if not pba_native then timer.Remove("pba_native_revbakepoll") return end
+			local st, info = pba_native.ReverbBakeStatus()
+			if st == "baking" then return end
+			timer.Remove("pba_native_revbakepoll")
+			N.revBake = st
+			MsgN(string.format("[PBA] reverb bake: %s, %d probes, %.1f s %s", st, #pts, SysTime() - t0, info or ""))
+		end)
+	end)
+end
+-- turned on: bake now; off: the baked data goes with a rebuild
+cvars.AddChangeCallback("pba_native_baked_reverb", function(_, _, new)
+	if not (N.ready or N.pba_demoHeld) or N.building then return end
+	if tonumber(new) == 1 then N.WantReverbBake() else N.Start() end
+end, "pba_native_baked_reverb")
 
 cvars.AddChangeCallback("pba_native_render", function(_, _, new)
 	if tonumber(new) == 1 then N.StartRender() else N.StopRender() end

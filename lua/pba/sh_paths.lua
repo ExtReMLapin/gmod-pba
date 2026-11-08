@@ -724,11 +724,14 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- knows the map, not the props / doors). Near a door frame part of the source is still
 		-- visible: blend the clear part into the world share of the loss.
 		if CLIENT and A.Native and A.Native.ready then
-			local worldWalls, entWalls = {}, {}
+			local worldWalls, entWalls, water = {}, {}, false
 			for _, w in ipairs(walls) do
 				if w.ent or w.water then entWalls[#entWalls + 1] = w else worldWalls[#worldWalls + 1] = w end
+				water = water or w.water
 			end
-			if #worldWalls > 0 then
+			-- a water surface on the line: Steam Audio's scene has it too (pba_native_water) and
+			-- would count it in its occlusion; the interface keeps pba's own model only
+			if #worldWalls > 0 and not water then
 				local d = A.Native.Direct(S, L)
 				-- only partial visibility is trusted: if Steam Audio sees the line fully clear
 				-- while the engine traces hit the world, its scene lacks that geometry

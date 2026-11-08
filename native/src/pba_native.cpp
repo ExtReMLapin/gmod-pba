@@ -103,13 +103,11 @@ std::atomic<int> g_reflRays{2048}, g_reflBounces{16}, g_reflRuns{0}, g_reflError
 std::atomic<int> g_simMaxRays{2048};
 
 // --- simulation backend (SetSimOptions), applied when the world is (re)loaded
-std::atomic<int> g_optScene{1};           // 0 built-in ray tracer, 1 Embree, 2 Radeon Rays (GPU); falls back
+std::atomic<int> g_optScene{1};           // 0 built-in ray tracer, 1 Embree (falls back)
 std::atomic<int> g_optThreads{0};         // 0 = auto
 std::atomic<float> g_optRevWindow{2.5f};  // long-window room reverb estimate (s); <= 0.5 = off
 std::atomic<int> g_optRevRays{512};
 IPLEmbreeDevice g_embree = nullptr;
-IPLOpenCLDevice g_ocl = nullptr;
-IPLRadeonRaysDevice g_rr = nullptr;
 IPLSceneType g_sceneType = IPL_SCENETYPE_DEFAULT;
 std::string g_backend = "default";
 int g_simThreads = 2;
@@ -266,7 +264,7 @@ void ReflectionLoop() {
 					IPLSimulationOutputs o{};
 					iplSourceGetOutputs(g_revSrc, IPL_SIMULATIONFLAGS_REFLECTIONS, &o);
 					for (int b = 0; b < 3; ++b) {
-						const float v = render::AirCorrectRt(o.reflections.reverbTimes[b], b);
+						const float v = o.reflections.reverbTimes[b];
 						if (v > 0) g_revRt[b] = g_revRt[b] <= 0 ? v : g_revRt[b] * 0.7f + v * 0.3f;
 					}
 					if (g_revRt[1] > 0) render::SetRoomReverbOverride(g_revRt);
@@ -387,6 +385,18 @@ void ReleaseWorld() {
 	JoinBakeThread();
 	StopReflections();
 	render::SetReflectionSources(nullptr, nullptr, 0);
+	render::SetRoomReverbOverride(nullptr);
+	if (g_revSim) {
+		if (g_revSrc) {
+			iplSourceRemove(g_revSrc, g_revSim);
+			iplSourceRelease(&g_revSrc);
+		}
+		if (g_revBatch) iplSimulatorRemoveProbeBatch(g_revSim, g_revBatch);
+		iplSimulatorCommit(g_revSim);
+		iplSimulatorRelease(&g_revSim);
+	}
+	if (g_revBatch) iplProbeBatchRelease(&g_revBatch);
+	g_revBaked = false;
 	if (g_sim) {
 		for (auto& s : g_sources) {
 			iplSourceRemove(s, g_sim);
@@ -431,59 +441,29 @@ void ReleaseWorld() {
 	if (g_scene) iplSceneRelease(&g_scene);
 }
 
-// Ray tracer for the scene: Radeon Rays (GPU, OpenCL) or Embree (CPU, faster than the built-in one)
-// when asked and available, otherwise Steam Audio's own. Devices are created once and kept.
+// Ray tracer for the scene: Embree (CPU, faster than the built-in one) when asked and available,
+// otherwise Steam Audio's own. The Embree device is created once and kept. (Radeon Rays is left out:
+// its scenes have no instanced meshes, radeonrays_scene.h, so doors could not move.)
 void ChooseBackend() {
 	g_sceneType = IPL_SCENETYPE_DEFAULT;
 	g_backend = "default";
-	const int want = g_optScene.load();
-	std::string note;
-	if (want == 2) {
-		if (!g_rr) {
-			IPLOpenCLDeviceSettings os{};
-			os.type = IPL_OPENCLDEVICETYPE_GPU;
-			os.numCUsToReserve = 0;
-			os.fractionCUsForIRUpdate = 1.0f;
-			os.requiresTAN = IPL_FALSE;
-			IPLOpenCLDeviceList list = nullptr;
-			if (iplOpenCLDeviceListCreate(g_ctx, &os, &list) == IPL_STATUS_SUCCESS && list) {
-				if (iplOpenCLDeviceListGetNumDevices(list) > 0 && iplOpenCLDeviceCreate(g_ctx, list, 0, &g_ocl) == IPL_STATUS_SUCCESS) {
-					IPLRadeonRaysDeviceSettings rs{};
-					if (iplRadeonRaysDeviceCreate(g_ocl, &rs, &g_rr) != IPL_STATUS_SUCCESS) {
-						g_rr = nullptr;
-						iplOpenCLDeviceRelease(&g_ocl);
-					}
-				}
-				iplOpenCLDeviceListRelease(&list);
-			}
-		}
-		if (g_rr) {
-			g_sceneType = IPL_SCENETYPE_RADEONRAYS;
-			g_backend = "radeonrays";
-			return;
-		}
-		note = "radeonrays unavailable; ";
+	if (g_optScene.load() < 1) return;
+	if (!g_embree) {
+		IPLEmbreeDeviceSettings es{};
+		if (iplEmbreeDeviceCreate(g_ctx, &es, &g_embree) != IPL_STATUS_SUCCESS) g_embree = nullptr;
 	}
-	if (want >= 1) {
-		if (!g_embree) {
-			IPLEmbreeDeviceSettings es{};
-			if (iplEmbreeDeviceCreate(g_ctx, &es, &g_embree) != IPL_STATUS_SUCCESS) g_embree = nullptr;
-		}
-		if (g_embree) {
-			g_sceneType = IPL_SCENETYPE_EMBREE;
-			g_backend = note + "embree";
-			return;
-		}
-		note += "embree unavailable; ";
+	if (g_embree) {
+		g_sceneType = IPL_SCENETYPE_EMBREE;
+		g_backend = "embree";
+	} else {
+		g_backend = "embree unavailable; default";
 	}
-	g_backend = note + "default";
 }
 
 IPLSceneSettings SceneSettings() {
 	IPLSceneSettings ss{};
 	ss.type = g_sceneType;
 	ss.embreeDevice = g_sceneType == IPL_SCENETYPE_EMBREE ? g_embree : nullptr;
-	ss.radeonRaysDevice = g_sceneType == IPL_SCENETYPE_RADEONRAYS ? g_rr : nullptr;
 	return ss;
 }
 
@@ -493,8 +473,6 @@ bool EnsureSimulator() {
 	sim.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING |
 	                                 IPL_SIMULATIONFLAGS_REFLECTIONS);
 	sim.sceneType = g_sceneType;
-	sim.openCLDevice = g_sceneType == IPL_SCENETYPE_RADEONRAYS ? g_ocl : nullptr;
-	sim.radeonRaysDevice = g_sceneType == IPL_SCENETYPE_RADEONRAYS ? g_rr : nullptr;
 	sim.reflectionType = IPL_REFLECTIONEFFECTTYPE_HYBRID;
 	g_simMaxRays = g_reflRays.load();
 	sim.maxNumRays = g_simMaxRays.load(); // see g_simMaxRays
@@ -629,9 +607,15 @@ LUA_FUNCTION(LoadWorld) {
 		LUA->Pop();
 	}
 
-	IPLSceneSettings ss{};
-	ss.type = IPL_SCENETYPE_DEFAULT;
-	if (iplSceneCreate(g_ctx, &ss, &g_scene) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplSceneCreate failed");
+	ChooseBackend();
+	IPLSceneSettings ss = SceneSettings();
+	if (iplSceneCreate(g_ctx, &ss, &g_scene) != IPL_STATUS_SUCCESS) {
+		g_sceneType = IPL_SCENETYPE_DEFAULT;
+		g_backend += " (scene failed; default)";
+		ss = SceneSettings();
+		if (iplSceneCreate(g_ctx, &ss, &g_scene) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplSceneCreate failed");
+	}
+	g_sceneVersion++;
 	IPLStaticMeshSettings ms{};
 	ms.numVertices = nv;
 	ms.numTriangles = nt;
@@ -952,6 +936,108 @@ LUA_FUNCTION(Paths) {
 
 // ------------------------------------------------------------------ dynamic objects
 
+// BakeReverb(points, radius) -> numProbes : room reverb times baked at these listener positions
+// (option): a parametric bake over the long window (worker thread), then used by g_revSim instead
+// of tracing at run time. ReverbBakeStatus() -> "idle" | "baking" | "ready" | "error", message.
+static std::thread g_revBakeThread;
+static std::atomic<int> g_revBakeState{0}; // 0 idle, 1 baking, 2 done, 3 error
+static std::string g_revBakeError;
+
+static void JoinRevBake() {
+	if (g_revBakeThread.joinable()) g_revBakeThread.join();
+}
+
+LUA_FUNCTION(BakeReverb) {
+	if (!g_sim || !g_revSim) LUA->ThrowError("no world loaded or long-window reverb off");
+	LUA->CheckType(1, Type::Table);
+	const float radius = (float)LUA->CheckNumber(2) * kUnit;
+	if (g_revBakeState == 1) LUA->ThrowError("a reverb bake is already running");
+	JoinRevBake();
+	IPLProbeBatch batch = nullptr;
+	if (iplProbeBatchCreate(g_ctx, &batch) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplProbeBatchCreate failed");
+	const int np = TableLen(LUA, 1);
+	for (int i = 0; i < np; ++i) {
+		LUA->PushNumber(i + 1);
+		LUA->GetTable(1);
+		IPLSphere sp{};
+		sp.center = ToSA(LUA->GetVector(-1));
+		sp.radius = radius;
+		LUA->Pop();
+		iplProbeBatchAddProbe(batch, sp);
+	}
+	iplProbeBatchCommit(batch);
+	g_revBakeState = 1;
+	g_revBakeError.clear();
+	IPLScene scene = g_scene;
+	IPLContext ctx = g_ctx;
+	const IPLSceneType type = g_sceneType;
+	const float win = g_optRevWindow.load();
+	const int rays = g_optRevRays.load(), threads = g_simThreads;
+	g_revBakeThread = std::thread([=]() mutable {
+		try {
+			IPLReflectionsBakeParams bp{};
+			bp.scene = scene;
+			bp.probeBatch = batch;
+			bp.sceneType = type;
+			bp.identifier.type = IPL_BAKEDDATATYPE_REFLECTIONS;
+			bp.identifier.variation = IPL_BAKEDDATAVARIATION_REVERB;
+			bp.bakeFlags = IPL_REFLECTIONSBAKEFLAGS_BAKEPARAMETRIC;
+			bp.numRays = rays * 4; // offline: more rays than at run time
+			bp.numDiffuseSamples = 1024;
+			bp.numBounces = 256;
+			bp.simulatedDuration = win;
+			bp.savedDuration = win;
+			bp.order = 0;
+			bp.numThreads = threads;
+			bp.rayBatchSize = 1;
+			bp.irradianceMinDistance = 0.25f;
+			bp.bakeBatchSize = 1;
+			iplReflectionsBakerBake(ctx, &bp, NoProgress, nullptr);
+			std::lock_guard<std::mutex> lk(g_simMtx);
+			if (g_revSim) {
+				if (g_revBatch) {
+					iplSimulatorRemoveProbeBatch(g_revSim, g_revBatch);
+					iplProbeBatchRelease(&g_revBatch);
+				}
+				g_revBatch = batch;
+				iplSimulatorAddProbeBatch(g_revSim, g_revBatch);
+				iplSimulatorCommit(g_revSim);
+				g_revBaked = true;
+			} else {
+				iplProbeBatchRelease(&batch);
+			}
+			g_revBakeState = 2;
+		} catch (const std::exception& e) {
+			iplProbeBatchRelease(&batch);
+			g_revBakeError = e.what();
+			g_revBakeState = 3;
+		} catch (...) {
+			iplProbeBatchRelease(&batch);
+			g_revBakeError = "unknown C++ exception during the reverb bake";
+			g_revBakeState = 3;
+		}
+	});
+	LUA->PushNumber(np);
+	return 1;
+}
+
+LUA_FUNCTION(ReverbBakeStatus) {
+	const int st = g_revBakeState.load();
+	if (st == 1) {
+		LUA->PushString("baking");
+		return 1;
+	}
+	JoinRevBake();
+	g_revBakeState = 0;
+	if (st == 3) {
+		LUA->PushString("error");
+		LUA->PushString(g_revBakeError.c_str());
+		return 2;
+	}
+	LUA->PushString(st == 2 ? "ready" : "idle");
+	return 1;
+}
+
 // DynamicAdd(id, verts, tris, material) -> true : object geometry in its LOCAL frame (Source
 // units, flat {x,y,z,...}; tris 0-based flat), one material { absorption, scattering,
 // transmission }. Placed with DynamicMove, effective after DynamicCommit.
@@ -985,9 +1071,12 @@ LUA_FUNCTION(DynamicAdd) {
 	}
 	mat.scattering = FieldIndex(LUA, 4, "scattering", 1, 0.05f);
 	Dynamic d;
-	IPLSceneSettings ss{};
-	ss.type = IPL_SCENETYPE_DEFAULT;
-	if (iplSceneCreate(g_ctx, &ss, &d.sub) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplSceneCreate failed");
+	IPLSceneSettings ss = SceneSettings();
+	if (iplSceneCreate(g_ctx, &ss, &d.sub) != IPL_STATUS_SUCCESS) {
+		LUA->PushBool(false);
+		LUA->PushString("iplSceneCreate failed");
+		return 2;
+	}
 	IPLStaticMeshSettings ms{};
 	ms.numVertices = nv;
 	ms.numTriangles = nt;
@@ -1066,13 +1155,14 @@ LUA_FUNCTION(DynamicRemove) {
 		iplSceneRelease(&d.sub);
 	}
 	g_dyn.erase(it);
+	g_sceneVersion++;
 	return 0;
 }
 
 // DynamicCommit() -> committed : applies the pending changes to the scene. Skipped (false) while
 // a path bake reads the scene on its thread.
 LUA_FUNCTION(DynamicCommit) {
-	if (!g_scene || !g_dynDirty || g_bakeState == 1) {
+	if (!g_scene || !g_dynDirty || g_bakeState == 1 || g_revBakeState == 1) {
 		LUA->PushBool(false);
 		return 1;
 	}
@@ -1081,6 +1171,7 @@ LUA_FUNCTION(DynamicCommit) {
 		iplSceneCommit(g_scene);
 	}
 	g_dynDirty = false;
+	g_sceneVersion++;
 	LUA->PushBool(true);
 	return 1;
 }
@@ -1192,6 +1283,17 @@ LUA_FUNCTION(Echo) {
 		return 1;
 	}
 	const IPLVector3 p = ToSA(LUA->GetVector(2));
+	// 7: the shooter's aim (Source direction), 8: dipole weight (0 omni .. 1 figure of eight)
+	IPLVector3 aim{0, 0, -1};
+	float dipole = 0;
+	if (LUA->IsType(7, Type::Vector)) {
+		const IPLVector3 a = DirToSA(LUA->GetVector(7));
+		const float l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+		if (l > 1e-4f) {
+			aim = {a.x / l, a.y / l, a.z / l};
+			dipole = LUA->IsType(8, Type::Number) ? std::clamp((float)LUA->GetNumber(8), 0.0f, 1.0f) : 0.0f;
+		}
+	}
 	auto d2 = [](IPLVector3 a, IPLVector3 b) {
 		return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
 	};
@@ -1212,6 +1314,12 @@ LUA_FUNCTION(Echo) {
 		// transition in the renderer, no new simulation)
 		if (e.gen == 0 || d2(e.pos, p) > 4.0f) {
 			e.pos = p;
+			e.gen++;
+		}
+		const float da = (e.ahead.x - aim.x) * (e.ahead.x - aim.x) + (e.ahead.y - aim.y) * (e.ahead.y - aim.y) + (e.ahead.z - aim.z) * (e.ahead.z - aim.z);
+		if (dipole != e.dipole || (dipole > 0 && da > 0.1f)) { // ~18 degrees: resimulate
+			e.ahead = aim;
+			e.dipole = dipole;
 			e.gen++;
 		}
 		e.key = key;
@@ -1424,6 +1532,16 @@ LUA_FUNCTION(Stats) {
 	}
 	LUA->PushString(render::HrtfInfo().c_str());
 	LUA->SetField(-2, "hrtf");
+	LUA->PushString(g_backend.c_str());
+	LUA->SetField(-2, "backend");
+	LUA->PushNumber(g_simThreads);
+	LUA->SetField(-2, "threads");
+	LUA->PushNumber(g_revMs.load());
+	LUA->SetField(-2, "revMs");
+	LUA->PushString(!g_revSim ? "main" : g_revBaked.load() ? "baked" : "long");
+	LUA->SetField(-2, "rtSource");
+	LUA->PushNumber(g_stillPasses.load());
+	LUA->SetField(-2, "stillPasses");
 	return 1;
 }
 
@@ -1517,12 +1635,25 @@ LUA_FUNCTION(Shutdown) {
 	streams::Shutdown();
 	render::Stop();
 	ReleaseWorld();
+	if (g_embree) iplEmbreeDeviceRelease(&g_embree);
 	if (g_ctx) iplContextRelease(&g_ctx);
+	return 0;
+}
+
+// SetSimOptions(scene, threads, reverbWindow, reverbRays): ray tracer (0 built-in, 1 Embree, falls
+// back), simulation threads (0 auto), long-window room reverb (s, 0 = off). Applied at the next LoadWorld.
+LUA_FUNCTION(SetSimOptions) {
+	g_optScene = std::clamp((int)LUA->CheckNumber(1), 0, 1);
+	g_optThreads = std::clamp((int)LUA->CheckNumber(2), 0, 64);
+	g_optRevWindow = std::clamp((float)LUA->CheckNumber(3), 0.0f, 10.0f);
+	g_optRevRays = std::clamp((int)LUA->CheckNumber(4), 64, 8192);
 	return 0;
 }
 
 void JoinBakeThread() {
 	JoinBake();
+	JoinRevBake();
+	g_revBakeState = 0;
 	if (g_bakeBatch) iplProbeBatchRelease(&g_bakeBatch);
 	g_bakeState = 0;
 }
@@ -1548,6 +1679,12 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "RoomReverb");
 	LUA->PushCFunction(Shutdown);
 	LUA->SetField(-2, "Shutdown");
+	LUA->PushCFunction(SetSimOptions);
+	LUA->SetField(-2, "SetSimOptions");
+	LUA->PushCFunction(BakeReverb);
+	LUA->SetField(-2, "BakeReverb");
+	LUA->PushCFunction(ReverbBakeStatus);
+	LUA->SetField(-2, "ReverbBakeStatus");
 	LUA->PushCFunction(AudioStart);
 	LUA->SetField(-2, "AudioStart");
 	LUA->PushCFunction(AudioStop);
@@ -1619,6 +1756,7 @@ GMOD_MODULE_CLOSE() {
 	streams::Shutdown();
 	render::Stop();
 	ReleaseWorld();
+	if (g_embree) iplEmbreeDeviceRelease(&g_embree);
 	if (g_ctx) iplContextRelease(&g_ctx);
 	return 0;
 }
