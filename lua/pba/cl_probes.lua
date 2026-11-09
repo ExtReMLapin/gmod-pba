@@ -1402,6 +1402,16 @@ function PR.AdvanceDoorFields()
 	local g = PR.current
 	local job = PR.doorFieldJob
 	if job and job.g ~= g then job, PR.doorFieldJob = nil, nil end
+	-- the links' door candidates and costs of a new graph, ahead of its first route (once per map: ~20 ms
+	-- on rp_downtown when the first sound asked for them, the worst step of a walk)
+	if not job and g and not g.linkCosts and not PR.building then
+		job = { g = g, f = false }
+		job.co = coroutine.create(function()
+			PR.LinkCosts(g, function() if SysTime() >= PR.doorFieldDeadline then coroutine.yield() end end)
+			return false
+		end)
+		PR.doorFieldJob = job
+	end
 	if not job then
 		local q = PR.doorFieldQueue
 		if not q or q.g ~= g or #q.list == 0 then return end
@@ -1425,6 +1435,8 @@ function PR.AdvanceDoorFields()
 	if not ok then
 		PR.doorFieldJob = nil
 		ErrorNoHaltWithStack("[PBA] door field failed: " .. tostring(res))
+	elseif coroutine.status(job.co) == "dead" and not job.f then
+		PR.doorFieldJob = nil -- (the graph's link costs, kept on g)
 	elseif coroutine.status(job.co) == "dead" then
 		local f = job.f
 		PR.doorFieldSpare = f.doors -- its tables are filled again by the next build (no garbage per build)
