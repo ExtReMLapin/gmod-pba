@@ -98,7 +98,10 @@ local function streamSend(ch, r, L, g, pos)
 		r.srcBound = N.BindSource(r.nativeId, r.pos, (r.vol or 1) * A.cfg.native_gain)
 	end
 	if not r.srcBound then return g end
-	if r.transG and r.transPos then return N.RoomSend((r.vol or 1) * r.transG * A.cfg.native_gain, r.transPos, L) end
+	-- what enters the listener's space, at its gain: no x distance / 1 m (N.RoomSend compensates a 1/r direct;
+	-- a stream's direct follows its addon's law, flat for rRadio: the factor, up to x100, made the reverb
+	-- depend on where the entry point lay: 16 dB in 40 u on gm_melancholia's stairs, reverb 24 dB over the direct)
+	if r.transG then return (r.vol or 1) * r.transG * A.cfg.native_gain end
 	return 0
 end
 
