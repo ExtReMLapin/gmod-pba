@@ -792,6 +792,31 @@ return {
 			local dq, aq = P.PathDiffuse(q, cfg)
 			expect(near(dp, dq) and near(ap, aq)).to.beTrue()
 		end },
+		{ name = "Corners: close edges bend as one wedge (a thick jamb costs the whole turn), far ones add (pba_corner_wedge)", func = function()
+			local saved = P.SegmentDoorLoss
+			P.SegmentDoorLoss = function() return 0, 0 end -- no game traces in the pure suite
+			local on = setmetatable({ portal_diffuse_db = 60, corner_wedge = 1 }, { __index = CFG })
+			local off = setmetatable({ portal_diffuse_db = 60, corner_wedge = 0 }, { __index = CFG })
+			-- pba_demo's doorway (measured): 40 then 22 degrees round two jambs 20 u apart
+			local S, L = Vector(0, 0, 0), Vector(500 + 20 * math.cos(math.rad(40)) + 600 * math.cos(math.rad(62)), 20 * math.sin(math.rad(40)) + 600 * math.sin(math.rad(62)), 0)
+			local p1 = Vector(500, 0, 0)
+			local p2 = p1 + Vector(math.cos(math.rad(40)), math.sin(math.rad(40)), 0) * 20
+			local ok1, thick = pcall(P.EvalPolyline, { S, p1, p2, L }, on)
+			local ok2, split = pcall(P.EvalPolyline, { S, p1, p2, L }, off)
+			-- one edge at the same spot, bending the same total (62 degrees)
+			local ok3, one = pcall(P.EvalPolyline, { S, p1, p1 + Vector(math.cos(math.rad(62)), math.sin(math.rad(62)), 0) * 620, }, on)
+			-- two 90 degree turns 300 u apart (a corridor): each corner its own, the wedge does not add
+			local ok4, far = pcall(P.EvalPolyline, { Vector(0, 0, 0), Vector(300, 0, 0), Vector(300, 300, 0), Vector(0, 300, 0) }, on)
+			local ok5, farOff = pcall(P.EvalPolyline, { Vector(0, 0, 0), Vector(300, 0, 0), Vector(300, 300, 0), Vector(0, 300, 0) }, off)
+			P.SegmentDoorLoss = saved
+			expect(ok1 and ok2 and ok3 and ok4 and ok5).to.beTrue()
+			expect(split.diffDb < 5).to.beTrue() -- each jamb with its neighbour: the former 2-3 dB
+			expect(thick.diffDb > 15).to.beTrue()
+			expect(thick.diffDb >= P.WedgeDb(thick.length, S:Distance(L), on) - 1e-6).to.beTrue()
+			expect(math.abs(thick.diffDb - one.diffDb) < 3).to.beTrue() -- a thick jamb ~ one edge of the whole turn
+			expect(near(far.diffDb, farOff.diffDb)).to.beTrue()
+			expect(P.WedgeDb(1000, 900, off) == 0).to.beTrue()
+		end },
 		{ name = "DiffuseMix: the diffuse part goes round corners by reflections (diffuse_corner_db per 90 degrees), the direct part keeps the diffraction", func = function()
 			local cfg = setmetatable({ diffuse_corner_db = 3, diffuse_max = 0.85 }, { __index = CFG })
 			-- room 14: 4 corners, 29.8 dB of edge diffraction, share 0.54, 3.4 dB of wall absorption

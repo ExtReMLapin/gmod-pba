@@ -43,6 +43,7 @@ A.CONFIG = {
 	diff_freq       = { 500, 125, 4000, "sv", "Reference frequency (Hz) for diffraction loss." },
 	diff_max_edge   = { 20, 0, 40, "sv", "Max diffraction loss per portal (dB)." },
 	diff_max_total  = { 30, 0, 60, "sv", "Max diffraction loss per path (dB)." },
+	corner_wedge    = { 1, 0, 1, "sv", "A path's corners together never cost less than one edge bending the whole path (its total extra length): close edges (the two jambs of a thick doorway) diffract as one thick wedge. 0 = each corner with its neighbours only." },
 	portal_diffuse_db = { 8, 0, 60, "sv", "Reverberant sound leaking through an opening: dB below the direct sound, added in power to the edge diffraction (a room's diffuse field leaves through an open door in every direction, unfiltered). 60 = edge diffraction only." },
 	door_aperture   = { 1, 0, 1, "sv", "Partly open doors: 1 = the real gap is measured (traces) and the sound through it follows the Fresnel zone (a crack in line of sight is bright, out of line much weaker); 0 = the opening angle alone (cheaper)." },
 	portal_diffuse_lp = { 1, 0, 4, "sv", "Max lowpass level of a path whose openings are all open: the diffuse part keeps the treble. 4 = no cap." },
