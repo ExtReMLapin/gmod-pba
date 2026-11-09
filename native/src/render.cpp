@@ -86,6 +86,8 @@ struct Voice {
 	double sfrac = 0;                  // fractional read position in the stream
 	bool primed = false;               // enough buffered to start (or restart after a gap)
 	double cursor = 0; // < 0: start delay still running (output samples)
+	double startAt = 0; // cursor once the start delay has run (VoiceParams::offset, in pcm samples)
+	int fadeIn = 0;     // samples of the start fade-in left (a start offset cuts into the waveform)
 	float rate = 1;
 	bool loop = false;
 	std::atomic<bool> alive{true};
@@ -343,6 +345,7 @@ void RenderBlock() {
 			if (v.cursor < 0) {
 				m[i] = 0;
 				v.cursor = std::min(v.cursor + 1.0, 0.0);
+				if (v.cursor >= 0) v.cursor = v.startAt; // delay over: jump to the start offset
 				continue;
 			}
 			if (v.cursor >= len - 1) {
@@ -356,6 +359,10 @@ void RenderBlock() {
 			const size_t k = (size_t)v.cursor;
 			const float f = (float)(v.cursor - (double)k);
 			m[i] = pcm[k] * (1 - f) + pcm[k + 1] * f;
+			// started mid-sound: the first sample is wherever the waveform happens to be, a step
+			// from silence that clicks. Ramp it in here, on the raw signal, so the direct path and
+			// every send (taken before the gain) fade in together.
+			if (v.fadeIn > 0) m[i] *= 1.0f - (float)v.fadeIn-- / kBlock;
 			v.cursor += v.rate;
 		}
 		}
@@ -1090,6 +1097,14 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 	v->loop = loop;
 	v->cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
 	SetVoice(*v, p); // takes a path effect if p.hasSH (see AcquirePath)
+	if (p.offset > 0) {
+		// offset is playback time: at pitch 150 the sound has advanced 1.5 s of pcm per second.
+		// Past the end of a one-shot the voice simply ends on its first block (the sound is over);
+		// a loop wraps in the mixer.
+		v->startAt = (double)p.offset * kRate * v->rate;
+		v->fadeIn = kBlock;
+		if (v->cursor >= 0) v->cursor = v->startAt;
+	}
 	if (pathFallback) *pathFallback = v->pathFallback;
 	const int id = v->id;
 	g_voices.push_back(std::move(v));

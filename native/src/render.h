@@ -27,6 +27,11 @@ struct VoiceParams {
 	float eq[3] = {1, 1, 1};
 	float pitch = 100;
 	float delay = 0;     // start delay (seconds): propagation time
+	// Play only: start this far into the sound (seconds of playback at the voice's pitch, i.e. the
+	// time the sound has already been heard elsewhere: the cursor moves offset x rate). Lets a sound
+	// whose rendering changes mid-way (engine copy re-muffled, switch to native rendering) continue
+	// instead of replaying from the beginning. Faded in over one block (no click on the cut).
+	float offset = 0;
 	bool hasSH = false;  // baked path: rendered through IPLPathEffect with these coefficients
 	float sh[4] = {0, 0, 0, 0};
 	// Update only: back to straight-line rendering (the path slot is released after a one-block

@@ -1,5 +1,5 @@
 // pba_native.trace (part of gmcl_pba): EXPERIMENTAL direct calls into the engine's trace interface (IEngineTrace,
-// "EngineTraceClient003" in GMod's engine.dll), world only, to replace util.TraceLine / TraceHull in
+// "EngineTraceClient003" in GMod's engine.dll), world and static props, to replace util.TraceLine / TraceHull in
 // pba's hottest loops (probe-path tightening: ~100 hull traces per path computation, 1.8 of the 2.3 us
 // of each util.TraceHull spent crossing the Lua binding).
 // The interface layout comes from the public Source SDK 2013 headers (IEngineTrace.h, cmodel.h Ray_t,
@@ -24,15 +24,47 @@ int g_pcIdx = 0;             // vtable index of GetPointContents (SDK 2013: 0)
 int g_layout = 0;            // Ray_t layout: 0 = SDK 2013 (bools at 64), 1 = with a transform pointer (bools at 72)
 const char* g_err = "not initialised";
 
+// Static props. pba's Lua traces (util.TraceLine / TraceHull with a filter refusing every entity) hit
+// the world AND the static props (HitTexture "**studio**"), but TRACE_WORLD_ONLY skips static props
+// (IEngineTrace.h), so on prop-heavy maps the native results differed (gm_melancholia: 82 of 2000
+// hulls) and the Lua self-check turned the native traces off. To match util.Trace*, the trace runs
+// as TRACE_EVERYTHING, for which the engine asks the filter about every entity and static prop in
+// the ray's way, and the filter accepts static props only, told apart by the engine's static prop
+// manager (engine/IStaticPropMgr.h, IStaticPropMgrClient, "StaticPropMgrClient004").
+// IStaticPropMgr's virtuals in declaration order: CreateVPhysicsRepresentations, TraceRayAgainstStaticProp,
+// IsStaticProp(IHandleEntity*), IsStaticProp(CBaseHandle), GetStaticPropByIndex. MSVC groups the
+// overloads of one name and lays them out in REVERSE declaration order, so the IHandleEntity* overload
+// is slot 3, the CBaseHandle one slot 2, GetStaticPropByIndex slot 4. Checked in GMod's x64
+// engine.dll: slot 3 reads the handle's GetRefEHandle(), slot 2 reads a CBaseHandle, slot 4 is
+// bounds-checked (null past the last prop). Init also checks slot 3 against prop 0's own handle.
+void* g_spm = nullptr;       // IStaticPropMgrClient*
+int g_isStaticIdx = 3;       // vtable index of IsStaticProp(IHandleEntity*)
+int g_propByIdx = 4;         // vtable index of GetStaticPropByIndex(int) -> ICollideable*
+int g_filterMode = 1;        // 1 = world + static props (as util.Trace*), 0 = world only (the old traces)
+
+bool IsStaticProp(void* handle) {
+	using Fn = bool (*)(void*, void*);
+	return reinterpret_cast<Fn>((*reinterpret_cast<void***>(g_spm))[g_isStaticIdx])(g_spm, handle);
+}
+
 struct Vec3 { float x, y, z; };
 
-// ITraceFilter (IEngineTrace.h): ShouldHitEntity, GetTraceType; world only = TRACE_WORLD_ONLY (1)
+// ITraceFilter (IEngineTrace.h): ShouldHitEntity, GetTraceType (TraceType_t: TRACE_EVERYTHING 0,
+// TRACE_WORLD_ONLY 1, TRACE_ENTITIES_ONLY 2, TRACE_EVERYTHING_FILTER_PROPS 3)
 class TraceFilterWorld {
 public:
 	virtual bool ShouldHitEntity(void*, int) { return false; }
 	virtual int GetTraceType() const { return 1; }
 };
+// world through TRACE_EVERYTHING (the BSP is always traced), static props kept, entities refused:
+// what util.Trace* gives with a filter returning false for every entity
+class TraceFilterStatic {
+public:
+	virtual bool ShouldHitEntity(void* h, int) { return h && IsStaticProp(h); }
+	virtual int GetTraceType() const { return 0; }
+};
 TraceFilterWorld g_world;
+TraceFilterStatic g_static;
 
 struct alignas(16) RayBuf { unsigned char b[128]; };
 struct alignas(16) TraceBuf { unsigned char b[512]; };
@@ -81,7 +113,8 @@ bool DoTrace(const Vec3& s, const Vec3& e, unsigned int mask, const Vec3* mins, 
 	std::memset(tr.b, 0, sizeof tr.b);
 	using Fn = void (*)(void*, const void*, unsigned int, void*, void*);
 	Fn fn = reinterpret_cast<Fn>((*reinterpret_cast<void***>(g_trace))[g_traceIdx]);
-	fn(g_trace, ray.b, mask, &g_world, tr.b);
+	void* filter = g_filterMode == 1 && g_spm ? static_cast<void*>(&g_static) : static_cast<void*>(&g_world);
+	fn(g_trace, ray.b, mask, filter, tr.b);
 	// CBaseTrace: startpos 0, endpos 12, plane 24 (20 bytes), fraction 44, contents 48, dispFlags 52,
 	// allsolid 54, startsolid 55; CGameTrace: fractionleftsolid 56
 	std::memcpy(&out.endpos, tr.b + 12, 12);
@@ -98,7 +131,28 @@ bool DoTrace(const Vec3& s, const Vec3& e, unsigned int mask, const Vec3* mins, 
 
 Vec3 ToVec3(const Vector& v) { return {v.x, v.y, v.z}; }
 
-// Init() -> true | false, err
+// Finds the static prop manager and checks the IsStaticProp slot on prop 0 (when the map has one:
+// GetStaticPropByIndex(0) -> ICollideable, whose first virtual is GetEntityHandle()). A slot that
+// does not say yes to a real static prop is not used: the traces fall back to world only.
+bool InitStaticProps(CreateInterfaceFn ci) {
+	int rc = 0;
+	g_spm = ci("StaticPropMgrClient004", &rc);
+	if (!g_spm) return false;
+	using ByIdx = void* (*)(void*, int);
+	void* coll = reinterpret_cast<ByIdx>((*reinterpret_cast<void***>(g_spm))[g_propByIdx])(g_spm, 0);
+	if (coll) {
+		using GetHandle = void* (*)(void*);
+		void* h = reinterpret_cast<GetHandle>((*reinterpret_cast<void***>(coll))[0])(coll);
+		if (!h || !IsStaticProp(h)) {
+			g_spm = nullptr;
+			return false;
+		}
+	}
+	return true;
+}
+
+// Init() -> true, staticProps | false, err. staticProps: the traces hit static props as util.Trace*
+// does (false: static prop manager missing or failing its check, world only)
 LUA_FUNCTION(Init) {
 	HMODULE eng = GetModuleHandleA("engine.dll");
 	if (!eng) { g_err = "engine.dll not loaded"; LUA->PushBool(false); LUA->PushString(g_err); return 2; }
@@ -109,14 +163,17 @@ LUA_FUNCTION(Init) {
 	if (!g_trace) { g_err = "EngineTraceClient003 not found"; LUA->PushBool(false); LUA->PushString(g_err); return 2; }
 	g_err = "";
 	LUA->PushBool(true);
-	return 1;
+	LUA->PushBool(InitStaticProps(ci));
+	return 2;
 }
 
-// SetLayout(rayLayout, traceRayIndex, pointContentsIndex): experiments only
+// SetLayout(rayLayout, traceRayIndex, pointContentsIndex, filterMode): experiments only.
+// filterMode: 1 = world + static props (default), 0 = world only (the traces before static props)
 LUA_FUNCTION(SetLayout) {
 	g_layout = (int)LUA->CheckNumber(1);
 	if (LUA->IsType(2, Type::Number)) g_traceIdx = (int)LUA->GetNumber(2);
 	if (LUA->IsType(3, Type::Number)) g_pcIdx = (int)LUA->GetNumber(3);
+	if (LUA->IsType(4, Type::Number)) g_filterMode = (int)LUA->GetNumber(4);
 	return 0;
 }
 
@@ -132,7 +189,8 @@ LUA_FUNCTION(PointContents) {
 }
 
 // Trace(start, end, mask [, mins, maxs]) -> fraction, startsolid, allsolid, endpos, contents, fractionleftsolid,
-// surface (texture name, as TraceResult.HitTexture), surface flags (SURF_*: 0x80 = nodraw) (world only)
+// surface (texture name, as TraceResult.HitTexture: "**studio**" on a static prop), surface flags
+// (SURF_*: 0x80 = nodraw) (world and static props, see g_filterMode)
 LUA_FUNCTION(Trace) {
 	LUA->CheckType(1, Type::Vector);
 	LUA->CheckType(2, Type::Vector);

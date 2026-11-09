@@ -17,7 +17,7 @@
 //   Paths(sources, listener) -> array of { el, em, eh, w, sh1..3, dx, dy, dz } (eq + arrival field)
 //   Rendering (render.cpp): AudioStart([sofaBytes]), AudioStop(), HasSound(name),
 //     LoadSound(name, bytes),
-//     Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse, send]) -> id, pathFallback,
+//     Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse, send, offset]) -> id, pathFallback,
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send]]),
@@ -35,6 +35,8 @@
 //     SetSourceSlots: active pool size (0..32, default 16); the reflections run cost grows with it
 //     send: room reverb send level (linear), independent from gain, which carries the distance law;
 //     absent = keep the voice's (a voice that never received one sends at its gain)
+//     offset (Play arg 13): start this many seconds into the sound (playback time at the given pitch:
+//     the time it has already been heard elsewhere), faded in over one block; after the delay if any
 //     sh (Play arg 10, Update arg 10): baked path arrival field {w, sh1, sh2, sh3} as Paths() gives;
 //     on Update: a table = path rendering with these (a straight-line voice switches to the path),
 //     false = back to straight-line rendering at pos, nil / absent = keep the current mode. Switches
@@ -1387,7 +1389,7 @@ static render::VoiceParams ReadVoice(ILuaBase* LUA, int first) {
 }
 
 // optional trailing arguments of Play: delay (seconds), sh {w, sh1, sh2, sh3} (baked path field),
-// diffuse share (0..1), room reverb send level (linear, absent = follows gain)
+// diffuse share (0..1), room reverb send level (linear, absent = follows gain), start offset (seconds)
 static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	if (LUA->IsType(first, Type::Number)) p.delay = (float)LUA->GetNumber(first);
 	if (LUA->IsType(first + 1, Type::Table)) {
@@ -1396,6 +1398,7 @@ static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	}
 	if (LUA->IsType(first + 2, Type::Number)) p.diffuse = (float)LUA->GetNumber(first + 2);
 	if (LUA->IsType(first + 3, Type::Number)) p.send = (float)LUA->GetNumber(first + 3);
+	if (LUA->IsType(first + 4, Type::Number)) p.offset = std::clamp((float)LUA->GetNumber(first + 4), 0.0f, 3600.0f); // inf would make a loop's fmod NaN
 }
 
 // optional room reverb send at index i (PlayStream, Update): -1 when absent = keep the current one
@@ -1459,7 +1462,7 @@ LUA_FUNCTION(LoadSound) {
 	return 1;
 }
 
-// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send]]]]]])
+// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send [, offset]]]]]]])
 //   -> voice id (0 = failed), pathFallback (sh given but no free path effect: straight line)
 LUA_FUNCTION(Play) {
 	const char* name = LUA->CheckString(1);
@@ -2168,6 +2171,14 @@ GMOD_MODULE_OPEN() {
 	LUA->PushCFunction(PlayStream);
 	LUA->SetField(-2, "PlayStream");
 	RegisterTrace(LUA);
+	// capabilities of this build, so that Lua can use a feature only when the installed DLL has it (an
+	// older DLL silently ignores extra arguments: a start offset would replay a sound from its start)
+	LUA->CreateTable();
+	LUA->PushBool(true); LUA->SetField(-2, "playOffset");       // Play arg 13: start offset (s)
+	LUA->PushBool(true); LUA->SetField(-2, "updatePathField");  // Update arg 10: sh / false
+	LUA->PushBool(true); LUA->SetField(-2, "sourcePool");       // SourceReflect / SetSourceSlots
+	LUA->PushBool(true); LUA->SetField(-2, "staticPropTraces"); // trace.* hit static props (trace.Init's 2nd value)
+	LUA->SetField(-2, "caps");
 	LUA->SetField(-2, "pba_native");
 	LUA->Pop();
 	return 0;
