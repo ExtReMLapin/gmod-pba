@@ -360,6 +360,11 @@ steps = [
         lambda: [job("server", "door_sweep_real.lua", 30), job("client", "door_sweep_real.lua", 400)])),
     ("door_sweep_real twodoors", lambda: seq(lambda: load("pba_twodoors"), lambda: native_on(True),
         lambda: [job("server", "door_sweep_real.lua", 30), job("client", "door_sweep_real.lua", 120)])),
+    # one corner, one cost: the estimators of a jamb's loss (edge, routes) and of a closed leaf agree, 2 u steps
+    ("corner_coherence rp_downtown", lambda: seq(lambda: load("rp_downtown_v4c_v2"),
+        lambda: [job("server", "corner_coherence.lua", 30), job("client", "corner_coherence.lua", 400)])),
+    ("corner_coherence twodoors", lambda: seq(lambda: load("pba_twodoors"),
+        lambda: [job("server", "corner_coherence.lua", 30), job("client", "corner_coherence.lua", 120)])),
     # what a player can hear: level steps > 1 dB (JND) and
     # direction jumps when the source or the listener walks 16 u steps, level(S, L) vs level(L, S).
     # Limits None (report only) until the first in-game baseline; --check fails on too few walks.

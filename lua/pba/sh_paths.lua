@@ -365,25 +365,30 @@ function P.EvalChain(S, L, chain, cfg, masks)
 		pos = pts[#pts], lp = lp, lpDb = tilt, direct = direct, bendDeg = bend, cornerPaid = paidMin }
 end
 
---- Door loss (dB), lowpass level and spectral tilt (dB) of the door entities crossed by segment a -> b
--- (game state). Level as AC.DoorGain (gap amplitude (1 - gc) sqrt(frac) beside the leaf's gc); spectrum
--- as a portal's (P.DoorTilt): the gap clear, the leaf its material's lowpass.
-local DOORS_ONLY = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
-local doorOut = {}
-local doorTr = { mask = MASK_SOLID, filter = function(e) return DOORS_ONLY[e:GetClass()] or false end, output = doorOut }
-function P.SegmentDoorLoss(a, b, cfg)
-	cfg = cfg or A.cfg
-	doorTr.start, doorTr.endpos = a, b
-	util.TraceLine(doorTr)
-	local tr = doorOut
-	if not tr.Hit or not IsValid(tr.Entity) then return 0 end
-	local st = A.Doors.byEnt and A.Doors.byEnt[tr.Entity:EntIndex()]
-	local frac, closedDb = st and st.frac or 0, st and st.closedDb or cfg.door_closed_db
-	local gc = 10 ^ (-AC.LeafDb(closedDb, cfg) / 20)
-	local gOpen = (1 - gc) * math.sqrt(math.Clamp(frac, 0, 1))
-	local t = P.DoorTilt(gOpen, 0, gc, st and st.closedLp or 3, 0, 0, cfg)
-	return -AC.GainToDb(gc + gOpen), AC.LowpassLevel(t, cfg), t
+--- The door state of an openable entity ({ frac, closedDb, closedLp }, sh_doors: the server's poll,
+-- replicated to the clients), or nil when unknown. The one place the straight-line model reads it.
+local function doorState(ent)
+	local D = A.Doors
+	if not D then return nil end
+	if CLIENT then return D.byEnt and D.byEnt[ent:EntIndex()] end
+	return D.entState and D.entState[ent:EntIndex()]
 end
+P.DoorState = doorState
+--- Mid-band loss (dB) and lowpass level of a door leaf as a closure: its one loss (sh_doors D.LeafLoss:
+-- the leaf's measured thickness and face material, replicated as closedDb), the same the portal model
+-- charges (AC.LeafDb in P.EvalChain and P.SegmentDoorLoss). Never the chord the straight line cuts
+-- through the leaf: a line crossing a leaf near its plane cut 86 u of "metal", 50 dB, where the same
+-- leaf costs 24 one step aside (door_sweep_real's 18.6 dB jump at the leaf's edge).
+local function leafLoss(ent, cfg)
+	local st = doorState(ent)
+	if st and st.closedDb then return st.closedDb, st.closedLp or 3 end
+	if SERVER and A.Doors and A.Doors.LeafLoss then
+		local db, lp = A.Doors.LeafLoss(ent)
+		return db, lp or 3
+	end
+	return cfg.door_closed_db, 3
+end
+P.LeafLoss = leafLoss
 
 --- Evaluates a polyline S, v1 .. vn, L (probe paths): a corner at each inner vertex (AC.Corner: the
 -- same model as a portal opening, reverberant leak included), door entities crossed by the segments;
@@ -391,14 +396,23 @@ end
 -- Spectrum as a chain's: with no door on the way the leak carries the treble round the corners
 -- (portal_diffuse_lp), so a doorway heard round its jamb is not muffled more on a map without
 -- areaportals than on one with them.
-function P.EvalPolyline(pts, cfg)
+-- doorPts (optional, same ends): the polyline whose segments meet the doors (P.EvalRoute: the clearance
+-- route, a hull off the walls, while pts has its corners on the edges; from a vertex on an edge every
+-- trace toward the other side of that edge grazes it, and a leaf's way round flipped valid / blocked
+-- from one frame to the next).
+function P.EvalPolyline(pts, cfg, doorPts)
 	cfg = cfg or A.cfg
 	local len, diff, door, doorTilt = 0, 0, 0, 0
-	for i = 1, #pts - 1 do
-		len = len + pts[i]:Distance(pts[i + 1])
-		local dl, dlp, dt = P.SegmentDoorLoss(pts[i], pts[i + 1], cfg)
-		door = door + dl
-		doorTilt = doorTilt + (dt or AC.LevelDb(dlp or 0, cfg)) -- doors in series, like a chain's openings
+	for i = 1, #pts - 1 do len = len + pts[i]:Distance(pts[i + 1]) end
+	local dp = doorPts or pts
+	local paid -- the leaves paid (each once)
+	for i = 1, #dp - 1 do
+		local dl, dlp, dt, ent = P.SegmentDoorLoss(dp[i], dp[i + 1], cfg)
+		if dl > 0 and not (ent and paid and paid[ent]) then
+			if ent then paid = paid or {} paid[ent] = true end
+			door = door + dl
+			doorTilt = doorTilt + (dt or AC.LevelDb(dlp or 0, cfg)) -- doors in series, like a chain's openings
+		end
 	end
 	for i = 2, #pts - 1 do
 		local delta = pts[i - 1]:Distance(pts[i]) + pts[i]:Distance(pts[i + 1]) - pts[i - 1]:Distance(pts[i + 1])
@@ -579,21 +593,21 @@ local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, pro
 -- A door entity closes an opening only while it is CLOSED. Open or ajar, its leaf is a panel standing
 -- in the room: sound goes round it and the room's reflections reach behind it, like any object.
 -- (Treating every door as a wall made a listener hiding behind an open leaf hear a muffled sound.)
--- Between the two, the leaf passes from one to the other over its first few % of opening
+-- Between the two, the leaf passes from one to the other over its first fifth of opening
 -- (CLOSURE_FRAC0 .. CLOSURE_FRAC1, P.EvalWalls blends them): the former switch at 2 % went in one step
--- from the closed door's full loss to an object with a way round it and capped at prop_max_db.
+-- from the closed door's full loss to an object with a way round it and capped at prop_max_db. The
+-- blend ends where the gap of a leaf (48 u long, 90 degrees) reaches about half a wavelength at
+-- diff_freq (15 u at 500 Hz): narrower, the slit passes little whatever way round the leaf the traces
+-- find; it ended at 5 % (a 4 u gap, a way round it at no cost), and the replicated state moving 1.5 %
+-- per update made 5 dB steps of a route through the door while it swung (door_sweep_real).
 local OPENABLE = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
-local CLOSURE_FRAC0, CLOSURE_FRAC1 = 0.005, 0.05
+local CLOSURE_FRAC0, CLOSURE_FRAC1 = 0.005, 0.2
 --- 1: the entity closes an opening (wall), 0: an object in the room, in between: a door just ajar.
 local function closureWeight(ent)
 	local cls = ent:GetClass()
 	if not DOOR_CLASSES[cls] then return 0 end
 	if not OPENABLE[cls] then return 1 end -- func_brush, func_wall...: part of the structure
-	local D = A.Doors
-	local st
-	if D then
-		if CLIENT then st = D.byEnt and D.byEnt[ent:EntIndex()] else st = D.entState and D.entState[ent:EntIndex()] end
-	end
+	local st = doorState(ent)
 	if not st then return 1 end -- state unknown: as before
 	return 1 - ramp(st.frac or 0, CLOSURE_FRAC0, CLOSURE_FRAC1)
 end
@@ -661,6 +675,21 @@ local function detClear(a, b)
 	return not detOut.Hit
 end
 
+-- Detour (path difference, units) round an object's ORIENTED box, in its local frame (a tilted slab
+-- keeps the size of a slab; its world AABB would be huge and could even contain S), for a line S -> L
+-- through it; the way round must be clear of the world (P.DetourDelta). The box itself, not grown: the
+-- traces that check the way round see the world only, and a point 2 u past a door leaf's free edge lay
+-- behind the jamb's corner for a route vertex on the jamb (the way round then 60 u over the hinge, 10 dB,
+-- against nothing one frame later).
+local function objectDetour(ent, S, L)
+	local mn, mx = ent:OBBMins(), ent:OBBMaxs()
+	local lS, lL = ent:WorldToLocal(S), ent:WorldToLocal(L)
+	return P.DetourDelta(lS, lL, mn, mx, function(e)
+		local we = ent:LocalToWorld(e)
+		return detClear(S, we) and detClear(we, L)
+	end)
+end
+
 --- Walls crossed by the straight line S -> L, traced from S only (see P.Walls).
 local function wallsOneWay(S, L, maxWalls, srcEnt)
 	local walls = {}
@@ -706,16 +735,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt)
 			w.minExtent = math.min(ext.x, ext.y, ext.z) -- panel or closed volume (P.EvalWalls)
 			w.fromInside = tr.StartSolid or nil -- the ray starts inside it: one sheet crossed
 		end
-		if hitEnt and closureWeight(hitEnt) < 1 then
-			-- detour round the object's ORIENTED box, in its local frame (a tilted slab keeps
-			-- the size of a slab; its world AABB would be huge and could even contain S)
-			local mn, mx = hitEnt:OBBMins() - Vector(2, 2, 2), hitEnt:OBBMaxs() + Vector(2, 2, 2)
-			local lS, lL = hitEnt:WorldToLocal(S), hitEnt:WorldToLocal(L)
-			w.detour = P.DetourDelta(lS, lL, mn, mx, function(e)
-				local we = hitEnt:LocalToWorld(e)
-				return detClear(S, we) and detClear(we, L)
-			end)
-		end
+		if hitEnt and closureWeight(hitEnt) < 1 then w.detour = objectDetour(hitEnt, S, L) end
 		if hitEnt or not P.PassTool(tr) then walls[#walls + 1] = w end
 		if exit == L then break end
 		start = exit + dir * 0.5
@@ -776,50 +796,120 @@ function P.Walls(S, L, maxWalls, srcEnt)
 	return out
 end
 
+--- Door loss (dB), lowpass level, (nil) and the door entity crossed by a route segment a -> b (game
+-- state; 0 and nothing else when none). The leaf costs what it costs the straight line through it
+-- (P.EvalWalls, one wall: a closed leaf its one loss, an open or ajar one an object with the way round
+-- it, the two blended over the first % of opening), so a route segment and the straight line through
+-- one leaf pay the same, and a leaf swinging out of a route's way fades out (its way round shrinks to
+-- nothing) instead of dropping a gap law at once (the former gap amplitude (1 - gc) sqrt(frac) beside
+-- the leaf's gc: 4.4 dB in 0.4 degree when the hull cleared the leaf, door_sweep_real).
+-- Traced against the door entities only (the world ignored: a segment along a wall is not a door) with a
+-- DOOR_HULL hull: a segment passing within a hull of a leaf, from its start on, goes through that leaf.
+-- A line did: a route costed on the jamb's edge (P.RefineCorners) ran along the jamb through the crack
+-- between a shut leaf and its frame (door models are a unit narrower than the brush opening), 14 dB then
+-- 0 one step on. A route pays a leaf once (P.EvalPolyline): two consecutive segments meeting at the jamb
+-- are both within the hull of the same leaf. (A source standing within a hull of a leaf charges it on
+-- every route: the straight line, traced thin, does not.)
+local DOORS_ONLY = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
+local DOOR_HULL = 4
+local doorOut = {}
+local function doorsOnly(e) return DOORS_ONLY[e:GetClass()] or false end
+local doorTr = { mask = MASK_SOLID, filter = doorsOnly, output = doorOut, ignoreworld = true,
+	mins = Vector(-DOOR_HULL, -DOOR_HULL, -DOOR_HULL), maxs = Vector(DOOR_HULL, DOOR_HULL, DOOR_HULL) }
+local doorWalls = { false }
+function P.SegmentDoorLoss(a, b, cfg)
+	cfg = cfg or A.cfg
+	doorTr.start, doorTr.endpos = a, b
+	util.TraceHull(doorTr)
+	local tr = doorOut
+	if not tr.Hit or not IsValid(tr.Entity) then return 0 end
+	local ent = tr.Entity
+	local ext = ent:OBBMaxs() - ent:OBBMins()
+	-- (no material: a leaf's loss is its state's, P.EvalWalls / leafLoss, not its surface's)
+	local w = { entry = tr.HitPos, exit = tr.HitPos, thickness = 0, ent = ent,
+		minExtent = math.min(ext.x, ext.y, ext.z), fromInside = tr.StartSolid or nil }
+	if closureWeight(ent) < 1 then w.detour = objectDetour(ent, a, b) end
+	doorWalls[1] = w
+	local loss, lp = P.EvalWalls(doorWalls, cfg)
+	P.lastDoorWall = w -- diagnostics (w.lossDb, w.diffDb, w.detour)
+	return loss, lp, nil, ent
+end
+
 --- Smallest path difference (units) for going around a finite box obstacle (mins/maxs, in
 -- the frame of S and L: the object's local frame for an oriented box) between S and L.
--- Candidates: for each box axis, its component perpendicular to S-L gives two directions
--- (either side); from the point of the S-L line closest to the box centre, go just past the
--- box along them. Works for any orientation (a tilted slab, a source above or below).
--- `valid(e)` (optional) rejects detour points blocked by the world (object on the floor,
--- against a wall). math.huge when no way round.
-local AXES = { Vector(1, 0, 0), Vector(0, 1, 0), Vector(0, 0, 1) }
+-- The way round a box bends on one of its edges: for each of the 12 edges, the point of the edge
+-- that makes S -> point -> L shortest (the sum is convex along the edge: bisection on its slope),
+-- shortest first; `valid(e)` (optional) rejects detour points blocked by the world (object on the
+-- floor, against a wall), and the first valid one stands. Works for any orientation (a tilted slab, a
+-- source above or below) and for a line that misses the box (a hull caught it): the nearest edge is
+-- then beside the line and the detour tends to nothing, continuously. The former six candidates
+-- (past the box along its axes, from the point of the line nearest its centre) missed the way round a
+-- door leaf's free edge from a route vertex at the jamb: the point past the leaf's end lay behind
+-- the wall's corner, and the way over the top (40 u) stood instead, 9 dB that fell to 0 the moment
+-- the hull cleared the leaf. math.huge when no way round, or when S or L is inside the box by more than
+-- ENCLOSED_DEPTH (a source inside a car); a point just under its surface (a route vertex on a door
+-- leaf's face: the probes' routes pass the leaves) is beside it, not inside.
+local EDGE_HALVINGS = 16
+local ENCLOSED_DEPTH = 4
+local function enclosed(p, mins, maxs)
+	local d = math.min(p.x - mins.x, maxs.x - p.x, p.y - mins.y, maxs.y - p.y, p.z - mins.z, maxs.z - p.z)
+	return d > ENCLOSED_DEPTH
+end
+local EDGES = { -- the 12 edges of a box as corner index pairs (bit k of the index: max on axis k)
+	{ 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
+local cand = {}
 function P.DetourDelta(S, L, mins, maxs, valid)
 	-- source or listener enclosed by the obstacle: no way round it
-	if S:WithinAABox(mins, maxs) or L:WithinAABox(mins, maxs) then return math.huge end
-	local dir = L - S
-	local len = dir:Length()
+	if enclosed(S, mins, maxs) or enclosed(L, mins, maxs) then return math.huge end
+	local sx, sy, sz = S.x, S.y, S.z
+	local lx, ly, lz = L.x, L.y, L.z
+	local len = math.sqrt((lx - sx) ^ 2 + (ly - sy) ^ 2 + (lz - sz) ^ 2)
 	if len < 1e-3 then return math.huge end
-	local d = dir / len
-	local c = (mins + maxs) * 0.5
-	local ext = maxs - mins
-	-- point of the S-L line closest to the obstacle centre: detours are taken there
-	local t = math.Clamp((c - S):Dot(d) / len, 0, 1)
-	local P0 = S + dir * t
-	local best = math.huge
-	for _, a in ipairs(AXES) do
-		local u = a - d * a:Dot(d)
-		if u:LengthSqr() > 1e-4 then
-			u:Normalize()
-			-- half extent of the box along u, and the box centre's offset along u from P0
-			local h = math.abs(u.x) * ext.x / 2 + math.abs(u.y) * ext.y / 2 + math.abs(u.z) * ext.z / 2
-			local sc = (c - P0):Dot(u)
-			for _, k in ipairs({ sc + h, sc - h }) do
-				local e = P0 + u * k
-				if not valid or valid(e) then
-					best = math.min(best, S:Distance(e) + e:Distance(L) - len)
-				end
-			end
-		end
+	local cx = { mins.x, maxs.x }
+	local cy = { mins.y, maxs.y }
+	local cz = { mins.z, maxs.z }
+	local function corner(i)
+		return cx[bit.band(i, 1) + 1], cy[bit.band(bit.rshift(i, 1), 1) + 1], cz[bit.band(bit.rshift(i, 2), 1) + 1]
 	end
-	return math.max(best, 0)
+	local n = 0
+	for _, e in ipairs(EDGES) do
+		local px, py, pz = corner(e[1])
+		local qx, qy, qz = corner(e[2])
+		local dx, dy, dz = qx - px, qy - py, qz - pz
+		-- f(t) = |S - P(t)| + |P(t) - L| is convex: bisection on the sign of its slope
+		local lo, hi = 0, 1
+		for _ = 1, EDGE_HALVINGS do
+			local t = (lo + hi) * 0.5
+			local x, y, z = px + dx * t, py + dy * t, pz + dz * t
+			local a = math.max(math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2), 1e-6)
+			local b = math.max(math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2), 1e-6)
+			local slope = ((x - sx) * dx + (y - sy) * dy + (z - sz) * dz) / a + ((x - lx) * dx + (y - ly) * dy + (z - lz) * dz) / b
+			if slope > 0 then hi = t else lo = t end
+		end
+		local t = (lo + hi) * 0.5
+		local x, y, z = px + dx * t, py + dy * t, pz + dz * t
+		local d = math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
+		n = n + 1
+		local c = cand[n]
+		if not c then c = {} cand[n] = c end
+		c[1], c[2], c[3], c[4] = d, x, y, z
+	end
+	-- shortest first; the first way round the world lets through stands
+	table.sort(cand, function(u, v) return u[1] < v[1] end)
+	for i = 1, n do
+		local c = cand[i]
+		if not valid or valid(Vector(c[2], c[3], c[4])) then return math.max(c[1], 0) end
+	end
+	return math.huge
 end
 
 --- Edge of a WORLD obstacle on the line S -> L (game state: traces), the world's counterpart of a prop's
--- detour (P.DetourDelta): a terrain ridge, a low wall, a pillar. Without it, a source the probes do not
--- reach (beyond probe_dist, probes off, search unfinished) or in the same area as the listener had the
--- transmission alone: one unit below the crest of a ridge it lost the ground's 40-65 dB, one unit above it
--- nothing. From the middle of the obstacle along the line (first world entry to last world exit), points
+-- detour (P.DetourDelta): a terrain ridge, a low wall, a pillar, a door jamb. Without it, a source the
+-- probes do not reach (beyond probe_dist, probes off, search unfinished) or in the same area as the
+-- listener had the transmission alone: one unit below the crest of a ridge it lost the ground's 40-65 dB,
+-- one unit above it nothing. Beside the routes found, it is the one-bend way over the edge that cuts the
+-- line: a route bending round that very edge is kept alone (P.Compute, P.SameRoute), a route through
+-- another opening gets it added. From the middle of the obstacle along the line (first world entry to last world exit), points
 -- are tried over it (up, perpendicular to the line) and to either side, at doubling distances, until both
 -- S and L see the point past the world; the first clear step is refined by bisection. The edge found is
 -- the apex of the way round: its path difference gives the same Kurze-Anderson diffraction as a prop's
@@ -828,7 +918,8 @@ end
 -- its two crests) up to diff_max_total, the cap growing with its depth along the line (16 -> 128 u, no
 -- step). Searched up to EDGE_FAR units off the line, the edge's weight fading out over the last half: an
 -- obstacle growing past the search range fades to its transmission instead of dropping to it.
--- walls: P.Walls(S, L) (only the world ones are used). Returns { db, weight, apex, delta } or nil.
+-- walls: P.Walls(S, L) (only the world ones are used). Returns { db, weight, apex, delta, doorDb, tilt }
+-- or nil (db includes the doors crossed on its legs, tilt what muffles it).
 local EDGE_STEPS = { 4, 8, 16, 32, 64, 128, 256, 512 }
 local EDGE_FAR = 512
 local EDGE_REFINE = 4
@@ -888,6 +979,15 @@ function P.WorldEdge(S, L, walls, cfg)
 	best.db = AC.Diffraction(best.delta, cfg.diff_freq, cap)
 	best.weight = 1 - ramp(best.h, EDGE_FAR * 0.5, EDGE_FAR)
 	if best.weight <= 0 then return nil end
+	-- the way over the edge crosses the doors on its two legs like any route segment (P.SegmentDoorLoss):
+	-- the thin traces see the world only, so a closed door's doorway is an edge for them, its leaf the loss
+	-- behind it (without it the edge gave 2 dB through a shut door beside the probes' 16)
+	local d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
+	local d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
+	if e2 and e2 == e1 then d2, l2 = 0, 0 end -- one leaf at the apex: paid once
+	best.doorDb = d1 + d2
+	best.tilt = best.db + AC.LevelDb(l1 or 0, cfg) + AC.LevelDb(l2 or 0, cfg)
+	best.db = best.db + best.doorDb
 	return best
 end
 
@@ -900,7 +1000,7 @@ function P.AddEdge(t, e, L, cfg)
 	local eD = e.weight * 10 ^ (-e.db / 10)
 	if eD <= 0 then return t end
 	local eT = 10 ^ (-t.lossDb / 10)
-	local tilt = AC.MixTilt(eT, AC.LevelDb(t.lp or 0, cfg), eD, e.db)
+	local tilt = AC.MixTilt(eT, AC.LevelDb(t.lp or 0, cfg), eD, e.tilt or e.db)
 	t.lossDb = math.max(-10 * math.log10(eT + eD), 0)
 	if t.midDb then t.midDb = math.max(-10 * math.log10(10 ^ (-t.midDb / 10) + eD), 0) end
 	t.lp = math.min(t.lp or 0, AC.LowpassLevel(tilt, cfg))
@@ -919,6 +1019,152 @@ function P.AddEdge(t, e, L, cfg)
 	return t
 end
 
+-- ------------------------------------------------------------------ corner geometry
+-- One geometry for the cost of a corner, whatever produced the route (probe search, listener field,
+-- bridge, a portal leg rerouted by the probes). A route's vertices are placed for CLEARANCE: the probes'
+-- tightening slides them with a 4 u hull and keeps CLEAR units off the walls, so a vertex sits 4-12 u off
+-- the edge the sound really bends round, farther when the tightening stops early. Used as the corner's
+-- apex, that offset is paid as path difference: measured on rp_downtown (2026-11-09), 8.1 u off the jamb
+-- made 5.1 dB where the edge itself (P.WorldEdge, bisected to 0.25 u) gave 2.0, and 74 u off made 12 dB
+-- against 1. So the cost is taken on the edge: each inner vertex is slid towards the straight line between
+-- its neighbours as far as both still see it with THIN traces (world brushes only, as the edge search: no
+-- hull; a door leaf is a lossy way through its doorway, charged by P.SegmentDoorLoss on the refined
+-- segments, not a shape), down to CORNER_EPS, and the corner law (AC.Corner) is applied there. The route
+-- keeps its clearance vertices for everything else (apparent position, homotopy, objects on its segments).
+-- pba_corner_refine 0: the clearance vertices as they are.
+local CORNER_EPS, CORNER_HALVINGS = 0.125, 8
+local cornerClear = detClear
+--- The point the sound bends round between a and b, starting from clearance vertex v (game state: traces).
+function P.CornerPoint(a, v, b)
+	local ab = b - a
+	local len2 = ab:LengthSqr()
+	local t = len2 > 0 and math.Clamp((v - a):Dot(ab) / len2, 0, 1) or 0
+	local target = a + ab * t
+	local len = v:Distance(target)
+	if len < CORNER_EPS then return v end
+	if cornerClear(a, target) and cornerClear(target, b) then return target end -- no corner at all
+	local lo, hi = 0, 1
+	for _ = 1, CORNER_HALVINGS do
+		if (hi - lo) * len < CORNER_EPS then break end
+		local mid = (lo + hi) * 0.5
+		local q = v + (target - v) * mid
+		if cornerClear(a, q) and cornerClear(q, b) then lo = mid else hi = mid end
+	end
+	return v + (target - v) * lo
+end
+--- The polyline pts (S, v1 .. vn, L) with every inner vertex moved onto its edge (a new list; pts is not
+-- modified). Each vertex is refined between its neighbours as they stand in pts (not the refined ones:
+-- two vertices on the two jambs of one doorway would otherwise chase each other).
+function P.RefineCorners(pts, cfg)
+	cfg = cfg or A.cfg
+	local out = { pts[1] }
+	if (cfg.corner_refine or 1) >= 0.5 then
+		for i = 2, #pts - 1 do out[i] = P.CornerPoint(pts[i - 1], pts[i], pts[i + 1]) end
+	else
+		for i = 2, #pts - 1 do out[i] = pts[i] end
+	end
+	out[#pts] = pts[#pts]
+	return out
+end
+--- A route S, v1 .. vn, L evaluated (P.EvalPolyline) on its corners' edges (P.RefineCorners): length
+-- and corners from the refined polyline, the doors met along the clearance route given; the apparent
+-- position and `points` are the clearance vertices (what the probes tightened).
+function P.EvalRoute(pts, cfg)
+	cfg = cfg or A.cfg
+	local p = P.EvalPolyline(P.RefineCorners(pts, cfg), cfg, pts)
+	local inner = {}
+	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
+	p.points, p.pos = inner, pts[#pts - 1]
+	return p
+end
+
+-- Whether the triangle u, v, w is free of the world, its edges u-v and u-w known clear: the new edge v-w,
+-- then a fan of rays from the vertex opposite its shortest edge to points along that edge (an obstacle
+-- inside the triangle, touching none of its edges, cuts a ray). The fan is refined by halving, coarse
+-- rays first (an obstacle is usually found after a few), until its rays are at most FAN_STEP apart
+-- along the edge, however long the edge: a cap of 32 rays left them up to 90 u apart on a 3000 u edge,
+-- and a thin pillar between two routes was missed (the routes merged, one voice lost). FAN_CAP only
+-- guards against absurd edges (16 km at FAN_STEP).
+local FAN_STEP, FAN_CAP = 16, 1024
+local function triangleFree(u, v, w, clear)
+	if v:DistToSqr(w) < 1 then return true end
+	if not clear(v, w) then return false end
+	local x, y, apex = v, w, u
+	local e = v:DistToSqr(w)
+	local e1, e2 = u:DistToSqr(v), u:DistToSqr(w)
+	if e1 < e then x, y, apex, e = u, v, w, e1 end
+	if e2 < e then x, y, apex, e = u, w, v, e2 end
+	local need = math.min(math.ceil(math.sqrt(e) / FAN_STEP), FAN_CAP)
+	local N = 1
+	while N < need do N = N * 2 end
+	local d = y - x
+	local stride = N
+	while stride >= 2 do
+		for k = stride / 2, N - 1, stride do
+			if not clear(apex, x + d * (k / N)) then return false end
+		end
+		stride = stride / 2
+	end
+	return true
+end
+
+--- Whether two routes from S to L (polylines a, b, S and L included) are one physical route: one slides
+-- onto the other without crossing the world (homotopic in the open volume). The loop a, then b backwards,
+-- is cut into triangles (a zipper over the vertices of both, which sit on the edges of the openings once
+-- tightened); the routes are one when every triangle is free. A wall, pillar or post between two openings
+-- fills some triangle whatever the zipper; two copies of one route through one opening (reached from
+-- neighbouring probes, tightened to bends on either side of the wall, or a detour in the same room) close
+-- over free triangles. Thin traces (`clear`, default: world brushes, as the edge search; the probes pass
+-- their own); a doubt (no free zipper) keeps both routes. One rule for the probes' copies of a route
+-- (PR.DistinctRoutes) and for the way over an edge beside the routes (P.Compute).
+function P.SameRoute(a, b, clear)
+	clear = clear or detClear
+	local na, nb = #a, #b
+	if na == nb then
+		local same = true
+		for i = 1, na do
+			if a[i]:DistToSqr(b[i]) > 1 then same = false break end
+		end
+		if same then return true end
+	end
+	-- arc length fractions of the vertices: the zipper advances the chain that is behind
+	local fa, fb = { 0 }, { 0 }
+	for i = 2, na do fa[i] = fa[i - 1] + a[i - 1]:Distance(a[i]) end
+	for i = 2, nb do fb[i] = fb[i - 1] + b[i - 1]:Distance(b[i]) end
+	-- depth-first over the states (i, j) = rung a[i] - b[j], from (1, 1) (S - S) to (na, nb) (L - L). The
+	-- stack holds moves not tried yet (a triangle is traced only when its move is taken); a state is entered
+	-- once, a move that failed may succeed from another state
+	local seen, stack = {}, {}
+	local function push(i, j)
+		local ta = i < na and fa[i + 1] / math.max(fa[na], 1e-9)
+		local tb = j < nb and fb[j + 1] / math.max(fb[nb], 1e-9)
+		-- pushed last = tried first: the chain that is behind advances first
+		if ta and tb and ta < tb then
+			stack[#stack + 1] = { i, j, i, j + 1 }
+			stack[#stack + 1] = { i, j, i + 1, j }
+		else
+			if ta then stack[#stack + 1] = { i, j, i + 1, j } end
+			if tb then stack[#stack + 1] = { i, j, i, j + 1 } end
+		end
+	end
+	push(1, 1)
+	while #stack > 0 do
+		local m = table.remove(stack)
+		local i, j, ni, nj = m[1], m[2], m[3], m[4]
+		local key = ni * 1024 + nj
+		if not seen[key] then
+			local ok
+			if ni > i then ok = triangleFree(a[i], a[ni], b[j], clear) else ok = triangleFree(b[j], b[nj], a[i], clear) end
+			if ok then
+				if ni == na and nj == nb then return true end
+				seen[key] = true
+				push(ni, nj)
+			end
+		end
+	end
+	return false
+end
+
 --- Transmission summary of a wall list (pure). noCap: no prop_max_db cap (reflections round the
 -- objects); noDetour: through the objects only, not round them.
 -- Each object's own share is capped at prop_max_db: the room / ground reflections reach the listener
@@ -934,7 +1180,10 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 	local loss, mid, lp = 0, 0, 0
 	local cap = cfg.prop_max_db or 18
 	for _, w in ipairs(walls) do
-		local db, l = AC.WallLoss(w.mat, w.surf, w.thickness)
+		local db, l
+		-- a door leaf: its one loss (leafLoss), whatever chord the line cuts through it
+		if w.ent and OPENABLE[w.ent:GetClass()] then db, l = leafLoss(w.ent, cfg)
+		else db, l = AC.WallLoss(w.mat, w.surf, w.thickness) end
 		-- as a closure: the material, no way round it, never capped
 		local through = math.max(db * cfg.trans_scale - cfg.trans_lf_bonus, 0)
 		local midDb = db * cfg.trans_scale
@@ -2015,7 +2264,7 @@ function P.CheckLegs(p, S, L, cfg, srcEnt, r)
 		local poly = { S }
 		for _, v in ipairs(r1) do poly[#poly + 1] = v points[#points + 1] = v end
 		poly[#poly + 1] = c.points[1]
-		local e = P.EvalPolyline(poly, cfg)
+		local e = P.EvalRoute(poly, cfg)
 		len = len + e.length - V:Distance(c.points[1])
 		diff, door, lpDb = diff + e.diffDb, door + e.doorDb, lpDb + e.lpDb
 	end
@@ -2024,7 +2273,7 @@ function P.CheckLegs(p, S, L, cfg, srcEnt, r)
 		local poly = { c.points[n] }
 		for _, v in ipairs(r2) do poly[#poly + 1] = v points[#points + 1] = v end
 		poly[#poly + 1] = L
-		local e = P.EvalPolyline(poly, cfg)
+		local e = P.EvalRoute(poly, cfg)
 		len = len + e.length - c.points[n]:Distance(W)
 		diff, door, lpDb = diff + e.diffDb, door + e.doorDb, lpDb + e.lpDb
 	end
@@ -2188,14 +2437,32 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				r.provisional = r.provisional or A.Probes.provisional or nil
 			end
 		end
-		-- no route round the world obstacle (none found, probes off or out of range): the way over its edge,
-		-- in power with the transmission (P.WorldEdge), so that a ridge or a low wall shadows by degrees
-		if worldBlocked and #r.paths == 0 and r.trans then
+		-- the way over the world obstacle's edge (P.WorldEdge), in power with the transmission, so that a
+		-- ridge, a low wall or a jamb shadows by degrees. Always looked for when the world cuts the line, not
+		-- only without a route: a route that bends round that very edge (homotopic to the one-bend way over
+		-- it, P.SameRoute) IS that way, evaluated on the same edge (P.RefineCorners), and is kept alone; a
+		-- route through another opening is not, and the edge is added beside it. Before, any route found
+		-- switched the edge off, so a listener stepping past a jamb heard the route's clearance vertex
+		-- (12 dB) where the edge gave 1, and the edge was heard only where the probes found nothing.
+		if worldBlocked and r.trans then
 			if A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
 				r.provisional = true
 			else
 				local e = P.WorldEdge(S, L, r.trans.walls, cfg)
-				if e then P.AddEdge(r.trans, e, L, cfg) end
+				if e then
+					local way = { S, e.apex, L }
+					local dup = false
+					for _, p in ipairs(r.paths) do
+						if p.points and #p.points > 0 and not p.native then
+							local pts = { S }
+							for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+							pts[#pts + 1] = L
+							if P.SameRoute(way, pts) then dup = true break end
+						end
+					end
+					r.edge, r.edgeDup = e, dup or nil
+					if not dup then P.AddEdge(r.trans, e, L, cfg) end
+				end
 			end
 		end
 		if (cfg.path_props or 1) >= 0.5 then

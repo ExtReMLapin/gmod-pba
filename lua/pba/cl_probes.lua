@@ -182,18 +182,17 @@ local function clearFatWorld(a, b)
 	return true
 end
 
--- Door leaves (the entities P.SegmentDoorLoss charges) are obstacles for the shape of a route: its
--- tightening, the vertices S and L skip, the bridge and the edge bend. They traced the world only, so on
--- rp_downtown a route past a door left ajar hugged the leaf's edge, went THROUGH the leaf, and paid its
--- 14 dB: the level fell 30 dB in 7 u where the listener stepped past the jamb. Links and joins stay
--- world only (a closed door is a lossy way through, charged by P.SegmentDoorLoss, not a wall), as do the
--- graph and its cached routes. The leaves are listed every 0.5 s with their world boxes: a segment is
--- traced against them (one door-only hull trace) only when it crosses one of the boxes. PR.doorEpoch
--- changes when a box does (a door opened or closed): the routes kept per S and L are then redone.
-local DOOR_CLASSES = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
-local function doorFilter(e) return DOOR_CLASSES[e:GetClass()] or false end
-local doorOut = {}
-local doorTr = { mask = MASK_SOLID, filter = doorFilter, ignoreworld = true, output = doorOut, mins = HULL_MIN, maxs = HULL_MAX }
+-- Door leaves are NOT obstacles for the shape of a route (its tightening, the vertices S and L skip, the
+-- bridge, the corners' edges): a leaf is a lossy way through its doorway, charged by P.SegmentDoorLoss from
+-- its state (the gap's gain beside the leaf's AC.LeafDb: a closed door its leaf, an open one nothing), as
+-- the links and joins already had it. They were obstacles once (ed9df32): a route past a door left ajar
+-- went through the leaf and paid it where the listener stepped past the jamb. That jump was the route's
+-- clearance vertex costed as its corner (P.RefineCorners now) plus the leaf's own loss, which the straight
+-- line pays too; and as obstacles, the leaves kept every route through a CLOSED door untightened (the
+-- hull cannot pass the leaf): its vertices stayed on the grid, 70 u off the jamb, 12 dB where the edge
+-- gave 1 (rp_downtown, 2026-11-09). The leaves are still listed every 0.5 s with their world boxes:
+-- PR.doorEpoch changes when a box does (a door opened, closed or moved), and the routes kept per S and L
+-- (their door losses depend on the state) are then redone.
 PR.doorEpoch = PR.doorEpoch or 0
 local function doorLeaves()
 	local d = PR.doorList
@@ -217,90 +216,7 @@ local function doorLeaves()
 	return list
 end
 PR.DoorLeaves = doorLeaves
--- The leaves' boxes, widened by DOOR_PAD, as plain numbers (6 per leaf), and a grid over x, y (cells of
--- DOOR_CELL units: cell -> the boxes overlapping it), rebuilt when the list changes. clearOfDoors runs
--- thousands of times per route (tighten's slides) and rp_downtown_v4c_v2 has 207 leaves: testing every box
--- with a slab test on Vectors (a[k] is a C call, a key table per call) cost 50-125 ms per stream update,
--- a freeze every 0.25 s while walking with a radio playing. A segment now tests the boxes of the cells
--- its own box covers (once each: a box spans several cells).
-local DOOR_PAD, DOOR_CELL = 5, 256
-local boxesFor, boxes, grid, stamp, query = nil, {}, {}, {}, 0
-local function cellKey(cx, cy) return (cx + 32768) * 65536 + (cy + 32768) end
-local function doorBoxes(list)
-	if boxesFor == list then return boxes, grid end
-	boxes, grid, stamp = {}, {}, {}
-	for i, d in ipairs(list) do
-		local mn, mx, j = d[1], d[2], (i - 1) * 6 + 1
-		boxes[j], boxes[j + 1], boxes[j + 2] = mn.x - DOOR_PAD, mn.y - DOOR_PAD, mn.z - DOOR_PAD
-		boxes[j + 3], boxes[j + 4], boxes[j + 5] = mx.x + DOOR_PAD, mx.y + DOOR_PAD, mx.z + DOOR_PAD
-		for cx = floor(boxes[j] / DOOR_CELL), floor(boxes[j + 3] / DOOR_CELL) do
-			for cy = floor(boxes[j + 1] / DOOR_CELL), floor(boxes[j + 4] / DOOR_CELL) do
-				local k = cellKey(cx, cy)
-				local c = grid[k]
-				if not c then c = {} grid[k] = c end
-				c[#c + 1] = j
-			end
-		end
-	end
-	boxesFor = list
-	return boxes, grid
-end
--- one slab of the segment o + t d, t in [t0, t1], against [lo, hi]: the clipped t0, t1 (t0 > t1: missed)
-local function slab(o, d, lo, hi, t0, t1)
-	if abs(d) < 1e-9 then
-		if o < lo or o > hi then return 1, 0 end
-		return t0, t1
-	end
-	local u, v = (lo - o) / d, (hi - o) / d
-	if u > v then u, v = v, u end
-	if u > t0 then t0 = u end
-	if v < t1 then t1 = v end
-	return t0, t1
-end
--- whether segment a-b crosses one of the widened leaf boxes
-local function nearDoor(a, b)
-	local bx, gr = doorBoxes(doorLeaves())
-	if #bx == 0 then return false end
-	local ax, ay, az = a.x, a.y, a.z
-	local dx, dy, dz = b.x - ax, b.y - ay, b.z - az
-	local x0, x1 = ax, ax + dx
-	if x0 > x1 then x0, x1 = x1, x0 end
-	local y0, y1 = ay, ay + dy
-	if y0 > y1 then y0, y1 = y1, y0 end
-	local z0, z1 = az, az + dz
-	if z0 > z1 then z0, z1 = z1, z0 end
-	query = query + 1
-	for cx = floor(x0 / DOOR_CELL), floor(x1 / DOOR_CELL) do
-		for cy = floor(y0 / DOOR_CELL), floor(y1 / DOOR_CELL) do
-			local c = gr[cellKey(cx, cy)]
-			if c then
-				for n = 1, #c do
-					local j = c[n]
-					if stamp[j] ~= query then
-						stamp[j] = query
-						local lx, ly, lz, hx, hy, hz = bx[j], bx[j + 1], bx[j + 2], bx[j + 3], bx[j + 4], bx[j + 5]
-						if x1 >= lx and x0 <= hx and y1 >= ly and y0 <= hy and z1 >= lz and z0 <= hz then
-							local t0, t1 = slab(ax, dx, lx, hx, 0, 1)
-							if t0 <= t1 then t0, t1 = slab(ay, dy, ly, hy, t0, t1) end
-							if t0 <= t1 then t0, t1 = slab(az, dz, lz, hz, t0, t1) end
-							if t0 <= t1 then return true end
-						end
-					end
-				end
-			end
-		end
-	end
-	return false
-end
-local function clearOfDoors(a, b)
-	local near = nearDoor(a, b)
-	if not near then return true end
-	doorTr.start, doorTr.endpos = a, b
-	util.TraceHull(doorTr)
-	return not (doorOut.Hit and IsValid(doorOut.Entity))
-end
-PR.ClearOfDoors = clearOfDoors
-local function clearFat(a, b) return clearFatWorld(a, b) and clearOfDoors(a, b) end
+local clearFat = clearFatWorld
 
 local function key(i, j, k) return i .. "," .. j .. "," .. k end
 -- a column of the grid as one number (no string per lookup): i and j stay within +-32768 on any map
@@ -1564,7 +1480,7 @@ local function bridgePath(g, S, L, cfg)
 	if clearFat(S, e.q) and clearFat(e.q, L) then
 		local pulled = tighten({ S, e.q, L })
 		if #pulled >= 3 then
-			p = A.Paths.EvalPolyline(pulled, cfg)
+			p = A.Paths.EvalRoute(pulled, cfg)
 			p.probe, p.bridge = true, true
 		end
 	end
@@ -1587,85 +1503,6 @@ local function addBridge(g, S, L, cfg, out)
 	local b = bridgePath(g, S, L, cfg)
 	if b and b.length < best then out[#out + 1] = b end
 end
-
--- Edge bend: the route that bends round the edge that cut the line of sight, searched near where the
--- line S-L hits (the world or a door leaf, from S's side and from L's): points EDGE_REACH units at most
--- around the hit, across the line, the nearest first; the first one both ends see (fat traces, doors
--- included) is tightened onto the edge. One step past the shadow boundary the line is cut by a few
--- units: the bend is at the edge and the route is a few degrees off the straight line, so the level
--- goes on from the clear line's instead of falling to a probe route's (rp_downtown, a doorway with a door
--- ajar: 0 dB clear, then -29.9 dB 7 u further through the leaf by a probe route, then -16.2 dB). Deeper
--- in the shadow the probe routes take over. nil when no such point.
-local EDGE_REACH, EDGE_DIRS = 32, 8
-local edgeLine = { mask = MASK_SOLID, filter = doorFilter, ignoreworld = true, output = {} }
-local function edgeBend(S, L)
-	local hits = {}
-	for side = 1, 2 do
-		local a, b = side == 1 and S or L, side == 1 and L or S
-		local TL = nativeTraces() and ntLine or util.TraceLine
-		segTr.start, segTr.endpos = a, b
-		TL(segTr)
-		local h, f = nil, 2
-		if segOut.Hit and not segOut.StartSolid and segOut.HitPos then h, f = Vector(segOut.HitPos), segOut.Fraction end
-		edgeLine.start, edgeLine.endpos = a, b
-		local o = util.TraceLine(edgeLine)
-		if o.Hit and IsValid(o.Entity) and o.HitPos and (o.Fraction or 1) < f then h = Vector(o.HitPos) end
-		if h then hits[#hits + 1] = h end
-	end
-	if #hits == 0 then return nil end
-	local dir = L - S
-	dir:Normalize()
-	local e1 = dir:Cross(abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
-	e1:Normalize()
-	local e2 = dir:Cross(e1)
-	local r = 2
-	while r <= EDGE_REACH do
-		for _, h in ipairs(hits) do
-			for k = 0, EDGE_DIRS - 1 do
-				local ang = k * 2 * math.pi / EDGE_DIRS
-				local q = h + e1 * (math.cos(ang) * r) + e2 * (math.sin(ang) * r)
-				if clearFat(S, q) and clearFat(q, L) then return q end
-			end
-		end
-		r = r * 2
-	end
-	return nil
-end
-PR.EdgeBend = edgeBend
-
--- The edge bend for S and L, evaluated, or nil. Kept for the last 16 exact (S, L); a search that found
--- nothing is not redone for the same pair of 8 u cells (deep shadow: up to 160 fat traces). Per graph and
--- door state.
-local function edgePath(S, L, cfg)
-	local memo = PR.edgeMemo
-	if not memo or memo.g ~= PR.current or memo.epoch ~= PR.doorEpoch or memo.n > 4096 then
-		memo = { g = PR.current, epoch = PR.doorEpoch, n = 0, miss = {}, done = {} }
-		PR.edgeMemo = memo
-	end
-	local sx, sy, sz = S:Unpack()
-	local lx, ly, lz = L:Unpack()
-	for _, d in ipairs(memo.done) do
-		if d[1] == sx and d[2] == sy and d[3] == sz and d[4] == lx and d[5] == ly and d[6] == lz then return d[7] or nil end
-	end
-	local ck = floor(sx / 8) .. "," .. floor(sy / 8) .. "," .. floor(sz / 8) .. ">" .. floor(lx / 8) .. "," .. floor(ly / 8) .. "," .. floor(lz / 8)
-	if memo.miss[ck] then return nil end
-	local q = edgeBend(S, L)
-	local p = false
-	if q then
-		local pulled = tighten({ S, q, L })
-		if #pulled >= 3 then
-			p = A.Paths.EvalPolyline(pulled, cfg)
-			p.probe, p.edge = true, true
-		end
-	else
-		memo.miss[ck] = true
-		memo.n = memo.n + 1
-	end
-	if #memo.done >= 16 then table.remove(memo.done, 1) end
-	memo.done[#memo.done + 1] = { sx, sy, sz, lx, ly, lz, p }
-	return p or nil
-end
-PR.EdgePath = edgePath
 
 -- S and L attached to a pulled polyline (skipping the vertices they already see), then tightened. World
 -- geometry only, which does not change: the result for the same polyline, S and L (a loop and a listener
@@ -1898,7 +1735,7 @@ function PR.FieldBlend(f, S, L, starts, cfg, full)
 	for _, c in ipairs(cand) do
 		local w = c.w / wsum
 		if w > 0 then
-			local p = A.Paths.EvalPolyline(c.pts, cfg)
+			local p = A.Paths.EvalRoute(c.pts, cfg)
 			out.length = out.length + w * p.length
 			out.diffDb = out.diffDb + w * p.diffDb
 			out.doorDb = out.doorDb + w * p.doorDb
@@ -1923,89 +1760,10 @@ function PR.FieldBlend(f, S, L, starts, cfg, full)
 	return out
 end
 
--- Whether the triangle u, v, w is free of the world, its edges u-v and u-w known clear: the new edge v-w,
--- then a fan of rays from the vertex opposite its shortest edge to points along that edge (an obstacle
--- inside the triangle, touching none of its edges, cuts a ray). The fan is refined by halving, coarse
--- rays first (an obstacle is usually found after a few), until its rays are at most FAN_STEP apart
--- along the edge, however long the edge: the former cap of 32 rays left them up to 90 u apart on a
--- 3000 u edge, and a thin pillar between two routes was missed (the routes merged, one voice lost).
--- FAN_CAP only guards against absurd edges (16 km at FAN_STEP).
-local FAN_STEP, FAN_CAP = 16, 1024
-local function triangleFree(u, v, w)
-	if v:DistToSqr(w) < 1 then return true end
-	if not clearSeg(v, w) then return false end
-	local x, y, apex = v, w, u
-	local e = v:DistToSqr(w)
-	local e1, e2 = u:DistToSqr(v), u:DistToSqr(w)
-	if e1 < e then x, y, apex, e = u, v, w, e1 end
-	if e2 < e then x, y, apex, e = u, w, v, e2 end
-	local need = math.min(math.ceil(sqrt(e) / FAN_STEP), FAN_CAP)
-	local N = 1
-	while N < need do N = N * 2 end
-	local d = y - x
-	local stride = N
-	while stride >= 2 do
-		for k = stride / 2, N - 1, stride do
-			if not clearSeg(apex, x + d * (k / N)) then return false end
-		end
-		stride = stride / 2
-	end
-	return true
-end
-
---- Whether two routes from S to L (polylines a, b) are one physical route: one slides onto the other
--- without crossing the world (homotopic in the open volume). The loop a, then b backwards, is cut into
--- triangles (a zipper over the vertices of both, which sit on the edges of the openings once tightened);
--- the routes are one when every triangle is free. A wall, pillar or post between two openings fills
--- some triangle whatever the zipper; two copies of one route through one opening (reached from
--- neighbouring probes, tightened to bends on either side of the wall, or a detour in the same room) close
--- over free triangles. Thin traces; a doubt (no free zipper) keeps both routes.
-function PR.SameRoute(a, b)
-	local na, nb = #a, #b
-	if na == nb then
-		local same = true
-		for i = 1, na do
-			if a[i]:DistToSqr(b[i]) > 1 then same = false break end
-		end
-		if same then return true end
-	end
-	-- arc length fractions of the vertices: the zipper advances the chain that is behind
-	local fa, fb = { 0 }, { 0 }
-	for i = 2, na do fa[i] = fa[i - 1] + a[i - 1]:Distance(a[i]) end
-	for i = 2, nb do fb[i] = fb[i - 1] + b[i - 1]:Distance(b[i]) end
-	-- depth-first over the states (i, j) = rung a[i] - b[j], from (1, 1) (S - S) to (na, nb) (L - L). The
-	-- stack holds moves not tried yet (a triangle is traced only when its move is taken); a state is entered
-	-- once, a move that failed may succeed from another state
-	local seen, stack = {}, {}
-	local function push(i, j)
-		local ta = i < na and fa[i + 1] / math.max(fa[na], 1e-9)
-		local tb = j < nb and fb[j + 1] / math.max(fb[nb], 1e-9)
-		-- pushed last = tried first: the chain that is behind advances first
-		if ta and tb and ta < tb then
-			stack[#stack + 1] = { i, j, i, j + 1 }
-			stack[#stack + 1] = { i, j, i + 1, j }
-		else
-			if ta then stack[#stack + 1] = { i, j, i + 1, j } end
-			if tb then stack[#stack + 1] = { i, j, i, j + 1 } end
-		end
-	end
-	push(1, 1)
-	while #stack > 0 do
-		local m = table.remove(stack)
-		local i, j, ni, nj = m[1], m[2], m[3], m[4]
-		local key = ni * 1024 + nj
-		if not seen[key] then
-			local ok
-			if ni > i then ok = triangleFree(a[i], a[ni], b[j]) else ok = triangleFree(b[j], b[nj], a[i]) end
-			if ok then
-				if ni == na and nj == nb then return true end
-				seen[key] = true
-				push(ni, nj)
-			end
-		end
-	end
-	return false
-end
+--- Whether two routes from S to L (polylines a, b) are one physical route: P.SameRoute (one rule for the
+-- probes' copies of a route and for the way over an edge beside the routes), with the graph's own thin
+-- trace (clearSeg: native traces when checked, tool brushes passed, displacements both ways).
+function PR.SameRoute(a, b) return A.Paths.SameRoute(a, b, clearSeg) end
 
 --- Evaluated probe paths from S to L, one per physical route: the copies of a route (PR.SameRoute) are
 -- dropped, the best of them (highest level) kept. Copies of one route through one opening each carried
@@ -2041,6 +1799,7 @@ function PR.Paths(S, L, k, cfg)
 	cfg = cfg or A.cfg
 	local g = PR.current
 	if not g then return {} end
+	doorLeaves() -- the door epoch (routes kept per S and L are redone when a leaf moved)
 	local out = {}
 	local starts
 	if (cfg.probe_field_blend or 0) >= 0.5 then
@@ -2051,8 +1810,6 @@ function PR.Paths(S, L, k, cfg)
 			if p then
 				out[1] = p
 				addBridge(g, S, L, cfg, out)
-				local e = edgePath(S, L, cfg)
-				if e then out[#out + 1] = e end
 				if #out > 1 then return PR.DistinctRoutes(S, L, out) end
 				return out
 			end
@@ -2060,19 +1817,18 @@ function PR.Paths(S, L, k, cfg)
 		end
 	end
 	local inners = pulledPaths(g, S, L, k, cfg, starts)
-	-- the edge bend first: S just past the shadow boundary of an edge has it, whatever the graph answers
-	local edge = edgePath(S, L, cfg)
+	-- (the way over the edge that cuts the line, S just past the shadow boundary, is P.WorldEdge's, beside
+	-- these routes in P.Compute: the probes had their own estimator of it, which found nothing on 97 steps
+	-- past a jamb and was a fifth model of one corner)
 	if #inners == 0 then
 		local b = bridgePath(g, S, L, cfg)
 		if b then out[1] = b end
-		if edge then out[#out + 1] = edge end
-		if #out > 1 then return PR.DistinctRoutes(S, L, out) end
 		return out
 	end
 	for _, inner in ipairs(inners) do
 		local pulled = attach(inner, S, L, inners.via)
 		if pulled and #pulled >= 3 then
-			local p = A.Paths.EvalPolyline(pulled, cfg)
+			local p = A.Paths.EvalRoute(pulled, cfg)
 			p.probe = true
 			out[#out + 1] = p
 		end
@@ -2101,7 +1857,6 @@ function PR.Paths(S, L, k, cfg)
 		local b = bridgePath(g, S, L, cfg)
 		if b then out[1] = b end
 	end
-	if edge then out[#out + 1] = edge end
 	-- one physical route once (the field's starts and the k-path search find copies of one route), not
 	-- one per apparent position: copies tightened to bends either side of a wall are a spacing apart, and
 	-- two doorways closer than a spacing are two routes
