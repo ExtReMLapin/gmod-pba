@@ -12,8 +12,12 @@ Settings are forced by in-memory overrides on the client (pba.SetOverride), neve
 Offline prediction (portal as measured in game: x = 512, y 72..112, z 8..112; shipped defaults; the
 prop passing 14 to 18 dB, wood leaf): prop 0.0 to 0.3 dB above the leaf (what passes the prop then goes
 through the doorway, a leaf radiates from the opening itself); former law 0.7 to 3.0 dB above.
+Runs with pba_paths_model 0 forced in memory on the client: the leaf given to the portal (its aperture,
+P.Aperture) is an object of the portal chains only; the listener field of model 1 crosses the opening
+without a chain and pays the real leaf entity on its segments. Goes with model 0 if model 0 is removed.
 Usage: python -I -u mask_equivalence.py <mcp.py>
 """
+import atexit
 import json
 import os
 import subprocess
@@ -120,6 +124,9 @@ if call("status", {}).get("map") != "pba_tworooms":
     call("map_load", {"map": "pba_tworooms", "maxplayers": 4})
     time.sleep(4)
 _cvsnap.guard(call)  # nothing is written (in-memory overrides on the client), kept as a safety net
+# the portal chains are pba_paths_model 0's (see above): forced in memory, released at exit
+lua("client", "pba.SetOverride('paths_model', 0, true) pba.Paths.InvalidateCache() return true")
+atexit.register(lambda: lua("client", "pba.SetOverride('paths_model', nil, true) pba.Paths.InvalidateCache() return true"))
 lua("server", "for _, d in ipairs(ents.FindByName('door1')) do d:Fire('Open') end return true")
 portal = None
 for _ in range(20):

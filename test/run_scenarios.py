@@ -158,7 +158,11 @@ if want("lcorridor"):
     r, _, _ = run("lcorridor", "pba_lcorridor")
     p = r["paths"][0] if r and r.get("paths") else None
     v = dom(r)
-    check("P3-lcorridor", p and len(p["portals"]) == 3 and v and abs(v["az"]) < 30, f"path={p} dominant={v}")
+    # the route follows the corridor: it bends round its corner (the portal list is only filled by the
+    # portal chains of pba_paths_model 0; the listener field of model 1 crosses the same openings without
+    # listing them) and the voice comes from the corridor ahead
+    check("P3-lcorridor", p and p["bend"] >= 45 and v and v["kind"] == "portal" and abs(v["az"]) < 30,
+          f"path={p} dominant={v}")
 
 mats = {}
 for m in ["concrete", "brick", "wood", "metal", "glass", "plaster"]:
