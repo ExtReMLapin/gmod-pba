@@ -635,8 +635,13 @@ P.ClosureWeight = closureWeight
 
 --- True when one of the paths goes through the doorway that door entity `ent` fills: a portal path
 -- through a portal linked to a door (leaf touching its opening: hinge side when open, in it when closed),
--- or, with routeLeaves (paths_model 1: the routes are the doorways' one model), a probe route whose
--- segments cross that leaf (P.EvalPolyline: it pays the leaf, open or shut).
+-- or, with routeLeaves (paths_model 1, the line crossing no world wall: the routes are the doorways' one
+-- model), a probe route that crosses that leaf (P.EvalPolyline: it pays the leaf, open or shut). Not when
+-- the world cuts the line too: the line's way is then through the leaf AND the wall, its own; on
+-- rp_downtown a route crossing the leaf by the source and going 900 u round by other doors took the leaf
+-- off the line, which kept its plaster alone, 16.7 dB, and 37.8 one step on beside the leaf. (Homotopy to
+-- the line, P.SameRoute, was tried as the test: its fan rays graze the jamb where the line crosses the
+-- leaf by its edge, and the leaf was paid twice there, pba_twodoors.)
 local function leafOfPaths(ent, paths, routeLeaves)
 	for _, path in ipairs(paths) do
 		if routeLeaves and path.leaves and path.leaves[ent] then return true end
@@ -2421,7 +2426,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if leafBlocked and #r.paths > 0 then
 			tw = {}
 			for _, w in ipairs(walls) do
-				if not (w.ent and OPENABLE[w.ent:GetClass()] and leafOfPaths(w.ent, r.paths, fieldOnly)) then tw[#tw + 1] = w end
+				if not (w.ent and OPENABLE[w.ent:GetClass()] and leafOfPaths(w.ent, r.paths, fieldOnly and not worldBlocked)) then tw[#tw + 1] = w end
 			end
 			r.leafByPortal = #tw < #walls
 		end
