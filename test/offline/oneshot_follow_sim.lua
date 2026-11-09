@@ -8,9 +8,18 @@
 --   native: pba_native.Update only (no new voice); engine: the anchor moves, SND_CHANGE_VOL on the
 --   same anchor / channel / name, never in the last 0.5 s of the sound (it would restart it);
 --   pba_oneshot_follow 0: no update at all (the bug).
+-- Native rendering uses the real distance law and sends of cl_native.lua (run_pure.py loads it first):
+-- the stub of the module's Lua helpers falls back on them. Then:
+--   an engine copy (PlayVoice refused at emission) that goes from muffled to clear while native
+--   rendering is on is handed to the module once, at the point of the sound heard so far (Play's
+--   offset, arg 13), its engine copy stopped; only with a module that exports caps.playOffset (an older
+--   one: today's behaviour, the engine copy's level follows); not when its low-pass level stays;
+--   the tunnel preset is held near diffuse_dsp_at: successive one-shots of a source (0.42 -> 0.38 keep
+--   it) and a followed copy (0.42 -> 0.38: no switch, 0.42 -> 0.2: switch).
 local A = pba
 local AC, P = A.AC, A.Paths
 local REPO = ...
+local REAL_N = A.Native or {} -- cl_native.lua's helpers (PhysPath, PhysSrcSend, RoomSend, BindSource...)
 
 -- ------------------------------------------------------------------ engine stubs
 local T = 1000
@@ -31,8 +40,8 @@ string.GetExtensionFromFilename = function(p) return p:match("%.([^%./]+)$") end
 SoundDuration = function() return 3.4 end
 Entity = function() return nil end
 local emits, anchors = {}, {}
-EmitSound = function(name, pos, idx, chan, vol, lvl, flags)
-	emits[#emits + 1] = { t = T, name = name, pos = pos, chan = chan, vol = vol, flags = flags, fixed = true }
+EmitSound = function(name, pos, idx, chan, vol, lvl, flags, pitch, dsp)
+	emits[#emits + 1] = { t = T, name = name, pos = pos, chan = chan, vol = vol, flags = flags, dsp = dsp, fixed = true }
 end
 ClientsideModel = function()
 	local a = { pos = Vector(0, 0, 0) }
@@ -41,8 +50,8 @@ ClientsideModel = function()
 	function a:GetPos() return self.pos end
 	function a:Remove() self.removed = true end
 	function a:StopSound(n) emits[#emits + 1] = { t = T, ent = self, name = n, stop = true } end
-	function a:EmitSound(n, lvl, pitch, vol, chan, flags)
-		emits[#emits + 1] = { t = T, ent = self, name = n, pos = Vector(self.pos), vol = vol, chan = chan, flags = flags }
+	function a:EmitSound(n, lvl, pitch, vol, chan, flags, dsp)
+		emits[#emits + 1] = { t = T, ent = self, name = n, pos = Vector(self.pos), vol = vol, chan = chan, flags = flags, dsp = dsp }
 	end
 	anchors[#anchors + 1] = a
 	return a
@@ -71,7 +80,9 @@ local BESIDE = Vector(-1020, 570, 64) -- apparent position beside the container
 local OTHER = Vector(-1020, 390, 64) -- the other side of the container
 local lvl = 75
 local TWO = false
+local SCENE -- per scenario: function(s, l) -> result; nil = the courtyard
 P.Compute = function(s, l)
+	if SCENE then return SCENE(s, l) end
 	if l.y < 600 then
 		local g = AC.EngineGain(s:Distance(l), lvl)
 		local vs = { { pos = BESIDE, gain = g * 0.3, lp = 2, lpDb = 8, len = 650, level = -20 } }
@@ -88,26 +99,38 @@ local function check(ok, msg) out[#out + 1] = (ok and "PASS " or "FAIL ") .. msg
 local function run(native, follow, opt)
 	opt = opt or {}
 	TWO = opt.two or false
+	SCENE = opt.scene
 	T = T + 100
 	emits, anchors = {}, {}
 	A.OneShots = nil
+	A.tunnelHeld = nil
 	A.cfg.oneshot_follow = follow and 1 or 0
 	local L = L1
 	A.ListenerPos = function() return L, { y = 0 } end
-	local updates, nextId, stops = {}, 0, {}
+	local updates, nextId, stops, plays = {}, 0, {}, {}
 	pba_native = {
 		Update = function(id, pos, g, l, m, h, pitch) updates[#updates + 1] = { t = T, id = id, pos = Vector(pos), g = g, h = h } return true end,
 		StopVoice = function(id) stops[#stops + 1] = id end,
+		-- the module's own Play (an engine copy handed over calls it directly, with its offset)
+		Play = function(name, pos, g, l, m, h, pitch, loop, delay, sh, diffuse, send, offset)
+			nextId = nextId + 1
+			plays[#plays + 1] = { t = T, id = nextId, name = name, pos = Vector(pos), g = g, offset = offset,
+				n = select("#", name, pos, g, l, m, h, pitch, loop, delay, sh, diffuse, send, offset) }
+			return nextId
+		end,
+		caps = opt.caps and { playOffset = true } or nil, -- the start offset (an older module has no caps)
 	}
-	A.Native = native and {
+	A.Native = native and setmetatable({
 		render = true, follow = {},
 		Directivity = function() return 1 end,
 		VoiceEQ = function(lp, len) local k = 1 - 0.2 * (lp or 0) return 1, k, k * k end,
-		PlayVoice = function() nextId = nextId + 1 return nextId end,
+		-- opt.nativeFail: the module refuses the voice at emission (the engine plays the copy)
+		PlayVoice = function() if opt.nativeFail then return false end nextId = nextId + 1 return nextId end,
+		EnsureSound = function(name) return true, name end,
 		Doppler = function() return 1 end, VelocityOf = function() return vector_origin end,
 		ListenerVelocity = function() return vector_origin end,
 		Echo = function() end,
-	} or nil
+	}, { __index = REAL_N }) or nil
 	loadRender()
 	local t0 = T
 	local data = { SoundName = "vo/npc/male01/question06.wav", Pos = S, SoundLevel = lvl, Pitch = 100, Volume = 1,
@@ -128,7 +151,7 @@ local function run(native, follow, opt)
 		end
 		if think then think() end
 	end
-	return { taken = taken, updates = updates, first = first, stepT = stepT, t0 = t0, stops = stops, cut = cut }
+	return { taken = taken, updates = updates, first = first, stepT = stepT, t0 = t0, stops = stops, cut = cut, plays = plays }
 end
 
 local tag
@@ -140,7 +163,8 @@ local after, last = nil, r.updates[#r.updates]
 for _, u in ipairs(r.updates) do
 	if u.t >= r.stepT and u.pos:Distance(S) < 1 then after = after or u end
 end
-local dDirect = AC.EngineGain(S:Distance(L2), lvl)
+-- native rendering: the full version's distance law (N.PhysClear), native_gain 1
+local dDirect = REAL_N.PhysClear(lvl, S:Distance(L2))
 check(last ~= nil and last.pos:Distance(S) < 1, tag .. "voice ends at the source (" .. (last and tostring(math.Round(last.pos:Distance(S))) or "no update") .. " u)")
 check(after ~= nil and after.t - r.stepT <= 0.6, tag .. "reached within 0.6 s of the step (" .. (after and math.Round(after.t - r.stepT, 2) or "never") .. " s)")
 check(last ~= nil and math.abs(db(last.g, dDirect)) < 0.5, tag .. "direct level (" .. (last and math.Round(db(last.g, dDirect), 2) or "-") .. " dB)")
@@ -189,7 +213,7 @@ check(last1 ~= nil and last1.pos:Distance(S) < 1, tag .. "the dominant ends at t
 check(last2 ~= nil and last2.g < 1e-6 and #r.stops == 1 and r.stops[1] == 2, tag .. "the other fades to 0 then stops (" ..
 	(last2 and string.format("%.4f", last2.g) or "-") .. ", stops " .. #r.stops .. ")")
 local power = (last1 and last1.g or 0)
-check(math.abs(db(power, AC.EngineGain(S:Distance(L2), lvl))) < 0.5, tag .. "total level = direct level")
+check(math.abs(db(power, dDirect)) < 0.5, tag .. "total level = direct level")
 r = run(false, true, { two = true })
 local stopsE = 0
 for _, e in ipairs(emits) do if e.stop then stopsE = stopsE + 1 end end
@@ -212,6 +236,83 @@ r = run(true, false)
 check(#r.updates == 0, "follow off: no update after emission (" .. #r.updates .. "), the former behaviour")
 r = run(false, false)
 check(emits[1] and emits[1].fixed == true and #anchors == 0, "follow off, engine: copy at a fixed position, as before")
+
+-- ------------------------------------------------------------------ engine copy handed to the module
+local function changesAfter(t)
+	local n = 0
+	for _, e in ipairs(emits) do if e.flags == SND_CHANGE_VOL and e.t > t then n = n + 1 end end
+	return n
+end
+local function stopsOf(x)
+	local n = 0
+	for _, e in ipairs(emits) do if e.stop and e.ent == x then n = n + 1 end end
+	return n
+end
+r = run(true, true, { nativeFail = true, caps = true })
+tag = "switch: "
+local pl = r.plays[1]
+check(anchors[1] ~= nil and emits[1].ent == anchors[1], tag .. "emitted by the engine (the module refused it)")
+check(#r.plays == 1, tag .. "handed to the module once (" .. #r.plays .. " Play)")
+check(pl ~= nil and pl.t >= r.stepT and pl.t - r.stepT <= 0.6, tag .. "within 0.6 s of the step (" .. (pl and math.Round(pl.t - r.stepT, 2) or "never") .. " s)")
+check(pl ~= nil and pl.n == 13 and pl.offset ~= nil and math.abs(pl.offset - (pl.t - r.t0)) < 1e-6,
+	tag .. "Play's offset = what was heard so far (" .. (pl and tostring(pl.offset) or "-") .. ")")
+check(pl ~= nil and stopsOf(anchors[1]) == 1 and changesAfter(pl.t) == 0, tag .. "engine copy stopped at the switch, never driven after")
+local lastS
+for _, u in ipairs(r.updates) do if pl and u.id == pl.id then lastS = u end end
+check(lastS ~= nil and lastS.pos:Distance(S) < 1 and math.abs(db(lastS.g, dDirect)) < 0.5, tag .. "the native voice ends at the source, direct level")
+check(A.OneShots ~= nil and #A.OneShots.recs == 0 and #r.stops == 0, tag .. "record dropped at the end, the voice not stopped")
+
+r = run(true, true, { nativeFail = true, caps = false })
+check(#r.plays == 0 and stopsOf(anchors[1]) == 0 and changesAfter(r.stepT) > 0,
+	"no offset in the module: today's behaviour, the engine copy's level follows (" .. #r.plays .. " Play)")
+
+local OTHER2 = Vector(-1100, 650, 64)
+local function sameLp(s, l)
+	local g = AC.EngineGain(s:Distance(l), lvl)
+	return { S = s, L = l, clear = false, voices = { { pos = l.y < 600 and BESIDE or OTHER2, gain = g * 0.3, lp = 2, lpDb = 8, len = 650, level = -20 } } }
+end
+r = run(true, true, { nativeFail = true, caps = true, scene = sameLp })
+check(#r.plays == 0, "switch: not when the low-pass level stays (" .. #r.plays .. " Play)")
+
+-- ------------------------------------------------------------------ tunnel preset held
+local saved = { A.cfg.diffuse, A.cfg.diffuse_dsp_at, A.cfg.diffuse_dsp_hyst }
+A.cfg.diffuse, A.cfg.diffuse_dsp_at, A.cfg.diffuse_dsp_hyst = 1, 0.4, 0.05
+local tunnelDsp, plainDsp = AC.DSPForVoice(1, 1), AC.DSPForLevel(1)
+check(tunnelDsp ~= plainDsp, "tunnel and plain presets differ (" .. tunnelDsp .. ", " .. plainDsp .. ")")
+local function shares(s1, s2)
+	return function(s, l)
+		local g = AC.EngineGain(s:Distance(l), lvl)
+		return { S = s, L = l, clear = false, voices = { { pos = BESIDE, gain = g * 0.3, lp = 1, lpDb = 4, len = 650, level = -20,
+			diffuse = l.y < 600 and s1 or s2 } } }
+	end
+end
+for _, c in ipairs({ { 0.38, false }, { 0.2, true } }) do
+	r = run(true, true, { nativeFail = true, caps = true, scene = shares(0.42, c[1]) })
+	check(emits[1].dsp == tunnelDsp and (#r.plays == 1) == c[2], "followed copy, share 0.42 -> " .. c[1] .. ": " ..
+		(c[2] and "switched" or "tunnel preset held, no switch") .. " (" .. #r.plays .. " Play)")
+end
+-- successive one-shots of one source (engine rendering, not followed)
+run(false, false)
+local function step(share, dt)
+	SCENE = shares(share, share)
+	T = T + dt
+	emits = {}
+	A.Process({ SoundName = "player/footsteps/concrete1.wav", Pos = S, SoundLevel = lvl, Pitch = 100, Volume = 1,
+		Channel = CHAN_AUTO, Flags = 0, EntIndex = 7 }, true)
+	for _, e in ipairs(emits) do if not e.stop then return e.dsp end end -- (a reused anchor is quieted first)
+end
+local seq = { 0.42, 0.38, 0.3, 0.42, 0.46 }
+local want = { tunnelDsp, tunnelDsp, plainDsp, plainDsp, tunnelDsp }
+local got, same = {}, true
+for i, share in ipairs(seq) do
+	got[i] = tostring(step(share, 0.3))
+	if got[i] ~= tostring(want[i]) then same = false end
+end
+check(same, "successive one-shots of a source: preset held near diffuse_dsp_at (" .. table.concat(got, " ") .. ")")
+local late = step(0.38, 3)
+check(late == plainDsp, "successive one-shots: the hold expires after 2 s (" .. tostring(late) .. ")")
+SCENE = nil
+A.cfg.diffuse, A.cfg.diffuse_dsp_at, A.cfg.diffuse_dsp_hyst = saved[1], saved[2], saved[3]
 
 local fails = 0
 for _, l in ipairs(out) do if l:sub(1, 4) == "FAIL" then fails = fails + 1 end end

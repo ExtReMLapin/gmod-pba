@@ -70,6 +70,8 @@ OS.native = OS.native or {}
 -- A copy stays in the registry this long after its expected end: the length of a compressed file can
 -- be slightly off, and a StopSound right after the expected end must still reach the copy.
 local EXPIRE_MARGIN = 1
+-- successive one-shots of one source hold their tunnel-preset choice this long (heldTunnel, below)
+local TUNNEL_TTL = 2
 
 --- Stops a native copy (a copy rule: new sound on the channel, StopSound): never driven again.
 local function stopNative(id)
@@ -224,6 +226,9 @@ timer.Create("pba_copies_gc", 5, 0, function()
 		for i = #list, 1, -1 do if expired(list[i], now) then table.remove(list, i) end end
 		if #list == 0 then A.emitted[idx] = nil end
 	end
+	for key, e in pairs(A.tunnelHeld or {}) do
+		if now - e.t > TUNNEL_TTL then A.tunnelHeld[key] = nil end
+	end
 end)
 
 --- Anchor of a copy without a copy set (unassigned channel), busy until its sound ends: a sound played
@@ -313,6 +318,46 @@ function A.DistVariantPos(name, pos, L, S)
 	return L + (pos - L) * (want / d)
 end
 
+-- ------------------------------------------------------------------ engine preset of a copy
+-- The diffuse "tunnel" preset (AC.DSPForVoice) switches at diffuse_dsp_at. A share moving 0.39 <-> 0.41 as
+-- the listener steps flipped the preset of successive sounds of one source (footsteps, gunfire down a
+-- corridor) and the preset a followed copy would need. The choice is held near the threshold
+-- (AC.DiffuseHold, diffuse_dsp_hyst): per followed copy (fv.tunnel, see evaluate) and, for successive
+-- one-shots of one source, per source entity and voice slot for TUNNEL_TTL seconds.
+A.tunnelHeld = A.tunnelHeld or {} -- "idx:slot" -> { on, t }
+
+local function hystMargin() return A.cfg.diffuse_dsp_hyst or 0.05 end
+
+--- Engine preset of low-pass level `level` with the tunnel choice `tunnel` already decided (held).
+local function presetFor(level, tunnel)
+	level = level or 0
+	-- a share of 1 is above any diffuse_dsp_at: AC.DSPForVoice keeps its own rule (diffuse model off: plain)
+	if tunnel then return AC.DSPForVoice(level, 1) end
+	return AC.DSPForLevel(level)
+end
+
+--- Tunnel choice of a new one-shot voice: held from the previous sound of the same source and slot when
+-- that one is recent (key nil: a source without an entity, no hold).
+local function heldTunnel(key, share, now)
+	local e = key and A.tunnelHeld[key]
+	local prev = nil
+	if e and now - e.t <= TUNNEL_TTL then prev = e.on end
+	local on = AC.DiffuseHold(share or 0, prev, hystMargin())
+	if key then
+		if e then e.on, e.t = on, now else A.tunnelHeld[key] = { on = on, t = now } end
+	end
+	return on
+end
+
+--- True when the loaded module's Play takes a start offset (arg 13: seconds of playback already heard,
+-- at the voice's pitch; faded in over one block). Version() is Steam Audio's version, not the module's,
+-- so it cannot tell: the module exports pba_native.caps.playOffset. An older module (no caps) ignores a
+-- 13th argument and would play the sound from its start, heard twice: never switch then.
+local function playOffsetOK()
+	local caps = pba_native and pba_native.caps
+	return type(caps) == "table" and caps.playOffset and true or false
+end
+
 --- Emits one voice. life: seconds the sound plays (pitch included; UNKNOWN_CAP while its length is
 -- unknown, ukey then the key of its file); follow: it is to be followed; idx: its source entity (the
 -- copy is registered for the stop rules). Returns false when nothing was emitted, else a handle:
@@ -354,9 +399,11 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
 	local vol = (data.Volume or 1) * v.gain / AC.EngineGain(math.max(d, 1), lvl)
 	vol = math.min(vol, 1)
 	if vol < 0.01 then return false end
-	local dsp = AC.DSPForVoice(v.lp, v.diffuse)
+	local tunnel = heldTunnel(idx and (idx .. ":" .. (slot or 1)), v.diffuse, RealTime())
+	local dsp = presetFor(v.lp, tunnel)
 	-- the sound's own preset (a radio or speaker effect) is part of the sound: kept, muffled by volume
-	if dsp == 0 or ((A.cfg.keep_dsp or 1) >= 0.5 and (data.DSP or 0) ~= 0) then dsp = data.DSP or 0 end
+	local own = (A.cfg.keep_dsp or 1) >= 0.5 and (data.DSP or 0) ~= 0
+	if dsp == 0 or own then dsp = data.DSP or 0 end
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
 	local delay = voiceDelay(v, L)
 	local name, pos = data.SoundName, v.epos
@@ -372,6 +419,9 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
 	if not anchor and not sentence and not copies and (follow or idx) then anchor = poolAnchor(tEnd) end
 	local chan = copies and copies.chan or CHAN_AUTO
 	local h = { t0 = t0, tEnd = tEnd, ukey = ukey, pitch = pitch, name = name, orig = orig, srcChan = srcChan }
+	-- what its preset was chosen from (frozen for the whole sound): a followed copy compares its new
+	-- target with it (see the native switch below); its own preset (own) is never replaced
+	h.lp0, h.tunnel0, h.tunnel, h.ownDsp = v.lp or 0, tunnel, tunnel, own or nil
 	if anchor then
 		h.seq = (anchor.pbaSeqNext or 0) + 1
 		anchor.pbaSeqNext, anchor.pbaEnd = h.seq, tEnd
@@ -410,9 +460,13 @@ end
 -- fade out, extra paths add their power). Native voices: pba_native.Update. Engine copies: their
 -- anchor moves (the engine places a sound at its entity) and the volume changes by SND_CHANGE_VOL on
 -- the same anchor, channel and name. The DSP preset of an engine sound cannot change mid-sound, and
--- a copy cannot be emitted again with another one: EmitSound and the module's Play start a sound
--- from its first sample (Play's delay is clamped to 0..3 s, render.cpp), so a line muffled at its
--- start and clear 1.5 s later would be heard twice. A copy keeps its preset, its level follows.
+-- EmitSound starts a sound from its first sample: emitted again with another preset, a line muffled at
+-- its start and clear 1.5 s later would be heard twice. Without native rendering a copy keeps its
+-- preset, only its level follows (a copy emitted muffled that becomes clear stays low-passed). With
+-- native rendering on and a module whose Play takes a start offset (playOffsetOK), a copy whose
+-- preset no longer fits (its target's low-pass level 1 or more away from the one it was emitted with,
+-- or the held tunnel choice changed) is handed to the module at the same point of the sound and its
+-- engine copy stopped (switchNative); its own preset (keep_dsp) is never replaced.
 -- Not followed in their last MIN_LEFT seconds, and no volume change then: a SND_CHANGE_VOL that no
 -- longer finds its sound starts it again (engine rule), so the margin covers a duration slightly off;
 -- only .wav durations are trusted for it (SoundDuration of compressed files can be off).
@@ -463,6 +517,79 @@ local function targetValues(rec, fv, t, L)
 	return math.min(rec.vol * t.gain / AC.EngineGain(math.max(d, 1), rec.lvl), 1), 1, 1, 1, pos, rec.pitch
 end
 
+--- The voice of the new selection that target t was built from (P.FollowAssign keeps its pos): the
+-- target gets its continuous loss, raw loss, diffuse share and kind, which FollowAssign leaves out
+-- (targetValues read t.lpDb / t.rawLossDb and always got nil: the native EQ stepped between levels and a
+-- loud source's loss was recovered from a gain that the headroom had absorbed, see N.PhysPath).
+local function enrich(t, vs)
+	local sv
+	for _, v in ipairs(vs) do if rawequal(v.pos, t.pos) then sv = v break end end
+	if not sv then return nil end
+	t.lpDb, t.diffuse, t.kind = sv.lpDb, sv.diffuse, sv.kind
+	-- the merged paths' extra power (t.gain is the group's) taken off the dominant member's raw loss
+	if sv.rawLossDb and (sv.gain or 0) > 0 and (t.gain or 0) > 0 then
+		t.rawLossDb = sv.rawLossDb - 20 * math.log10(t.gain / sv.gain)
+	end
+	return sv
+end
+
+--- True when the engine copy fv should be handed to the module now (see the comment above MIN_LEFT).
+local function wantsNative(rec, fv, t, now)
+	-- (lp0 nil: a copy emitted before this code was loaded, autorefresh: left as it is)
+	if not fv.a or not fv.started or fv.ownDsp or fv.lp0 == nil or rec.ukey or (fv.switchFails or 0) >= 3 then return false end
+	if (A.cfg.oneshot_native_switch or 1) < 0.5 then return false end
+	local N = A.Native
+	if not (N and N.render and pba_native and pba_native.Play) or A.IsSentence(rec.name) then return false end
+	-- a switch near the end is not worth a second voice (the end of a compressed file can be off)
+	if now > fv.tEnd - MIN_LEFT - followInterval() then return false end
+	if not playOffsetOK() then return false end
+	return math.abs((t.lp or 0) - fv.lp0) >= 1 or (fv.tunnel0 ~= nil and fv.tunnel ~= fv.tunnel0)
+end
+
+local NATIVE_FV = { id = true } -- targetValues of a voice about to become native
+
+--- Hands the engine copy fv over to the module: played from where the copy is now (seconds since it
+-- started), then the engine copy stopped. fv (the copy's handle, in the registry) becomes a
+-- native voice in place: the copy rules (StopSound, channel, removal) reach it by its id. dominant: the
+-- record's first voice (it takes the source reverb slot, as at emission). Returns true when switched.
+local function switchNative(rec, fv, t, L, now, dominant)
+	local N = A.Native
+	local ok, n = N.EnsureSound(rec.name)
+	if not ok then return false end -- not decoded yet (a large file): tried again at the next evaluation
+	local g, el, em, eh, pos, pitch = targetValues(rec, NATIVE_FV, t, L)
+	-- what has been heard of it so far (the module's offset is playback time at the voice's pitch)
+	local offset = math.max(now - fv.t0, 0)
+	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and t.sh or nil
+	local trans = t.kind == "transmission"
+	local id = pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, trans and N.RoomSend(g, pos, L) or 0, offset)
+	if not id or id <= 0 then
+		fv.switchFails = (fv.switchFails or 0) + 1
+		return false
+	end
+	-- reverb as at emission (emitVoice / N.PlayVoice): the dominant voice feeds its source slot unless a
+	-- loud sound is already echoed; without a slot, a voice that is not a transmission feeds the room
+	local echoed = (A.cfg.native_all or 0) < 0.5 and rec.lvl >= (A.cfg.native_echo_lvl or 95)
+	local bound = false
+	if dominant and not echoed and rec.S then
+		local srcSend = rec.vol * N.PhysSrcSend(rec.lvl, rec.S:Distance(L)) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain
+		bound = N.BindSource(id, rec.S, srcSend)
+	end
+	if not bound and not trans then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g) end
+	-- the engine copy stops once the module has it (stopCopy without cancelling the handle)
+	local a, name = fv.a, fv.name or rec.name
+	if anchorAlive(fv, name) then a:StopSound(name) a.pbaName = nil end
+	if IsValid(a) and a.pbaSeqNext == fv.seq then a.pbaEnd = 0 end -- free for the next copy
+	fv.a, fv.seq, fv.chan, fv.dsp, fv.sent = nil, nil, nil, nil, nil
+	fv.id, fv.switched = id, true
+	OS.native[id] = fv
+	fv.sh = t.sh or false
+	fv.shSent = sh and fv.sh or false
+	A.Paths.RampTo(fv.ramp, now, 0, L, g, el, em, eh, pos, pitch)
+	fv.ramp.pending = false -- played with these values
+	A.stats.nativeSwitch = (A.stats.nativeSwitch or 0) + 1
+	return true
+end
+
 local function evaluate(rec, now, L)
 	local P = A.Paths
 	local ent = IsValid(rec.ent) and rec.ent or nil
@@ -487,8 +614,13 @@ local function evaluate(rec, now, L)
 	for i, fv in ipairs(live) do
 		local t = targets[i]
 		if t then
+			enrich(t, vs)
+			-- the tunnel choice this copy would need now, held near diffuse_dsp_at (clear sight: none)
+			if fv.a then fv.tunnel = AC.DiffuseHold(t.diffuse or 0, fv.tunnel, hystMargin()) end
 			fv.sh = t.sh or false -- its new path's baked field (none: straight line to its position)
-			P.RampTo(fv.ramp, now, dur, L, targetValues(rec, fv, t, L))
+			if not (wantsNative(rec, fv, t, now) and switchNative(rec, fv, t, L, now, i == 1)) then
+				P.RampTo(fv.ramp, now, dur, L, targetValues(rec, fv, t, L))
+			end
 		else
 			-- no path left for this voice: it fades out over the interval, then stops
 			fv.fading = true

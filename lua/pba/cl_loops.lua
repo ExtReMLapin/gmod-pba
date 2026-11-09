@@ -85,20 +85,37 @@ local function reevalDue(m, S, L)
 	return A.Paths.ReevalDue(m.reeval, S, L, RealTime())
 end
 
+--- Tunnel-preset choice of a mirror (AC.DSPForVoice switches to the diffuse "tunnel" preset at
+-- diffuse_dsp_at): held near the threshold (AC.DiffuseHold, diffuse_dsp_hyst), so a loop heard down a
+-- corridor whose share moves 0.39 <-> 0.41 as the listener steps keeps one preset instead of switching
+-- at every update. m.tunnel: the choice heard so far (nil: none yet).
+local function holdTunnel(m, share)
+	m.tunnel = AC.DiffuseHold(share or 0, m.tunnel, A.cfg.diffuse_dsp_hyst or 0.05)
+	return m.tunnel
+end
+
+--- Engine preset of low-pass level `level` with the tunnel choice already decided (held).
+local function presetFor(level, tunnel)
+	level = level or 0
+	-- a share of 1 is above any diffuse_dsp_at: AC.DSPForVoice keeps its own rule (diffuse model off: plain)
+	if tunnel then return AC.DSPForVoice(level, 1) end
+	return AC.DSPForLevel(level)
+end
+
 --- Gain multiplier and DSP of a loop at S for the local listener.
 local function muffle(m, S, L)
-	if not A.Enabled() then return 1, m.dsp end
+	if not A.Enabled() then m.tunnel = nil return 1, m.dsp end
 	local r = pathOf(m, S, L)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
-	if r.clear or not r.voices or #r.voices == 0 then return 1, m.dsp end
+	if r.clear or not r.voices or #r.voices == 0 then m.tunnel = false return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
 	local p, best, dp = 0, r.voices[1], 0
 	for _, v in ipairs(r.voices) do p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain end
-	local diffuse = dp / math.max(p, 1e-12)
+	local tunnel = holdTunnel(m, dp / math.max(p, 1e-12))
 	local g = math.sqrt(p) / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6)
 	-- the sound's own preset (radio, speaker) is kept (pba_keep_dsp): muffled by volume only
 	if (A.cfg.keep_dsp or 1) >= 0.5 and (m.dsp or 0) ~= 0 then return math.min(g, 1), m.dsp end
-	return math.min(g, 1), AC.DSPForVoice(best.lp, diffuse)
+	return math.min(g, 1), presetFor(best.lp, tunnel)
 end
 
 --- Native rendering of a loop: the module plays it (HRTF + EQ) at its apparent position
@@ -112,7 +129,7 @@ local function applyNative(m, S, L)
 	-- the full version's distance law (N.PhysClear / N.PhysPath): real spreading
 	if m.clearPath then
 		pos, gain, lp = S, N.PhysClear(m.lvl, S:Distance(L)), 0
-		m.diffuse = 0
+		m.diffuse, m.tunnel = 0, false
 	else
 		local p, dp, pt = 0, 0, 0
 		for _, v in ipairs(r.voices) do
@@ -127,7 +144,8 @@ local function applyNative(m, S, L)
 	end
 	-- same meters as the patch path (gain relative to the direct law in use, DSP equivalent)
 	m.g = math.min(gain / math.max(N.PhysClear(m.lvl, S:Distance(L)), 1e-6), 1)
-	m.curDsp = AC.DSPForVoice(lp or 0, m.diffuse)
+	-- (the module itself has no preset: a meter, held like the patch path's so both read alike)
+	m.curDsp = presetFor(lp or 0, not m.clearPath and holdTunnel(m, m.diffuse))
 	-- reverb (cl_native, "Reverb of natively rendered sounds"): the air-borne part from a source slot at
 	-- the loop's position; the listener's room only gets what comes through walls. No slot: the room bus
 	-- at the voice's gain
