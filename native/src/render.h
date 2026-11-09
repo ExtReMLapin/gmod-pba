@@ -11,6 +11,12 @@
 namespace render {
 
 constexpr int kEchoSlots = 4;      // reflection sources simulated per source (loud sounds)
+// source reverb slots: reflections simulated from a continuous sound's own position (radio, engine
+// loop). The listener-centric room reverb only renders the listener's space; a source-centric
+// simulation also carries the source room's reverberant field spilling out through its openings.
+// A bound voice sends to its slot in addition to the room bus (the room bus still renders what the
+// listener's own room does with sound transmitted through walls and floors).
+constexpr int kSrcSlots = 4;
 constexpr float kIRSeconds = 0.5f; // convolution part of the impulse response (parametric tail beyond)
 
 struct VoiceParams {
@@ -43,10 +49,20 @@ void SetDiffuseSend(float k);
 void SetUnderwater(float amount);
 // game paused (single player menu): silence, voices and reflections frozen where they are
 void SetPaused(bool paused);
-// reflection sources owned by the simulator (nullptr to detach before releasing them)
-void SetReflectionSources(IPLSource room, const IPLSource* echo, int n);
-// the simulation thread reports that slot (-1 = room) has been simulated at generation gen
+// reflection sources owned by the simulator (nullptr to detach before releasing them);
+// srcs: the source reverb slots' sources (kSrcSlots)
+void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IPLSource* srcs = nullptr, int nSrc = 0);
+// the simulation thread reports that slot has been simulated at generation gen:
+// -1 = room, 0..kEchoSlots-1 = echo slots, kEchoSlots + k = source reverb slot k
 void PublishSimulated(int slot, int gen);
+// binds voice id to source reverb slot `slot` simulated at generation gen (slot < 0: unbinds it);
+// srcSend: send level into the slot (linear, < 0 = keep the voice's; 0 at the first bind).
+// Another voice bound to that slot loses it. false if the voice is gone (or dying, or an echo).
+bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend);
+// ids[k]: the live voice bound to source reverb slot k (0 = none), k < kSrcSlots
+void SrcSlotVoices(int ids[kSrcSlots]);
+// level of the source reverb slots relative to the room reverb (wet room x k)
+void SetSourceReverbScale(float k);
 // latest reverb times at the listener (read by the audio thread from the simulation outputs)
 void RoomReverbTimes(float rt[3]);
 // hybrid tail EQ last applied to the room reverb (3 bands)

@@ -126,6 +126,19 @@ local function applyNative(m, S, L)
 	-- same meters as the patch path (gain relative to the engine's direct law, DSP equivalent)
 	m.g = math.min(gain / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6), 1)
 	m.curDsp = AC.DSPForVoice(lp or 0, m.diffuse)
+	-- source reverb slot (reflections simulated from the loop's position: its room's reverb spilling out
+	-- of the openings included; see streamSend in cl_streams): the simulation has the geometry, the send
+	-- is the game's level at this distance without the path's losses, times distance / 1 m
+	-- the listener's room keeps the send computed above (what reaches the listener's space: a loop upstairs
+	-- makes the room below resonate), except in clear sight where the slot simulates that same room
+	local now = RealTime()
+	local d = S:Distance(L)
+	m.srcSend = AC.EngineGain(math.max(d, 1), m.lvl) * math.Clamp(d / N.REF_UNITS, 1, 100) * m.vol * A.cfg.native_gain
+	if m.nativeId and pba_native.SourceReflect and (not m.srcNext or now >= m.srcNext) then
+		m.srcNext = now + 0.3
+		m.srcSlot = pba_native.SourceReflect(m.nativeId, S, m.srcSend)
+	end
+	if m.srcSlot and m.srcSlot >= 0 and m.clearPath then send = 0 end
 	gain = gain * m.vol * A.cfg.native_gain
 	send = send * m.vol * A.cfg.native_gain
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
@@ -334,6 +347,12 @@ function LP.FollowNative(L)
 	local vL = N.ListenerVelocity()
 	for _, m in pairs(LP.mirrors) do
 		if m.nativeId and not m.done then
+			-- keep its source reverb slot (pba_native.SourceReflect needs a call at least every 0.5 s)
+			if m.srcSlot and m.srcSlot >= 0 and pba_native.SourceReflect and (not m.srcNext or now >= m.srcNext) then
+				m.srcNext = now + 0.3
+				local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
+				if S then m.srcSlot = pba_native.SourceReflect(m.nativeId, S, m.srcSend) end
+			end
 			local ramp = m.ramp
 			local ent = m.clearPath and IsValid(m.ent) and m.ent or nil
 			if ent then
@@ -345,12 +364,15 @@ function LP.FollowNative(L)
 				if ramp then
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
-					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, g * N.SendK(d))
+					-- clear sight: with a source reverb slot, that slot is the room (no listener-room send)
+					local send = (m.srcSlot and m.srcSlot >= 0) and 0 or g * N.SendK(d)
+					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, send)
 				end
 			end
 			if ramp and ramp.pending then
 				local g, el, em, eh, pos, pitch = P.RampAt(ramp, now, L)
-				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch, nil, g * N.SendK(pos:Distance(L)))
+				local send = (m.srcSlot and m.srcSlot >= 0 and m.clearPath) and 0 or g * N.SendK(pos:Distance(L))
+				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch, nil, send)
 			end
 		end
 	end

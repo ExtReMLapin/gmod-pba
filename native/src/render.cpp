@@ -8,6 +8,9 @@
 //   echoes       : loud sounds feed one of kEchoSlots reflection effects whose impulse response
 //                  is simulated for that source position (convolution early part + parametric
 //                  tail) -> ambisonic bus
+//   source reverb: continuous voices bound to one of kSrcSlots reflection effects simulated at
+//                  their own position also send there (the source room's reverberant field,
+//                  heard through doorways) -> ambisonic bus
 //   ambisonic bus -> IPLAmbisonicsDecodeEffect (HRTF / speakers) -> mix
 // The engine still plays every sound pba does not take over (clear line of sight...).
 // Licence: MIT (see native/LICENSE).
@@ -89,6 +92,11 @@ struct Voice {
 	int pathSlot = -1; // index in the path effect pool
 	int echoSlot = -1; // reflections-only voice
 	int needGen = 0;
+	// source reverb slot (SetVoiceSrcSlot): fed once simulated at srcGen (the generation at bind
+	// time; later re-simulations of a moving source keep the previous response meanwhile)
+	int srcSlot = -1;
+	int srcGen = 0;
+	float srcSend = 0, srcSendCur = -1; // send into the slot, smoothed like send
 	int waited = 0;
 	bool dying = false; // fading to 0 over one block, then dead
 };
@@ -144,7 +152,9 @@ Reflection g_room;                 // reverb at the listener, fed by every voice
 // (direct + reverb) about constant in a typical room (measured on pba_demo: direct x 0.11 at share 0.85)
 float g_diffuseSend = 1.5f;
 Reflection g_echo[kEchoSlots];     // per-source reflections
+Reflection g_src[kSrcSlots];       // source reverb slots (continuous voices, see kSrcSlots)
 float g_wetRoom = 0, g_wetEcho = 0;
+float g_srcScale = 1; // source reverb level, relative to the room reverb's wet
 bool g_paused = false;
 float g_uw = 0, g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: target, current mix, LP states
 float g_roomRt[3] = {0, 0, 0}; // under g_mtx
@@ -176,6 +186,7 @@ void ReleaseVoice(Voice& v) {
 	if (v.slot >= 0 && v.slot < (int)g_pool.size()) g_pool[v.slot].used = false;
 	if (v.pathSlot >= 0 && v.pathSlot < (int)g_pathPool.size()) g_pathPool[v.pathSlot].used = false;
 	v.slot = v.pathSlot = -1;
+	v.srcSlot = -1;
 }
 
 // Applies one reflection effect (if simulated) and adds its ambisonic output to g_amb.
@@ -233,6 +244,7 @@ void RenderBlock() {
 	for (int c = 0; c < kAmbi; ++c) std::fill(g_amb.data[c], g_amb.data[c] + kBlock, 0.0f);
 	std::fill(g_room.in.data[0], g_room.in.data[0] + kBlock, 0.0f);
 	for (auto& e : g_echo) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
+	for (auto& e : g_src) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
 	const IPLCoordinateSpace3 lis = ListenerSpace();
 
 	for (auto& vp : g_voices) {
@@ -327,10 +339,28 @@ void RenderBlock() {
 		const float s1 = v.send < 0 ? g1 : v.send;
 		const float s0 = v.sendCur < 0 ? s1 : v.sendCur;
 		v.sendCur = s1;
-		auto feedRoom = [&](const float* x, float k) {
+		// source reverb slot: an extra send (own level), once the slot's response for this source
+		// is simulated; until then the room send alone (no silence gap, no response of another place)
+		Reflection* srcBus = nullptr;
+		if (v.srcSlot >= 0 && v.srcSlot < kSrcSlots && g_src[v.srcSlot].fx && g_src[v.srcSlot].simGen.load() >= v.srcGen)
+			srcBus = &g_src[v.srcSlot];
+		const float q1 = v.srcSend;
+		const float q0 = v.srcSendCur < 0 ? q1 : v.srcSendCur;
+		v.srcSendCur = srcBus ? q1 : 0; // a slot that becomes ready fades in over one block
+		// x: the signal for the listener's room (muffled like the direct sound: what reaches the
+		// listener's space through walls and openings). The source slot gets m, the voice's signal
+		// BEFORE the direct path's EQ: the simulation from the source has the geometry, and a room's
+		// diffuse field leaves through an open doorway unfiltered (fed through the direct's EQ, the
+		// reverb spilling out of a doorway round a corner was muffled like the diffracted direct)
+		auto feedRoom = [&](const float* x, float k, float kSrc) {
 			float* snd = g_room.in.data[0];
 			for (int i = 0; i < kBlock; ++i) snd[i] += x[i] * (s0 + (s1 - s0) * (float)i / kBlock) * k;
 			g_room.fed = true;
+			if (srcBus && (q0 > 0 || q1 > 0)) {
+				float* d = srcBus->in.data[0];
+				for (int i = 0; i < kBlock; ++i) d[i] += m[i] * (q0 + (q1 - q0) * (float)i / kBlock) * kSrc;
+				srcBus->fed = true;
+			}
 		};
 		// diffuse energy (long winding path): the direct part gives way to the room reverb send, and
 		// its direction blurs (binaural spatial blend); the total energy is kept
@@ -338,7 +368,7 @@ void RenderBlock() {
 		const float directGain = std::sqrt(std::max(1.0f - dif, 0.0f));
 		const float sendBoost = 1.0f + g_diffuseSend * dif;
 		if (v.hasSH && v.pathSlot >= 0) {
-			feedRoom(m, v.eq[1] * sendBoost); // before the gain is applied to m
+			feedRoom(m, v.eq[1] * sendBoost, sendBoost); // before the gain is applied to m
 			applyGain(m);
 			IPLPathEffectParams pp{};
 			for (int b = 0; b < 3; ++b) pp.eqCoeffs[b] = v.eq[b];
@@ -362,7 +392,7 @@ void RenderBlock() {
 				iplDirectEffectApply(g_pool[v.slot].direct, &dp, &g_mono, &g_mono2);
 				bin_in = &g_mono2;
 			}
-			feedRoom(bin_in->data[0], sendBoost);
+			feedRoom(bin_in->data[0], sendBoost, sendBoost);
 			applyGain(bin_in->data[0]);
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
@@ -394,6 +424,7 @@ void RenderBlock() {
 	// reflections -> ambisonic bus -> decode
 	ApplyReflection(g_room, g_wetRoom, g_roomRt);
 	for (auto& e : g_echo) ApplyReflection(e, g_wetEcho);
+	for (auto& e : g_src) ApplyReflection(e, g_wetRoom * g_srcScale);
 	if (g_decode) {
 		IPLAmbisonicsDecodeEffectParams dp{};
 		dp.order = 1;
@@ -535,6 +566,8 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 	if (!CreateReflection(g_room, as)) return "reflection effect creation failed";
 	for (auto& e : g_echo)
 		if (!CreateReflection(e, as)) return "reflection effect creation failed";
+	for (auto& e : g_src)
+		if (!CreateReflection(e, as)) return "reflection effect creation failed";
 	{
 		IPLAmbisonicsDecodeEffectSettings ds{};
 		ds.speakerLayout = Stereo();
@@ -608,6 +641,7 @@ void Stop() {
 	g_pathPool.clear();
 	ReleaseReflection(g_room);
 	for (auto& e : g_echo) ReleaseReflection(e);
+	for (auto& e : g_src) ReleaseReflection(e);
 	if (g_decode) iplAmbisonicsDecodeEffectRelease(&g_decode);
 	if (g_hrtf) {
 		for (IPLAudioBuffer* b : {&g_mono, &g_mono2, &g_stereo, &g_amb, &g_ambTmp, &g_ambOut})
@@ -647,7 +681,7 @@ void SetDiffuseSend(float k) {
 	g_diffuseSend = std::clamp(k, 0.0f, 8.0f);
 }
 
-void SetReflectionSources(IPLSource room, const IPLSource* echo, int n) {
+void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IPLSource* srcs, int nSrc) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	g_room.src = room;
 	g_room.simGen = 0;
@@ -655,6 +689,49 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n) {
 		g_echo[k].src = (echo && k < n) ? echo[k] : nullptr;
 		g_echo[k].simGen = 0;
 	}
+	// new simulator: the slots restart at generation 1; bindings of the previous one are dropped
+	// (their generations would never be reached again)
+	for (int k = 0; k < kSrcSlots; ++k) {
+		g_src[k].src = (srcs && k < nSrc) ? srcs[k] : nullptr;
+		g_src[k].simGen = 0;
+	}
+	for (auto& v : g_voices) v->srcSlot = -1;
+}
+
+void SetSourceReverbScale(float k) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_srcScale = std::clamp(k, 0.0f, 16.0f);
+}
+
+bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	Voice* t = nullptr;
+	for (auto& v : g_voices)
+		if (v->id == id && v->alive.load() && !v->dying && v->echoSlot < 0) t = v.get();
+	if (slot < 0 || slot >= kSrcSlots) {
+		if (t) t->srcSlot = -1;
+		return t != nullptr && slot < 0;
+	}
+	if (!t || !g_src[slot].fx) return false;
+	for (auto& v : g_voices) // one voice per slot: the slot was taken over (its owner went quiet)
+		if (v.get() != t && v->srcSlot == slot) v->srcSlot = -1;
+	if (t->srcSlot != slot || gen < t->srcGen) { // new binding (or a new simulator): wait for this gen
+		t->srcGen = gen;
+		if (t->srcSlot != slot) {
+			t->srcSend = 0;
+			t->srcSendCur = 0;
+		}
+	}
+	t->srcSlot = slot;
+	if (srcSend >= 0) t->srcSend = srcSend;
+	return true;
+}
+
+void SrcSlotVoices(int ids[kSrcSlots]) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	for (int k = 0; k < kSrcSlots; ++k) ids[k] = 0;
+	for (auto& v : g_voices)
+		if (v->srcSlot >= 0 && v->srcSlot < kSrcSlots && v->alive.load() && !v->dying) ids[v->srcSlot] = v->id;
 }
 
 void RoomTailEq(float eq[3]) {
@@ -669,6 +746,7 @@ void RoomReverbTimes(float rt[3]) {
 void PublishSimulated(int slot, int gen) {
 	if (slot < 0) g_room.simGen = gen;
 	else if (slot < kEchoSlots) g_echo[slot].simGen = gen;
+	else if (slot < kEchoSlots + kSrcSlots) g_src[slot - kEchoSlots].simGen = gen;
 }
 
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
@@ -921,6 +999,7 @@ void StopVoice(int id) {
 			v->dying = true;
 			v->gain = 0;
 			v->send = 0; // the reverb send fades out with the direct sound
+			v->srcSend = 0; // fades out too; a dying voice no longer holds its slot (SrcSlotVoices)
 			if (v->gainCur < 0) v->alive = false; // never rendered yet
 		}
 }

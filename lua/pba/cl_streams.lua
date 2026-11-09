@@ -68,14 +68,36 @@ local function applyVol(ch, r)
 	O.SetVolume(ch, (r.vol or 1) * (r.hG or r.g or 1))
 end
 
+--- Reverb sends of a stream's native voice. Two reverbs:
+--  * source reverb slot (pba_native.SourceReflect): reflections simulated FROM the stream's position:
+--    its room's reverb, also spilling out of the room's openings (heard in the corridor outside). The
+--    simulation has the geometry: its send is the game's level at this distance without the path's
+--    losses, times distance / 1 m (a real source's reverb/direct balance against the game's gentle law).
+--  * the listener's room (listener-centric reverb, N.SendK on the last leg): what reaches the listener's
+--    space through walls, floors and openings makes it resonate (a radio upstairs, heard below). In clear
+--    sight with a slot it is the same room as the slot's: 0, not counted twice.
+-- Returns the listener-room send; the slot's is passed to SourceReflect (refreshed every 0.3 s, the module
+-- frees a slot not refreshed for 1 s).
+local function streamSend(ch, r, L, g, pos)
+	local N = A.Native
+	local now = RealTime()
+	if r.nativeId and pba_native.SourceReflect and (not r.srcNext or now >= r.srcNext) then
+		r.srcNext = now + 0.3
+		local dS = r.pos:Distance(L)
+		local srcSend = (r.vol or 1) * bassGain(ch, dS) * A.cfg.native_gain * math.Clamp(dS / N.REF_UNITS, 1, 100)
+		r.srcSlot = pba_native.SourceReflect(r.nativeId, r.pos, srcSend)
+	end
+	if r.srcSlot and r.srcSlot >= 0 and not r.apparent then return 0 end -- clear sight: the slot is the room
+	return g * N.SendK(pos:Distance(L))
+end
+
 --- Native voice of a stream: position, gain (owner volume x BASS distance law x path), EQ.
 local function nativeParams(ch, r, L)
 	local pos = r.apparent or r.pos
 	local dS = r.pos:Distance(L)
 	local gain = (r.vol or 1) * bassGain(ch, dS) * (r.gRel or 1) * A.cfg.native_gain
 	local el, em, eh = A.Native.VoiceEQ(r.lp or 0, r.len or dS)
-	-- room reverb send: the reverb/direct balance of a real source at this distance (see N.SendK)
-	local send = gain * A.Native.SendK(pos:Distance(L))
+	local send = streamSend(ch, r, L, gain, pos)
 	return pos, gain, el, em, eh, send
 end
 
@@ -232,7 +254,7 @@ local function applyRamp(ch, r, L, now)
 	local g, e1, e2, e3, pos = A.Paths.RampAt(r.ramp, now, L)
 	if r.nativeId then
 		-- the room reverb send too, from what is heard now (else the voice kept the send of its start)
-		local send = g * A.Native.SendK(pos:Distance(L))
+		local send = streamSend(ch, r, L, g, pos)
 		if not pba_native.Update(r.nativeId, pos, g, e1, e2, e3, 100, r.diffuse or 0, send) then r.nativeId = nil end
 		return
 	end
