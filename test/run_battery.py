@@ -178,12 +178,12 @@ def water_ogg():
     finally:
         drop_ogg()
 
-def pure():
+def pure(name="pba_pure_test.lua"):
     # the suite is sent inline, not copied into lua/: parallel game instances share that folder (and its
     # autorefresh), a written file would be seen by every instance
     load("pba_tworooms")
     code = open(os.path.join(TEST, "gluatest", "run_pure.lua"), encoding="utf-8").read()
-    src = open(os.path.join(TEST, "gluatest", "pba_pure_test.lua"), encoding="utf-8").read()
+    src = open(os.path.join(TEST, "gluatest", name), encoding="utf-8").read()
     assert "]=======]" not in src
     return call("lua_exec", {"realm": "client", "code": "local PBA_PURE_SRC = [=======[" + src + "]=======]" + chr(10) + code}).get("values")
 
@@ -197,6 +197,8 @@ def seq(*fns):
 TW = "pba_tworooms"
 steps = [
     ("GLuaTest pure suite", pure),
+    # the native helpers (physical law, sends, directivity, EQ) in the real game state
+    ("GLuaTest pure suite (native helpers)", lambda: seq(lambda: native_on(True), lambda: pure("pba_pure_native_test.lua"))),
     # metrics of the perceptual bench (Python, no game): full battery only
     ("perceptual metrics (pure)", lambda: py("test_perceptual.py")),
     ("menu_fit", lambda: seq(lambda: load(TW), lambda: job("client", "menu_fit.lua"))),
@@ -342,6 +344,15 @@ steps = [
     # other addons' radios keep the distance law their addon chose (a 'same volume everywhere' radio came
     # out 14 dB weaker at 5 m under the physical law): native level = channel law, flat and 250 u ranges
     ("stream_addon_range", lambda: seq(any_map, lambda: native_on(True), lambda: job("client", "stream_addon_range.lua", 60))),
+    # every native Update keeps or refreshes the reverb sends; per-step changes small while walking (rp_downtown)
+    ("native_send_continuity rp_downtown", lambda: py("native_send_continuity.py")),
+    # the module's output along walks (rp_downtown, gm_melancholia): <= 2 dB per 16 u step
+    ("native_output_walk", lambda: py("native_output_walk.py")),
+    # a real map's door and a func_door_rotating swinging: no level jump, same voice kind across the leaf / wall
+    ("door_sweep_real rp_downtown", lambda: seq(lambda: load("rp_downtown_v4c_v2"), lambda: native_on(True),
+        lambda: [job("server", "door_sweep_real.lua", 30), job("client", "door_sweep_real.lua", 400)])),
+    ("door_sweep_real twodoors", lambda: seq(lambda: load("pba_twodoors"), lambda: native_on(True),
+        lambda: [job("server", "door_sweep_real.lua", 30), job("client", "door_sweep_real.lua", 120)])),
     # what a player can hear: level steps > 1 dB (JND) and
     # direction jumps when the source or the listener walks 16 u steps, level(S, L) vs level(L, S).
     # Limits None (report only) until the first in-game baseline; --check fails on too few walks.
@@ -407,7 +418,7 @@ def _check_numeric_equiv(d):
     return (PASS, "") if ok else (FAIL, f"pairs {d.get('pairs')}, chainsDifferent {d.get('chainsDifferent')} (want 0), "
                                         f"maxPointError {err} (want < 1e-3)")
 
-CHECKS = {"GLuaTest pure suite": _check_pure, "menu_fit": _check_menu, "loop_removed": _check_loop_removed,
+CHECKS = {"GLuaTest pure suite": _check_pure, "GLuaTest pure suite (native helpers)": _check_pure, "menu_fit": _check_menu, "loop_removed": _check_loop_removed,
           "paths_numeric_equiv pba_demo": _check_numeric_equiv}
 
 def judge_py(o):
