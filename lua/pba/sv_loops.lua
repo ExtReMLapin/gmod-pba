@@ -13,8 +13,16 @@ util.AddNetworkString(NET)
 
 LP.active = LP.active or {} -- key -> { ent, idx, chan, name, vol, pitch, lvl, flags, dsp, pos, subs = {ply=true} }
 LP.released = LP.released or {} -- loops handed back to the engine while pba is off: taken again when it comes back
+-- loops left to the engine by the pba_loops_max cap (their later changes too), same fields as an
+-- active loop: taken over by the timer once slots free up. An older file stored `true` here.
+LP.capped = LP.capped or {}
+for k, v in pairs(LP.capped) do if not istable(v) then LP.capped[k] = nil end end
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
+
+-- A subscribed player leaves only beyond 110 % of the radius: a player pacing at the edge of a
+-- fire's range would otherwise get STOP / START every 0.5 s, the loop restarting from its top each time.
+local LEAVE_SCALE = 1.1
 
 local function radiusFor(lvl) return math.min(lvl > 50 and 100 * (lvl - 50) or 500, A.cfg.lod_dist) end
 
@@ -37,19 +45,137 @@ local function send(op, l, plys)
 	net.Send(plys)
 end
 
-local function inRange(l, ply)
+local function inRange(l, ply, scale)
 	local pos = IsValid(l.ent) and l.ent:WorldSpaceCenter() or l.pos
-	local r = radiusFor(l.lvl)
+	local r = radiusFor(l.lvl) * (scale or 1)
 	return A.PlayerEar(ply):DistToSqr(pos) <= r * r
 end
 
---- Physics friction / scrape loops (driven by the physics engine's own envelope).
+-- ------------------------------------------------------------------ sound sets
+
+-- name (sound script or wave) -> lowercased files, cached by set key: "surf:<surfaceprop>",
+-- "veh:<class>:<script>", "chg:<class>". false = the source could not be read.
+LP.soundSets = LP.soundSets or {}
+
+--- Adds a sound name to a set: its file, and the waves it resolves to when it is a sound script
+-- ("Metal_Box.ScrapeRough" -> physics/metal/metal_box_scrape_rough_loop1.wav, the name the hook sees).
+local function addSound(set, s)
+	if not isstring(s) or s == "" then return end
+	set[string.lower(A.SoundFile(s))] = true
+	local props = sound.GetProperties(s)
+	local w = props and props.sound
+	if isstring(w) then
+		set[string.lower(A.SoundFile(w))] = true
+	elseif istable(w) then
+		for _, x in ipairs(w) do if isstring(x) then set[string.lower(A.SoundFile(x))] = true end end
+	end
+end
+
+--- True when the sound (its wave, or the script it came from) belongs to the set.
+local function inSet(set, name, orig)
+	if set[string.lower(A.SoundFile(name or ""))] then return true end
+	return isstring(orig) and orig ~= "" and set[string.lower(A.SoundFile(orig))] == true
+end
+
+--- Friction / rolling loops of a surfaceprop (surfaceproperties.txt scrapeRough, scrapeSmooth, rolling).
+local SURF_KEYS = { "scrapeRoughSound", "scrapeSmoothSound", "rollingSound" }
+local function surfaceLoops(mat)
+	local ck = "surf:" .. mat
+	local set = LP.soundSets[ck]
+	if set ~= nil then return set end
+	set = {}
+	local i = util.GetSurfaceIndex(mat)
+	local sd = i and i >= 0 and util.GetSurfaceData(i)
+	if sd then for _, k in ipairs(SURF_KEYS) do addSound(set, sd[k]) end end
+	LP.soundSets[ck] = set
+	return set
+end
+
+-- name fallback, for an entity without a physics object (the sound outlived it, a point entity)
 local PHYS_PATTERNS = { "scrape", "friction", "_roll", "rolling", "_slide" }
-function LP.IsPhysicsLoop(name)
-	local n = string.lower(name or "")
-	if not string.find(n, "physics/", 1, true) then return false end
-	for _, p in ipairs(PHYS_PATTERNS) do if string.find(n, p, 1, true) then return true end end
+
+--- Physics friction / scrape / rolling loop (driven by the physics engine's own envelope): the
+-- engine plays the scrape sound of the scraping object's own surface (PhysFrictionSound), so the
+-- entity's physics materials decide. A wooden crate dragged on concrete plays wood_box_scrape_rough;
+-- a "physics/..._roll" alarm an addon plays on a prop is not one of its surfaces and is followed.
+-- The name list remains only for an entity without physics object.
+function LP.IsPhysicsLoop(name, ent, orig)
+	if IsValid(ent) and ent.GetPhysicsObjectCount then
+		local n = ent:GetPhysicsObjectCount()
+		local known = false
+		-- every bone of a ragdoll: a metal-armoured limb scrapes with its own material
+		for i = 0, n - 1 do
+			local po = ent:GetPhysicsObjectNum(i)
+			local mat = IsValid(po) and po:GetMaterial()
+			if isstring(mat) and mat ~= "" then
+				local set = surfaceLoops(mat)
+				if next(set) then known = true end
+				if inSet(set, name, orig) then return true end
+			end
+		end
+		if known then return false end
+	end
+	local nm = string.lower(name or "")
+	if not string.find(nm, "physics/", 1, true) then return false end
+	for _, p in ipairs(PHYS_PATTERNS) do if string.find(nm, p, 1, true) then return true end end
 	return false
+end
+
+-- Sounds the vehicle's C++ stops when its engine goes off: its script's vehicle_sounds block, plus the
+-- loops hard-coded in the class (CPropAirboat::CreateSounds, the jeep's gauss charge).
+local VEHICLE_EXTRA = {
+	prop_vehicle_airboat = { "Airboat_engine_idle", "Airboat_engine_fullthrottle", "Airboat_fan_idle",
+		"Airboat_fan_fullthrottle", "Airboat_water_stopped", "Airboat_water_fast", "Airboat.FireGunLoop" },
+	prop_vehicle_jeep = { "Jeep.GaussCharge" },
+}
+
+local function vehicleScript(e)
+	for _, k in ipairs({ "m_vehicleScript", "vehiclescript", "VehicleScript" }) do
+		local ok, v = pcall(e.GetInternalVariable, e, k)
+		if ok and isstring(v) and v ~= "" then return v end
+	end
+	local kv = e:GetKeyValues()
+	local v = kv and (kv.vehiclescript or kv.VehicleScript)
+	if isstring(v) and v ~= "" then return v end
+	local vt = e.VehicleTable
+	v = vt and vt.KeyValues and (vt.KeyValues.vehiclescript or vt.KeyValues.VehicleScript)
+	return isstring(v) and v ~= "" and v or nil
+end
+
+--- The vehicle's own sounds, or nil when its script cannot be read.
+function LP.VehicleSounds(e)
+	local class, script = e:GetClass(), vehicleScript(e)
+	local ck = "veh:" .. class .. ":" .. (script or "")
+	local set = LP.soundSets[ck]
+	if set ~= nil then return set or nil end
+	local txt = script and file.Read(script, "GAME")
+	set = {}
+	if txt then
+		-- every quoted token of the vehicle_sounds block (the last block of HL2 scripts): gear, state,
+		-- crash and skid sounds. Non-sound tokens ("max_speed", "0.3") resolve to nothing a loop plays.
+		local s = string.find(string.lower(txt), "\"vehicle_sounds\"", 1, true)
+		if s then for q in string.gmatch(string.sub(txt, s + 16), "\"([^\"]*)\"") do addSound(set, q) end end
+	end
+	for _, n in ipairs(VEHICLE_EXTRA[class] or {}) do addSound(set, n) end
+	if not txt and not VEHICLE_EXTRA[class] then set = false end
+	LP.soundSets[ck] = set
+	return set or nil
+end
+
+-- HL2 chargers and their scripted sounds (CNewWallHealth / CWallHealth / CNewRecharge / CRecharge)
+local WALLHEALTH = { "WallHealth.Deny", "WallHealth.Start", "WallHealth.LoopingContinueCharge", "WallHealth.Recharge" }
+local SUITCHARGE = { "SuitRecharge.Deny", "SuitRecharge.Start", "SuitRecharge.ChargingLoop" }
+local CHARGERS = { item_suitcharger = SUITCHARGE, func_recharge = SUITCHARGE,
+	item_healthcharger = WALLHEALTH, func_healthcharger = WALLHEALTH }
+
+local function chargerSounds(class)
+	local ck = "chg:" .. class
+	local set = LP.soundSets[ck]
+	if set ~= nil then return set end
+	set = {}
+	for _, n in ipairs(CHARGERS[class]) do addSound(set, n) end
+	LP.soundSets[ck] = set
+	return set
 end
 
 --- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
@@ -62,11 +188,15 @@ function LP.IsLong(data)
 end
 
 --- Stops the loops / long sounds `name` of entity idx (any channel: a stop may come on another
--- channel than the start). Returns true when one was running.
+-- channel than the start). Returns true when one was running. Capped loops (vanilla) are forgotten
+-- too: the timer must not take over later a CSoundPatch an addon has stopped meanwhile.
 function LP.Stop(idx, name)
 	local found = false
 	for k, x in pairs(LP.released) do
 		if x.idx == idx and (name == nil or name == "" or x.name == name) then LP.released[k] = nil end
+	end
+	for k, x in pairs(LP.capped) do
+		if x.idx == idx and (name == nil or name == "" or x.name == name) then LP.capped[k] = nil end
 	end
 	for k, x in pairs(LP.active) do
 		if x.idx == idx and (name == nil or name == "" or x.name == name) then
@@ -105,11 +235,16 @@ function LP.IsMoveSound(e, name)
 	return false
 end
 
+--- True when `name` is one of the vehicle's own sounds, the ones its C++ stops with the engine. A car
+-- radio (an addon's CSoundPatch) on a parked jeep is not, and keeps playing. Unreadable script: every
+-- loop counts (an engine idle playing forever is worse than a radio cut).
+function LP.IsVehicleSound(e, name, orig)
+	local set = LP.VehicleSounds(e)
+	if not set then return true end
+	return inSet(set, name, orig)
+end
+
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
-local CHARGERS = { item_suitcharger = true, item_healthcharger = true, func_recharge = true, func_healthcharger = true }
-
-LP.capped = LP.capped or {} -- loops left to the engine by the pba_loops_max cap (their later changes too)
-
 local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
 
 function LP.Handle(data)
@@ -128,24 +263,38 @@ function LP.Handle(data)
 		return false
 	end
 	-- a new sound on a replacing channel (CHAN_VOICE...) cuts what that channel played, a followed long
-	-- line included (the engine replaces it; the mirror must go too)
+	-- line included (the engine replaces it; the mirror must go too, and a capped one is over)
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 and replacing(data.Channel) then
 		for k, x in pairs(LP.active) do
 			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.Stop(idx, x.name) end
 		end
+		for k, x in pairs(LP.capped) do
+			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.capped[k] = nil end
+		end
 	end
-	-- left to the engine by the cap: its changes stay the engine's too (else a mirror doubles it)
-	if LP.capped[key] then
-		if bit.band(flags, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then LP.capped[key] = nil end
+	-- left to the engine by the cap: its changes stay the engine's too (else a mirror doubles it);
+	-- they are kept so a later take-over (timer) starts at the current volume / pitch
+	local c = LP.capped[key]
+	if c then
+		if bit.band(flags, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then
+			LP.capped[key] = nil
+		else
+			c.t = CurTime()
+			if bit.band(flags, SND_CHANGE_VOL) ~= 0 then c.vol = data.Volume or c.vol end
+			if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then c.pitch = data.Pitch or c.pitch end
+		end
 		return false
 	end
-	-- engine-driven physics loops (scraping / rolling friction): their envelope lives in the physics
-	-- engine; leave them to it
-	if not l and LP.IsPhysicsLoop(data.SoundName) then return false end
 	local once, dur = false, 0
-	if not l and not A.IsLooping(data.SoundName) then
-		once, dur = LP.IsLong(data)
-		if not once then return false end
+	if not l then
+		if A.IsLooping(data.SoundName) then
+			-- engine-driven physics loops (scraping / rolling friction): their envelope lives in the
+			-- physics engine; leave them to it
+			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then return false end
+		else
+			once, dur = LP.IsLong(data)
+			if not once then return false end
+		end
 	end
 
 	-- stop events carry no sound level: test them first (SND_STOP_LOOPING ends a loop the same way)
@@ -153,13 +302,11 @@ function LP.Handle(data)
 		return LP.Stop(idx, data.SoundName)
 	end
 	if not l and (data.SoundLevel or 75) <= 0 then return false end -- 2D loops: leave to the engine
-	if not l and table.Count(LP.active) >= (A.cfg.loops_max or 64) then -- cap: left to the engine
-		LP.capped[key] = true
-		return false
-	end
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
-	if not l then
-		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {} }
+	local fresh = l == nil
+	if fresh then
+		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
+			orig = data.OriginalSoundName, posGiven = data.Pos }
 		-- sounds play in real time whatever the time scale (game.SetTimeScale, host_timescale): ends in real time
 		if once then l.once, l.endT = true, RealTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
 		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...) and model doors:
@@ -169,7 +316,10 @@ function LP.Handle(data)
 		l.mover = IsValid(e) and e:GetMoveType() == MOVETYPE_PUSH
 			and (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating")
 			and LP.IsMoveSound(e, data.SoundName) or nil
-		LP.active[key] = l
+		-- HL2 chargers: their charging loop ends in C++ when the use stops; only their own sounds
+		l.charger = IsValid(e) and CHARGERS[e:GetClass()] and inSet(chargerSounds(e:GetClass()), data.SoundName, l.orig) or nil
+		-- vehicles: their engine loops end in C++ when it is switched off; only their own sounds
+		l.vehicle = IsValid(e) and e:IsVehicle() and LP.IsVehicleSound(e, data.SoundName, l.orig) or nil
 	end
 	l.t = CurTime()
 	if not update or bit.band(flags, SND_CHANGE_VOL) ~= 0 then l.vol = data.Volume or 1 end
@@ -180,14 +330,28 @@ function LP.Handle(data)
 		-- flag, which a mirror (CSoundPatch) cannot carry: the speaker preset becomes the mirror's DSP
 		l.speaker = bit.band(flags, SND_SPEAKER or 64) ~= 0 or nil
 		if l.dsp == 0 and l.speaker then
-			local c = GetConVar("dsp_speaker")
-			l.dsp = c and c:GetInt() or 0
+			local cv = GetConVar("dsp_speaker")
+			l.dsp = cv and cv:GetInt() or 0
 		end
 		l.pos = data.Pos or (IsValid(e) and e:WorldSpaceCenter()) or Vector()
+		-- a long line started again (same key): it plays from its top again, so it ends later
+		if l.once and not fresh then
+			l.endT = RealTime() + (A.SoundDuration(data.SoundName) or 0) * 100 / math.max(l.pitch, 1) + 0.5
+		end
 	end
+	if fresh then
+		if table.Count(LP.active) >= (A.cfg.loops_max or 64) then -- cap: left to the engine for now
+			LP.capped[key] = l
+			return false
+		end
+		LP.active[key] = l
+	end
+	-- a volume / pitch change of a long one-shot goes to its listeners only: to anyone else it would
+	-- start the mirror from the top, midway through the speech
+	local joinable = not (l.once and update)
 	local plys = {}
 	for _, p in ipairs(player.GetHumans()) do
-		if l.subs[p] or inRange(l, p) then
+		if l.subs[p] or (joinable and inRange(l, p)) then
 			l.subs[p] = true
 			plys[#plys + 1] = p
 		end
@@ -232,18 +396,23 @@ function LP.MoverStill(e)
 	return e:GetVelocity():LengthSqr() < 1 and e:GetLocalAngularVelocity():IsZero()
 end
 
--- (un)subscribe players moving in / out of range, drop loops of removed entities
+--- True when the entity's C++ ended loop l with a StopSound Lua never sees: a mover at rest, a
+-- charger no longer in use, a vehicle whose engine is off (its own sounds only, see l.charger / l.vehicle).
+local function endedInCpp(l)
+	local e = l.ent
+	if not IsValid(e) then return false end
+	local age = CurTime() - l.t
+	if l.mover then return age > 0.4 and LP.MoverStill(e) end
+	if l.charger and age > 0.5 and e:GetInternalVariable("m_iOn") == 0 then return true end
+	if l.vehicle and age > 1 and e.IsEngineStarted and not e:IsEngineStarted() then return true end
+	return false
+end
+
+-- (un)subscribe players moving in / out of range, drop loops of removed entities, take capped
+-- loops over once slots free up
 timer.Create("pba_loops", 0.5, 0, function()
 	for key, l in pairs(LP.active) do
-		if l.mover and IsValid(l.ent) and CurTime() - l.t > 0.4 and LP.MoverStill(l.ent) then
-			LP.Stop(l.idx, l.name)
-		elseif IsValid(l.ent) and CHARGERS[l.ent:GetClass()] and l.ent:GetInternalVariable("m_iOn") == 0
-			and CurTime() - l.t > 0.5 then
-			-- HL2 chargers: their charging loop ends in C++ when the use stops (m_iOn back to 0)
-			LP.Stop(l.idx, l.name)
-		elseif IsValid(l.ent) and l.ent:IsVehicle() and l.ent.IsEngineStarted and not l.ent:IsEngineStarted()
-			and CurTime() - l.t > 1 then
-			-- a vehicle's engine loops end in C++ when it is switched off (driver out): never seen by Lua
+		if endedInCpp(l) then
 			LP.Stop(l.idx, l.name)
 		elseif l.idx ~= 0 and not IsValid(l.ent) then
 			-- entity removed (a rocket that exploded...): its sounds stopped without any STOP
@@ -255,15 +424,46 @@ timer.Create("pba_loops", 0.5, 0, function()
 		elseif l.once and RealTime() > l.endT then
 			LP.active[key] = nil -- finished: the client mirrors end by themselves
 		else
+			for p in pairs(l.subs) do if not IsValid(p) then l.subs[p] = nil end end
 			local join, leave = {}, {}
 			for _, p in ipairs(player.GetHumans()) do
-				local want = inRange(l, p)
-				-- a long one-shot cannot be joined midway (it would restart from the beginning)
-				if want and not l.subs[p] and not l.once then l.subs[p] = true join[#join + 1] = p
-				elseif not want and l.subs[p] then l.subs[p] = nil leave[#leave + 1] = p end
+				if l.subs[p] then
+					-- a long one-shot is never left: its mirror could not come back midway (OP_START
+					-- carries no offset), and a Breencast heard once must not go silent for good after
+					-- one step past the radius. Far away the client's own distance law fades it.
+					if not l.once and not inRange(l, p, LEAVE_SCALE) then l.subs[p] = nil leave[#leave + 1] = p end
+				elseif not l.once and inRange(l, p) then
+					-- (a long one-shot cannot be joined midway: it would restart from the beginning)
+					l.subs[p] = true
+					join[#join + 1] = p
+				end
 			end
 			send(OP_START, l, join)
 			send(OP_STOP, l, leave)
+		end
+	end
+	-- capped loops: drop the ended ones; take the others over while slots are free (a loop capped
+	-- during a 70-loop battle no longer stays through every wall once the battle is over)
+	local free = (A.cfg.loops_max or 64) - table.Count(LP.active)
+	local adopt = {}
+	for key, c in pairs(LP.capped) do
+		if (c.idx ~= 0 and not IsValid(c.ent)) or (c.once and RealTime() > c.endT) or endedInCpp(c) then
+			LP.capped[key] = nil
+		elseif free > #adopt and not c.once and c.idx ~= 0 then
+			-- a long one-shot stays vanilla to its end: a take-over would restart it from the top
+			adopt[#adopt + 1] = key
+		end
+	end
+	if #adopt == 0 or (A.cfg.loops or 0) < 0.5 or not A.hooksInstalled then return end
+	for _, key in ipairs(adopt) do
+		local c = LP.capped[key]
+		if c and IsValid(c.ent) then
+			LP.capped[key] = nil
+			-- the engine's copy stops, the mirror starts (from the loop's top, as AdoptAmbients does)
+			A.orig.EntStopSound(c.ent, c.name)
+			LP.Handle({ Entity = c.ent, SoundName = c.name, OriginalSoundName = c.orig, Channel = c.chan,
+				Volume = c.vol, Pitch = c.pitch, SoundLevel = c.lvl, DSP = c.dsp, Pos = c.posGiven,
+				Flags = c.speaker and (SND_SPEAKER or 64) or 0 })
 		end
 	end
 end)
@@ -324,4 +524,7 @@ function LP.Release()
 		end
 		LP.active[key] = nil
 	end
+	-- capped loops are the engine's already; with the hook gone their stops are no longer seen, so
+	-- a later take-over could restart a loop that ended meanwhile: forgotten
+	LP.capped = {}
 end

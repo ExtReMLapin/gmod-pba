@@ -31,9 +31,16 @@ end
 -- the previous one. When pba takes a sound over (the original is suppressed), the engine never
 -- sees it, so a sound it still plays on that channel would go on forever. Addons rely on it:
 -- Exquisite Radio "stops" its 5-minute song by emitting a short sound on the same CHAN_ITEM.
--- The orphan then follows whatever entity reuses the index. We remember the name the engine
--- plays per entity + channel and stop it ourselves when the replacement is taken over.
-A.vanillaOn = A.vanillaOn or {} -- entindex -> { [chan] = sound name played by the engine }
+-- The orphan then follows whatever entity reuses the index. We remember the names the engine
+-- plays per entity + channel and stop them ourselves when the replacement is taken over.
+-- pba's own re-emissions count: an NPC's line 1, heard clear, is re-emitted by the engine to you;
+-- you walk behind a wall and line 2 is relayed: line 1's engine copy must stop, or both play at once.
+-- Several names per channel: one sound re-emitted clear to some players and muffled ("#" removed)
+-- to others is two engine sounds.
+A.vanillaOn = A.vanillaOn or {} -- entindex -> { [chan] = { [sound name played by the engine] = true } }
+for idx, per in pairs(A.vanillaOn) do -- an older file stored one name per channel
+	for chan, v in pairs(per) do if isstring(v) then per[chan] = { [v] = true } end end
+end
 local NOT_NEW = SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH
 
 local function stopEngineSound(e, name)
@@ -46,25 +53,59 @@ local function stopEngineSound(e, name)
 	end
 end
 
+--- Entity index and channel of a new sound the channel rule applies to (nil otherwise).
+local function ruleSlot(data)
+	local chan, e = data.Channel, data.Entity
+	if not chan or chan == CHAN_AUTO or chan == CHAN_STATIC or chan <= 0 then return nil end
+	if not IsValid(e) or e:IsWorld() or bit.band(data.Flags or 0, NOT_NEW) ~= 0 then return nil end
+	local idx = e:EntIndex()
+	if idx <= 0 then return nil end
+	return idx, chan
+end
+
 --- Wraps an EntityEmitSound handler with the channel rule above.
 function A.WithChannelRule(fn)
 	return function(data)
-		local ret = fn(data)
-		if A.reemitting then return ret end
-		local chan, e = data.Channel, data.Entity
-		if not chan or chan == CHAN_AUTO or chan == CHAN_STATIC or chan <= 0 then return ret end
-		if not IsValid(e) or e:IsWorld() or bit.band(data.Flags or 0, NOT_NEW) ~= 0 then return ret end
-		local idx = e:EntIndex()
-		if idx <= 0 then return ret end
+		local idx, chan = ruleSlot(data)
+		if not idx then return fn(data) end
+		if A.reemitting then
+			-- pba's own emission (the original re-emitted to clear or muffled listeners): the engine
+			-- plays it, on this channel, for those players
+			local ret = fn(data)
+			if ret ~= false then
+				local per = A.vanillaOn[idx]
+				if not per then per = {} A.vanillaOn[idx] = per end
+				local names = per[chan]
+				if not names then names = {} per[chan] = names end
+				names[data.SoundName] = true
+			end
+			return ret
+		end
+		-- what the engine played before this sound; the handler's re-emissions record themselves anew
 		local per = A.vanillaOn[idx]
+		local prev = per and per[chan]
+		if per then per[chan] = nil end
+		local ret = fn(data)
 		if ret == false then
-			local prev = per and per[chan]
-			-- same name: left alone (stopping it would also cut what pba just re-emitted by name)
-			if prev and prev ~= data.SoundName then pcall(stopEngineSound, e, prev) end
-			if per then per[chan] = nil end
+			if prev then
+				per = A.vanillaOn[idx]
+				for name in pairs(prev) do
+					if name ~= data.SoundName then
+						pcall(stopEngineSound, data.Entity, name)
+					else
+						-- same name: left alone (stopping it would also cut what pba just re-emitted by
+						-- name) and still playing for whoever got it
+						if not per then per = {} A.vanillaOn[idx] = per end
+						if not per[chan] then per[chan] = {} end
+						per[chan][name] = true
+					end
+				end
+			end
 		else
+			-- the engine plays the original: it replaces whatever played on that channel
+			per = A.vanillaOn[idx]
 			if not per then per = {} A.vanillaOn[idx] = per end
-			per[chan] = data.SoundName
+			per[chan] = { [data.SoundName] = true }
 		end
 		return ret
 	end
@@ -87,6 +128,8 @@ function A.InstallHooks(on)
 	if SERVER and not on and A.Loops and A.Loops.Release then A.Loops.Release() end
 	-- ambiences started at map load, before the hooks: taken over now (next tick, entities ready)
 	if SERVER and on and A.Loops and A.Loops.AdoptAmbients then timer.Simple(0, A.Loops.AdoptAmbients) end
+	-- pba switched on: overlapping addons off; switched off: they get their value back (sh_compat)
+	if A.Compat and A.Compat.Check then A.Compat.Check() end
 end
 
 function A.Refresh()
@@ -99,6 +142,8 @@ function A.OnConfigChanged(name)
 	if name == "loops" and SERVER and A.Loops and A.hooksInstalled then
 		if (A.cfg.loops or 0) < 0.5 then A.Loops.Release() else timer.Simple(0, A.Loops.AdoptAmbients) end
 	end
+	-- pba_compat_auto switched: Sound Muffling Effect is turned off, or given back its value
+	if name == "compat_auto" and A.Compat and A.Compat.Check then A.Compat.Check() end
 	if name == "update_interval" and CLIENT then
 		for _, t in ipairs({ "pba_streams" }) do
 			if timer.Exists(t) then timer.Adjust(t, A.cfg.update_interval) end
@@ -206,7 +251,6 @@ function A.Eligible(data)
 	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
-	if data.Channel == CHAN_STATIC and A.IsLooping(data.SoundName) then return false end
 	if A.IsLooping(data.SoundName) then return false end
 	local dur = A.SoundDuration(data.SoundName) or 0
 	-- (a sentence is relayed whatever its length: it cannot be followed as a long sound anyway)
