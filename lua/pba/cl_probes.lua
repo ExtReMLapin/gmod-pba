@@ -2033,6 +2033,13 @@ end
 function PR.FieldRoutes(S, L, k, cfg)
 	cfg = cfg or A.cfg
 	local g = PR.current
+	-- the graph is the one topology here: started if pba was off when the map loaded (pba_demo holds it
+	-- aside in its desk's mode A, and InitPostEntity then started nothing: no route at all in mode C)
+	if not g and not PR.building and PR.Start and (PR.startTried or 0) + 5 < SysTime() then
+		PR.startTried = SysTime()
+		PR.Start()
+		g = PR.current
+	end
 	if not g then return {} end
 	doorLeaves()
 	-- The nearest usable field: the upkeep's (around the player, PR.field) or the one built for a listener
@@ -2079,6 +2086,16 @@ function PR.FieldRoutes(S, L, k, cfg)
 					straight = straight or #pulled == 2
 					local p = A.Paths.EvalRoute(pulled, cfg)
 					p.probe = true
+					-- the straight route is heard where the transmission voice would be: at the leaf it crosses
+					-- (its point on the line nearest the leaf's centre), not at the source
+					if #pulled == 2 and p.leaves then
+						local ent = next(p.leaves)
+						if IsValid(ent) then
+							local ab = L - S
+							local tt = math.Clamp((ent:WorldSpaceCenter() - S):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1)
+							p.pos = S + ab * tt
+						end
+					end
 					out[#out + 1] = p
 				end
 			end

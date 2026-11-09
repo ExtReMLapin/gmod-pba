@@ -422,7 +422,7 @@ function P.EvalPolyline(pts, cfg, doorPts)
 		local j = i
 		while ent and j < nd and segEnt[j + 1] == ent do j = j + 1 end
 		local dl, dlp, dt = segLoss[i][1], segLoss[i][2], segLoss[i][3]
-		if ent and j > i then dl, dlp = P.DoorSpanLoss(ent, dp[i], dp[j + 1], cfg) dt = nil end
+		if ent and j > i then dl, dlp, dt = P.DoorSpanLoss(ent, dp[i], dp[j + 1], cfg) end
 		if ent then leaves = leaves or {} leaves[ent] = true end
 		if dl > 0 and not (ent and paid and paid[ent]) then
 			if ent then paid = paid or {} paid[ent] = true end
@@ -856,7 +856,7 @@ function P.DoorSpanLoss(ent, a, b, cfg, hitPos, startSolid)
 	doorWalls[1] = w
 	local loss, lp = P.EvalWalls(doorWalls, cfg)
 	P.lastDoorWall = w -- diagnostics (w.lossDb, w.diffDb, w.detour)
-	return loss, lp
+	return loss, lp, w.tiltDb
 end
 function P.SegmentDoorLoss(a, b, cfg)
 	cfg = cfg or A.cfg
@@ -865,8 +865,8 @@ function P.SegmentDoorLoss(a, b, cfg)
 	local tr = doorOut
 	if not tr.Hit or not IsValid(tr.Entity) then return 0 end
 	local ent = tr.Entity
-	local loss, lp = P.DoorSpanLoss(ent, a, b, cfg, tr.HitPos, tr.StartSolid)
-	return loss, lp, nil, ent
+	local loss, lp, tilt = P.DoorSpanLoss(ent, a, b, cfg, tr.HitPos, tr.StartSolid)
+	return loss, lp, tilt, ent
 end
 
 --- Smallest path difference (units) for going around a finite box obstacle (mins/maxs, in
@@ -1253,6 +1253,7 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 		local midDb = db * cfg.trans_scale
 		local c = (w.ent and not w.water) and closureWeight(w.ent) or 1
 		local dd
+		w.tiltDb = AC.LevelDb(l, cfg) -- its spectral tilt (dB), continuous where the lowpass level is not
 		if c < 1 then
 			-- props: hollow models (sheet metal, panels...) follow the mass law on the
 			-- surfaceprop's own thickness when it declares one. A closed hollow volume (vending
@@ -1287,11 +1288,19 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 			end
 			-- mostly diffracted round the object: muffled like the diffraction, not like the material
 			local pl = (dd and dd < transDb) and math.min(l, AC.LowpassLevel(dd, cfg)) or l
+			-- the object's tilt: what passes through it (its material's muffling) and what goes round it (the
+			-- diffraction's, about its loss) mixed by energy, as a doorway's gap and leaf (P.DoorTilt). Its
+			-- lowpass LEVEL is whole: a route past an open leaf went from level 1 (4 dB of tilt) to 0 in one
+			-- 2 u step while its loss moved 0.4 dB (pba_twodoors, paths_model 1).
+			local tObj = AC.LevelDb(l, cfg)
+			if dd then tObj = AC.MixTilt(10 ^ (-transDb / 10), tObj, 10 ^ (-dd / 10), dd) end
 			if not noCap and pThrough > cap then
 				-- the reflected sound dominates: capped loss, muffled like that level of loss
 				pThrough, pMid = cap, math.min(pMid, cap + cfg.trans_lf_bonus)
 				pl = math.min(pl, AC.LowpassLevel(cap, cfg))
+				tObj = math.min(tObj, cap)
 			end
+			w.tiltDb = c * w.tiltDb + (1 - c) * tObj
 			if c <= 0 then
 				through, midDb, l = pThrough, pMid, pl
 			else

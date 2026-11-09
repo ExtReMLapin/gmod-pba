@@ -278,8 +278,9 @@ CFG.door_closed_db, CFG.trans_scale, CFG.trans_max = 28, 1, 70
 CFG.portal_diffuse_db, CFG.portal_diffuse_lp = 60, 4 -- edge diffraction only (the diffuse leak has its own case)
 CFG.lp1_db, CFG.lp2_db, CFG.lp3_db, CFG.lp4_db = 2, 6, 11, 16
 CFG.dsp_lp1, CFG.dsp_lp2, CFG.dsp_lp3, CFG.dsp_lp4 = 30, 30, 31, 31
+CFG.paths_model = 0 -- the tested default, whatever the server's setting (see the end of the suite)
 
-return {
+local SUITE = {
 	groupName = "pba pure functions",
 	cases = {
 		{ name = "EngineGain: 1 near the source, decreasing, level 0 = no attenuation", func = function()
@@ -2811,3 +2812,17 @@ return {
 		end },
 	},
 }
+-- Every case runs with paths_model 0 (the tested default) whatever the server's setting: the cases of the
+-- field model set 1 themselves (their cfg or withProbeRooms' overrides). Run in a game with
+-- pba_paths_model 1, nine former-model cases read the global setting and failed.
+for _, c in ipairs(SUITE.cases) do
+	local f = c.func
+	c.func = function()
+		local saved = A.cfg.paths_model
+		A.cfg.paths_model = 0
+		local ok, err = pcall(f)
+		A.cfg.paths_model = saved
+		if not ok then error(err, 0) end
+	end
+end
+return SUITE
