@@ -949,6 +949,7 @@ local GAP_FAR = 128 -- units: a passage wider than this on one side is open on t
 local WAY_TRIES = 6 -- ways round costed in full, the best by their lower bound
 local WAY_HALVINGS = 16 -- bisection along an edge for its best point
 local GAP_MAX_DB = 60
+local GAP_PLAY = 1.5 -- units: the frame's play round a leaf (gapLoss)
 P.LEAF_REACH = LEAF_REACH
 
 local function polyLen(V, i, j)
@@ -999,8 +1000,8 @@ end
 -- vertices: a corner the route bends round farther on is the way's second bend, paid in its length (double
 -- diffraction), not the other side of a slit (a leaf's free edge and a wall corner just past it across the way
 -- made a shut slit, 60 dB), and legs to a vertex next to a bend were pinched by that bend's own corner.
-local GAP_DEPTH, GAP_HALVINGS = 16, 6
-local GAP_DEPTHS = { 2, 4, 6, 8, 10, 12, 14, 15 } -- sample depths (units, < GAP_DEPTH)
+local GAP_DEPTH, GAP_HALVINGS, GAP_JUMP, GAP_REFINE = 16, 5, 1, 6
+local GAP_DEPTHS = { 3, 6, 9, 12, 15 } -- sample depths (units, < GAP_DEPTH), each side
 local function depthPen(t) return 0.5 * t / (1 - t / GAP_DEPTH) end
 local gapOut = {}
 local gapTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = gapOut }
@@ -1012,30 +1013,43 @@ local function crossDist(p, dir)
 	return gapOut.Fraction * GAP_FAR
 end
 local function gapAlong(r, dir, ray)
-	local d0 = crossDist(r, dir) or GAP_FAR
-	local best = d0
-	for side = -1, 1, 2 do
-		local prevT, prevD = 0, d0
-		for _, t in ipairs(GAP_DEPTHS) do
-			if depthPen(t) >= best then break end
-			local d = crossDist(r + ray * (t * side), dir) or GAP_FAR
-			local tb = t
-			if d < prevD - 1 then
-				-- a nearer wall starts between prevT and t: where (the reach is continuous as it moves)
-				local cut = (prevD + d) * 0.5
-				local lo, hi = prevT, t
-				for _ = 1, GAP_HALVINGS do
-					local m = (lo + hi) * 0.5
-					local dm = crossDist(r + ray * (m * side), dir) or GAP_FAR
-					if dm < cut then hi, d = m, dm else lo = m end
-				end
-				tb = hi
+	local function f(t) return (crossDist(r + ray * t, dir) or GAP_FAR) + depthPen(math.abs(t)) end
+	local ts, fs = {}, {}
+	for i = #GAP_DEPTHS, 1, -1 do ts[#ts + 1] = -GAP_DEPTHS[i] end
+	ts[#ts + 1] = 0
+	for i = 1, #GAP_DEPTHS do ts[#ts + 1] = GAP_DEPTHS[i] end
+	local best, bi = math.huge, 1
+	for i, t in ipairs(ts) do
+		fs[i] = f(t)
+		if fs[i] < best then best, bi = fs[i], i end
+	end
+	-- a surface starting between two samples (a jamb's edge): where, from the nearer one's side, so the reach
+	-- moves continuously as that edge passes a sample
+	for i = 1, #ts - 1 do
+		local da, db = fs[i] - depthPen(math.abs(ts[i])), fs[i + 1] - depthPen(math.abs(ts[i + 1]))
+		if math.abs(da - db) > GAP_JUMP then
+			local cut = (da + db) * 0.5
+			local lo, hi = ts[i], ts[i + 1] -- lo on da's side
+			for _ = 1, GAP_HALVINGS do
+				local m = (lo + hi) * 0.5
+				local dm = crossDist(r + ray * m, dir) or GAP_FAR
+				if (dm < cut) == (da < cut) then lo = m else hi = m end
 			end
-			best = math.min(best, d + depthPen(tb))
-			prevT, prevD = t, d
+			local v = f(da < db and lo or hi)
+			if v < best then best = v end
 		end
 	end
-	return best
+	-- the least over the depths between the best sample's neighbours (golden section): sampled only, the reach
+	-- went down in steps as the leaf's edge moved past each sample along a jamb's face
+	local lo, hi = ts[math.max(bi - 1, 1)], ts[math.min(bi + 1, #ts)]
+	local g = 0.381966
+	local x1, x2 = lo + (hi - lo) * g, hi - (hi - lo) * g
+	local f1, f2 = f(x1), f(x2)
+	for _ = 1, GAP_REFINE do
+		if f1 <= f2 then hi, x2, f2 = x2, x1, f1 x1 = lo + (hi - lo) * g f1 = f(x1)
+		else lo, x1, f1 = x1, x2, f2 x2 = hi - (hi - lo) * g f2 = f(x2) end
+	end
+	return math.min(best, f1, f2)
 end
 -- the leaf's box corners in world space
 local function boxCorners(ent)
@@ -1062,6 +1076,12 @@ local function gapLoss(ent, r, m, h, ray, d1, d2, cfg)
 	local top = math.min(far, W)
 	if top <= h then return 0 end -- the leaf is outside the passage (behind a jamb, flat against a wall)
 	local g = gapAlong(r, -m, ray)
+	-- the frame's play (a door model is a unit or so narrower than its opening, the same gaps round the shut
+	-- leaf): sealed, as the shut leaf is, so the leaf going from shut to ajar does not open those cracks at once
+	-- (2.2 dB in its first half degree). Taken off the world's side first, then off the leaf's.
+	local play = math.min(GAP_PLAY, g + h)
+	g, h = math.max(g - play, 0), h - math.max(play - g, 0)
+	if g + h <= 0 then return GAP_MAX_DB end
 	d1, d2 = math.max(d1, 1), math.max(d2, 1)
 	local slit = AC.GapRatio(-g, h, top, d1, d2, cfg.diff_freq)
 	local edge = AC.GapRatio(-GAP_OPEN, h, top, d1, d2, cfg.diff_freq)
