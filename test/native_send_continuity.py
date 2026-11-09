@@ -88,7 +88,7 @@ local prev = p:EyePos()
 p:SetPos(feet) p:SetVelocity(-p:GetVelocity())
 local eye = feet + p:GetViewOffset()
 local solid = bit.band(util.PointContents(eye), CONTENTS_SOLID) ~= 0
-local cross = %s and util.TraceLine({ start = prev, endpos = eye, mask = MASK_SOLID_BRUSHONLY }).Hit or false
+local cross = %s and util.TraceLine({ start = prev, endpos = eye, mask = MASK_SOLID, filter = p }).Hit or false
 p:SendLua("if PBA_NSC then PBA_NSC.step = %d PBA_NSC.stepT = RealTime() end")
 return { solid = solid, cross = cross }"""
 

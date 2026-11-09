@@ -23,7 +23,7 @@ A.Probes = PR
 
 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways; 9: probes kept off
 -- floors; 10: probes follow the floors (one per storey and column, explicit positions), map seeds only
-local CACHE_VERSION = 10
+local CACHE_VERSION = 11
 local MAX_PROBES = 30000
 -- a build that reaches MAX_PROBES is redone at a wider spacing, up to this one, instead of keeping the
 -- part of the map flood-filled first (the far side of a big map had no probe at all)
@@ -476,22 +476,48 @@ end
 -- q links them if it keeps the probes' clearance (moved clear like a probe) and both half-segments
 -- are clear. Returns q or nil.
 local function gapPoint(a, b, s)
-	local mid = (a + b) * 0.5
 	local axis = b - a
 	axis:Normalize()
 	local u = abs(axis.z) > 0.5 and Vector(1, 0, 0) or Vector(0, 0, 1)
 	local v = axis:Cross(u)
 	v:Normalize()
-	for _, o in ipairs(gapGrid(s)) do
-		local q = mid + u * o[1] + v * o[2]
-		if bit.band(util.PointContents(q), CONTENTS_SOLID) == 0 and clearSeg(a, q) and clearSeg(q, b) then
-			local c = clearance(q)
-			if c and (c:DistToSqr(q) < 1e-6 or (clearSeg(a, c) and clearSeg(c, b))) then return c end
+	-- the face between the probes, then the middle of the wall that blocks the link (its near and far
+	-- faces): a probe moved off its column centre (the centre inside a wall on a grid-aligned map) puts
+	-- the wall far from the middle, and an opening in it out of the line from the middle to that probe
+	local centres = { (a + b) * 0.5 }
+	local h1 = buildLine(a, b)
+	local p1 = h1.Hit and not h1.StartSolid and h1.HitPos * 1
+	if p1 then
+		local h2 = buildLine(b, a)
+		if h2.Hit and not h2.StartSolid then centres[2] = (p1 + h2.HitPos) * 0.5 end
+	end
+	for _, mid in ipairs(centres) do
+		for _, o in ipairs(gapGrid(s)) do
+			local q = mid + u * o[1] + v * o[2]
+			if bit.band(util.PointContents(q), CONTENTS_SOLID) == 0 and clearSeg(a, q) and clearSeg(q, b) then
+				local c = clearance(q)
+				if c and (c:DistToSqr(q) < 1e-6 or (clearSeg(a, c) and clearSeg(c, b))) then return c end
+			end
 		end
 	end
 	return nil
 end
 PR.GapPoint = gapPoint
+
+--- A floor's edge over a lower floor in the neighbouring column (a roof over the street, a ledge over a
+-- yard, a cliff): no straight link (the edge is in the way) and no gap (the probes are a storey or more
+-- apart), but the sound leaves the upper probe level and falls through the lower column's air. The bend
+-- point stands above the lower probe at the upper probe's height (moved clear like a probe). nil if not.
+local function dropPoint(a, b)
+	local hi, lo = a, b
+	if hi.z < lo.z then hi, lo = b, a end
+	local q = Vector(lo.x, lo.y, hi.z)
+	if bit.band(util.PointContents(q), CONTENTS_SOLID) ~= 0 then return nil end
+	local c = clearance(q)
+	if c and clearSeg(hi, c) and clearSeg(c, lo) then return c end
+	return nil
+end
+PR.DropPoint = dropPoint
 
 local DIRS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
 --- Coroutine body: flood fill over the floor-following probes from the seeds. `bounds` = { mins, maxs }
@@ -535,7 +561,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 	-- a pair already found blocked (no link, no gap) is not searched again from the other side
 	local failed = {}
 	local function pairKey(i, j, k) return colKey(i, j) * 64 + k end
-	local function tryLink(n, i, j, k, q, gap)
+	local function tryLink(n, i, j, k, q, gap, drop)
 		local _, ids = column(i, j)
 		local id = ids[k]
 		if id and n.nb[id] then return end
@@ -543,7 +569,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		if pa > pb then pa, pb = pb, pa end
 		local fk = failed[pa]
 		if fk and fk[pb] then return end
-		local via = clearSeg(n.pos, q) and true or (gap and gapPoint(n.pos, q, s))
+		local via = clearSeg(n.pos, q) and true or (gap and gapPoint(n.pos, q, s)) or (drop and dropPoint(n.pos, q))
 		if via then
 			local m = node(i, j, k)
 			if m then n.nb[m.id], m.nb[n.id] = via, via end
@@ -585,7 +611,9 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 			local i, j = n.i + d[1], n.j + d[2]
 			for k, q in ipairs((column(i, j))) do
 				local dz = abs(q.z - n.pos.z)
-				if dz <= LINK_DZ * s then tryLink(n, i, j, k, q, dz < s) end
+				-- beyond LINK_DZ spacings only a drop (a tower's roof over the street)
+				if dz <= LINK_DZ * s then tryLink(n, i, j, k, q, dz < s, dz >= s)
+				else tryLink(n, i, j, k, q, false, true) end
 			end
 		end
 		if budgetFn then budgetFn(#nodes, qh) end

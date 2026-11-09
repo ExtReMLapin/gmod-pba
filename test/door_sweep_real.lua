@@ -73,6 +73,8 @@ if SERVER then
 	job:wait(function() return (D.Fraction(door) or 0) <= 0.005 end, 15)
 	door:SetKeyValue("speed", tostring(SPEED))
 	pcall(door.SetSaveValue, door, "m_flSpeed", SPEED)
+	-- the client needs the door entity (its state, its box): out of the player's PVS it is not transmitted
+	hook.Add("SetupPlayerVisibility", "pba_test_dsr", function() if IsValid(door) then AddOriginToPVS(door:WorldSpaceCenter()) end end)
 	SetGlobalInt("pba_dsr_door", door:EntIndex())
 	concommand.Add("pba_test_dsr_open", function() if IsValid(door) then door:Fire("Open") end end)
 	concommand.Add("pba_test_dsr_done", function()
@@ -81,11 +83,12 @@ if SERVER then
 			pcall(door.SetSaveValue, door, "m_flSpeed", speed0)
 			door:Fire(frac0 > 0.5 and "Open" or "Close")
 		end
+		hook.Remove("SetupPlayerVisibility", "pba_test_dsr")
 		concommand.Remove("pba_test_dsr_open")
 		concommand.Remove("pba_test_dsr_done")
 		SetGlobalInt("pba_dsr_door", 0)
 	end)
-	return { ready = true, door = door:GetClass(), idx = door:EntIndex(), closed = (D.Fraction(door) or 0) <= 0.005,
+	return { pass = true, ready = true, door = door:GetClass(), idx = door:EntIndex(), closed = (D.Fraction(door) or 0) <= 0.005,
 		frac0 = frac0, speed0 = speed0 }
 end
 
