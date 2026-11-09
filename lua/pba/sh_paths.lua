@@ -18,6 +18,48 @@ local function ramp(x, x0, x1)
 	return t * t * (3 - 2 * t)
 end
 
+-- ------------------------------------------------------------------ world-only answers kept
+-- Answers kept from world-only traces (segment tests, corners, route homotopy): the world brushes do not
+-- change during a map, so they are kept across evaluations, and dropped together by P.worldGen
+-- (P.ForgetWorld: a test that moves its stubbed world) or when util.TraceLine / TraceHull is another function
+-- (a stub swapped in). Not by P.InvalidateCache: door states, settings and the probe graph do not move the
+-- world brushes.
+P.worldGen = P.worldGen or 0
+function P.ForgetWorld() P.worldGen = P.worldGen + 1 end
+
+-- exact equality of two coordinates, the sign of a zero included (a trace from -0 is not assumed the same)
+local function same(p, q) return p == q and (p ~= 0 or 1 / p == 1 / q) end
+
+--- fn(a, b) -> boolean (a world-only segment test) kept by the exact coordinates of a and b: the candidate
+-- routes of one evaluation repeat most of their tightening and corner traces (two thirds of them, pure
+-- scene of the offline bench), and a still source repeats them all. `limit` answers at most, then emptied;
+-- `tag` (optional, per call): what else the answer depends on (the probes' trace backend), the memo emptied
+-- when it changes. Hash of the six numbers, buckets checked exactly; a NaN coordinate is not kept.
+function P.WorldSegMemo(fn, limit)
+	local t, n, gen, TL, TH, tg = {}, 0, nil, nil, nil, nil
+	return function(a, b, tag)
+		local ul, uh = util.TraceLine, util.TraceHull
+		if gen ~= P.worldGen or TL ~= ul or TH ~= uh or tg ~= tag or n >= limit then
+			t, n, gen, TL, TH, tg = {}, 0, P.worldGen, ul, uh, tag
+		end
+		local ax, ay, az = a:Unpack()
+		local bx, by, bz = b:Unpack()
+		local h = ax + ay * 1.7 + az * 2.9 + bx * 4.3 + by * 6.1 + bz * 8.7
+		if h ~= h then return fn(a, b) end
+		local e = t[h]
+		while e do
+			if same(e[1], ax) and same(e[2], ay) and same(e[3], az) and same(e[4], bx) and same(e[5], by) and same(e[6], bz) then
+				return e[7]
+			end
+			e = e[8]
+		end
+		local r = fn(a, b)
+		t[h] = { ax, ay, az, bx, by, bz, r, t[h] }
+		n = n + 1
+		return r
+	end
+end
+
 -- ------------------------------------------------------------------ geometry
 
 local function planeHit(a, b, c, n)
@@ -704,11 +746,14 @@ local function onlyBackEnt(e) return e == backEnt end
 local backTr = { mask = MASK_SOLID, filter = onlyBackEnt, output = backOut }
 local function noEnt() return false end
 local detTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = detOut }
-local function detClear(a, b)
+local function detTrace(a, b)
 	detTr.start, detTr.endpos = a, b
 	util.TraceLine(detTr)
 	return not detOut.Hit
 end
+-- world brushes only (filter noEnt): kept (P.WorldSegMemo). The corners, the way over an edge and the ways
+-- round objects (their points in the world, from the object's pose) trace the same segments again
+local detClear = P.WorldSegMemo(detTrace, 16384)
 
 -- Detour (path difference, units) round an object's ORIENTED box, in its local frame (a tilted slab
 -- keeps the size of a slab; its world AABB would be huge and could even contain S), for a line S -> L
@@ -1193,13 +1238,74 @@ function P.CornerPoint(a, v, b)
 	end
 	return q
 end
+-- P.CornerPoint kept by the exact coordinates of a, v and b (world-only thin traces, ~60 per call): the
+-- candidate routes of one evaluation (k + 2 starts, two fields) share most of their corners. The point is
+-- kept as a copy (the answer may be v itself, a caller's Vector); a NaN coordinate is not kept.
+local CORNER_KEEP = 4096
+local cornerKept
+local cornerT, cornerN, cornerGen, cornerTL = {}, 0, nil, nil
+function cornerKept(a, v, b)
+	local TL = util.TraceLine
+	if cornerGen ~= P.worldGen or cornerTL ~= TL or cornerN >= CORNER_KEEP then
+		cornerT, cornerN, cornerGen, cornerTL = {}, 0, P.worldGen, TL
+	end
+	local ax, ay, az = a:Unpack()
+	local vx, vy, vz = v:Unpack()
+	local bx, by, bz = b:Unpack()
+	local h = ax + ay * 1.7 + az * 2.9 + vx * 4.3 + vy * 6.1 + vz * 8.7 + bx * 10.3 + by * 12.7 + bz * 14.9
+	if h ~= h then return P.CornerPoint(a, v, b) end
+	local e = cornerT[h]
+	while e do
+		if same(e[1], ax) and same(e[2], ay) and same(e[3], az) and same(e[4], vx) and same(e[5], vy) and same(e[6], vz)
+			and same(e[7], bx) and same(e[8], by) and same(e[9], bz) then
+			return e[10]
+		end
+		e = e[11]
+	end
+	local q = P.CornerPoint(a, v, b)
+	cornerT[h] = { ax, ay, az, vx, vy, vz, bx, by, bz, Vector(q), cornerT[h] }
+	cornerN = cornerN + 1
+	return q
+end
+-- Kept per route table: the refinement sees the world brushes only (static), so the same vertices give the
+-- same refined polyline. A still source and listener get the very same route table at every evaluation
+-- (cl_probes attach keeps it), whose corners cost ~650 thin traces per evaluation to refine again. The
+-- vertices' coordinates are checked (a caller may move a Vector in place), and the trace function (a test
+-- stub swapped in).
+local refineMemo = setmetatable({}, { __mode = "k" })
+local refineCorners
 --- The polyline pts (S, v1 .. vn, L) with every inner vertex moved onto its edge (a new list; pts is not
 -- modified). Each vertex is refined between its neighbours as they stand in pts (not the refined ones:
 -- two vertices on the two jambs of one doorway would otherwise chase each other).
 function P.RefineCorners(pts, cfg)
 	cfg = cfg or A.cfg
+	if (cfg.corner_refine or 1) < 0.5 then return refineCorners(pts, false) end
+	local n, TL = #pts, util.TraceLine
+	local m = refineMemo[pts]
+	if m and m.n == n and m.TL == TL and m.gen == P.worldGen then
+		local c, k = m.c, 0
+		for i = 1, n do
+			local x, y, z = pts[i]:Unpack()
+			if not (same(c[k + 1], x) and same(c[k + 2], y) and same(c[k + 3], z)) then k = -1 break end
+			k = k + 3
+		end
+		if k >= 0 then
+			local out = {}
+			for i = 1, #m.out do out[i] = m.out[i] end
+			return out
+		end
+	end
+	local c = {}
+	for i = 1, n do c[3 * i - 2], c[3 * i - 1], c[3 * i] = pts[i]:Unpack() end
+	local out = refineCorners(pts, true)
+	local keep = {}
+	for i = 1, #out do keep[i] = out[i] end
+	refineMemo[pts] = { n = n, TL = TL, gen = P.worldGen, c = c, out = keep }
+	return out
+end
+function refineCorners(pts, on)
 	local out = { pts[1] }
-	if (cfg.corner_refine or 1) >= 0.5 then
+	if on then
 		-- first the vertices that are no corner at all: kept by the tightening because its hull grazes a
 		-- wall where the thin line between their neighbours is clear. Left in, such a vertex bent the route
 		-- (a corner of 4 dB between two that see each other) whenever the copy of the route kept came from
@@ -1214,7 +1320,7 @@ function P.RefineCorners(pts, cfg)
 			i = j
 		end
 		pts = kept
-		for x = 2, #pts - 1 do out[x] = P.CornerPoint(pts[x - 1], pts[x], pts[x + 1]) end
+		for x = 2, #pts - 1 do out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1]) end
 	else
 		for i = 2, #pts - 1 do out[i] = pts[i] end
 	end
@@ -1273,16 +1379,61 @@ end
 -- over free triangles. Thin traces (`clear`, default: world brushes, as the edge search; the probes pass
 -- their own); a doubt (no free zipper) keeps both routes. One rule for the probes' copies of a route
 -- (PR.DistinctRoutes) and for the way over an edge beside the routes (P.Compute).
-function P.SameRoute(a, b, clear)
+-- The traced answer is kept by the routes' coordinates (exact), the `clear` function and its `tag` (the probes
+-- pass their trace backend: native or util), as the world it traces does not change: the copies of the routes
+-- of still sources are compared again at every evaluation (~40 thin traces each). Bounded: emptied past
+-- SAME_KEEP answers. So `clear` must be a world-only test.
+local SAME_KEEP = 4096
+local sameMemo, sameN, sameTL, sameGen = {}, 0, nil, nil
+local sameTraced
+function P.SameRoute(a, b, clear, tag)
 	clear = clear or detClear
 	local na, nb = #a, #b
 	if na == nb then
-		local same = true
+		local close = true
 		for i = 1, na do
-			if a[i]:DistToSqr(b[i]) > 1 then same = false break end
+			if a[i]:DistToSqr(b[i]) > 1 then close = false break end
 		end
-		if same then return true end
+		if close then return true end
 	end
+	local TL = util.TraceLine
+	if TL ~= sameTL or sameGen ~= P.worldGen or sameN >= SAME_KEEP then sameMemo, sameN, sameTL, sameGen = {}, 0, TL, P.worldGen end
+	local c, h = {}, na * 4099 + nb
+	for i = 1, na do
+		local x, y, z = a[i]:Unpack()
+		c[3 * i - 2], c[3 * i - 1], c[3 * i] = x, y, z
+		h = h + (x * 1.13 + y * 1.37 + z * 1.71) * i
+	end
+	local o = 3 * na
+	for i = 1, nb do
+		local x, y, z = b[i]:Unpack()
+		c[o + 3 * i - 2], c[o + 3 * i - 1], c[o + 3 * i] = x, y, z
+		h = h - (x * 1.19 + y * 1.43 + z * 1.79) * i
+	end
+	if h ~= h then return sameTraced(a, b, clear, na, nb) end -- (NaN: no table key)
+	local list = sameMemo[h]
+	if list then
+		local nc = #c
+		for _, e in ipairs(list) do
+			if e.na == na and e.nb == nb and e.clear == clear and e.tag == tag then
+				local ok = true
+				for i = 1, nc do
+					if not same(e[i], c[i]) then ok = false break end
+				end
+				if ok then return e.res end
+			end
+		end
+	else
+		list = {}
+		sameMemo[h] = list
+	end
+	local res = sameTraced(a, b, clear, na, nb)
+	c.na, c.nb, c.clear, c.tag, c.res = na, nb, clear, tag, res
+	list[#list + 1] = c
+	sameN = sameN + 1
+	return res
+end
+function sameTraced(a, b, clear, na, nb)
 	-- arc length fractions of the vertices: the zipper advances the chain that is behind
 	local fa, fb = { 0 }, { 0 }
 	for i = 2, na do fa[i] = fa[i - 1] + a[i - 1]:Distance(a[i]) end
