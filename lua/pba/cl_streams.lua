@@ -6,6 +6,9 @@
 --   * every 0.25 s, pba computes the paths as for a loop and applies, through the
 --     original methods: the apparent position (the opening) and the level (losses, plus a
 --     correction for BASS's own distance law at the apparent position);
+--   * the distance law stays the channel's own (BASS: full up to the owner's Set3DFadeDistance min, then
+--     min / d), for the BASS channel and for the native voice alike: the addon's author chose the range
+--     (a radio set to 1e6 means "the same volume on the whole floor", not a 1 m point source);
 --   * with the native module, a 3-band EQ is attached to the channel as a BASS DSP: the radio
 --     behind a wall is really muffled (cl_native: pba_native.StreamFilter).
 -- Everything is in pcall with a fallback to the original call; pba_streams 0 restores the
@@ -41,10 +44,22 @@ local function record(ch)
 end
 
 -- BASS distance law (rolloff 1): full volume up to `min`, then min / d (silent past `max` with
--- Set3DFadeDistance's "max" only as a cut-off). Used to correct the level at the apparent position.
+-- Set3DFadeDistance's "max" only as a cut-off). The law of a stream's level, BASS channel and native
+-- voice alike (see the header), and the correction of the level at the apparent position.
+-- GMod's defaults are min 200, max 1e9 (wiki, IGModAudioChannel:Set3DFadeDistance, "The default
+-- values"): a channel whose min cannot be read is taken at that default, and it is said once in the
+-- console (a silent 200 hid a broken binding: a radio set to 1e6 would be heard 14 dB low at 5 m).
+local BASS_DEFAULT_MIN = 200
 local function bassGain(ch, d)
-	local ok, mn, mx = pcall(ch.Get3DFadeDistance, ch)
-	mn = (ok and mn and mn > 0) and mn or 200
+	local ok, mn = pcall(ch.Get3DFadeDistance, ch)
+	if not ok or type(mn) ~= "number" or mn <= 0 then
+		if not ST.fadeWarned then
+			ST.fadeWarned = true
+			MsgN("[PBA] streams: Get3DFadeDistance gave ", tostring(mn), "; BASS's default min distance (",
+				BASS_DEFAULT_MIN, " u) assumed for such channels")
+		end
+		mn = BASS_DEFAULT_MIN
+	end
 	if d <= mn then return 1 end
 	return mn / d
 end
@@ -71,15 +86,16 @@ end
 --- Room-bus send of a stream's native voice (cl_native, "Reverb of natively rendered sounds"): the
 -- air-borne reverb comes from a source reverb slot at the stream's position (refreshed every 0.3 s, the
 -- module frees one not refreshed for 1 s); the listener's room only gets what comes through walls (the
--- transmission voice, r.transG / r.transPos from the last evaluation). No slot: the room bus at the gain.
+-- transmission voice, r.transG / r.transPos from the last evaluation, channel-law gains). No slot: the
+-- room bus at the gain.
 local function streamSend(ch, r, L, g, pos)
 	local N = A.Native
 	local now = RealTime()
 	if r.nativeId and (not r.srcNext or now >= r.srcNext) then
 		r.srcNext = now + 0.3
-		local dS = r.pos:Distance(L)
-		-- the source's power: its level at 1 m (a real balance against the 1/r direct)
-		r.srcBound = N.BindSource(r.nativeId, r.pos, (r.vol or 1) * N.PhysStream(dS) * math.max(dS, N.REF_UNITS) / N.REF_UNITS * A.cfg.native_gain)
+		-- the source's power: its level at 1 m, where BASS plays it at full volume whatever the fade
+		-- distance; constant with the listener's distance (the slot's simulation does the spreading)
+		r.srcBound = N.BindSource(r.nativeId, r.pos, (r.vol or 1) * A.cfg.native_gain)
 	end
 	if not r.srcBound then return g end
 	if r.transG and r.transPos then return N.RoomSend((r.vol or 1) * r.transG * A.cfg.native_gain, r.transPos, L) end
@@ -90,9 +106,11 @@ end
 local function nativeParams(ch, r, L)
 	local pos = r.apparent or r.pos
 	local dS = r.pos:Distance(L)
-	-- the full version's distance law: 1/r from 1 m (N.PhysStream), whatever the channel's fade distance
-	local gain = (r.vol or 1) * (r.gNative or A.Native.PhysStream(dS)) * A.cfg.native_gain
-	local el, em, eh = A.Native.VoiceEQ(r.lp or 0, r.len or dS)
+	-- the channel's own distance law (bassGain), not the full version's 1/r from 1 m (N.PhysStream, the law
+	-- of engine sounds): an addon that set Set3DFadeDistance(1e6, ...) wants its radio heard alike on the
+	-- whole floor; with 1/r it came out 14 dB weaker at 5 m (gm_melancholia: ~10 dB under vanilla next door)
+	local gain = (r.vol or 1) * (r.gNative or bassGain(ch, dS)) * A.cfg.native_gain
+	local el, em, eh = A.Native.VoiceEQ(r.lp or 0, r.len or dS, r.lpDb)
 	local send = streamSend(ch, r, L, gain, pos)
 	return pos, gain, el, em, eh, send
 end
@@ -188,31 +206,25 @@ local function evaluate(ch, r, L)
 	if res.provisional and r.reeval then r.reeval.force = true end -- probe search still running
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
-		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len, r.diffuse = nil, 1, { 1, 1, 1 }, 1, 0, nil, 0
-		r.transG, r.transPos, r.gNative = nil, nil, nil -- native: N.PhysStream at the true distance
+		r.apparent, r.g, r.eq, r.gRel, r.lp, r.lpDb, r.len, r.diffuse = nil, 1, { 1, 1, 1 }, 1, 0, nil, nil, 0
+		r.transG, r.transPos, r.gNative = nil, nil, nil -- native: the channel's law at the true distance
 		return
 	end
 	-- each voice keeps its own losses (walls, doors, corners, absorption) but its distance law is the
 	-- channel's (BASS min / d), not the engine's at 75 dB: a long detour of a stream heard from far
-	-- (Set3DFadeDistance) lost tens of dB it never would have (room 14: -47 dB instead of -16)
-	-- the native module renders with the full version's distance law (N.PhysStream: 1/r from 1 m), the
-	-- BASS channel (Light) keeps the channel's own law
-	local p, pd, pn = 0, 0, 0
+	-- (Set3DFadeDistance) lost tens of dB it never would have (room 14: -47 dB instead of -16).
+	-- The native voice uses the same channel-law gains (header: the addon chose the range)
+	local p, pd = 0, 0
 	local trG, trPos
 	local dS = S:Distance(L)
-	local N0 = A.Native
 	for _, v in ipairs(res.voices) do
 		local len = v.len or dS
 		local loss = v.gain / math.max(AC.EngineGain(len, 75), 1e-6)
 		local gv = loss * bassGain(ch, len)
 		p, pd = p + gv * gv, pd + gv * gv * (v.diffuse or 0)
-		if N0 and N0.PhysStream then
-			local gn = loss * N0.PhysStream(len)
-			pn = pn + gn * gn
-			if v.kind == "transmission" then trG, trPos = gn, v.pos end
-		end
+		if v.kind == "transmission" then trG, trPos = gv, v.pos end
 	end
-	r.gNative = math.sqrt(pn)
+	r.gNative = math.sqrt(p)
 	r.transG, r.transPos = trG, trPos -- what comes through walls (the listener's room resonates with it)
 	-- energy-weighted diffuse share (diffuse model): rendered by the native module only (BASS has no DSP)
 	r.diffuse = pd / math.max(p, 1e-12)
@@ -221,9 +233,16 @@ local function evaluate(ch, r, L)
 	-- BASS attenuates from the apparent (closer) position: compensate to the real distance
 	local corr = bassGain(ch, dS) / math.max(bassGain(ch, apparent:Distance(L)), 1e-6)
 	r.apparent, r.g = apparent, math.Clamp(g * corr, 0, 1)
-	r.gRel, r.lp, r.len = math.Clamp(g, 0, 1), res.voices[1].lp or 0, res.voices[1].len
+	r.gRel, r.lp, r.lpDb, r.len = math.Clamp(g, 0, 1), res.voices[1].lp or 0, res.voices[1].lpDb, res.voices[1].len
+	-- the BASS filter: the same continuous low-pass EQ as a native voice (N.LowpassEQ: the volume already
+	-- holds the loss at diff_freq, the EQ only the other bands' difference)
 	local N = A.Native
-	r.eq = N and N.EQ and N.EQ[math.Clamp(res.voices[1].lp or 0, 0, 4)] or { 1, 1, 1 }
+	if N and N.LowpassEQ then
+		local l, m, h = N.LowpassEQ(r.lp, r.lpDb)
+		r.eq = { l, m, h }
+	else
+		r.eq = { 1, 1, 1 }
+	end
 end
 
 local function filter(ch, r)

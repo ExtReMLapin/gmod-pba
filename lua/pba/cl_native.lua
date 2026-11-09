@@ -81,13 +81,17 @@ local function skipMaterial(name)
 	return false
 end
 
---- Steam Audio material for a surfaceprop: transmission derived from pba's own wall
--- table at a typical wall thickness (16 units), split into bands (LF bonus, -10 dB HF).
-local function saMaterial(surf, cfg, model)
+--- Steam Audio material for a surfaceprop: transmission derived from pba's own wall table at
+-- `thick` units, split into bands (LF bonus, -10 dB HF). A world face does not know the brush it
+-- bounds (GetBrushSurfaces gives faces, not brushes), so the world uses a typical wall (16 u); a
+-- prop or mover is an oriented box, its thickness the box's smallest dimension (a 2 u sheet-metal
+-- panel lets through ~12 dB more than a 64 u metal crate; the table's min / max still bound both).
+N.WORLD_THICK = 16
+local function saMaterial(surf, cfg, model, thick)
 	local idx = util.GetSurfaceIndex(surf or "default")
 	local data = util.GetSurfaceData(idx >= 0 and idx or 0)
 	local mat = data and data.material or MAT_CONCRETE
-	local R = A.AC.WallLoss(mat, surf, 16) * cfg.trans_scale
+	local R = A.AC.WallLoss(mat, surf, thick or N.WORLD_THICK) * cfg.trans_scale
 	local tm = 10 ^ (-R / 20)
 	local absorption, padded = absorptionFor(model, surf, mat)
 	return {
@@ -130,7 +134,7 @@ function N.BuildWorld()
 				-- calm surface; transmission = pba's own interface loss (pba_water_db)
 				mats[#mats + 1] = water and { absorption = { 0.01, 0.01, 0.02 }, scattering = 0.05,
 					transmission = { 10 ^ (-(A.cfg.water_db or 24) / 20), 10 ^ (-(A.cfg.water_db or 24) / 20), 10 ^ (-(A.cfg.water_db or 24) / 20) } }
-					or saMaterial(surf, A.cfg)
+					or saMaterial(surf, A.cfg, nil, N.WORLD_THICK)
 				mi = #mats - 1
 				matOf[surf] = mi
 			end
@@ -322,9 +326,80 @@ end
 
 -- ------------------------------------------------------------------ native rendering
 
--- 3-band EQ (low / mid / high gain) per low-pass level: same intent as DSP presets 30/31
-N.EQ = { [0] = { 1, 1, 1 }, { 1, 0.7, 0.4 }, { 1, 0.5, 0.2 }, { 0.9, 0.3, 0.08 }, { 0.8, 0.18, 0.03 } }
+-- 3-band EQ of a muffled voice (low / mid / high gain), continuous in the loss.
+-- The voice's gain already holds its loss at pba_diff_freq (500 Hz, AC.Diffraction): the EQ only says how
+-- much MORE (or less) the other bands lose, so the band holding diff_freq stays at exactly 1. The former
+-- table per low-pass level (N.EQ, "same intent as DSP presets 30/31") counted the loss twice and stepped:
+-- at level 4 the mid band got -15 dB on top of the -16 dB already in the gain, the low band was cut although
+-- low frequencies bend round an edge best, and 10.9 -> 11.0 dB of loss dropped the high band 8 dB.
+-- The tilt is pba's own diffraction law (Kurze-Anderson, AC.Diffraction): from the loss D at diff_freq the
+-- Fresnel number is solved, then scaled to each band's frequency (N grows with f). Near the shadow boundary
+-- (D = 0.5 dB) the high band loses ~7 dB more, deep in the shadow (D = 16 dB) ~15 dB more and the mid band
+-- ~7 dB more (3 dB per octave at most); D = 0 is no filter at all.
+-- Steam Audio's bands: low < 800 Hz < mid < 8 kHz < high; a band below diff_freq would gain (low
+-- frequencies diffract more) but is held at 1: the module's EQ never boosts (a full-scale voice would clip).
+N.BAND_HZ = { 400, 2500, 15000 } -- representative frequency of each band (Steam Audio's material bands)
+N.BAND_EDGE = { 800, 8000 }
+N.EQ = nil -- the former stepped table (autorefresh of a running game)
 N.failed = N.failed or {}
+
+local tanh = math.tanh
+--- x of the Kurze-Anderson law (A = 20 log10(x / tanh x), x = sqrt(2 pi N)) giving a loss of `db` dB.
+local function kaX(db)
+	local G = 10 ^ (db / 20)
+	if G <= 1.0000001 then return 0 end
+	-- x / tanh x rises from 1 (x = 0) and lies between x and x + 1: bisection on [G - 1, G]
+	local lo, hi = math.max(G - 1, 0), G
+	for _ = 1, 40 do
+		local mid = (lo + hi) * 0.5
+		if mid / tanh(mid) < G then lo = mid else hi = mid end
+	end
+	return (lo + hi) * 0.5
+end
+N.KaX = kaX
+
+--- Loss (dB at diff_freq) behind a voice's low-pass: its continuous loss lpDb (sh_paths: path.lpDb) when it
+-- explains the level; a level set by a discrete cause (closed leaf, wall material, masking object, cap) or
+-- given without a loss stands for its threshold lp<k>_db. The low-pass hysteresis (AC.LowpassHold) may keep
+-- a level one above what lpDb gives, by at most lp_hyst_db: lpDb is still the loss then (no 3 dB jump when
+-- the hold lets go).
+function N.LowpassDb(lp, lpDb, cfg)
+	cfg = cfg or A.cfg
+	lp = math.Clamp(math.floor(lp or 0), 0, 4)
+	local T = lp > 0 and (cfg["lp" .. lp .. "_db"] or 0) or 0
+	if lpDb then
+		local lvl = A.AC.LowpassLevel(lpDb, cfg)
+		if lvl >= lp or (lvl == lp - 1 and lpDb >= T - (cfg.lp_hyst_db or 0)) then return math.max(lpDb, 0) end
+		return math.max(lpDb, T)
+	end
+	return T
+end
+
+--- EQ (low, mid, high) of a loss of `db` dB at diff_freq, relative to that frequency (see above).
+function N.TiltEQ(db, cfg)
+	cfg = cfg or A.cfg
+	if not db or db <= 0 then return 1, 1, 1 end
+	local x0 = kaX(db)
+	if x0 <= 0 then return 1, 1, 1 end
+	local f0 = cfg.diff_freq or 500
+	local a0 = x0 / tanh(x0) -- = 10^(db/20)
+	local out = {}
+	for b = 1, 3 do
+		local lo, hi = N.BAND_EDGE[b - 1] or 0, N.BAND_EDGE[b] or math.huge
+		local f = N.BAND_HZ[b]
+		if f0 >= lo and f0 < hi then f = f0 end -- the band the gain is expressed in
+		if f <= f0 then
+			out[b] = 1
+		else
+			local x = x0 * math.sqrt(f / f0)
+			out[b] = math.max(a0 * tanh(x) / x, 1e-3)
+		end
+	end
+	return out[1], out[2], out[3]
+end
+
+--- EQ of a voice's low-pass: level lp, continuous loss lpDb when known (N.LowpassDb).
+function N.LowpassEQ(lp, lpDb, cfg) return N.TiltEQ(N.LowpassDb(lp, lpDb, cfg), cfg) end
 
 function N.StartRender()
 	N.render = false
@@ -401,24 +476,42 @@ end
 local AIR = { 0.0002, 0.0017, 0.0182 }
 local UNIT_M = 0.01905
 
---- EQ of a voice: low-pass level, times air absorption over `len` units of path.
-function N.VoiceEQ(lp, len)
-	local e = N.EQ[math.Clamp(lp or 0, 0, 4)]
-	if (A.cfg.native_air or 0) < 0.5 or not len then return e[1], e[2], e[3] end
-	local m = len * UNIT_M
-	return e[1] * math.exp(-AIR[1] * m), e[2] * math.exp(-AIR[2] * m), e[3] * math.exp(-AIR[3] * m)
+--- EQ of a voice: its low-pass (level lp, continuous loss lpDb when the caller has it: N.LowpassEQ), times
+-- air absorption over `len` units of path.
+function N.VoiceEQ(lp, len, lpDb)
+	local l, m, h = N.LowpassEQ(lp, lpDb)
+	if (A.cfg.native_air or 0) < 0.5 or not len then return l, m, h end
+	local d = len * UNIT_M
+	return l * math.exp(-AIR[1] * d), m * math.exp(-AIR[2] * d), h * math.exp(-AIR[3] * d)
 end
 
---- Dipole directivity of a weapon-like source towards L (1 in front, 1 - 2w behind).
-function N.Directivity(ent, L)
+--- Shooter of a weapon emission and its aim now, or nil when the sound is not one. A weapon emission: the
+-- sound's entity is a weapon (a SWEP's self:EmitSound), or it was emitted on the weapon channel (CHAN_WEAPON:
+-- the shot of an NPC or player emitted on the shooter itself). Footsteps, voices and pain sounds of the same
+-- player are not: a voice heard -8 dB from behind, swinging as the speaker turned, was the dipole applied to
+-- every player and NPC sound (audit).
+function N.WeaponAim(ent, chan)
+	if not IsValid(ent) then return nil end
+	local owner
+	if ent:IsWeapon() then
+		owner = ent:GetOwner()
+	elseif chan == CHAN_WEAPON then
+		owner = ent
+	end
+	if not (IsValid(owner) and (owner:IsPlayer() or owner:IsNPC())) then return nil end -- a weapon on the floor
+	return owner, owner:IsPlayer() and owner:GetAimVector() or owner:GetForward()
+end
+
+--- Dipole directivity of a weapon emission towards L (1 in front, 1 - 2w behind, floor 0.05); 1 for any
+-- other sound. chan: the sound's channel; aim: the aim taken when the sound was emitted (a shot does not
+-- swing round when the shooter turns while its tail plays); without it, the aim now.
+function N.Directivity(ent, L, chan, aim)
 	local w = A.cfg.native_dir or 0
-	if w <= 0 or not IsValid(ent) then return 1 end
-	local owner = ent
-	if ent:IsWeapon() and IsValid(ent:GetOwner()) then owner = ent:GetOwner() end
-	if not (owner:IsPlayer() or owner:IsNPC()) then return 1 end
-	local fwd = owner:IsPlayer() and owner:GetAimVector() or owner:GetForward()
+	if w <= 0 or not L then return 1 end
+	local owner, now = N.WeaponAim(ent, chan)
+	if not owner then return 1 end
 	local d = (L - owner:EyePos()):GetNormalized()
-	return math.max((1 - w) + w * fwd:Dot(d), 0.05)
+	return math.max((1 - w) + w * (aim or now):Dot(d), 0.05)
 end
 
 -- A microphone's speaker copy (SND_SPEAKER: Breencast jumbotrons, TVs): the engine runs it through
@@ -450,7 +543,8 @@ local function distK(d) return math.Clamp((d or 0) / N.REF_UNITS, 1, 100) end
 -- With the engine's law the reverb could not be both physical and sensible (kept at a real balance, a
 -- radio got LOUDER walking away). Scale: the game's own gain at 1 m. Loud sources keep their headroom: a
 -- level above the engine's full scale (pba_fullscale_db) stays at full scale until spreading brings it down
--- (a level 140 gunshot is full scale up to ~300 m). Light (engine rendering) keeps the engine's law.
+-- (a level 140 gunshot is full scale up to ~300 m). Light (engine rendering) keeps the engine's law, and
+-- other addons' BASS streams the law their channel was given (cl_streams).
 local function spread(lvl, d)
 	local AC = A.AC
 	lvl = lvl or 75
@@ -476,7 +570,9 @@ end
 function N.PhysSrcSend(lvl, d)
 	return math.min(spread(lvl, d), 1) * math.max(d or 0, N.REF_UNITS) / N.REF_UNITS
 end
---- Streams (BASS): no sound level; full scale at 1 m, then 1/r.
+--- 1/r from 1 m without a sound level (full scale at 1 m). Not the law of other addons' BASS streams: they keep
+-- the channel's own (cl_streams, bassGain: the addon chose the range; a radio set to Set3DFadeDistance(1e6)
+-- came out 14 dB weaker at 5 m with this one).
 function N.PhysStream(d) return N.REF_UNITS / math.max(d or 0, N.REF_UNITS) end
 --- Send into the listener's room for a transmission voice of gain g coming out of a wall at wallPos.
 function N.RoomSend(g, wallPos, L) return g * distK(wallPos:Distance(L)) end
@@ -494,21 +590,23 @@ timer.Remove("pba_native_enclosure") -- the former one-trace enclosure guess (au
 -- native_gain): the voice takes a source reverb slot (one voice per sound: the dominant one);
 -- trans = true for a transmission voice (through walls: the listener's room resonates);
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds, diffuse = share
--- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction) }.
+-- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction),
+-- lpDb = the voice's continuous loss behind lp (path.lpDb: N.LowpassDb), follow = { ent, vol, lvl, chan }
+-- to follow a moving entity }.
 -- Returns true on success.
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
 	local ok, n = N.EnsureSound(name)
 	if not ok then return false end
 	opt = opt or {}
-	local l, m, h = N.VoiceEQ(lp, opt.len)
+	local l, m, h = N.VoiceEQ(lp, opt.len, opt.lpDb)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and opt.sh or nil
 	local g = gain * A.cfg.native_gain
 	-- reverb sends (see "Reverb of natively rendered sounds" above): the listener's room only for what
-	-- comes through walls; the air-borne reverb from the source's slot
-	local ply = LocalPlayer()
-	local L = IsValid(ply) and ply:EyePos()
+	-- comes through walls; the air-borne reverb from the source's slot. The listener is A.ListenerPos, as
+	-- everywhere else (looking through a camera, the eye position put the wall 'behind' the wrong ear)
+	local L = A.ListenerPos()
 	local roomSend
 	if opt.trans and L then roomSend = N.RoomSend(g, pos, L)
 	elseif opt.srcPos or opt.noRoom then roomSend = 0 end
@@ -521,6 +619,11 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100
+		-- a weapon emission keeps the aim it was fired with (N.Directivity) while it follows the shooter
+		if opt.follow.aim == nil then
+			local _, aim = N.WeaponAim(opt.follow.ent, opt.follow.chan)
+			opt.follow.aim = aim or false
+		end
 		N.follow[id] = opt.follow
 	end
 	return id and id > 0 and id or false
@@ -572,7 +675,7 @@ function N.UpdateFollowers(L)
 		else
 			local S = A.SoundPos({ Entity = e })
 			local d = S:Distance(L)
-			local g = f.vol * N.PhysClear(f.lvl, d) * N.Directivity(e, L) * A.cfg.native_gain
+			local g = f.vol * N.PhysClear(f.lvl, d) * N.Directivity(e, L, f.chan, f.aim or nil) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)
 			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
 			-- clear line: the reverb is the source slot's (bound at Play), kept alive while the voice lives
@@ -599,12 +702,11 @@ function N.Echo(data, pos)
 	local gain = (data.Volume or 1) * A.AC.EngineGain(52.5, lvl)
 	local e = data.Entity
 	local key = IsValid(e) and e:EntIndex() or (data.EntIndex or 0)
-	-- weapon-like source: the echoes are louder where the shooter aims (same rule as N.Directivity)
-	local aim, w = nil, A.cfg.native_dir or 0
-	if w > 0 and IsValid(e) then
-		local owner = (e:IsWeapon() and IsValid(e:GetOwner())) and e:GetOwner() or e
-		if owner:IsPlayer() then aim = owner:GetAimVector() elseif owner:IsNPC() then aim = owner:GetForward() end
-	end
+	-- a weapon emission: the echoes are louder where the shooter aims (same rule as N.Directivity: an NPC's
+	-- shout or a player's footstep is not aimed)
+	local w = A.cfg.native_dir or 0
+	local aim = nil
+	if w > 0 then local _, a = N.WeaponAim(e, data.Channel) aim = a end
 	pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, 0, aim, aim and w or 0)
 	N.echoes = (N.echoes or 0) + 1
 end
@@ -634,8 +736,19 @@ end
 local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, prop_dynamic = true, prop_vehicle_jeep = true,
 	prop_vehicle_airboat = true, prop_vehicle_prisoner_pod = false }
 local PROP_MIN_SIZE = 64 -- units (largest box dimension); the count is capped by pba_native_props_max
+-- Which props are in the scene is re-decided every PROP_RANK_S: the cap keeps those that matter most
+-- to the listener NOW. Before, the first pba_native_props_max props of ents.GetAll() got in and every
+-- later one was skipped for good: on an RP map with 300 props, the container next to the player could
+-- be left out for the session while crates 5000 u away reflected.
+local PROP_RANK_S = 2
+-- a prop in the scene keeps its place against one only slightly more relevant (no swapping back and
+-- forth of two props at the same distance; each swap re-commits the scene)
+local PROP_KEEP = 1.5
 N.doors = N.doors or {}
-N.dynSkip = N.dynSkip or setmetatable({}, { __mode = "k" }) -- entities not to look at again
+-- entities not to look at again (too small). Recreated on load: the former code also put the props over
+-- the cap here, for good (autorefresh of a running game must give them their chance)
+N.dynSkip = setmetatable({}, { __mode = "k" })
+N.propInfo = setmetatable({}, { __mode = "k" }) -- entity -> { mn, mx, big, thick, area }
 
 local function boxMesh(mn, mx)
 	local v = {}
@@ -653,13 +766,78 @@ end
 N.BoxMesh = boxMesh
 local MOVED_NEAR2 = 1024 * 1024 -- units: dynamic objects whose motion re-evaluates the continuous sounds
 
+--- Box facts of a door, mover or prop: bounds, largest and smallest dimension (the smallest is the
+-- thickness sound crosses: saMaterial), mean face area (its acoustic size for the ranking).
+local function boxInfo(e)
+	local mn, mx = e:OBBMins(), e:OBBMaxs()
+	local sz = mx - mn
+	return { mn = mn, mx = mx, big = math.max(sz.x, sz.y, sz.z), thick = math.max(math.min(sz.x, sz.y, sz.z), 1),
+		area = (sz.x * sz.y + sz.y * sz.z + sz.x * sz.z) / 3 }
+end
+
+--- Surfaceprop of a moving brush (lift, shutter, func_physbox): brush models ("*N") have no model info and
+-- usually no client physics object, so the face on top is traced (only this entity) for the surfaceprop of
+-- its texture. Unknown ("default" or nothing hit): metal, what lifts and shutters usually are (the former
+-- choice for every mover: a wooden func_physbox crate rang like a steel plate).
+local function moverSurface(e, info)
+	local s = N.SurfaceOf(e)
+	if s and s ~= "default" then return s end
+	local c = e:WorldSpaceCenter()
+	local tr = util.TraceLine({ start = c + Vector(0, 0, (info.mx - info.mn):Length() * 0.5 + 8), endpos = c,
+		filter = function(x) return x == e end, ignoreworld = true })
+	if tr.Hit and tr.Entity == e and tr.SurfaceProps and tr.SurfaceProps >= 0 then
+		local name = util.GetSurfacePropName(tr.SurfaceProps)
+		if name and name ~= "" and name ~= "default" then return name end
+	end
+	return "metal"
+end
+
+--- Acoustic relevance of a prop to the listener: its cross-section over the squared distance (the solid
+-- angle it fills, what its reflections and its shadow scale with). The distance is floored at 128 u so
+-- the prop under the player's feet does not outrank everything around by orders of magnitude.
+local function propScore(e, info, L)
+	if not L then return info.area end
+	local d = math.max(e:WorldSpaceCenter():Distance(L), 128)
+	return info.area / (d * d)
+end
+
+local function addProp(e, id, info)
+	-- material from the physics surface: pba's wall table at the object's smallest dimension
+	-- (hollow objects behave like thin walls)
+	local m = saMaterial(N.SurfaceOf(e), A.cfg, e:GetModel(), info.thick)
+	local v, t = boxMesh(info.mn, info.mx)
+	pba_native.DynamicAdd(id, v, t, m)
+	local d = { prop = true, ent = e }
+	N.doors[id] = d
+	return d
+end
+
+local function removeDyn(id)
+	pba_native.DynamicRemove(id)
+	N.doors[id] = nil
+end
+
 function N.SyncDoors()
 	if not N.ready or not pba_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
 	local seen, nProps = {}, 0
 	local wantProps = (A.cfg.native_props or 0) >= 0.5
+	local cap = A.cfg.native_props_max or 64
+	local now = RealTime()
+	local rerank = wantProps and now >= (N.propRankT or 0)
+	if rerank then N.propRankT = now + PROP_RANK_S end
+	local cands = rerank and {} or nil
 	-- a door, mover or large prop that moved near the listener changes paths and occlusion: the
 	-- continuous sounds re-evaluate (reeval_adaptive; P.ReevalDue watches the world version)
 	local L, moved = A.ListenerPos(), false
+	local function near(p) return L and p and p:DistToSqr(L) < MOVED_NEAR2 end
+	local function track(e, id, d)
+		local p, a = e:GetPos(), e:GetAngles()
+		if not d.p or d.p ~= p or d.a ~= a then
+			pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
+			if d.p and near(p) then moved = true end
+			d.p, d.a = p, a
+		end
+	end
 	for id in pairs(N.doors) do if N.doors[id].prop then nProps = nProps + 1 end end
 	for _, e in ipairs(ents.GetAll()) do
 		local cls = e:GetClass()
@@ -668,21 +846,21 @@ function N.SyncDoors()
 		local isDoor, isProp = DOOR_CLASSES[cls] or bk == "door" or isMover, wantProps and PROP_CLASSES[cls]
 		local id = e:EntIndex()
 		if (isDoor or isProp) and id > 0 and not N.dynSkip[e] then
-			seen[id] = true
 			local d = N.doors[id]
 			if d and d.ent ~= e then -- entity index reused by another entity: rebuild
-				pba_native.DynamicRemove(id)
-				N.doors[id], d = nil, nil
+				if d.prop then nProps = nProps - 1 end
+				removeDyn(id)
+				d = nil
 			end
-			if not d then
-				local mn, mx = e:OBBMins(), e:OBBMaxs()
-				local sz = mx - mn
-				local big = math.max(sz.x, sz.y, sz.z)
-				if isDoor and big > 8 then
-					local v, t = boxMesh(mn, mx)
+			local info = N.propInfo[e]
+			if not info then info = boxInfo(e) N.propInfo[e] = info end
+			if isDoor then
+				seen[id] = true
+				if not d and info.big > 8 then
+					local v, t = boxMesh(info.mn, info.mx)
 					if isMover then
-						-- lifts, bridges, shutters: usually metal or concrete
-						pba_native.DynamicAdd(id, v, t, saMaterial("metal", A.cfg))
+						-- lifts, bridges, shutters: their texture's surfaceprop, at the box's thickness
+						pba_native.DynamicAdd(id, v, t, saMaterial(moverSurface(e, info), A.cfg, nil, info.thick))
 					else
 						local tm = 10 ^ (-A.cfg.door_closed_db / 20)
 						pba_native.DynamicAdd(id, v, t, { absorption = { 0.11, 0.07, 0.06 }, scattering = 0.05,
@@ -690,34 +868,51 @@ function N.SyncDoors()
 					end
 					d = { ent = e }
 					N.doors[id] = d
-				elseif isProp and big >= PROP_MIN_SIZE and nProps < (A.cfg.native_props_max or 64) then
-					-- material from the physics surface: pba's wall table at the object's
-					-- smallest dimension (hollow objects behave like thin walls)
-					local surf = N.SurfaceOf(e)
-					local m = saMaterial(surf, A.cfg, e:GetModel())
-					local v, t = boxMesh(mn, mx)
-					pba_native.DynamicAdd(id, v, t, m)
-					d = { prop = true, ent = e }
-					N.doors[id] = d
+				elseif not d then
+					N.dynSkip[e] = true -- a sliver: not looked at again
+				end
+			elseif info.big < PROP_MIN_SIZE then
+				N.dynSkip[e] = true -- too small to matter: not looked at again
+			else
+				if d then
+					seen[id] = true
+				elseif nProps < cap then
+					-- room left under the cap: in at once (the next ranking may swap it out)
+					d = addProp(e, id, info)
 					nProps = nProps + 1
-				else
-					N.dynSkip[e] = true -- too small (or over the cap): not looked at again
+					seen[id] = true
 				end
+				if cands then cands[#cands + 1] = { e = e, id = id, info = info, s = propScore(e, info, L) * (d and PROP_KEEP or 1) } end
 			end
-			if d then
-				local p, a = e:GetPos(), e:GetAngles()
-				if not d.p or d.p ~= p or d.a ~= a then
-					pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
-					if d.p and L and p:DistToSqr(L) < MOVED_NEAR2 then moved = true end
-					d.p, d.a = p, a
-				end
-			end
+			if d then track(e, id, d) end
 		end
 	end
+	-- unseen (gone, no longer a candidate, props switched off): out of the scene
 	for id, d in pairs(N.doors) do
 		if not seen[id] or (d.prop and not wantProps) then
-			pba_native.DynamicRemove(id)
-			N.doors[id] = nil
+			if d.prop and near(d.p) then moved = true end
+			removeDyn(id)
+		end
+	end
+	-- ranking: the `cap` most relevant props are in the scene, the others out (swapped). Outs first, so
+	-- the scene never holds more than `cap` props.
+	if cands and #cands > cap then
+		table.sort(cands, function(a, b) return a.s > b.s end)
+		for i = cap + 1, #cands do
+			local c = cands[i]
+			local d = N.doors[c.id]
+			if d and d.prop then
+				if near(d.p) then moved = true end
+				removeDyn(c.id)
+			end
+		end
+		for i = 1, cap do
+			local c = cands[i]
+			if not N.doors[c.id] then
+				local d = addProp(c.e, c.id, c.info)
+				track(c.e, c.id, d)
+				if near(d.p) then moved = true end
+			end
 		end
 	end
 	-- the module only commits when something changed (and retries itself after a running bake)
@@ -735,7 +930,7 @@ hook.Add("Think", "pba_native_listener", function()
 	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
 	local eL, eR
 	local L, vang = A.ListenerPos()
-	L = L or ply:EyePos()
+	if not L then return end
 	ang = vang or ang
 	N.live, eL, eR = pba_native.SetListener(L, ang:Forward(), ang:Up(), master)
 	N.UpdateFollowers(L)

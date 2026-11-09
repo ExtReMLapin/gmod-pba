@@ -107,7 +107,7 @@ local function applyNative(m, S, L)
 	local N = A.Native
 	local r = pathOf(m, S, L)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
-	local pos, gain, lp, trans
+	local pos, gain, lp, trans, lpDb
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
 	-- the full version's distance law (N.PhysClear / N.PhysPath): real spreading
 	if m.clearPath then
@@ -122,6 +122,7 @@ local function applyNative(m, S, L)
 			if v.kind == "transmission" then local s = N.RoomSend(g, v.pos, L) pt = pt + s * s end
 		end
 		pos, gain, lp, trans = r.voices[1].pos, math.sqrt(p), r.voices[1].lp, math.sqrt(pt)
+		lpDb = r.voices[1].lpDb -- the continuous loss behind lp: the EQ follows it without steps (N.LowpassDb)
 		m.diffuse = dp / math.max(p, 1e-12) -- diffuse share (long winding path): the module blurs and reverbs it
 	end
 	-- same meters as the patch path (gain relative to the direct law in use, DSP equivalent)
@@ -140,7 +141,7 @@ local function applyNative(m, S, L)
 	gain = gain * m.vol * A.cfg.native_gain
 	local send = m.srcBound and (trans or 0) * m.vol * A.cfg.native_gain or gain
 	m.roomSend = send
-	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
+	local el, em, eh = N.VoiceEQ(lp, S:Distance(L), lpDb)
 	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
 	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
 	if m.nativeId then
