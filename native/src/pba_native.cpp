@@ -88,14 +88,22 @@ IPLSource g_reverbSource = nullptr; // placed at the listener: room reverb estim
 bool g_pathsReady = false;
 
 // Dynamic objects (doors...): a sub-scene per object, instanced into the world scene with a
-// rigid transform updated from Lua. Scene commits are serialized with the reflection thread.
+// rigid transform updated from Lua. Steam Audio: iplSceneCommit "cannot be called concurrently with
+// any simulation functions", and Add / Remove / UpdateTransform only take effect at that commit. So
+// the main thread never touches the world scene when Lua adds, moves or removes an object: it
+// records the change here, and TryCommitScene applies every recorded change and commits at one point
+// where nothing simulates (main thread, g_simMtx taken without waiting; see TryCommitScene).
 struct Dynamic {
-	IPLScene sub = nullptr;
+	IPLScene sub = nullptr;          // the object's own scene (no simulator reads it)
 	IPLStaticMesh mesh = nullptr;
-	IPLInstancedMesh inst = nullptr;
+	IPLInstancedMesh inst = nullptr; // null until the commit that puts it in the world scene
+	IPLMatrix4x4 xf{};               // latest transform from Lua (Steam Audio space)
+	bool xfDirty = true;
 };
-std::unordered_map<int, Dynamic> g_dyn;
+std::unordered_map<int, Dynamic> g_dyn;   // main thread only
+std::vector<Dynamic> g_dynDead;           // removed by Lua, out of the scene at the next commit
 bool g_dynDirty = false;
+double g_dynDirtySince = 0;               // Now() of the first change not yet committed
 
 // ---- reflection simulation thread (room reverb at the listener + per-source echoes)
 // RunReflections takes milliseconds (thousands of rays): it runs on its own thread, every
@@ -144,6 +152,31 @@ std::atomic<int> g_reflRays{2048}, g_reflBounces{16}, g_reflRuns{0}, g_reflError
 // maxNumRays (azimuth = 2*pi*i/maxNumRays) and traces the FIRST numRays of them, so numRays below
 // maxNumRays covers only part of the horizon (2048 of 8192 = one fixed quadrant). Both are equal.
 std::atomic<int> g_simMaxRays{2048};
+
+// ---- scene commit gate. The main thread commits the world scene (doors, props) only when it can
+// take g_simMtx at once (try_lock): it never waits for a reflection pass. When it could not, it
+// raises g_commitWanted and the reflection thread, before its next pass, waits until the main
+// thread has committed (it does at its next SetListener, i.e. the next frame), at most kGateMs.
+std::mutex g_commitMtx;
+std::condition_variable g_commitCv;
+std::atomic<bool> g_commitWanted{false};
+constexpr int kGateMs = 150;
+// Stats: commits, deferrals (try_lock failed), the commit itself, the main thread's whole share
+// (applying the changes + commit + releases), the reflection thread's wait at the gate, and the
+// latency from Lua's change to the commit
+std::atomic<int> g_commits{0}, g_commitDeferred{0}, g_dynErrors{0};
+std::atomic<float> g_commitMs{0}, g_commitMaxMs{0}, g_commitMainMaxMs{0}, g_gateMaxMs{0}, g_commitLatMaxMs{0};
+
+// Reflection thread, before taking g_simMtx for a pass: lets a pending scene commit in first.
+void WaitSceneCommit() {
+	if (!g_commitWanted.load()) return;
+	const auto t0 = std::chrono::steady_clock::now();
+	std::unique_lock<std::mutex> lk(g_commitMtx);
+	if (!g_commitCv.wait_for(lk, std::chrono::milliseconds(kGateMs), [] { return !g_commitWanted.load() || !g_reflRun.load(); }))
+		g_commitWanted = false; // the main thread did not come back (no frame): do not stall every pass
+	const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+	g_gateMaxMs = std::max(g_gateMaxMs.load(), ms);
+}
 
 // --- simulation backend (SetSimOptions), applied when the world is (re)loaded
 std::atomic<int> g_optScene{1};           // 0 built-in ray tracer, 1 Embree (falls back)
@@ -403,6 +436,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 		const auto t0 = std::chrono::steady_clock::now();
 		bool failed = false;
 		{
+			WaitSceneCommit();
 			std::lock_guard<std::mutex> lk(g_simMtx);
 			SetSharedReflInputs(A.anchor, g_slotSim);
 			for (int k = 0; k < render::kSrcSlotsMax; ++k)
@@ -507,6 +541,7 @@ bool RunSlotPass() {
 		const auto t0 = std::chrono::steady_clock::now();
 		bool failed = false;
 		{
+			WaitSceneCommit();
 			std::lock_guard<std::mutex> lk(g_simMtx);
 			SetSharedReflInputs(lis);
 			SetReflInputs(g_reverbSource, lis.origin, false);
@@ -566,6 +601,7 @@ void ReflectionLoop() {
 		if (ok && g_sim && g_reverbSource) {
 			bool failed = false;
 			{
+				WaitSceneCommit();
 				std::lock_guard<std::mutex> lk(g_simMtx);
 				SetSharedReflInputs(lis);
 				SetReflInputs(g_reverbSource, {lis.origin.x, lis.origin.y + 0.1f, lis.origin.z}, true);
@@ -614,6 +650,7 @@ void ReflectionLoop() {
 			const auto r0 = std::chrono::steady_clock::now();
 			bool done = false;
 			{
+				WaitSceneCommit();
 				std::lock_guard<std::mutex> lk(g_simMtx);
 				const float win = g_optRevWindow.load();
 				IPLSimulationSharedInputs sh{};
@@ -701,6 +738,7 @@ void StopReflections() {
 		for (int& g : g_srcSimulatedGen) g = 0;
 	}
 	g_reflCv.notify_all();
+	g_commitCv.notify_all();
 	if (g_reflThread.joinable()) g_reflThread.join();
 }
 
@@ -774,6 +812,20 @@ float FieldIndex(ILuaBase* LUA, int tableIdx, const char* field, int i, float de
 	return v;
 }
 
+// Frees an object; inScene: also takes its instance out of the world scene (no commit: the caller
+// commits, or releases the scene). Never while a simulation may run.
+void ReleaseDynamic(Dynamic& d, bool inScene) {
+	if (d.inst) {
+		if (inScene && g_scene) iplInstancedMeshRemove(d.inst, g_scene);
+		iplInstancedMeshRelease(&d.inst);
+	}
+	if (d.mesh) {
+		iplStaticMeshRemove(d.mesh, d.sub);
+		iplStaticMeshRelease(&d.mesh);
+	}
+	if (d.sub) iplSceneRelease(&d.sub);
+}
+
 void ReleaseWorld() {
 	JoinBakeThread();
 	StopReflections();
@@ -829,20 +881,13 @@ void ReleaseWorld() {
 	for (auto& s : g_srcSlotB) s = nullptr;
 	if (g_probes) iplProbeBatchRelease(&g_probes);
 	g_pathsReady = false;
-	for (auto& kv : g_dyn) {
-		Dynamic& d = kv.second;
-		if (d.inst) {
-			iplInstancedMeshRemove(d.inst, g_scene);
-			iplInstancedMeshRelease(&d.inst);
-		}
-		if (d.mesh) {
-			iplStaticMeshRemove(d.mesh, d.sub);
-			iplStaticMeshRelease(&d.mesh);
-		}
-		if (d.sub) iplSceneRelease(&d.sub);
-	}
+	// the reflection thread is stopped and the bakes joined: nothing simulates
+	for (auto& kv : g_dyn) ReleaseDynamic(kv.second, true);
+	for (auto& d : g_dynDead) ReleaseDynamic(d, true);
 	g_dyn.clear();
+	g_dynDead.clear();
 	g_dynDirty = false;
+	g_commitWanted = false;
 	if (g_mesh) {
 		iplStaticMeshRemove(g_mesh, g_scene);
 		iplStaticMeshRelease(&g_mesh);
@@ -1475,6 +1520,75 @@ LUA_FUNCTION(ReverbBakeStatus) {
 	return 1;
 }
 
+void MarkDynDirty() {
+	if (!g_dynDirty) g_dynDirtySince = Now();
+	g_dynDirty = true;
+}
+
+// Main thread. Applies every recorded change of the dynamic objects to the world scene and commits
+// it, when nothing simulates on it:
+//   - the reflection thread runs every iplSimulatorRunReflections (g_sim, g_slotSim, g_revSim)
+//     under g_simMtx: taken here with try_lock, so never waited for. Busy: g_commitWanted makes
+//     the thread hold its next pass at the gate (WaitSceneCommit) and the next call commits;
+//   - iplSimulatorRunDirect (Direct) and iplSimulatorRunPathing (Paths) run on the main thread,
+//     which is here: they cannot overlap;
+//   - the bake threads read the scene: deferred while one runs (as before).
+// Every world-scene call (instance create / add / remove / transform, iplSceneCommit) happens here
+// or in ReleaseWorld, none on the other threads. Removed objects are released once the commit has
+// taken them out of the scene.
+bool TryCommitScene() {
+	if (!g_scene || !g_dynDirty || g_bakeState == 1 || g_revBakeState == 1) return false;
+	const auto t0 = std::chrono::steady_clock::now();
+	std::unique_lock<std::mutex> lk(g_simMtx, std::try_to_lock);
+	if (!lk.owns_lock()) {
+		g_commitWanted = true;
+		g_commitDeferred++;
+		return false;
+	}
+	for (auto& d : g_dynDead)
+		if (d.inst) iplInstancedMeshRemove(d.inst, g_scene);
+	for (auto it = g_dyn.begin(); it != g_dyn.end();) {
+		Dynamic& d = it->second;
+		if (!d.inst) {
+			IPLInstancedMeshSettings is{};
+			is.subScene = d.sub;
+			is.transform = d.xf;
+			if (iplInstancedMeshCreate(g_scene, &is, &d.inst) != IPL_STATUS_SUCCESS) {
+				d.inst = nullptr;
+				g_dynDead.push_back(d); // freed below; later moves of this id are ignored
+				it = g_dyn.erase(it);
+				g_dynErrors++;
+				continue;
+			}
+			iplInstancedMeshAdd(d.inst, g_scene);
+		} else if (d.xfDirty) {
+			iplInstancedMeshUpdateTransform(d.inst, g_scene, d.xf);
+		}
+		d.xfDirty = false;
+		++it;
+	}
+	const auto c0 = std::chrono::steady_clock::now();
+	iplSceneCommit(g_scene);
+	const float cms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - c0).count();
+	for (auto& d : g_dynDead) ReleaseDynamic(d, false); // already removed and committed out
+	g_dynDead.clear();
+	g_sceneVersion++;
+	lk.unlock();
+	{
+		std::lock_guard<std::mutex> glk(g_commitMtx);
+		g_commitWanted = false;
+	}
+	g_commitCv.notify_all();
+	g_dynDirty = false;
+	g_commits++;
+	g_commitMs = g_commitMs * 0.9f + cms * 0.1f;
+	g_commitMaxMs = std::max(g_commitMaxMs.load(), cms);
+	const float mms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+	g_commitMainMaxMs = std::max(g_commitMainMaxMs.load(), mms);
+	g_commitLatMaxMs = std::max(g_commitLatMaxMs.load(), (float)((Now() - g_dynDirtySince) * 1000.0));
+	return true;
+}
+
 // DynamicAdd(id, verts, tris, material) -> true : object geometry in its LOCAL frame (Source
 // units, flat {x,y,z,...}; tris 0-based flat), one material { absorption, scattering,
 // transmission }. Placed with DynamicMove, effective after DynamicCommit.
@@ -1527,19 +1641,12 @@ LUA_FUNCTION(DynamicAdd) {
 		LUA->ThrowError("iplStaticMeshCreate failed");
 	}
 	iplStaticMeshAdd(d.mesh, d.sub);
+	// the object's own scene: no simulator holds it until the world scene's commit instances it
 	iplSceneCommit(d.sub);
-	IPLInstancedMeshSettings is{};
-	is.subScene = d.sub;
-	for (int i = 0; i < 4; ++i) is.transform.elements[i][i] = 1;
-	if (iplInstancedMeshCreate(g_scene, &is, &d.inst) != IPL_STATUS_SUCCESS) {
-		iplStaticMeshRemove(d.mesh, d.sub);
-		iplStaticMeshRelease(&d.mesh);
-		iplSceneRelease(&d.sub);
-		LUA->ThrowError("iplInstancedMeshCreate failed");
-	}
-	iplInstancedMeshAdd(d.inst, g_scene);
+	for (int i = 0; i < 4; ++i) d.xf.elements[i][i] = 1;
+	d.xfDirty = true;
 	g_dyn[id] = d;
-	g_dynDirty = true;
+	MarkDynDirty();
 	LUA->PushBool(true);
 	return 1;
 }
@@ -1572,8 +1679,9 @@ LUA_FUNCTION(DynamicMove) {
 	IPLMatrix4x4 m{};
 	for (int i = 0; i < 4; ++i)
 		for (int j = 0; j < 4; ++j) m.elements[i][j] = S[i][j];
-	iplInstancedMeshUpdateTransform(it->second.inst, g_scene, m);
-	g_dynDirty = true;
+	it->second.xf = m; // applied at the next commit (TryCommitScene)
+	it->second.xfDirty = true;
+	MarkDynDirty();
 	return 0;
 }
 
@@ -1581,35 +1689,18 @@ LUA_FUNCTION(DynamicRemove) {
 	const int id = (int)LUA->CheckNumber(1);
 	auto it = g_dyn.find(id);
 	if (it == g_dyn.end() || !g_scene) return 0;
-	{
-		std::lock_guard<std::mutex> lk(g_simMtx);
-		Dynamic& d = it->second;
-		iplInstancedMeshRemove(d.inst, g_scene);
-		iplSceneCommit(g_scene);
-		iplInstancedMeshRelease(&d.inst);
-		iplStaticMeshRemove(d.mesh, d.sub);
-		iplStaticMeshRelease(&d.mesh);
-		iplSceneRelease(&d.sub);
-	}
+	// out of the scene and freed at the next commit (a reflection pass may be tracing it now)
+	g_dynDead.push_back(it->second);
 	g_dyn.erase(it);
-	g_sceneVersion++;
+	MarkDynDirty();
 	return 0;
 }
 
-// DynamicCommit() -> committed : applies the pending changes to the scene. Skipped (false) while
-// a path bake reads the scene on its thread.
+// DynamicCommit() -> committed : applies the pending changes to the scene now if nothing simulates
+// (see TryCommitScene); false: nothing pending, or deferred (to the next frame's SetListener, or
+// after a running bake). Never waits for the reflection thread.
 LUA_FUNCTION(DynamicCommit) {
-	if (!g_scene || !g_dynDirty || g_bakeState == 1 || g_revBakeState == 1) {
-		LUA->PushBool(false);
-		return 1;
-	}
-	{
-		std::lock_guard<std::mutex> lk(g_simMtx);
-		iplSceneCommit(g_scene);
-	}
-	g_dynDirty = false;
-	g_sceneVersion++;
-	LUA->PushBool(true);
+	LUA->PushBool(TryCommitScene());
 	return 1;
 }
 
@@ -2149,6 +2240,23 @@ LUA_FUNCTION(Stats) {
 	LUA->SetField(-2, "threads");
 	LUA->PushNumber(g_revMs.load());
 	LUA->SetField(-2, "revMs");
+	// scene commits (doors, props): see TryCommitScene. *MaxMs reset on read
+	LUA->PushNumber(g_commits.load());
+	LUA->SetField(-2, "sceneCommits");
+	LUA->PushNumber(g_commitDeferred.load());
+	LUA->SetField(-2, "sceneCommitDeferred");
+	LUA->PushNumber(g_dynErrors.load());
+	LUA->SetField(-2, "sceneDynErrors");
+	LUA->PushNumber(g_commitMs.load());
+	LUA->SetField(-2, "sceneCommitMs");
+	LUA->PushNumber(g_commitMaxMs.exchange(0));
+	LUA->SetField(-2, "sceneCommitMaxMs");
+	LUA->PushNumber(g_commitMainMaxMs.exchange(0));
+	LUA->SetField(-2, "sceneCommitMainMaxMs");
+	LUA->PushNumber(g_gateMaxMs.exchange(0));
+	LUA->SetField(-2, "sceneGateMaxMs");
+	LUA->PushNumber(g_commitLatMaxMs.exchange(0));
+	LUA->SetField(-2, "sceneCommitLatencyMaxMs");
 	LUA->PushString(!g_revSim ? "main" : g_revBaked.load() ? "baked" : "long");
 	LUA->SetField(-2, "rtSource");
 	LUA->PushNumber(g_stillPasses.load());
@@ -2315,6 +2423,7 @@ LUA_FUNCTION(SetListener) {
 		g_stageLisOk = true;
 	}
 	if (g_stillPasses.load() >= 10) g_reflCv.notify_one(); // settled: let the thread check the move
+	if (g_dynDirty && g_commitWanted.load()) TryCommitScene(); // deferred commit: the gate holds the thread
 	LUA->PushNumber(render::SetListener(pos, ahead, up, master, &eL, &eR));
 	LUA->PushNumber(eL);
 	LUA->PushNumber(eR);
