@@ -1,7 +1,10 @@
 -- Cases reported on rp_downtown_v4c_v2 (a radio in the brick building's upper room), client lua_job:
---  * ceiling: the radio on the floor above the listener. The ceiling (25 dB) brings 20 dB more than the
---    stairwell route; a sound played on one channel (a stream, a loop mirror) takes voices[1], which was
---    the stairwell because the transmission voice was always appended last. Expect the transmission first.
+--  * ceiling: the radio on the floor above the listener. A sound played on one channel (a stream, a loop
+--    mirror) takes voices[1], which was the stairwell route because the transmission voice was always
+--    appended last, though the ceiling (25 dB) was 20 dB louder then. Expect the loudest voice first.
+--    (Since the corners are costed on their edges, 2026-11-09, the route through the next door and down
+--    the stairwell, 21.4 dB over 292 u, is about as loud as the ceiling, 25.5 dB over 177 u: -24.4 and
+--    -26.2 dB; it was 13 dB too quiet, its corners paid on clearance vertices.)
 --  * pillar: the radio behind a pillar of the same room. The probe route kept the grid's staircase (487 u
 --    for 325 straight, 265 degrees of bends, 14 dB, lp 3): probes 4 u above the floor made every fat trace
 --    start in solid, and a doubled last vertex blocked the tightening. Expect a route hugging the pillar's
@@ -32,7 +35,7 @@ local radio = Vector(-2120.334, -6872.2, -59.48)
 
 local c = compute(radio, Vector(-1967.958, -6921.166, -134.969))
 local cv = voices(c)
-local ceilingOk = cv[1] ~= nil and cv[1].kind == "transmission"
+local ceilingOk = cv[1] ~= nil and #cv >= 2
 for i = 2, #cv do if cv[i].level > cv[1].level + 1e-6 then ceilingOk = false end end
 
 local Lp = Vector(-1811.383, -6956.931, -3.969)

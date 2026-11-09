@@ -27,7 +27,8 @@ A.CONFIG = {
 	diffuse_absorb  = { 0.1, 0, 0.9, "sv", "Diffuse model: share of the energy the walls absorb at each bounce along the extra length of a detour." },
 	diffuse_width   = { 128, 16, 1024, "sv", "Diffuse model: units between two wall bounces along a detour (about a corridor's width)." },
 	portal_legs     = { 1, 0, 1, "sv", "Paths through openings: the legs from the source to the first opening and from the last opening to the listener are traced against the world (a floor of several rooms is often one BSP area: a leg could cross an interior wall for free); a blocked leg is routed through the probe graph or pays its walls. 0 = legs not checked (former behaviour)." },
-	world_edge      = { 1, 0, 1, "sv", "Sound bends over the edge of a world obstacle (a low wall, a terrain ridge) when no path round it is known: diffraction from 0 dB at grazing, combined with what goes through. 0 = through the obstacle only (a line sinking behind a crest jumped tens of dB in one unit)." },
+	world_edge      = { 1, 0, 1, "sv", "Sound bends over the edge of a world obstacle (a low wall, a terrain ridge, a door jamb): diffraction from 0 dB at grazing, combined with what goes through, beside the paths round it (a path bending round that very edge is kept alone). 0 = through the obstacle only (a line sinking behind a crest jumped tens of dB in one unit)." },
+	corner_refine   = { 1, 0, 1, "sv", "A path's corners are costed on the edges the sound really bends round (each bend slid onto its edge with thin traces), not on the vertices placed for clearance (4-12 units off the edge: up to 10 dB too much just past a jamb). 0 = the clearance vertices as they are." },
 	diffuse_dsp_hyst = { 0.05, 0, 0.3, "sv", "Diffuse model, engine rendering: hysteresis on the diffuse share around diffuse_dsp_at, so the tunnel reverb preset does not flip back and forth (a sound at a share of 0.42 then 0.38)." },
 	diffuse_corner_db = { 3, 0, 20, "sv", "Diffuse model: loss of the diffuse part per 90 degrees of bend: hard corridor walls guide sound round a corner by reflections, instead of the 7-8 dB of an edge's diffraction (which the direct part keeps). Never more than that diffraction." },
 	diffuse_max_db  = { 20, 0, 60, "sv", "Diffuse model: most dB the walls of a detour absorb." },
@@ -38,6 +39,7 @@ A.CONFIG = {
 	diffuse_dsp_at  = { 0.4, 0, 1, "cl", "Diffuse model, engine rendering: from this diffuse share a sound gets a reverberant tunnel preset instead of the plain low-pass." },
 	probe_spacing   = { 128, 32, 512, "sv", "Probe grid spacing (units) of the fallback graph." },
 	probes          = { 1, 0, 1, "sv", "Use the probe graph when no areaportal path exists." },
+	paths_model     = { 1, 0, 1, "sv", "1 = the routes of every sound are read from one search done from the listener over the probe graph (doors and closed areaportals are costs of its links), beside the way over the obstacle's edge and the transmission; no portal chains, no search per sound, no provisional answer (the result no longer depends on the frame budget or on the order of the sounds). 0 = portal chains first, probe search per sound when they fail (former behaviour, to be removed)." },
 
 	-- diffraction (Kurze-Anderson on path difference)
 	diff_freq       = { 500, 125, 4000, "sv", "Reference frequency (Hz) for diffraction loss." },
