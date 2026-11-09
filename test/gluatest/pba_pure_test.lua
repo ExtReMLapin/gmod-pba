@@ -1968,5 +1968,238 @@ return {
 			expect(found).to.beTrue()
 			expect(kept[1].chain[1] == g.byKey[4]).to.beTrue()
 		end },
+		-- Scene for the next cases: a world of concrete boxes seen by util.TraceLine (traces without
+		-- ignoreworld) and P.Walls; two areas split by an open doorway in the plane x = 100 (y 0..50, z 0..100,
+		-- partition 4 u deep on the source side), area 1 for x < 100. Restored even on error.
+		{ name = "Portal legs: one step across an open doorway into the next area keeps the level (the first leg crosses an interior wall: old 0 dB through it, ~50 dB step)", func = function()
+			local boxes = { { Vector(96, -1000, -100), Vector(100, 0, 300) }, { Vector(96, 50, -100), Vector(100, 1000, 300) },
+				{ Vector(96, 0, 100), Vector(100, 50, 300) },
+				{ Vector(20, 60, -100), Vector(36, 1000, 300) } } -- the interior wall, in area 1
+			local poly = rect(100, 0, 50, 0, 100)
+			local g = G.Build({ map = "synthetic", numAreas = 3, areas = { [0] = {}, [1] = { { key = 1, other = 2, poly = poly } },
+				[2] = { { key = 1, other = 1, poly = poly } } }, entities = { { classname = "func_areaportal", portalnumber = "1", startopen = "1" } } })
+			local function hit(a, b)
+				local best
+				for _, w in ipairs(boxes) do
+					local t0, t1 = segBox(a, b, w[1], w[2])
+					if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+				end
+				return best
+			end
+			local saved = { util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area }
+			util.TraceLine = function(t)
+				local out = t.output or {}
+				local f = not t.ignoreworld and hit(t.start, t.endpos) or nil
+				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
+				out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
+				return out
+			end
+			P.Walls = function(a, b)
+				local walls = {}
+				for _, w in ipairs(boxes) do
+					local t0, t1 = segBox(a, b, w[1], w[2])
+					if t0 and t1 - t0 > 1e-6 then
+						local e, x = a + (b - a) * t0, a + (b - a) * t1
+						walls[#walls + 1] = { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" }
+					end
+				end
+				table.sort(walls, function(x, y) return x.t < y.t end)
+				return walls
+			end
+			A.Graph.Get = function() return g end
+			A.Graph.Area = function(_, p) return p.x < 100 and 1 or 2 end
+			local cfg = setmetatable({ probes = 0, path_props = 0, water = 0, native_paths = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local S = Vector(0, 200, 50)
+				local function heard(L)
+					P.InvalidateCache()
+					local r = P.Compute(S, L, 75, cfg)
+					if r.clear then return AC.GainToDb(AC.EngineGain(S:Distance(L), 75)), r end
+					local pw = 0
+					for _, v in ipairs(r.voices) do pw = pw + v.gain * v.gain end
+					return 10 * math.log10(math.max(pw, 1e-30)), r
+				end
+				local before, rb = heard(Vector(99, 25, 50))
+				local after, ra = heard(Vector(101, 25, 50))
+				if math.abs(after - before) > 3 then error(string.format("step across the doorway: %.1f -> %.1f dB", before, after), 0) end
+				expect(rb.aS == nil or rb.aS == rb.aL).to.beTrue() -- same area: no portal model
+				expect(#ra.paths).to.equal(1) -- next area: the doorway's portal path
+				expect((ra.paths[1].legDb or 0) > 5).to.beTrue() -- its first leg pays the interior wall
+			end)
+			util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area = saved[1], saved[2], saved[3], saved[4]
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Portal legs: a blocked leg is routed through the probe graph (spliced, corners counted once), and the probes search S -> L although a chain exists", func = function()
+			local boxes = { { Vector(96, -1000, -100), Vector(100, 0, 300) }, { Vector(96, 50, -100), Vector(100, 1000, 300) },
+				{ Vector(96, 0, 100), Vector(100, 50, 300) }, { Vector(20, 60, -100), Vector(36, 1000, 300) } }
+			local poly = rect(100, 0, 50, 0, 100)
+			local g = G.Build({ map = "synthetic", numAreas = 3, areas = { [0] = {}, [1] = { { key = 1, other = 2, poly = poly } },
+				[2] = { { key = 1, other = 1, poly = poly } } }, entities = { { classname = "func_areaportal", portalnumber = "1", startopen = "1" } } })
+			local function hit(a, b)
+				local best
+				for _, w in ipairs(boxes) do
+					local t0, t1 = segBox(a, b, w[1], w[2])
+					if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+				end
+				return best
+			end
+			local PR = A.Probes
+			local saved = { util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area, PR.Paths }
+			util.TraceLine = function(t)
+				local out = t.output or {}
+				local f = not t.ignoreworld and hit(t.start, t.endpos) or nil
+				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
+				out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
+				return out
+			end
+			P.Walls = function(a, b)
+				local walls = {}
+				for _, w in ipairs(boxes) do
+					local t0, t1 = segBox(a, b, w[1], w[2])
+					if t0 and t1 - t0 > 1e-6 then
+						local e, x = a + (b - a) * t0, a + (b - a) * t1
+						walls[#walls + 1] = { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" }
+					end
+				end
+				table.sort(walls, function(x, y) return x.t < y.t end)
+				return walls
+			end
+			A.Graph.Get = function() return g end
+			A.Graph.Area = function(_, p) return p.x < 100 and 1 or 2 end
+			-- the probe graph: round the interior wall's end (y = 60) for the leg, nothing more for S -> L
+			local V1, V2 = Vector(10, 56, 50), Vector(40, 56, 50)
+			local calls = {}
+			PR.Paths = function(a, b, k, c)
+				calls[#calls + 1] = { a, b }
+				if b.x >= 100 and b.x < 100.5 then return { P.EvalPolyline({ a, V1, V2, b }, c) } end
+				return {}
+			end
+			local cfg = setmetatable({ probes = 1, probe_dist = 1e6, path_props = 0, water = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local S, L = Vector(0, 200, 50), Vector(160, 25, 50)
+				P.InvalidateCache()
+				local r = P.Compute(S, L, 75, cfg)
+				local full = false
+				for _, c in ipairs(calls) do if c[1] == S and c[2] == L then full = true end end
+				expect(full).to.beTrue()
+				expect(r.legBlocked).to.beTrue()
+				local p = r.paths[1]
+				expect(p ~= nil and p.legRouted == true and #p.chain == 1).to.beTrue()
+				expect(#p.points).to.equal(3) -- V1, V2, the doorway
+				expect(p.points[1] == V1 and p.points[2] == V2).to.beTrue()
+				-- routed round the wall: the corners at V1, V2 and the doorway, not the wall's ~50 dB
+				expect(p.lossDb < 30 and p.legDb == nil).to.beTrue()
+				-- length: S -> V1 -> V2 -> doorway -> L
+				local d = p.points[3]
+				expect(near(p.length, S:Distance(V1) + V1:Distance(V2) + V2:Distance(d) + d:Distance(L), 0.5)).to.beTrue()
+			end)
+			util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area, PR.Paths = saved[1], saved[2], saved[3], saved[4], saved[5]
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
+		{ name = "World edge: a line sinking behind a low wall loses by degrees (<= 3 dB per unit; old: clear -> 52 dB in one unit), ~10 dB 64 u below the crest", func = function()
+			local boxes = { { Vector(100, -1000, -100), Vector(116, 1000, 64) } }
+			local function hit(a, b)
+				local best
+				for _, w in ipairs(boxes) do
+					local t0, t1 = segBox(a, b, w[1], w[2])
+					if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+				end
+				return best
+			end
+			local saved = { util.TraceLine, P.Walls, A.Graph.Get }
+			util.TraceLine = function(t)
+				local out = t.output or {}
+				local f = not t.ignoreworld and hit(t.start, t.endpos) or nil
+				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
+				out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
+				return out
+			end
+			P.Walls = function(a, b)
+				local walls = {}
+				for _, w in ipairs(boxes) do
+					local t0, t1 = segBox(a, b, w[1], w[2])
+					if t0 and t1 - t0 > 1e-6 then
+						local e, x = a + (b - a) * t0, a + (b - a) * t1
+						walls[#walls + 1] = { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" }
+					end
+				end
+				return walls
+			end
+			A.Graph.Get = function() return nil end
+			local cfg = setmetatable({ probes = 0, path_props = 0, water = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local function lossAt(z)
+					local S, L = Vector(0, 0, z), Vector(300, 0, z)
+					P.InvalidateCache()
+					local r = P.Compute(S, L, 75, cfg)
+					if r.clear then return 0 end
+					local pw = 0
+					for _, v in ipairs(r.voices) do pw = pw + v.gain * v.gain end
+					return AC.GainToDb(AC.EngineGain(S:Distance(L), 75)) - 10 * math.log10(math.max(pw, 1e-30))
+				end
+				local prev, worst = lossAt(70), 0
+				for z = 69, 50, -1 do
+					local l = lossAt(z)
+					worst = math.max(worst, math.abs(l - prev))
+					prev = l
+				end
+				if worst > 3 then error(string.format("largest step %.1f dB per unit", worst), 0) end
+				local deep = lossAt(0)
+				expect(deep > 5 and deep < 20).to.beTrue()
+				-- world_edge 0: the transmission alone, as before
+				cfg.world_edge = 0
+				expect(lossAt(0) > 40).to.beTrue()
+			end)
+			util.TraceLine, P.Walls, A.Graph.Get = saved[1], saved[2], saved[3]
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Stable: a provisional result keeps the last final one nearby (no dip to the transmission while the probes search); far away the provisional one stands", func = function()
+			local L = Vector(0, 0, 0)
+			local final = { S = Vector(300, 0, 0), L = L, voices = { { kind = "portal", pos = Vector(100, 50, 0), gain = 0.5, level = AC.GainToDb(0.5), lp = 0 } } }
+			local function prov(S) return { S = S, L = L, provisional = true,
+				voices = { { kind = "transmission", pos = Vector(50, 0, 0), gain = 0.001, level = -60, lp = 4 } } } end
+			local st = {}
+			P.Stable(st, final, CFG)
+			local r = P.Stable(st, prov(Vector(308, 0, 0)), CFG)
+			expect(near(r.voices[1].gain, 0.5, 1e-9)).to.beTrue()
+			expect(r.provisional).to.beTrue() -- still provisional: the caller forces the re-evaluation
+			-- moved far since the final result: the provisional answer is the better guess
+			local far = P.Stable(st, prov(Vector(900, 0, 0)), CFG)
+			expect(near(far.voices[1].gain, 0.001, 1e-9)).to.beTrue()
+		end },
+		{ name = "One corner model: a portal chain and a probe polyline on the same points lose the same at a sharp corner (leak 8 dB: old 8 vs 20 dB) and get the same lowpass", func = function()
+			local g = G.Build(synthBsp())
+			g.byKey[1].open, g.byKey[2].open = 1, 1
+			local cfg = table.Copy(CFG)
+			cfg.portal_diffuse_db, cfg.portal_diffuse_lp = 8, 1
+			local S, L = Vector(90, -200, 50), Vector(210, 350, 50)
+			local p = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, cfg)
+			local pts = { S }
+			for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+			pts[#pts + 1] = L
+			local saved = P.SegmentDoorLoss
+			P.SegmentDoorLoss = function() return 0, 0 end
+			local ok, q = pcall(P.EvalPolyline, pts, cfg)
+			P.SegmentDoorLoss = saved
+			expect(ok).to.beTrue()
+			if not near(q.diffDb, p.diffDb, 0.05) then error(string.format("chain %.2f dB, polyline %.2f dB", p.diffDb, q.diffDb), 0) end
+			expect(near(q.lossDb, p.lossDb, 0.05)).to.beTrue()
+			expect(q.lp).to.equal(p.lp)
+			-- the corner alone: never above the leak, 0 dB edge at grazing
+			expect(AC.Corner(1e6, 500, 20, 8) <= 8 + 1e-9).to.beTrue()
+			expect(AC.Corner(0, 500, 20, 60)).to.equal(0)
+		end },
+		{ name = "EvalChain cap: each door its own loss on top of the corners (two closed 60 dB doors in series: old cap 86 dB, the straight trace 100)", func = function()
+			local g = G.Build(synthBsp())
+			for k = 1, 2 do g.byKey[k].open, g.byKey[k].closedDb, g.byKey[k].closedLp = 0, 60, 4 end
+			local S, L = Vector(0, 25, 50), Vector(300, 125, 50)
+			local p = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, CFG)
+			if p.lossDb < 2 * AC.LeafDb(60, CFG) - 0.5 then error(string.format("%.1f dB < 2 x %.1f", p.lossDb, AC.LeafDb(60, CFG)), 0) end
+			-- the corners alone are capped at diff_max_total, as a probe polyline's
+			expect(p.diffDb <= CFG.diff_max_total + 1e-9).to.beTrue()
+		end },
 	},
 }

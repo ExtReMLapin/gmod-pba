@@ -55,6 +55,21 @@ function AC.Diffraction(delta, freq, maxDb)
 	return min(max(a, 0), maxDb or 20)
 end
 
+--- One corner of a path, the single model for every bend a path takes round the structure: a portal
+-- opening (P.EvalChain) and a probe vertex (P.EvalPolyline) alike. Two parts in power: the coherent wave
+-- diffracted at the edge (Kurze-Anderson on the path difference `delta`, at most maxDb) and the source
+-- space's reverberant field, which lights the edge from every direction and leaks round it whatever the
+-- bend (leakDb below the direct sound; 60 or more = none). The leak belongs to the edge, not to the way
+-- the map describes it: a doorway jamb is an areaportal on one map and a probe vertex on another (or on
+-- the same map once the listener stands in the doorway's area), and it cost 8 dB as the first and up to
+-- 20 dB as the second. Returns the corner's loss (dB; slightly below 0 at grazing: the leak adds to a
+-- free wave, the voices' free-field cap in P.SelectVoices takes it back), the edge gain and the leak gain.
+function AC.Corner(delta, freq, maxDb, leakDb)
+	local gEdge = 10 ^ (-AC.Diffraction(delta, freq, maxDb) / 20)
+	local gLeak = (leakDb and leakDb < 60) and 10 ^ (-leakDb / 20) or 0
+	return -AC.GainToDb(sqrt(gEdge * gEdge + gLeak * gLeak)), gEdge, gLeak
+end
+
 -- ------------------------------------------------------------------ apertures (Fresnel)
 -- A partly open door is a slit: what reaches the listener directly depends on how much of the
 -- first Fresnel zone around the ray passes through the free gap, not on the opening angle. A 1 cm
