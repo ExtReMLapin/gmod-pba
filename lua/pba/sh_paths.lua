@@ -238,6 +238,21 @@ function P.DoorTilt(gOpen, tOpen, gLeaf, leafLp, gMask, maskLp, cfg)
 		(gMask or 0) ^ 2, AC.LevelDb(maskLp or 0, cfg))
 end
 
+--- The whole bend as one wedge (pure): the corner loss (AC.Corner) of a path of length `len` whose ends are
+-- `direct` apart, the path difference being its whole excess length. Each corner of a path is evaluated
+-- with its neighbours (Epstein-Peterson), which is right for corners far apart but not for close ones: the
+-- two jambs of a thick doorway 16 u apart, or a probe vertex next to an opening's point, each see a
+-- path difference of a few units (the 16 u segment bends little), and a 60 degree turn round the doorway
+-- cost 2-3 dB where the same turn round one edge costs 20. Edges close together diffract as one thick
+-- wedge of the total bend (thick barrier); edges far apart cost more than one wedge (their losses add,
+-- the wedge's grows like the log of the excess). So a path's corners together never cost less than this
+-- one wedge: one rule for portal chains, probe polylines and their joins. pba_corner_wedge 0: off.
+function P.WedgeDb(len, direct, cfg)
+	cfg = cfg or A.cfg
+	if (cfg.corner_wedge or 1) < 0.5 then return 0 end
+	return math.max(AC.Corner(math.max(len - direct, 0), cfg.diff_freq, cfg.diff_max_edge, cfg.portal_diffuse_db or 60), 0)
+end
+
 --- Evaluates a portal chain: length, diffraction, door losses, apparent position.
 -- Pure for fully open / closed portals; a partly open door reads its measured aperture.
 -- masks[i] (optional): objects masking part of the i-th opening ({ ap = aperture they leave,
@@ -249,6 +264,7 @@ function P.EvalChain(S, L, chain, cfg, masks)
 	local pts = P.RelaxPoints(S, L, chain)
 	local len, diff, loss = 0, 0, 0
 	local allOpen = true
+	local free, paidMin = 0, 1 -- the openings' corners wide open (dB), the least share of the sound paying them
 	local tilt = 0 -- what muffles (dB, AC.MixTilt): the openings in series add their tilts
 	local prev = S
 	for i, p in ipairs(chain) do
@@ -315,6 +331,7 @@ function P.EvalChain(S, L, chain, cfg, masks)
 		-- is what the door's state adds (gap, leaf)
 		local paid = g > 0 and (go * go + gm * gm) / (g * g) or 0
 		diff = diff - AC.GainToDb(gFree) * paid
+		free, paidMin = free - AC.GainToDb(gFree), math.min(paidMin, paid)
 		-- spectrum: each part keeps its own (P.DoorTilt). The open part: the doorway's diffraction (with
 		-- the diffuse leak), plus the gap's own tilt when it passes the lows better than the highs (at
 		-- most 40 dB: a crack passing no highs at all); the leaf: its material's lowpass; the masking
@@ -326,6 +343,10 @@ function P.EvalChain(S, L, chain, cfg, masks)
 		prev = pt
 	end
 	len = len + prev:Distance(L)
+	-- the corners together as one wedge at least (P.WedgeDb), paid as the openings' corners are (a shut
+	-- door's corner costs nothing more than its leaf)
+	local extra = math.max(P.WedgeDb(len, S:Distance(L), cfg) - free, 0) * paidMin
+	diff, loss, tilt = diff + extra, loss + extra, tilt + extra
 	-- one cap, on the corners only, as for a probe polyline (P.EvalPolyline): the corners' losses together
 	-- at most diff_max_total, what the doors' states add (gap, leaf, masking objects) on top, each door its
 	-- own. The former caps were two other bases: diff_max_total + 40 for the corners (a probe path through
@@ -341,7 +362,7 @@ function P.EvalChain(S, L, chain, cfg, masks)
 	local direct, bend = P.PathShape(S, pts, L)
 	-- lpDb: the continuous loss behind the level (AC.LowpassHold); the cap may set lp instead
 	return { chain = chain, points = pts, length = len, diffDb = diff, doorDb = loss - diff, lossDb = loss,
-		pos = pts[#pts], lp = lp, lpDb = tilt, direct = direct, bendDeg = bend }
+		pos = pts[#pts], lp = lp, lpDb = tilt, direct = direct, bendDeg = bend, cornerPaid = paidMin }
 end
 
 --- Door loss (dB), lowpass level and spectral tilt (dB) of the door entities crossed by segment a -> b
@@ -383,6 +404,7 @@ function P.EvalPolyline(pts, cfg)
 		local delta = pts[i - 1]:Distance(pts[i]) + pts[i]:Distance(pts[i + 1]) - pts[i - 1]:Distance(pts[i + 1])
 		diff = diff + AC.Corner(delta, cfg.diff_freq, cfg.diff_max_edge, cfg.portal_diffuse_db or 60)
 	end
+	if #pts > 2 then diff = math.max(diff, P.WedgeDb(len, pts[1]:Distance(pts[#pts]), cfg)) end
 	diff = math.min(diff, cfg.diff_max_total)
 	local inner = {}
 	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
@@ -2005,6 +2027,10 @@ function P.CheckLegs(p, S, L, cfg, srcEnt, r)
 		local e = P.EvalPolyline(poly, cfg)
 		len = len + e.length - c.points[n]:Distance(W)
 		diff, door, lpDb = diff + e.diffDb, door + e.doorDb, lpDb + e.lpDb
+	end
+	if r1 or r2 then -- the joined route's corners as one wedge at least (P.WedgeDb), as the chain's own
+		local w = P.WedgeDb(len, S:Distance(L), cfg) * (c.cornerPaid or 1)
+		if w > diff then diff, lpDb = w, lpDb + w - diff end
 	end
 	diff = math.min(diff, cfg.diff_max_total)
 	local pen = 0
