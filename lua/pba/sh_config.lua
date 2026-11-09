@@ -83,7 +83,7 @@ A.CONFIG = {
 	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_pba is installed." },
 	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },
 	native_render   = { 0, 0, 1, "cl", "Experimental: the native module plays processed sounds itself (Steam Audio HRTF + 3-band EQ)." },
-	native_reverb   = { 0.15, 0, 2, "cl", "Room reverb level of natively rendered sounds (Steam Audio reflections simulated at the listener)." },
+	native_reverb   = { 0.4, 0, 2, "cl", "Room reverb level of natively rendered sounds (Steam Audio reflections simulated at the listener). Each sound feeds the reverb with its level times its distance (the reverb/direct balance of a real room, whatever the game's distance law); 0.4 matches an empty room's physics (rp_downtown, measured: reverb = direct + 3 dB at 1 m, +18 dB at 5.5 m). Lower for a drier sound." },
 	native_echo     = { 0.25, 0, 4, "cl", "Echo level: reflections simulated for each loud sound (gunfire, explosions), heard in addition to the engine's sound. 0 = off." },
 	native_echo_lvl = { 95, 60, 160, "cl", "Minimum sound level (dB SNDLVL) for a sound to get simulated echoes." },
 	native_bounces  = { 16, 4, 256, "cl", "Bounces per ray of the reverb simulation: enough to fill the simulated window, or reflective rooms (tile, metal) get a reverb time capped too short. Background thread CPU grows with it." },

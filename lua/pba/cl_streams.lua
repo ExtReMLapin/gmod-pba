@@ -74,19 +74,21 @@ local function nativeParams(ch, r, L)
 	local dS = r.pos:Distance(L)
 	local gain = (r.vol or 1) * bassGain(ch, dS) * (r.gRel or 1) * A.cfg.native_gain
 	local el, em, eh = A.Native.VoiceEQ(r.lp or 0, r.len or dS)
-	return pos, gain, el, em, eh
+	-- room reverb send: the reverb/direct balance of a real source at this distance (see N.SendK)
+	local send = gain * A.Native.SendK(r.len or dS)
+	return pos, gain, el, em, eh, send
 end
 
 local function nativeUpdate(ch, r, L)
 	if not r.nativeId then return end
-	local pos, gain, el, em, eh = nativeParams(ch, r, L)
-	if not pba_native.Update(r.nativeId, pos, gain, el, em, eh, 100, r.diffuse or 0) then r.nativeId = nil end
+	local pos, gain, el, em, eh, send = nativeParams(ch, r, L)
+	if not pba_native.Update(r.nativeId, pos, gain, el, em, eh, 100, r.diffuse or 0, send) then r.nativeId = nil end
 end
 
 local function nativeStart(ch, r, L)
 	local ok, id = pcall(function()
-		local pos, gain, el, em, eh = nativeParams(ch, r, L)
-		return pba_native.PlayStream(ch, pos, gain, el, em, eh, 100)
+		local pos, gain, el, em, eh, send = nativeParams(ch, r, L)
+		return pba_native.PlayStream(ch, pos, gain, el, em, eh, 100, send)
 	end)
 	if ok and id and id > 0 then
 		r.nativeId = id

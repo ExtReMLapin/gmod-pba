@@ -24,6 +24,10 @@ struct VoiceParams {
 	// share of the energy arriving diffuse (long winding path: scattered at every corner and wall):
 	// 0 = a clean wavefront; towards 1 less direct sound, more room reverb send, blurred direction
 	float diffuse = 0;
+	// room reverb send level (linear), independent from gain: the diffuse field of a room is excited by
+	// the source's power whatever the source-listener distance, so the send must not carry the distance
+	// law that gain does. < 0: unchanged on Update; a voice that never received one sends at its gain
+	float send = -1;
 };
 
 // sofa / sofaSize: optional SOFA HRTF file contents (nullptr = Steam Audio's default HRTF)

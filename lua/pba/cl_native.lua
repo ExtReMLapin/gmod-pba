@@ -426,7 +426,22 @@ end
 -- treble cut, low / mid / high gains) stands for it.
 N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 
+-- Room reverb send of a voice. In a room the reverberant field is the same everywhere, excited by the
+-- source's power, while the direct sound falls as 1/r: the farther the source, the more the reverb
+-- dominates (an empty room: reverb = direct at ~0.7 m, +17 dB at 5.5 m). The game's direct sound does not
+-- fall as 1/r (the engine's and BASS's laws are much gentler: a radio 290 u away is ~13 dB louder than
+-- a real one), so a send that followed the direct gain kept the reverb/direct balance of a source about
+-- 1 m away at every distance: far sources sounded dry (pba_native_reverb 0.15 right near, too low far).
+-- The send is the gain times distance / 1 m: the reverb/direct balance of a real source at that distance,
+-- whatever the game's distance law. Capped at 100 (+40 dB). lvl is unused (kept for the callers).
+N.REF_UNITS = 52.49 -- 1 m
+function N.SendK(len)
+	if not len then return 1 end
+	return math.Clamp(len / N.REF_UNITS, 1, 100)
+end
+
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
+-- lvl = sound level (dB, for the room reverb send: see N.SendK; without it the send follows the gain),
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds, diffuse = share
 -- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction) }.
 -- Returns true on success.
@@ -438,8 +453,9 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local l, m, h = N.VoiceEQ(lp, opt.len)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and opt.sh or nil
-	local id = pba_native.Play(n, pos, gain * A.cfg.native_gain, l, m, h, pitch or 100, false, opt.delay or 0, sh,
-		opt.diffuse or 0)
+	local g = gain * A.cfg.native_gain
+	local send = opt.lvl and g * N.SendK(opt.len, opt.lvl) or nil
+	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, send)
 	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100

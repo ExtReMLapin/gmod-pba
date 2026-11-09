@@ -84,6 +84,7 @@ struct Voice {
 	bool hasSH = false;
 	float sh[4] = {0, 0, 0, 0};
 	float diffuse = 0; // see VoiceParams::diffuse
+	float send = -1, sendCur = -1; // room reverb send (see VoiceParams::send); -1: follows gain
 	int slot = -1;     // index in the effect pool
 	int pathSlot = -1; // index in the path effect pool
 	int echoSlot = -1; // reflections-only voice
@@ -305,11 +306,14 @@ void RenderBlock() {
 		}
 		// gain smoothing over the block (no zipper noise / clicks on updates)
 		const float g0 = v.gainCur < 0 ? v.gain : v.gainCur, g1 = v.gain;
-		for (int i = 0; i < kBlock; ++i) m[i] *= g0 + (g1 - g0) * (float)i / kBlock;
+		auto applyGain = [&](float* x) {
+			for (int i = 0; i < kBlock; ++i) x[i] *= g0 + (g1 - g0) * (float)i / kBlock;
+		};
 		v.gainCur = g1;
 		if (v.dying && g1 <= 0) v.alive = false;
 
 		if (v.echoSlot >= 0) {
+			applyGain(m);
 			Reflection& r = g_echo[v.echoSlot];
 			float* d = r.in.data[0];
 			for (int i = 0; i < kBlock; ++i) d[i] += m[i];
@@ -317,14 +321,25 @@ void RenderBlock() {
 			continue;
 		}
 
-		const float* sendSrc = m;
-		float sendGain = 1;
+		// room reverb send, smoothed like the gain. It is taken from the pre-gain signal: the room's
+		// diffuse field is excited by the source's power, not by what reaches the listener directly
+		// (the send must not carry the game's distance law). No send yet: it follows the gain.
+		const float s1 = v.send < 0 ? g1 : v.send;
+		const float s0 = v.sendCur < 0 ? s1 : v.sendCur;
+		v.sendCur = s1;
+		auto feedRoom = [&](const float* x, float k) {
+			float* snd = g_room.in.data[0];
+			for (int i = 0; i < kBlock; ++i) snd[i] += x[i] * (s0 + (s1 - s0) * (float)i / kBlock) * k;
+			g_room.fed = true;
+		};
 		// diffuse energy (long winding path): the direct part gives way to the room reverb send, and
 		// its direction blurs (binaural spatial blend); the total energy is kept
 		const float dif = v.diffuse;
 		const float directGain = std::sqrt(std::max(1.0f - dif, 0.0f));
 		const float sendBoost = 1.0f + g_diffuseSend * dif;
 		if (v.hasSH && v.pathSlot >= 0) {
+			feedRoom(m, v.eq[1] * sendBoost); // before the gain is applied to m
+			applyGain(m);
 			IPLPathEffectParams pp{};
 			for (int b = 0; b < 3; ++b) pp.eqCoeffs[b] = v.eq[b];
 			pp.shCoeffs = v.sh;
@@ -334,8 +349,9 @@ void RenderBlock() {
 			pp.listener = lis;
 			pp.normalizeEQ = IPL_FALSE;
 			iplPathEffectApply(g_pathPool[v.pathSlot].fx, &pp, &g_mono, &g_stereo);
-			sendGain = v.eq[1] * sendBoost;
 		} else {
+			// EQ first (linear), then the gain and send ramps: one EQ pass serves both the direct
+			// path and the send (same level and EQ as gain-then-EQ)
 			IPLAudioBuffer* bin_in = &g_mono;
 			if (v.eq[0] < 0.999f || v.eq[1] < 0.999f || v.eq[2] < 0.999f) {
 				IPLDirectEffectParams dp{};
@@ -346,8 +362,8 @@ void RenderBlock() {
 				iplDirectEffectApply(g_pool[v.slot].direct, &dp, &g_mono, &g_mono2);
 				bin_in = &g_mono2;
 			}
-			sendSrc = bin_in->data[0];
-			sendGain = sendBoost;
+			feedRoom(bin_in->data[0], sendBoost);
+			applyGain(bin_in->data[0]);
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
 			if (g_outMode == 0) {
@@ -363,11 +379,6 @@ void RenderBlock() {
 				iplPanningEffectApply(g_pool[v.slot].pan, &pp, bin_in, &g_stereo);
 			}
 			for (int i = 0; i < kBlock; ++i) g_dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
-		}
-		{
-			float* snd = g_room.in.data[0];
-			for (int i = 0; i < kBlock; ++i) snd[i] += sendSrc[i] * sendGain;
-			g_room.fed = true;
 		}
 		const float* L = g_stereo.data[0];
 		const float* R = g_stereo.data[1];
@@ -797,6 +808,7 @@ static void SetVoice(Voice& v, const VoiceParams& p) {
 	std::copy(p.eq, p.eq + 3, v.eq);
 	if (p.hasSH) std::copy(p.sh, p.sh + 4, v.sh);
 	if (p.diffuse >= 0) v.diffuse = std::clamp(p.diffuse, 0.0f, 1.0f); // < 0: unchanged (Update without it)
+	if (p.send >= 0) v.send = p.send; // < 0: unchanged (Update without it)
 }
 
 int Play(const std::string& name, const VoiceParams& p, bool loop) {
@@ -908,6 +920,7 @@ void StopVoice(int id) {
 		if (v->id == id) {
 			v->dying = true;
 			v->gain = 0;
+			v->send = 0; // the reverb send fades out with the direct sound
 			if (v->gainCur < 0) v->alive = false; // never rendered yet
 		}
 }

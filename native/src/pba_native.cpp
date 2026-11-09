@@ -16,10 +16,14 @@
 //   SavePaths() -> bytes | nil ; LoadPaths(bytes) -> numProbes | false, err   (disk cache)
 //   Paths(sources, listener) -> array of { el, em, eh, w, sh1..3, dx, dy, dz } (eq + arrival field)
 //   Rendering (render.cpp): AudioStart([sofaBytes]), AudioStop(), HasSound(name),
-//     LoadSound(name, bytes), Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse]),
-//     Update(id, ...), StopVoice(id), SetListener(pos, fwd, up, master), SetOutputMode(0|1),
+//     LoadSound(name, bytes), Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse, send]),
+//     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send]]), StopVoice(id),
+//     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send]]),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table
+//     send: room reverb send level (linear), independent from gain, which carries the distance law;
+//     absent = keep the voice's (a voice that never received one sends at its gain)
 //   DynamicAdd(id, verts, tris, material), DynamicMove(id, matrixRows), DynamicRemove(id),
 //     DynamicCommit() -> committed   (doors and other moving objects in the scene)
 //   Shutdown()
@@ -1192,7 +1196,7 @@ static render::VoiceParams ReadVoice(ILuaBase* LUA, int first) {
 }
 
 // optional trailing arguments of Play: delay (seconds), sh {w, sh1, sh2, sh3} (baked path field),
-// diffuse share (0..1)
+// diffuse share (0..1), room reverb send level (linear, absent = follows gain)
 static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	if (LUA->IsType(first, Type::Number)) p.delay = (float)LUA->GetNumber(first);
 	if (LUA->IsType(first + 1, Type::Table)) {
@@ -1200,6 +1204,12 @@ static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 		p.hasSH = true;
 	}
 	if (LUA->IsType(first + 2, Type::Number)) p.diffuse = (float)LUA->GetNumber(first + 2);
+	if (LUA->IsType(first + 3, Type::Number)) p.send = (float)LUA->GetNumber(first + 3);
+}
+
+// optional room reverb send at index i (PlayStream, Update): -1 when absent = keep the current one
+static float ReadSend(ILuaBase* LUA, int i) {
+	return LUA->IsType(i, Type::Number) ? (float)LUA->GetNumber(i) : -1.0f;
 }
 
 // AudioStart([sofaBytes]) -> true | false, err
@@ -1258,7 +1268,7 @@ LUA_FUNCTION(LoadSound) {
 	return 1;
 }
 
-// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse]]]]]) -> voice id (0 = failed)
+// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send]]]]]]) -> voice id (0 = failed)
 LUA_FUNCTION(Play) {
 	const char* name = LUA->CheckString(1);
 	LUA->CheckType(2, Type::Vector);
@@ -1431,13 +1441,14 @@ LUA_FUNCTION(StreamCapture) {
 	return 1;
 }
 
-// PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch]) -> voice id (0 = failed): the captured
+// PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send]]) -> voice id (0 = failed): the captured
 // audio of the channel played as a native voice (HRTF, reverb, paths); Update / StopVoice as usual
 LUA_FUNCTION(PlayStream) {
 	void* obj = LUA->GetUserType<void>(1, Type::SoundHandle);
 	if (!obj) LUA->ThrowError("PlayStream: IGModAudioChannel expected");
 	LUA->CheckType(2, Type::Vector);
 	render::VoiceParams p = ReadVoice(LUA, 2);
+	p.send = ReadSend(LUA, 8);
 	unsigned freq;
 	bool is3D;
 	ChannelFacts(LUA, &freq, &is3D);
@@ -1558,12 +1569,13 @@ LUA_FUNCTION(Stats) {
 }
 
 // Update(id, pos, gain, eqL, eqM, eqH [, pitch]) -> alive
-// Update(id, pos, gain, eqL, eqM, eqH [, pitch [, diffuse]])
+// Update(id, pos, gain, eqL, eqM, eqH [, pitch [, diffuse [, send]]])
 LUA_FUNCTION(Update) {
 	const int id = (int)LUA->CheckNumber(1);
 	LUA->CheckType(2, Type::Vector);
 	render::VoiceParams p = ReadVoice(LUA, 2);
 	p.diffuse = LUA->IsType(8, Type::Number) ? (float)LUA->GetNumber(8) : -1.0f; // -1: keep the voice's
+	p.send = ReadSend(LUA, 9);
 	LUA->PushBool(render::Update(id, p));
 	return 1;
 }

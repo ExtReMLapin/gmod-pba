@@ -107,21 +107,27 @@ local function applyNative(m, S, L)
 	local N = A.Native
 	local r = pathOf(m, S, L)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
-	local pos, gain, lp
+	local pos, gain, lp, send
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
 	if m.clearPath then
 		pos, gain, lp = S, AC.EngineGain(S:Distance(L), m.lvl), 0
+		send = gain * N.SendK(S:Distance(L), m.lvl)
 		m.diffuse = 0
 	else
-		local p, dp = 0, 0
-		for _, v in ipairs(r.voices) do p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain end
-		pos, gain, lp = r.voices[1].pos, math.sqrt(p), r.voices[1].lp
+		local p, dp, ps = 0, 0, 0
+		for _, v in ipairs(r.voices) do
+			p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain
+			local s = v.gain * N.SendK(v.len, m.lvl) -- room reverb send: without the distance law
+			ps = ps + s * s
+		end
+		pos, gain, lp, send = r.voices[1].pos, math.sqrt(p), r.voices[1].lp, math.sqrt(ps)
 		m.diffuse = dp / math.max(p, 1e-12) -- diffuse share (long winding path): the module blurs and reverbs it
 	end
 	-- same meters as the patch path (gain relative to the engine's direct law, DSP equivalent)
 	m.g = math.min(gain / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6), 1)
 	m.curDsp = AC.DSPForVoice(lp or 0, m.diffuse)
 	gain = gain * m.vol * A.cfg.native_gain
+	send = send * m.vol * A.cfg.native_gain
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
 	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
 	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
@@ -136,7 +142,7 @@ local function applyNative(m, S, L)
 		else
 			m.ramp = nil
 		end
-		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0) then m.nativeId = nil end
+		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil end
 		return
 	end
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
@@ -145,7 +151,7 @@ local function applyNative(m, S, L)
 		if why == "pending" then return nil end -- decoding: wait for it (no engine fallback meanwhile)
 		return false
 	end
-	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0)
+	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
 	m.started = true
 	m.nativeId = id > 0 and id or nil
 	-- a new voice starts at its target: the next ramp starts from there

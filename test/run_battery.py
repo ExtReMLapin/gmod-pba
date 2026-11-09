@@ -162,6 +162,8 @@ steps = [
     # diffuse share in the native module: direct down, reverb up, total about constant (demo mode C)
     ("native_diffuse pba_demo", lambda: (call("lua_exec", {"realm": "server", "code": "pba.DemoMap.SetMode(3) return true"}),
                                          job("client", "native_diffuse.lua", 60))[1]),
+    # reverb send independent from the direct gain: a far source excites the room reverb as much as a near one
+    ("native_reverb_distance pba_demo", lambda: job("client", "native_reverb_distance.lua", 90)),
     ("native_water", lambda: py("native_water.py")),  # still on pba_demo: one load less
     ("reverb_rt", lambda: py("reverb_rt.py")),
     ("native_options", lambda: py("native_options.py")),
