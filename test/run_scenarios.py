@@ -94,6 +94,7 @@ if want("tworooms_left"):
     v = dom(r)
     check("P3-door-left", v and v["az"] < -15, f"dominant={v}")
 
+closed_level = None
 if want("tworooms_closed"):
     r, _, _ = run("tworooms_closed", "pba_tworooms", wait=3.5)
     p = r["paths"][0] if r and r.get("paths") else None
@@ -102,6 +103,7 @@ if want("tworooms_closed"):
     # AND more muffling; the old >10 dB thresholds came from the generic 28 dB mid-band leaf.
     check("P3-door-closed-loss", p and p["door_db"] > 5, f"path={p} trans={r and r.get('trans')}")
     v = dom(r)
+    closed_level = v["level_db"] if v else None
     if v and want("tworooms_open"):
         check("P3-door-closed-quieter", v["level_db"] < open_level - 5 and v.get("lp", 0) > open_lp,
               f"closed={v['level_db']} lp{v.get('lp')} open={open_level} lp{open_lp}")
@@ -109,7 +111,14 @@ if want("tworooms_closed"):
 if want("tworooms_half"):
     r, _, _ = run("tworooms_half", "pba_tworooms", wait=3.5)
     p = r["paths"][0] if r and r.get("paths") else None
-    check("P3-door-half", p and 0 < p["door_db"] < 10, f"path={p}")
+    # judged on what is heard, not on how the loss is split (door_db is the portal chain's aperture law in
+    # pba_paths_model 0; the listener field of model 1 pays an ajar leaf as an object, its way round
+    # included in the corners): quieter than the open door by at least HALF_MIN_DB, louder than the closed one
+    v = dom(r)
+    HALF_MIN_DB = 0.5
+    ref = want("tworooms_open") and want("tworooms_closed") and open_level is not None and closed_level is not None
+    check("P3-door-half", p and v and (not ref or closed_level < v["level_db"] < open_level - HALF_MIN_DB),
+          f"half={v and v['level_db']} open={open_level if ref else '?'} closed={closed_level if ref else '?'} path={p}")
 
 if want("loop_door"):
     ensure_map("pba_tworooms")
