@@ -153,6 +153,85 @@ local function routeClear(pts)
 	return true
 end
 
+-- A door leaf turning about a vertical hinge (its `yaw` in degrees, settable), local box mn..mx: for the
+-- door-in-3-D cases.
+local function leafEnt(idx, hinge, mn, mx)
+	local e = { yaw = 0 }
+	function e:IsValid() return true end
+	function e:GetClass() return "prop_door_rotating" end
+	function e:EntIndex() return idx end
+	function e:OBBMins() return mn end
+	function e:OBBMaxs() return mx end
+	function e:IsWorld() return false end
+	function e:BoundingRadius() return (mx - mn):Length() * 0.5 end
+	function e:WorldToLocal(v)
+		local r, d = math.rad(self.yaw), v - hinge
+		return Vector(d.x * math.cos(r) + d.y * math.sin(r), -d.x * math.sin(r) + d.y * math.cos(r), d.z)
+	end
+	function e:LocalToWorld(v)
+		local r = math.rad(self.yaw)
+		return hinge + Vector(v.x * math.cos(r) - v.y * math.sin(r), v.x * math.sin(r) + v.y * math.cos(r), v.z)
+	end
+	return e
+end
+-- World boxes and one leaf for the duration of fn(state) only (restored even on error): traces whose filter
+-- takes the leaf see it (its box grown by the hull, in its own frame), traces without ignoreworld see the
+-- boxes; state is the leaf's door state (pba.Doors.byEnt), closed at first.
+local function withLeafScene(world, leaf, fn)
+	local function worldHit(a, b)
+		local best
+		for _, w in ipairs(world) do
+			local t0, t1 = segBox(a, b, w[1], w[2])
+			if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+		end
+		return best
+	end
+	local function leafHit(a, b, pad)
+		local d = Vector(pad, pad, pad)
+		local t0, t1 = segBox(leaf:WorldToLocal(a), leaf:WorldToLocal(b), leaf:OBBMins() - d, leaf:OBBMaxs() + d)
+		if t0 and t1 - t0 > 1e-9 then return t0 end
+	end
+	local function tr(t)
+		local o = traceOut(t)
+		local f, ent
+		if not t.ignoreworld then f = worldHit(t.start, t.endpos) end
+		if type(t.filter) == "function" and t.filter(leaf) == true then
+			local g = leafHit(t.start, t.endpos, t.maxs and t.maxs.x or 0)
+			if g and (not f or g < f) then f, ent = g, leaf end
+		end
+		o.Hit, o.Fraction, o.Entity, o.StartSolid = f ~= nil, f or 1, ent, f == 0
+		o.HitPos = t.start + (t.endpos - t.start) * (f or 1)
+		return o
+	end
+	local D = pba.Doors
+	D.byEnt = D.byEnt or {}
+	local idx = leaf:EntIndex()
+	local saved = { util.TraceLine, util.TraceHull, D.byEnt[idx], A.cfg.native_traces }
+	util.TraceLine, util.TraceHull, A.cfg.native_traces = tr, tr, 0
+	D.byEnt[idx] = { frac = 0, closedDb = 24, closedLp = 3 }
+	local ok, err = pcall(fn, D.byEnt[idx])
+	util.TraceLine, util.TraceHull, D.byEnt[idx], A.cfg.native_traces = saved[1], saved[2], saved[3], saved[4]
+	if not ok then error(err, 0) end
+end
+-- two rooms (A x < 512, B x > 528, z 0..192) and the doorway y0..y1 (z 0..112) in their 16 u wall:
+-- pba_twodoors' door_s 96..144, pba_tworooms' door1 64..112
+local WB = 4000
+local function twoRoomsWorld(y0, y1)
+	return { { Vector(-WB, -WB, -16), Vector(WB, WB, 0) }, { Vector(-WB, -WB, 192), Vector(WB, WB, 208) },
+		{ Vector(512, -WB, 0), Vector(528, y0, 192) }, { Vector(512, y1, 0), Vector(528, WB, 192) },
+		{ Vector(512, y0, 112), Vector(528, y1, 192) } }
+end
+-- largest step of f(x) over the list xs
+local function worstStep(xs, f)
+	local prev, worst, at = nil, 0, nil
+	for _, x in ipairs(xs) do
+		local v = f(x)
+		if prev and math.abs(v - prev) > worst then worst, at = math.abs(v - prev), x end
+		prev = v
+	end
+	return worst, at
+end
+
 -- synthetic BSP: three areas in a row, portals 1 (areas 1|2, plane x=100) and 2 (areas 2|3, x=200)
 local function rect(x, y0, y1, z0, z1)
 	return { Vector(x, y0, z0), Vector(x, y0, z1), Vector(x, y1, z1), Vector(x, y1, z0) }
@@ -1825,7 +1904,9 @@ local SUITE = {
 			expect(P.EvalWalls({ machine() }, cfg, true) > 40).to.beTrue()
 		end },
 		{ name = "EvalWalls: a door leaf opening goes from closure to object over its first fifth (former switch at 2 %: 37 dB in one step; a slit under half a wavelength)", func = function()
-			local cfg = setmetatable({ prop_max_db = 18, trans_max = 500 }, { __index = pba.cfg })
+			-- the former model (pba_door_3d 0): the narrowness of a gap blended in from the opening fraction;
+			-- the leaf in 3-D measures it (the "Door in 3-D" cases)
+			local cfg = setmetatable({ prop_max_db = 18, trans_max = 500, door_3d = 0 }, { __index = pba.cfg })
 			local fakeDoor = { IsValid = function() return true end, GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
 			local D = pba.Doors
 			local states = CLIENT and D.byEnt or D.entState
@@ -1870,7 +1951,8 @@ local SUITE = {
 			-- every trace meets the leaf (the way round it is blocked too: an object with no detour)
 			util.TraceLine = function(t) local o = traceOut(t) o.Hit, o.Entity, o.HitPos, o.StartSolid = true, fakeDoor, Vector(50, 0, 0), false return o end
 			util.TraceHull = util.TraceLine -- P.SegmentDoorLoss traces a hull
-			local cfg = setmetatable({ prop_max_db = 18, trans_scale = 1, trans_lf_bonus = 10 }, { __index = CFG })
+			-- (the former model's blend over the opening fraction: pba_door_3d 0; the leaf in 3-D has its own cases)
+			local cfg = setmetatable({ prop_max_db = 18, trans_scale = 1, trans_lf_bonus = 10, door_3d = 0 }, { __index = CFG })
 			local ok, err = pcall(function()
 				local function at(frac)
 					D.byEnt[9999] = { frac = frac, closedDb = 30, closedLp = 3 }
@@ -2884,6 +2966,94 @@ local SUITE = {
 				PR.doorList, PR.doorEpoch = savedList, savedEpoch
 				states[9996] = savedState
 				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "GapRatio: the free part of a passage, relative to the passage whole: 1 uncovered, falling as the gap narrows, 0 shut", func = function()
+			expect(AC.GapRatio(-40, 10, 10, 300, 300, 500)).to.equal(1)
+			expect(AC.GapRatio(-40, -40, 10, 300, 300, 500)).to.equal(0)
+			local prev = 1
+			for hi = 9, -39, -2 do
+				local r = AC.GapRatio(-40, hi, 10, 300, 300, 500)
+				expect(r <= prev + 1e-6 and r >= 0).to.beTrue()
+				prev = r
+			end
+			-- a third of a doorway left free costs several dB, far below the Fresnel zone it follows the width
+			local third = -AC.GainToDb(AC.GapRatio(-16, 0, 32, 300, 300, 500))
+			expect(third > 3 and third < 15).to.beTrue()
+		end },
+		{ name = "Door in 3-D: a leaf swinging past a route changes its level by degrees (was 8-10 dB in 0.25 degree: a span over the route's corner costed against its chord, then nothing once the hull let go; pba_twodoors)", func = function()
+			-- pba_twodoors' door_s: hinge (520, 100), leaf y 97..143 when shut, swinging into room A; source in room B,
+			-- listeners in room A ahead and to either side, routes bending round the jamb on a clearance vertex
+			local leaf = leafEnt(9971, Vector(520, 100, 5), Vector(-4, -3, -4), Vector(4, 43, 106))
+			local cfg = setmetatable({ door_3d = 1 }, { __index = CFG })
+			local S = Vector(640, 120, 56)
+			local routes = { { S, Vector(440, 120, 56) }, { S, Vector(506, 138, 56), Vector(460, 220, 56) },
+				{ S, Vector(506, 102, 56), Vector(460, 40, 56) }, { S, Vector(506, 138, 56), Vector(490, 260, 56) } }
+			local angles = {}
+			for th = 0.5, 60, 0.25 do angles[#angles + 1] = th end
+			local savedProp, saved3d = util.GetSurfacePropName, A.cfg.door_3d
+			util.GetSurfacePropName = util.GetSurfacePropName or function() return "default" end
+			A.cfg.door_3d = 1 -- the straight line's walls (P.Walls) read the global setting
+			local ok, err = pcall(withLeafScene, twoRoomsWorld(96, 144), leaf, function(st)
+				for k, pts in ipairs(routes) do
+					local worst, at = worstStep(angles, function(th)
+						leaf.yaw, st.frac = th, th / 90
+						local p = P.EvalRoute(pts, cfg)
+						if #pts == 2 then
+							-- the straight line pays the leaf as this route of two points does: one model (a leaf beside
+							-- the line costing under 0.05 dB is left out of its walls: the line stays clear)
+							local walls = P.LineLeaves(pts[1], pts[2], P.Walls(pts[1], pts[2], 6), cfg)
+							local line = #walls > 0 and P.EvalWalls(walls, cfg) or 0
+							if math.abs(line - p.doorDb) > 0.06 then error(string.format("%.2f deg: line %.2f dB, route %.2f dB", th, line, p.doorDb)) end
+						end
+						return p.lossDb
+					end)
+					if DEBUGDOOR then print("route", k, worst, at) end
+					expect(worst < 1.5).to.beTrue()
+				end
+			end)
+			util.GetSurfacePropName, A.cfg.door_3d = savedProp, saved3d
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Door in 3-D: the way round a leaf's free edge hidden behind a parallel wall corner bends round that corner (was a jump to the way over the top when the edge came into view: double diffraction missing)", func = function()
+			-- a leaf hinged on a wall (y < -100), its free edge at y = 20, 1 u under a ceiling and over the floor;
+			-- a fin wall (x 230..240, y >= 18) beside the free edge; the route a -> b crosses the leaf under the fin,
+			-- b slides 2 u at a time: the free edge comes into b's view past the fin's corner
+			local leaf = leafEnt(9972, Vector(200, -100, 0), Vector(-5, 0, 1), Vector(5, 120, 101))
+			local world = { { Vector(-WB, -WB, -16), Vector(WB, WB, 0) }, { Vector(-WB, -WB, 102), Vector(WB, WB, 200) },
+				{ Vector(195, -WB, 0), Vector(205, -100, 102) }, { Vector(230, 18, 0), Vector(240, WB, 102) } }
+			local cfg = setmetatable({ door_3d = 1 }, { __index = CFG })
+			local a = Vector(0, 0, 50)
+			local ys = {}
+			for y = 30, -20, -2 do ys[#ys + 1] = y end
+			withLeafScene(world, leaf, function(st)
+				st.frac = 1
+				local worst, at = worstStep(ys, function(y) return P.EvalRoute({ a, Vector(400, y, 50) }, cfg).lossDb end)
+				if DEBUGDOOR then print("slide", worst, at) end
+				expect(worst < 1.5).to.beTrue()
+			end)
+		end },
+		{ name = "Door in 3-D: a door left ajar is heard through its gap: quieter than wide open, louder than shut (was exactly as loud as open: the narrow gap between the free edge and the jamb paid nothing; pba_tworooms P3-door-half)", func = function()
+			-- pba_tworooms' door1: hinge (520, 65), leaf 47 u swinging into the source room; the route from the
+			-- source round the doorway's north jamb on a clearance vertex
+			local leaf = leafEnt(9973, Vector(520, 65.25, 54.25), Vector(-1, 0, -54), Vector(1, 47, 54))
+			local cfg = setmetatable({ door_3d = 1 }, { __index = CFG })
+			local pts = { Vector(784, 256, 40), Vector(520, 106, 40), Vector(256, 256, 40) }
+			withLeafScene(twoRoomsWorld(64, 112), leaf, function(st)
+				local function at(deg)
+					leaf.yaw, st.frac = -deg, deg / 90
+					return P.EvalRoute(pts, cfg).lossDb
+				end
+				local open, half, shut = at(90), at(20), at(0)
+				if DEBUGDOOR then print("open", open, "half", half, "shut", shut) end
+				expect(half >= open + 0.5).to.beTrue()
+				expect(half < shut).to.beTrue()
+				-- and by degrees on the way
+				local angles = {}
+				for d = 0.5, 90, 0.5 do angles[#angles + 1] = d end
+				local worst = worstStep(angles, at)
+				if DEBUGDOOR then print("worst", worst) end
+				expect(worst < 1.5).to.beTrue()
 			end)
 		end },
 	},

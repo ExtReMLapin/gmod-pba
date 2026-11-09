@@ -150,6 +150,16 @@ function AC.ApertureBand(ap, u, v, d1, d2, freq)
 	return math.sqrt(p / 5)
 end
 
+--- Amplitude through the free part [lo, hi] of a passage [lo, top] (units across the ray, the ray at 0),
+-- relative to the passage left whole: an object (a door leaf ajar, a prop) covers [hi, top]. The law of an
+-- opening masked by objects (AC.ApertureBand), for a passage measured across a route instead of a portal:
+-- 1 when nothing covers it, falling with the gap as the gap narrows below the Fresnel zone, 0 shut.
+function AC.GapRatio(lo, hi, top, d1, d2, freq)
+	if hi >= top or top - lo < 1e-3 then return 1 end
+	if hi <= lo then return 0 end
+	return math.min(AC.ApertureBand({ w0 = lo, w1 = top, intervals = { { lo, hi } } }, 0, 0, d1, d2, freq), 1)
+end
+
 --- Low-pass level 0..4 from a diffraction loss in dB.
 function AC.LowpassLevel(db, cfg)
 	cfg = cfg or A.cfg
