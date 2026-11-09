@@ -919,11 +919,13 @@ end
 -- step). Searched up to EDGE_FAR units off the line, the edge's weight fading out over the last half: an
 -- obstacle growing past the search range fades to its transmission instead of dropping to it.
 -- walls: P.Walls(S, L) (only the world ones are used). Returns { db, weight, apex, delta, doorDb, tilt }
--- or nil (db includes the doors crossed on its legs, tilt what muffles it).
+-- or nil (db includes the doors crossed on its legs, tilt what muffles it). noDoors: the legs pay no
+-- door (a portal path's leg, P.CheckLegs: its doorway's leaf is the chain's own term, and the leg
+-- starts in that doorway, within a hull of the leaf: paid twice, a 14 dB step where a leg got blocked).
 local EDGE_STEPS = { 4, 8, 16, 32, 64, 128, 256, 512 }
 local EDGE_FAR = 512
 local EDGE_REFINE = 4
-function P.WorldEdge(S, L, walls, cfg)
+function P.WorldEdge(S, L, walls, cfg, noDoors)
 	cfg = cfg or A.cfg
 	if (cfg.world_edge or 1) < 0.5 then return nil end
 	local first, last
@@ -982,9 +984,12 @@ function P.WorldEdge(S, L, walls, cfg)
 	-- the way over the edge crosses the doors on its two legs like any route segment (P.SegmentDoorLoss):
 	-- the thin traces see the world only, so a closed door's doorway is an edge for them, its leaf the loss
 	-- behind it (without it the edge gave 2 dB through a shut door beside the probes' 16)
-	local d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
-	local d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
-	if e2 and e2 == e1 then d2, l2 = 0, 0 end -- one leaf at the apex: paid once
+	local d1, l1, e1, d2, l2, e2 = 0, 0, nil, 0, 0, nil
+	if not noDoors then
+		d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
+		d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
+		if e2 and e2 == e1 then d2, l2 = 0, 0 end -- one leaf at the apex: paid once
+	end
 	best.doorDb = d1 + d2
 	best.tilt = best.db + AC.LevelDb(l1 or 0, cfg) + AC.LevelDb(l2 or 0, cfg)
 	best.db = best.db + best.doorDb
@@ -2220,7 +2225,7 @@ end
 local function legPenalty(a, b, ws, cfg)
 	local loss, l, mid = P.EvalWalls(ws, cfg)
 	local t = { lossDb = loss, midDb = mid, lp = l }
-	local e = P.WorldEdge(a, b, ws, cfg)
+	local e = P.WorldEdge(a, b, ws, cfg, true) -- the leg's doorway is the chain's: no door on the edge
 	if e then P.AddEdge(t, e, nil, cfg) end
 	return t.lossDb, t.tilt or AC.LevelDb(t.lp, cfg)
 end
