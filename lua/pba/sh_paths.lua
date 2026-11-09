@@ -616,8 +616,9 @@ local function wallsOneWay(S, L, maxWalls, srcEnt)
 		else
 			exit = entry -- zero-thickness surface (displacement, model face)
 		end
+		-- tex / sky: whether Steam Audio's scene holds this surface (P.NativeLacks)
 		local w = { entry = entry, exit = exit, thickness = entry:Distance(exit), mat = tr.MatType, surf = surf,
-			surfIdx = tr.SurfaceProps, ent = hitEnt }
+			surfIdx = tr.SurfaceProps, ent = hitEnt, tex = tr.HitTexture, sky = tr.HitSky or nil }
 		if hitEnt then
 			local ext = hitEnt:OBBMaxs() - hitEnt:OBBMins()
 			w.minExtent = math.min(ext.x, ext.y, ext.z) -- panel or closed volume (P.EvalWalls)
@@ -1253,6 +1254,90 @@ end
 
 local function q(v) return math.floor(v.x / 32) .. "," .. math.floor(v.y / 32) .. "," .. math.floor(v.z / 32) end
 
+-- The result cache is keyed on 32 u cells, which can straddle a wall: a sound 8 u behind a concrete
+-- wall shared the cell of one 8 u past its edge, and whichever came first gave the other its result
+-- (the hidden one heard clear, 46 dB too loud, or the visible one muffled). The key also holds the
+-- state of the actual straight line, traced on every call: one TraceLine (the expensive parts, walls,
+-- paths, probes, portal masks, stay cached), with the walls' own mask and filter, from the higher end
+-- (a displacement is hit only from above, see P.Walls), plus the water side of each end (two point
+-- tests). And the emitter: a crate's own sound ignores the crate, another sound from that cell does
+-- not. Ids live in P: after a file refresh a fresh counter would hand id 1 to another entity and
+-- reuse the first one's cached result.
+P.cacheEntIds = P.cacheEntIds or setmetatable({}, { __mode = "k" })
+P.cacheEntN = P.cacheEntN or 0
+local function entKey(e)
+	if not IsValid(e) then return "-" end
+	local id = P.cacheEntIds[e]
+	if not id then
+		P.cacheEntN = P.cacheEntN + 1
+		id = P.cacheEntN
+		P.cacheEntIds[e] = id
+	end
+	return id
+end
+local lineOut = {}
+local lineTr = { mask = bit.band(MASK_SOLID, NO_GRATE), filter = traceFilter, output = lineOut }
+--- State of the straight line S -> L for the cache key: "c" clear, "w" the world first, "e<id>" that
+-- entity first; then the water side of each end ("0" dry, "1" wet).
+function P.LineState(S, L, srcEnt)
+	local a, b = S, L
+	if S.z < L.z then a, b = L, S end
+	ignoreEnt = srcEnt
+	lineTr.start, lineTr.endpos = a, b
+	util.TraceLine(lineTr)
+	local st
+	if not lineOut.Hit or lineOut.Fraction >= 1 then
+		st = "c"
+	else
+		local e = lineOut.Entity
+		st = (IsValid(e) and not e:IsWorld()) and "e" .. entKey(e) or "w"
+	end
+	if A.cfg.water >= 0.5 then
+		local wS = bit.band(util.PointContents(S), CONTENTS_WATER) ~= 0
+		local wL = bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
+		st = st .. (wS and "1" or "0") .. (wL and "1" or "0")
+	end
+	return st
+end
+function P.CacheKey(S, L, sndlvl, srcEnt)
+	return q(S) .. "|" .. q(L) .. "|" .. sndlvl .. "|" .. entKey(srcEnt) .. "|" .. P.LineState(S, L, srcEnt)
+end
+
+-- Surfaces pba's traces hit but Steam Audio's scene does not hold (cl_native N.BuildWorld): static
+-- props (traces report them as world, texture "**studio**"), sky faces, the tool textures it skips
+-- (mirror of cl_native's SKIP_PREFIX: toolsskybox is solid to traces), displacements when its BSP
+-- read gave none. Steam Audio sees the line clear through them (o = 1), so its occlusion says nothing
+-- about them: trusted there, a static concrete pillar between two players would lose nothing. Grates
+-- are out of both models.
+local NATIVE_SKIP = { "tools/toolsclip", "tools/toolsplayerclip", "tools/toolsnpcclip", "tools/toolstrigger",
+	"tools/toolshint", "tools/toolsskip", "tools/toolsskybox", "tools/toolsfog", "tools/toolsoccluder" }
+function P.NativeLacks(w, nativeDisp)
+	if w.sky then return true end
+	local t = string.lower(w.tex or "")
+	if t == "**studio**" then return true end
+	if t == "**displacement**" then return not nativeDisp end
+	for _, p in ipairs(NATIVE_SKIP) do
+		if string.StartWith(t, p) then return true end
+	end
+	return false
+end
+
+--- Blend of Steam Audio's occlusion o (1 = clear line: the share of the source it sees) with the
+-- loss wl (mid wm, lowpass level wlp) of the world walls its scene holds (pure): the visible part
+-- passes, the rest goes through the walls. Continuous over all of [0, 1]: a listener stepping out of
+-- a door frame (o 0.985 -> 0.995, 10 u of concrete, 46 dB) goes 0.13 -> 0.04 dB, where the former
+-- 0.01 < o < 0.99 window gave 0.1 -> 46 dB. The lowpass level goes linearly from the walls' (o = 0)
+-- to at most 1 at half visibility (edge diffraction), then to 0 fully visible; rounded at the end
+-- (the former o > 0.5 switch stepped it from 4 to 1).
+function P.NativeBlend(o, wl, wlp, wm)
+	o = math.Clamp(o, 0, 1)
+	local loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-wl / 20))
+	local mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-wm / 20))
+	local edge = math.min(wlp, 1)
+	local f = o < 0.5 and wlp + (edge - wlp) * o * 2 or edge * (1 - o) * 2
+	return math.max(loss, 0), math.floor(f + 0.5), math.max(mid, 0)
+end
+
 --- Full computation for one sound. S, L: positions; returns result table:
 -- { clear = bool, aS, aL, paths, trans, voices }.
 --- Props (and closed movers) on the paths, not only on the straight line: a crate in a doorway, a
@@ -1535,7 +1620,7 @@ end
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
 	S = P.FreeSource(S)
-	local key = q(S) .. "|" .. q(L) .. "|" .. sndlvl
+	local key = P.CacheKey(S, L, sndlvl, srcEnt)
 	local now = RealTime()
 	local c = P.cache[key]
 	if c and now - c.t < cfg.cache_ttl then return c.r end
@@ -1591,17 +1676,26 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				-- would count it in its occlusion; the interface keeps pba's own model only
 				if #worldWalls > 0 and not water then
 					local d = A.Native.Direct(S, L)
-					-- only partial visibility is trusted: if Steam Audio sees the line fully clear
-					-- while the engine traces hit the world, its scene lacks that geometry
-					-- (displacements...) and the Lua loss stands
-					if d and d.occlusion > 0.01 and d.occlusion < 0.99 then
-						local o = math.min(d.occlusion, 1)
-						local wl, wlp, wm = P.EvalWalls(worldWalls, cfg, true)
-						local el, elp, em = 0, 0, 0
-						if #entWalls > 0 then el, elp, em = P.EvalWalls(entWalls, cfg, true) end
-						loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-wl / 20)) + el
-						mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-wm / 20)) + em
-						lp = math.max(o > 0.5 and math.min(wlp, 1) or wlp, elp)
+					-- its occlusion is trusted fully, for the world walls its scene holds; those it
+					-- lacks (static props, displacements it could not read: P.NativeLacks) keep their
+					-- whole Lua loss, added like the entities'. Decided by the surface hit, not by a
+					-- threshold on o: the former 0.01 < o < 0.99 window jumped 46 dB at a door frame.
+					if d and d.occlusion then
+						local known, other = {}, {}
+						local nativeDisp = (A.Native.dispTris or 0) > 0
+						for _, w in ipairs(worldWalls) do
+							if P.NativeLacks(w, nativeDisp) then other[#other + 1] = w else known[#known + 1] = w end
+						end
+						if #known > 0 then
+							for _, w in ipairs(entWalls) do other[#other + 1] = w end
+							local wl, wlp, wm = P.EvalWalls(known, cfg, true)
+							local el, elp, em = 0, 0, 0
+							if #other > 0 then el, elp, em = P.EvalWalls(other, cfg, true) end
+							local bl, blp, bm = P.NativeBlend(d.occlusion, wl, wlp, wm)
+							loss = math.min(bl + el, cfg.trans_max)
+							mid = math.min(bm + em, cfg.trans_max)
+							lp = math.max(blp, elp)
+						end
 					end
 					r.nativeOcclusion = d and d.occlusion
 				end

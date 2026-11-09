@@ -1350,6 +1350,122 @@ return {
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
 		end },
+		{ name = "NativeBlend: continuous in Steam Audio's occlusion from 0 to 1 (no cliff at a door frame's edge)", func = function()
+			local wl, wlp = 46, 4 -- 10 u of concrete
+			local l0, lp0 = P.NativeBlend(0, wl, wlp, wl)
+			local l1, lp1 = P.NativeBlend(1, wl, wlp, wl)
+			expect(near(l0, wl, 1e-6) and lp0 == wlp).to.beTrue() -- hidden: the walls' own loss and lowpass
+			expect(near(l1, 0, 1e-6) and lp1 == 0).to.beTrue()    -- fully visible: nothing
+			expect(P.NativeBlend(0.5, wl, wlp, wl) < 6.1).to.beTrue()
+			-- the listener stepping out of the frame: 0.985 -> 0.995 was 0.1 -> 46 dB with the former window
+			local a, b = P.NativeBlend(0.985, wl, wlp, wl), P.NativeBlend(0.995, wl, wlp, wl)
+			expect(a < 0.2 and b < a and a - b < 0.2).to.beTrue()
+			-- monotonic, and the level never steps by more than one between neighbouring samples
+			local prevL, prevLp = l0, lp0
+			for i = 1, 1000 do
+				local l, lp = P.NativeBlend(i / 1000, wl, wlp, wl)
+				expect(l <= prevL + 1e-9 and lp <= prevLp and prevLp - lp <= 1).to.beTrue()
+				expect(lp == math.floor(lp)).to.beTrue()
+				prevL, prevLp = l, lp
+			end
+			expect(P.NativeBlend(0.5, wl, wlp, wl) > 0).to.beTrue()
+			expect(select(2, P.NativeBlend(0.5, wl, wlp, wl))).to.equal(1) -- edge diffraction, as before
+		end },
+		{ name = "NativeLacks: static props, sky, skipped tool textures, unread displacements are not in Steam Audio's scene", func = function()
+			expect(P.NativeLacks({ tex = "**studio**" }, true)).to.beTrue()
+			expect(P.NativeLacks({ tex = "TOOLS/TOOLSSKYBOX" }, true)).to.beTrue()
+			expect(P.NativeLacks({ tex = "sky_day01", sky = true }, true)).to.beTrue()
+			expect(P.NativeLacks({ tex = "**displacement**" }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "**displacement**" }, true)).to.equal(false)
+			expect(P.NativeLacks({ tex = "CONCRETE/CONCRETEWALL001A" }, false)).to.equal(false)
+			expect(P.NativeLacks({ tex = "TOOLS/TOOLSNODRAW" }, false)).to.equal(false) -- hidden faces of real walls: in it
+			expect(P.NativeLacks({}, false)).to.equal(false)
+		end },
+		{ name = "Compute (native): occlusion blended smoothly up to 1; a wall Steam Audio lacks keeps its Lua loss", func = function()
+			local savedWalls, savedGet, savedNative = P.Walls, A.Graph.Get, A.Native
+			local tex, occ = "CONCRETE/CONCRETEWALL001A", 1
+			P.Walls = function(a, b)
+				local e, x = a + (b - a) * 0.45, a + (b - a) * 0.45 + (b - a):GetNormalized() * 10
+				return { { t = 0.45, entry = e, exit = x, thickness = 10, mat = MAT_CONCRETE, surf = "concrete", tex = tex } }
+			end
+			A.Graph.Get = function() return nil end
+			A.Native = { ready = true, Direct = function() return { occlusion = occ } end }
+			local cfg = setmetatable({ probes = 0, path_props = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local S, L = Vector(0, 0, 0), Vector(300, 0, 0)
+				local function at(o) occ = o P.InvalidateCache() return P.Compute(S, L, 75, cfg).trans end
+				local full = P.EvalWalls(P.Walls(S, L), cfg)
+				expect(full > 30).to.beTrue()
+				local a, b, c = at(0.985), at(0.995), at(1)
+				expect(a.lossDb < 0.5 and b.lossDb < a.lossDb and c.lossDb < 1e-6).to.beTrue()
+				expect(near(at(0).lossDb, full, 1e-6)).to.beTrue()
+				-- a static prop: Steam Audio sees through it (o = 1), its own loss stands
+				tex = "**studio**"
+				expect(near(at(1).lossDb, full, 1e-6)).to.beTrue()
+			end)
+			P.Walls, A.Graph.Get, A.Native = savedWalls, savedGet, savedNative
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Compute cache: a sound behind a wall never reuses the clear result of its 32 u cell, nor the reverse", func = function()
+			-- a concrete wall ending at y = 16; the listener at (0, 8, 0); sources at (200, 8, 0) (hidden) and
+			-- (200, 28, 0) (its line passes 2 u past the wall's end): the same 32 u cell
+			local mn, mx = Vector(100, -200, -100), Vector(110, 16, 100)
+			local savedWalls, savedTrace, savedGet = P.Walls, util.TraceLine, A.Graph.Get
+			P.Walls = function(a, b)
+				local t0, t1 = segBox(a, b, mn, mx)
+				if not t0 then return {} end
+				local e, x = a + (b - a) * t0, a + (b - a) * t1
+				return { { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" } }
+			end
+			util.TraceLine = function(t)
+				local out = t.output or {}
+				local f = segBox(t.start, t.endpos, mn, mx)
+				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
+				return out
+			end
+			A.Graph.Get = function() return nil end
+			local cfg = setmetatable({ probes = 0, path_props = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local L, hid, vis = Vector(0, 8, 0), Vector(200, 8, 0), Vector(200, 28, 0)
+				expect(#P.Walls(hid, L) == 1 and #P.Walls(vis, L) == 0).to.beTrue()
+				for _, order in ipairs({ { hid, vis }, { vis, hid } }) do
+					P.InvalidateCache()
+					for _, S in ipairs(order) do
+						expect(P.Compute(S, L, 75, cfg).clear).to.equal(S == vis)
+					end
+				end
+				-- the straight-line state is part of the key, whichever end is higher
+				expect(P.LineState(hid, L) ~= P.LineState(vis, L)).to.beTrue()
+				expect(P.LineState(L, hid) == P.LineState(hid, L)).to.beTrue()
+			end)
+			P.Walls, util.TraceLine, A.Graph.Get = savedWalls, savedTrace, savedGet
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Compute cache: keyed on the emitter (a crate's own sound ignores the crate, another sound from there not)", func = function()
+			local crate = { GetClass = function() return "prop_physics" end, EntIndex = function() return 9997 end,
+				IsWorld = function() return false end }
+			local savedWalls, savedGet = P.Walls, A.Graph.Get
+			P.Walls = function(a, b, _, srcEnt)
+				if srcEnt == crate then return {} end
+				local e, x = a + (b - a) * 0.1, a + (b - a) * 0.2
+				return { { t = 0.1, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_METAL, surf = "metal", ent = crate,
+					minExtent = 8, detour = math.huge } }
+			end
+			A.Graph.Get = function() return nil end
+			local cfg = setmetatable({ probes = 0, path_props = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local S, L = Vector(0, 0, 0), Vector(300, 0, 0)
+				P.InvalidateCache()
+				expect(P.Compute(S, L, 75, cfg, crate).clear).to.beTrue()
+				expect(P.Compute(S, L, 75, cfg).clear).to.equal(false)
+				expect(P.Compute(S, L, 75, cfg, crate).clear).to.beTrue()
+			end)
+			P.Walls, A.Graph.Get = savedWalls, savedGet
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Follow: a one-shot is followed when it still plays min_left after its first update", func = function()
 			expect(P.FollowWorth(3.4, 0.25, 0.5)).to.beTrue()       -- the courtyard radio line
 			expect(P.FollowWorth(0.6, 0.25, 0.5)).to.equal(false)   -- a gunshot: over before it would matter
