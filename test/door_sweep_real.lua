@@ -209,7 +209,10 @@ end
 local ok, err = pcall(function()
 	slide("closed")
 	-- the leaf swings: fixed listeners, every frame
-	local probes = { doorway = L0, beyond = L0 + n * 24, left = L0 + t * 24, right = L0 - t * 24 }
+	-- "beyond": 24 u further from the door, or halfway to the wall when one is nearer (rp_downtown: a wall
+	-- 16 u past the listener, L0 + n * 24 was in solid and every sample skipped)
+	local bt = util.TraceLine({ start = L0, endpos = L0 + n * 24, mask = MASK_SOLID_BRUSHONLY })
+	local probes = { doorway = L0, beyond = L0 + n * (bt.Hit and 12 * bt.Fraction or 24), left = L0 + t * 24, right = L0 - t * 24 }
 	local series = {}
 	for k in pairs(probes) do series[k] = {} end
 	RunConsoleCommand("pba_test_dsr_open")

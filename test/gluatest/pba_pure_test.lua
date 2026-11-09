@@ -2216,6 +2216,35 @@ return {
 			-- the corners alone are capped at diff_max_total, as a probe polyline's
 			expect(p.diffDb <= CFG.diff_max_total + 1e-9).to.beTrue()
 		end },
+		{ name = "Probe columns: a displacement's underside (traces from just under it hit again at their start) adds no empty segments and hides no floor below", func = function()
+			-- gm_construct (-3136, -832): 69-5000 68-68 68-68 67-67 ...: one empty segment per 0.5 u, and a run
+			-- of them used up the 64 iterations before the floors below. Here a shell 40 u thick (80 such
+			-- steps) over a floor at z 0 (solid below it).
+			local PR = A.Probes
+			local saved, savedNT = { util.TraceLine, util.PointContents }, A.cfg.native_traces
+			A.cfg.native_traces = 0
+			util.TraceLine = function(t)
+				local o, s = traceOut(t), t.start.z
+				local hz = s > 100 and 100 or (s > 60 and s or (s > 0 and 0 or nil))
+				o.StartSolid = hz == nil
+				o.Hit = true
+				o.HitPos = Vector(t.start.x, t.start.y, hz or s)
+				o.Fraction = hz and (s - hz) / (s - t.endpos.z) or 0
+				o.HitTexture = "**displacement**"
+				return o
+			end
+			util.PointContents = function(p) return p.z < 0 and CONTENTS_SOLID or 0 end
+			local ok, err = pcall(function()
+				local segs = PR.ScanColumn(0, 0, 500, -8)
+				expect(#segs).to.equal(2)
+				expect(segs[1][1]).to.equal(100)
+				expect(segs[1][2]).to.equal(500)
+				expect(segs[2][1]).to.equal(0)
+				expect(segs[2][2] <= 60 and segs[2][2] > 50).to.beTrue() -- the shell's underside, 8 u at most below it
+			end)
+			util.TraceLine, util.PointContents, A.cfg.native_traces = saved[1], saved[2], savedNT
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Probe placement: one probe per storey, 48 u above each floor (under a mezzanine and on it), none in the air; no link through the slab between them", func = function()
 			-- room A: a mezzanine slab z 96..112 over x < 256. Before: a z grid of cells (probes at 64 and 180 u, in
 			-- the air), none 48 u above the mezzanine's floor
