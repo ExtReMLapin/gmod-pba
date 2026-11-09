@@ -142,11 +142,13 @@ local function sample(L, wait)
 		job:sleep(0.1)
 	end
 	if r.provisional then return { skip = "provisional" } end
-	local cls = "clear"
+	-- what the straight line crosses, decided over all its walls: the door first (a leaf in a doorway
+	-- of a wall is still the leaf), then the world
+	local leaf, world = false, false
 	for _, w in ipairs(P.Walls(S, L, 6, emitter)) do
-		if not w.ent and not w.water then cls = "wall" break end
-		if w.ent == door then cls = "leaf" end
+		if w.ent == door then leaf = true elseif not w.ent and not w.water then world = true end
 	end
+	local cls = leaf and "leaf" or world and "wall" or "clear"
 	if r.clear or not r.voices or #r.voices == 0 then return { cls = cls, loss = 0, lp = 0, kind = "direct" } end
 	local p, kinds = 0, {}
 	local ff = AC.GainToDb(AC.EngineGain(S:Distance(L), 75))
