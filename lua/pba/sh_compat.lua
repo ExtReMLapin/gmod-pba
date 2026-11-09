@@ -5,6 +5,11 @@
 --   Dynamic Weapon Reverb (cl_dwr_*): its occlusion rays overlap ours; its reverb tails are
 --     complementary. Warn only (client preference of the player).
 --   Echo/Reverb Everywhere (ere_*): global room DSP, complementary. Nothing to do.
+--   rRadio (rRadio.config, client): it tells BASS "infinite distance" and does its own distance falloff
+--     and occlusion in Lua (one ray from the player to the radio: blocked = volume x 0.35, no muffling).
+--     PBA receives that volume as the owner's, so a wall was counted twice (rRadio's -9 dB, then pba's
+--     path). With pba_compat_auto 1 its occlusion is turned off while pba runs (and given back when pba is
+--     off); its distance falloff stays: it is its only distance law and its range is the server's choice.
 
 local A = pba
 A.Compat = A.Compat or {}
@@ -92,7 +97,31 @@ function C.Check()
 		end
 	end
 	if changed then saveRestore() end
+	if CLIENT then C.RRadio() end
 end
+
+--- rRadio's own occlusion (client table rRadio.config.Occlusion.Enabled): off while pba renders, back
+-- when pba is off or pba_compat_auto 0. Re-applied every 2 s: rRadio may receive its settings again from
+-- the server (its config sync), which would switch it back on.
+function C.RRadio()
+	local cfg = rRadio and istable(rRadio.config) and rRadio.config.Occlusion
+	if not istable(cfg) then return end
+	local takeOver = A.Enabled() and (A.cfg.compat_auto or 1) >= 0.5
+	if takeOver then
+		if cfg.Enabled ~= false then
+			if C.rradioOcc == nil then
+				C.rradioOcc = cfg.Enabled == nil and true or cfg.Enabled
+				MsgN("[PBA] rRadio detected: its own wall occlusion (-9 dB, one ray) is turned off while pba handles ",
+					"walls (pba_compat_auto 0 to keep both).")
+			end
+			cfg.Enabled = false
+		end
+	elseif C.rradioOcc ~= nil then
+		cfg.Enabled = C.rradioOcc
+		C.rradioOcc = nil
+	end
+end
+if CLIENT then timer.Create("pba_compat_rradio", 2, 0, function() C.RRadio() end) end
 
 -- Multiplayer Distant Sounds Fix replaces EmitSound with its own global; our server detour
 -- must wrap what is installed when we load, and must not double its copies.
