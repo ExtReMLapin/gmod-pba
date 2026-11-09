@@ -709,6 +709,7 @@ function PR.Start()
 	PR.current, PR.building = nil, nil
 	PR.pathCache, PR.pathCacheN, PR.queue = {}, 0, {}
 	PR.bridgeMemo, PR.sticky, PR.fieldAway, PR.fieldsByKey, PR.seedMemo = nil, nil, nil, nil, nil
+	PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare = nil, nil, nil
 	local g = A.Graph.Get()
 	if not g then return end
 	local map = g.map
@@ -1180,7 +1181,10 @@ function PR.LinkCosts(g, yield)
 	local closedDef = cfg.door_closed_db or 28
 	local db = {}
 	local D = A.Doors
+	local k = 0
 	for e, l in pairs(g.linkDoors) do
+		k = k + 1
+		if yield and k % 16 == 0 then yield() end
 		local d = 0
 		for _, ent in ipairs(l.ents) do
 			if IsValid(ent) then
@@ -1324,8 +1328,17 @@ function PR.FieldFor(g, L)
 	if not kept or kept.g ~= g then kept = { g = g, order = {} } PR.fieldsByKey = kept end
 	local f = kept[key]
 	if f and f.stateSig == sig then return f end
+	if f then
+		-- a door or portal state changed: the field by length stands (it reads no door: they are paid on the
+		-- route, P.EvalPolyline), only the field with the door costs is redone, in background slices, the old
+		-- one answering meanwhile. It only picks which ways round are tried; every route is costed on the
+		-- doors as they are now. Rebuilt at once, both fields and the link costs were redone at every state
+		-- change: 14 builds in one door swing on pba_tworooms, ~25 ms each on rp_downtown, any door of the map.
+		PR.QueueDoorField(g, f, sig)
+		return f
+	end
 	f = PR.BuildFields(g, L, nil, nil, seeds)
-	f.key = key
+	f.key, f.seedList = key, seeds
 	if not kept[key] then
 		kept.order[#kept.order + 1] = key
 		if #kept.order > FIELD_KEEP then kept[table.remove(kept.order, 1)] = nil end
@@ -1333,6 +1346,56 @@ function PR.FieldFor(g, L)
 	kept[key] = f
 	return f
 end
+
+--- Queues the rebuild of field f's door-cost part (f.doors) for state signature sig (paths_model 1). One
+-- job at a time; a field whose state changed again while queued or building is taken up by the next job.
+function PR.QueueDoorField(g, f, sig)
+	local q = PR.doorFieldQueue
+	if not q or q.g ~= g then q = { g = g, list = {}, has = {} } PR.doorFieldQueue = q end
+	if q.has[f] or (PR.doorFieldJob and PR.doorFieldJob.f == f) then return end
+	q.has[f] = true
+	q.list[#q.list + 1] = f
+end
+
+--- Runs the door-field jobs for probe_field_ms per frame. A job reads the state signature when it starts:
+-- the field keeps that one, so a state that changed while it was building queues it again.
+function PR.AdvanceDoorFields()
+	local g = PR.current
+	local job = PR.doorFieldJob
+	if job and job.g ~= g then job, PR.doorFieldJob = nil, nil end
+	if not job then
+		local q = PR.doorFieldQueue
+		if not q or q.g ~= g or #q.list == 0 then return end
+		local f = table.remove(q.list, 1)
+		q.has[f] = nil
+		local kept = PR.fieldsByKey
+		if not kept or kept[f.key] ~= f then return end -- dropped from the kept fields meanwhile
+		job = { g = g, f = f }
+		job.co = coroutine.create(function()
+			local yield = function() if SysTime() >= PR.doorFieldDeadline then coroutine.yield() end end
+			local sig = PR.StateSig(g)
+			local extra = PR.LinkCosts(g, yield)
+			local d = next(extra) and PR.BuildField(g, f.L, yield, PR.doorFieldSpare, extra, f.seedList) or nil
+			if d then d.stateSig = sig end
+			return { doors = d, sig = sig }
+		end)
+		PR.doorFieldJob = job
+	end
+	PR.doorFieldDeadline = SysTime() + (A.cfg.probe_field_ms or 1) / 1000
+	local ok, res = coroutine.resume(job.co)
+	if not ok then
+		PR.doorFieldJob = nil
+		ErrorNoHaltWithStack("[PBA] door field failed: " .. tostring(res))
+	elseif coroutine.status(job.co) == "dead" then
+		local f = job.f
+		PR.doorFieldSpare = f.doors -- its tables are filled again by the next build (no garbage per build)
+		f.doors, f.stateSig = res.doors, res.sig
+		PR.doorFieldJob = nil
+	end
+end
+hook.Add("Think", "pba_probes_door_field", function()
+	if (A.cfg.paths_model or 0) >= 0.5 then PR.AdvanceDoorFields() end
+end)
 
 --- Built at once around L (tests: as if the listener had been standing there); the background
 -- upkeep around the real listener is held for 2 s so that it does not replace it.

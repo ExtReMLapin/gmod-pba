@@ -122,7 +122,7 @@ local function withProbeRooms(holes, extra, over, fn)
 		return out
 	end
 	local saved = { util.TraceLine, util.TraceHull, util.PointContents }
-	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold", "fieldsByKey", "seedMemo", "fieldAway" }
+	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold", "fieldsByKey", "seedMemo", "fieldAway", "doorFieldQueue", "doorFieldJob", "doorFieldSpare" }
 	local savedPR, savedCfg = {}, {}
 	for _, k in ipairs(state) do savedPR[k] = PR[k] end
 	-- native_traces 0 always: the scene replaces util.Trace*, the engine's own traces would bypass it
@@ -135,6 +135,7 @@ local function withProbeRooms(holes, extra, over, fn)
 	util.PointContents = function(p) return inside(p) and CONTENTS_SOLID or 0 end
 	local ok, err = pcall(function()
 		PR.queue, PR.pathCache, PR.pathCacheN, PR.inlineFrame, PR.field, PR.fieldHold, PR.fieldsByKey, PR.seedMemo = {}, {}, 0, nil, nil, nil, nil, nil
+		PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare = nil, nil, nil
 		local g = PR.BuildCo({ Vector(256, 256, 49) }, 128)
 		PR.Prepare(g)
 		PR.current = g
@@ -2597,6 +2598,16 @@ local SUITE = {
 					for _, v in ipairs(ps[1].points) do expect(v.y < 200).to.beTrue() end
 					-- the signature of the door states the field was built with changes with a state
 					local f2 = PR.FieldFor(g, L)
+					-- the door-cost part is redone in background slices (PR.AdvanceDoorFields), the old one answering
+					-- meanwhile; the field by length is kept (it reads no door)
+					expect(f2.doors ~= nil).to.beTrue()
+					local cur = PR.current
+					PR.current = g
+					for _ = 1, 1000 do
+						PR.AdvanceDoorFields()
+						if not PR.doorFieldJob and #((PR.doorFieldQueue or {}).list or {}) == 0 then break end
+					end
+					PR.current = cur
 					expect(f2.stateSig ~= nil and f2.doors == nil).to.beTrue()
 					A.Doors.byEnt[9990].frac = 0.5
 					expect(PR.StateSig(g) ~= f2.stateSig).to.beTrue()
