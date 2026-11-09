@@ -921,6 +921,7 @@ end
 -- ENCLOSED_DEPTH (a source inside a car); a point just under its surface (a route vertex on a door
 -- leaf's face: the probes' routes pass the leaves) is beside it, not inside.
 local EDGE_HALVINGS = 16
+local EDGE_SAMPLES, EDGE_CLEAR_HALVINGS = 6, 7 -- clear points along a blocked edge (P.DetourDelta)
 local ENCLOSED_DEPTH = 4
 local function enclosed(p, mins, maxs)
 	local d = math.min(p.x - mins.x, maxs.x - p.x, p.y - mins.y, maxs.y - p.y, p.z - mins.z, maxs.z - p.z)
@@ -963,15 +964,54 @@ function P.DetourDelta(S, L, mins, maxs, valid)
 		n = n + 1
 		local c = cand[n]
 		if not c then c = {} cand[n] = c end
-		c[1], c[2], c[3], c[4] = d, x, y, z
+		c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11] = d, x, y, z, px, py, pz, dx, dy, dz, t
 	end
-	-- shortest first; the first way round the world lets through stands
+	for i = n + 1, #cand do cand[i] = nil end
+	-- shortest first. An edge whose best point the world blocks still has clear points along it: the
+	-- best clear one (nearest the best point, on either side) stands, so the way round grows by degrees as
+	-- the world closes on that edge instead of jumping to the next edge: an open leaf's way round went
+	-- from 10 to 3 dB in a 2 u step of the listener when the shortest edge's best point came clear
+	-- (pba_twodoors, open slide). Edges are tried while their best point could still beat the best way found.
 	table.sort(cand, function(u, v) return u[1] < v[1] end)
+	if not valid then return n > 0 and math.max(cand[1][1], 0) or math.huge end
+	local best = math.huge
+	local function along(c, t)
+		local x, y, z = c[5] + c[8] * t, c[6] + c[9] * t, c[7] + c[10] * t
+		return x, y, z, math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
+	end
 	for i = 1, n do
 		local c = cand[i]
-		if not valid or valid(Vector(c[2], c[3], c[4])) then return math.max(c[1], 0) end
+		if c[1] >= best then break end
+		if valid(Vector(c[2], c[3], c[4])) then
+			best = c[1]
+			break
+		end
+		-- the clear points nearest the best one, each side: EDGE_SAMPLES samples out to the edge's end, then
+		-- bisection between the last blocked sample and the first clear one
+		local t0 = c[11]
+		for side = -1, 1, 2 do
+			local tEnd = side < 0 and 0 or 1
+			local prev = t0
+			for k = 1, EDGE_SAMPLES do
+				local t = t0 + (tEnd - t0) * k / EDGE_SAMPLES
+				local x, y, z, d = along(c, t)
+				if d >= best then break end
+				if valid(Vector(x, y, z)) then
+					local lo, hi = prev, t -- blocked .. clear
+					for _ = 1, EDGE_CLEAR_HALVINGS do
+						local m = (lo + hi) * 0.5
+						local mx, my, mz = along(c, m)
+						if valid(Vector(mx, my, mz)) then hi = m else lo = m end
+					end
+					local _, _, _, dc = along(c, hi)
+					if dc < best then best = dc end
+					break
+				end
+				prev = t
+			end
+		end
 	end
-	return math.huge
+	return best < math.huge and math.max(best, 0) or math.huge
 end
 
 --- Edge of a WORLD obstacle on the line S -> L (game state: traces), the world's counterpart of a prop's

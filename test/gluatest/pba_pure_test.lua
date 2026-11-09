@@ -1928,6 +1928,19 @@ local SUITE = {
 			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
 			if not ok then error(err, 0) end
 		end },
+		{ name = "DetourDelta: the world closing on the best way round an object moves it by degrees along its edge (was a jump to the next edge: 10 -> 3 dB in 2 u, pba_twodoors)", func = function()
+			-- a tall slab across the line, its four vertical edges the ways round (best point at z = 0); the world
+			-- blocks every point below h, h rising through 0
+			local mins, maxs = Vector(-10, -30, -200), Vector(10, 30, 200)
+			local S, L = Vector(-100, 0, 0), Vector(100, 0, 0)
+			local prev, worst = nil, 0
+			for h = -10, 10, 0.5 do
+				local d = P.DetourDelta(S, L, mins, maxs, function(p) return p.z > h end)
+				if prev then worst = math.max(worst, math.abs(d - prev)) end
+				prev = d
+			end
+			expect(worst < 0.5).to.beTrue()
+		end },
 		{ name = "EvalRoute: a vertex whose neighbours see each other is no corner (a walking source went 2-3 dB up and down with the copy kept, pba_demo)", func = function()
 			-- empty world: every thin trace clear; the route keeps a vertex 40 u off the straight line between
 			-- its neighbours (its hull grazed a wall)
