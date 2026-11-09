@@ -12,6 +12,14 @@ for k, v in pairs({ probe_inline_ms = 20, probe_inline_frame_ms = 40, frame_budg
 	saved[k] = A.override[k] or false
 	A.SetOverride(k, v, true)
 end
+-- the probe routes keep a history (sticky probe picks, bridge memo, cached routes, the listener field):
+-- a route between two equal-cost choices depends on what ran before. The golden starts from none, so it
+-- compares the code, not the tests that ran on this map before it
+if PR then
+	PR.pathCache, PR.pathCacheN, PR.queue = {}, 0, {}
+	PR.bridgeMemo, PR.sticky = nil, nil
+	PR.field, PR.fieldJob, PR.fieldHold = nil, nil, nil
+end
 local rows = {}
 local ok, err = pcall(function()
 	for i, q in ipairs(args.pairs or {}) do
