@@ -39,7 +39,7 @@ A.CONFIG = {
 	diffuse_dsp_at  = { 0.4, 0, 1, "cl", "Diffuse model, engine rendering: from this diffuse share a sound gets a reverberant tunnel preset instead of the plain low-pass." },
 	probe_spacing   = { 128, 32, 512, "sv", "Probe grid spacing (units) of the fallback graph." },
 	probes          = { 1, 0, 1, "sv", "Use the probe graph when no areaportal path exists." },
-	paths_model     = { 0, 0, 1, "sv", "Experimental: 1 = the routes of every sound are read from one search done from the listener over the probe graph (doors and closed areaportals are costs of its links), beside the way over the obstacle's edge and the transmission; no portal chains, no search per sound, no provisional answer (the result no longer depends on the frame budget or on the order of the sounds). 0 = portal chains first, probe search per sound when they fail (former behaviour)." },
+	paths_model     = { 1, 0, 1, "sv", "1 = the routes of every sound are read from one search done from the listener over the probe graph (doors and closed areaportals are costs of its links), beside the way over the obstacle's edge and the transmission; no portal chains, no search per sound, no provisional answer (the result no longer depends on the frame budget or on the order of the sounds). 0 = portal chains first, probe search per sound when they fail (former behaviour, to be removed)." },
 
 	-- diffraction (Kurze-Anderson on path difference)
 	diff_freq       = { 500, 125, 4000, "sv", "Reference frequency (Hz) for diffraction loss." },
