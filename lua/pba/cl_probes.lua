@@ -2086,6 +2086,11 @@ function PR.FieldRoutes(S, L, k, cfg)
 					straight = straight or #pulled == 2
 					local p = A.Paths.EvalRoute(pulled, cfg)
 					p.probe = true
+					-- heard from its last corner ON the edge, not from its clearance vertex: two copies of one
+					-- route (from two probes the source sees) end on clearance vertices 60 u apart and the
+					-- voice's direction swung 14.5 degrees in a 4 u step of the source when the copy kept
+					-- changed (field_continuity); on the edge they meet
+					if #pulled >= 3 and p.edgePos then p.pos = p.edgePos end
 					-- the straight route is heard where the transmission voice would be: at the leaf it crosses
 					-- (its point on the line nearest the leaf's centre), not at the source
 					if #pulled == 2 and p.leaves then

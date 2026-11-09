@@ -1138,6 +1138,7 @@ function P.EvalRoute(pts, cfg)
 	local p = P.EvalPolyline(P.RefineCorners(pts, cfg), cfg, pts)
 	local inner = {}
 	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
+	p.edgePos = p.pos -- the last corner on its edge (paths_model 1 hears the route there)
 	p.points, p.pos = inner, pts[#pts - 1]
 	return p
 end
