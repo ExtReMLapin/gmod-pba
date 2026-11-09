@@ -814,16 +814,18 @@ return {
 			-- 4 corridor corners: 30 dB of edge diffraction
 			local function lone() return { { pos = Vector(100, -100, 0), length = 2300, direct = 600, bendDeg = 360, lossDb = 30, diffDb = 30, lp = 0 } } end
 			local t = { walls = { {} }, lossDb = 40, lp = 4, length = 600, pos = Vector(50, 0, 0) }
-			local a = P.SelectVoices(L, lone(), t, 75, on)
-			local b = P.SelectVoices(L, lone(), t, 75, off)
-			expect(a[1].kind).to.equal("portal")
+			-- voices are sorted loudest first: compare the corridor (portal) voices
+			local function portal(vs) for _, v in ipairs(vs) do if v.kind == "portal" then return v end end end
+			local a = { portal(P.SelectVoices(L, lone(), t, 75, on)) }
+			local b = { portal(P.SelectVoices(L, lone(), t, 75, off)) }
+			expect(a[1] ~= nil and b[1] ~= nil).to.beTrue()
 			expect(a[1].diffuse > 0.6).to.beTrue()
 			expect((b[1].diffuse or 0) == 0).to.beTrue()
 			-- the corridor guides the diffuse part round its corners: louder than pure diffraction
 			expect(a[1].level - b[1].level > 5).to.beTrue()
 			-- the same detour through wide openings (no diffraction): the walls only absorb, quieter
 			local function wide() return { { pos = Vector(100, -100, 0), length = 2300, direct = 600, bendDeg = 360, lossDb = 0, lp = 0 } } end
-			local wa, wb = P.SelectVoices(L, wide(), t, 75, on), P.SelectVoices(L, wide(), t, 75, off)
+			local wa, wb = { portal(P.SelectVoices(L, wide(), t, 75, on)) }, { portal(P.SelectVoices(L, wide(), t, 75, off)) }
 			expect(wb[1].level - wa[1].level > 1 and wb[1].level - wa[1].level <= 20 + 1e-6).to.beTrue()
 			-- idempotent: the cached paths re-selected keep the same levels (absorption not added twice)
 			local ps = lone()
@@ -833,6 +835,20 @@ return {
 			-- a short gentle route is a clean voice
 			local c = P.SelectVoices(L, { { pos = Vector(100, 100, 0), length = 700, direct = 600, bendDeg = 60, lossDb = 3, lp = 1 } }, nil, 75, on)
 			expect(c[1].diffuse).to.equal(0)
+		end },
+		{ name = "SelectVoices: loudest voice first (a radio upstairs: through the ceiling, not from the far stairwell)", func = function()
+			local L = Vector(0, 0, 0)
+			-- the stairwell route: long and muffled; the ceiling: 25 dB, close
+			local paths = { { pos = Vector(300, 0, 100), length = 690, direct = 180, bendDeg = 200, lossDb = 25, diffDb = 25, lp = 4 } }
+			local t = { walls = { {} }, lossDb = 25, lp = 3, length = 175, pos = Vector(0, 0, 80) }
+			local v = P.SelectVoices(L, paths, t, 75, CFG)
+			expect(#v).to.equal(2)
+			expect(v[1].kind).to.equal("transmission")
+			expect(v[1].level >= v[2].level).to.beTrue()
+			-- the other way round: the doorway louder stays first
+			local open = { { pos = Vector(100, 0, 0), length = 200, direct = 180, bendDeg = 20, lossDb = 0, lp = 0 } }
+			local w = P.SelectVoices(L, open, { walls = { {} }, lossDb = 15, lp = 2, length = 180, pos = Vector(0, 0, 80) }, 75, CFG)
+			expect(w[1].kind).to.equal("portal")
 		end },
 		-- one wavefront: two routes past the same jamb (two openings either side of a thin post, or a doorway
 		-- and the clear part of the source blended into the transmission) are not two sources. Each is

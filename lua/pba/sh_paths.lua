@@ -974,6 +974,15 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 				len = trans.length }
 		end
 	end
+	-- loudest first: a sound played on one channel (a loop mirror, another addon's radio stream) takes
+	-- its position and muffling from voices[1]; the transmission was always appended last, so a radio on
+	-- the floor above was placed at the far stairwell, fully muffled, while 20 dB more came through the
+	-- ceiling. Voices of equal level keep their order (stable: portal before transmission).
+	for i = 2, #voices do
+		local v, j = voices[i], i - 1
+		while j >= 1 and voices[j].level < v.level do voices[j + 1] = voices[j] j = j - 1 end
+		voices[j + 1] = v
+	end
 	while #voices > cfg.max_voices do table.remove(voices) end
 
 	-- one wavefront: obstacles only take away from the free field. Every route is modelled on its own up
