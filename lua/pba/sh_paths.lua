@@ -936,7 +936,7 @@ local doorWalls = { false }
 --     whole cost. No way is rejected because a straight leg is blocked: an edge coming into view behind a
 --     corner was a jump to the next edge;
 --   * through the free part of the passage: across the way at the leaf's edge, the passage the world leaves
---     (thin traces each side, gapAlong) and the part the leaf covers (its box projected): the Fresnel law of
+--     (on the side away from the leaf, gapAlong) and the part the leaf covers (its box projected): the Fresnel law of
 --     an opening masked by an object (AC.GapRatio, AC.ApertureBand), relative to the leaf's edge alone, so a
 --     slit between a free edge and a jamb pays its narrowness, a lone edge or a leaf flat against a wall
 --     nothing more than its way round;
@@ -946,10 +946,11 @@ local doorWalls = { false }
 -- A shut leaf (closureWeight 1) stays its one loss (leafLoss); ajar, the object above, its gap measured.
 local LEAF_REACH = 32
 local GAP_FAR = 128 -- units: a passage wider than this on one side is open on that side
-local WAY_TRIES = 6 -- ways round costed in full, the best by their lower bound
+local WAY_TRIES = 12 -- ways round costed in full (all: a budget dropped ways as the order of their bounds changed)
 local WAY_HALVINGS = 16 -- bisection along an edge for its best point
 local GAP_MAX_DB = 60
 local GAP_PLAY = 1.5 -- units: the frame's play round a leaf (gapLoss)
+local EDGE_ALONG0, EDGE_ALONG1 = 0.2, 0.5 -- sine between an edge and the way: along it below, across it above
 P.LEAF_REACH = LEAF_REACH
 
 local function polyLen(V, i, j)
@@ -991,65 +992,40 @@ local function segBoxDist(a, b, mn, mx)
 	local p = a + (b - a) * t
 	return p:Distance(boxClamp(p, mn, mx)), t, boxClamp(p, mn, mx)
 end
--- How far the passage reaches from r along dir (across the way, whose direction at r is ray): thin traces of
--- the world across the way, as a doorway's gap is measured across its portal (P.Aperture), from r and from
--- points before and after it along the way. A wall met from depth t counts depthPen(t) farther: a jamb a
--- little before or after the leaf's edge along the way narrows the passage too, the less the farther, and
--- not at all from GAP_DEPTH (so a wall coming within reach adds nothing at once). The depth where a jamb starts
--- is bisected: the reach is continuous as the leaf or the way moves past that edge. Not traced to the route's
--- vertices: a corner the route bends round farther on is the way's second bend, paid in its length (double
--- diffraction), not the other side of a slit (a leaf's free edge and a wall corner just past it across the way
--- made a shut slit, 60 dB), and legs to a vertex next to a bend were pinched by that bend's own corner.
-local GAP_DEPTH, GAP_HALVINGS, GAP_JUMP, GAP_REFINE = 16, 5, 1, 6
-local GAP_DEPTHS = { 3, 6, 9, 12, 15 } -- sample depths (units, < GAP_DEPTH), each side
-local function depthPen(t) return 0.5 * t / (1 - t / GAP_DEPTH) end
+-- How far the passage reaches from r on the side dir (across the way): the largest cube touching r and
+-- reaching s along dir (r + s * ([-1, 1]^3 + dir)) that the world leaves free, bisected: the nearest world on
+-- that side in any direction, before or after r along the way included (a jamb a little upstream narrows the
+-- passage too). A distance, so continuous as the leaf or the way moves past an edge of the world: thin traces
+-- across the way (and from depths along it) jumped where they passed a jamb's or a lintel's corner (60 dB to 3
+-- in 0.1 degree at a leaf's top corner under the lintel; 1.4 dB per 0.1 degree along a jamb's face). The cubes
+-- grow about r, so the test is monotonic. Not traced to the route's vertices: a corner the route bends round
+-- farther on is the way's second bend, paid in its length (double diffraction), not the other side of a slit.
+local GAP_HALVINGS = 7
 local gapOut = {}
-local gapTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = gapOut }
-local function crossDist(p, dir)
-	gapTr.start, gapTr.endpos = p, p + dir * GAP_FAR
-	util.TraceLine(gapTr)
-	if not gapOut.Hit then return nil end
-	if gapOut.StartSolid then return 0 end
-	return gapOut.Fraction * GAP_FAR
+local gapTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = gapOut,
+	mins = Vector(), maxs = Vector() }
+local GAP_CONE = 0.5 -- a probe's half-size per unit of its reach: the side's nearest world within about 27 degrees
+local function cubeFree(r, dir, s)
+	local c, k = r + dir * s, s * GAP_CONE
+	gapTr.start, gapTr.endpos = c, c
+	gapTr.mins.x, gapTr.mins.y, gapTr.mins.z = -k, -k, -k
+	gapTr.maxs.x, gapTr.maxs.y, gapTr.maxs.z = k, k, k
+	util.TraceHull(gapTr)
+	return not (gapOut.Hit or gapOut.StartSolid)
 end
-local function gapAlong(r, dir, ray)
-	local function f(t) return (crossDist(r + ray * t, dir) or GAP_FAR) + depthPen(math.abs(t)) end
-	local ts, fs = {}, {}
-	for i = #GAP_DEPTHS, 1, -1 do ts[#ts + 1] = -GAP_DEPTHS[i] end
-	ts[#ts + 1] = 0
-	for i = 1, #GAP_DEPTHS do ts[#ts + 1] = GAP_DEPTHS[i] end
-	local best, bi = math.huge, 1
-	for i, t in ipairs(ts) do
-		fs[i] = f(t)
-		if fs[i] < best then best, bi = fs[i], i end
+local function gapAlong(r, dir)
+	local lo, hi = 0, nil
+	local s = 1
+	while s <= GAP_FAR do
+		if not cubeFree(r, dir, s) then hi = s break end
+		lo, s = s, s * 2
 	end
-	-- a surface starting between two samples (a jamb's edge): where, from the nearer one's side, so the reach
-	-- moves continuously as that edge passes a sample
-	for i = 1, #ts - 1 do
-		local da, db = fs[i] - depthPen(math.abs(ts[i])), fs[i + 1] - depthPen(math.abs(ts[i + 1]))
-		if math.abs(da - db) > GAP_JUMP then
-			local cut = (da + db) * 0.5
-			local lo, hi = ts[i], ts[i + 1] -- lo on da's side
-			for _ = 1, GAP_HALVINGS do
-				local m = (lo + hi) * 0.5
-				local dm = crossDist(r + ray * m, dir) or GAP_FAR
-				if (dm < cut) == (da < cut) then lo = m else hi = m end
-			end
-			local v = f(da < db and lo or hi)
-			if v < best then best = v end
-		end
+	if not hi then return GAP_FAR end
+	for _ = 1, GAP_HALVINGS do
+		local m = (lo + hi) * 0.5
+		if cubeFree(r, dir, m) then lo = m else hi = m end
 	end
-	-- the least over the depths between the best sample's neighbours (golden section): sampled only, the reach
-	-- went down in steps as the leaf's edge moved past each sample along a jamb's face
-	local lo, hi = ts[math.max(bi - 1, 1)], ts[math.min(bi + 1, #ts)]
-	local g = 0.381966
-	local x1, x2 = lo + (hi - lo) * g, hi - (hi - lo) * g
-	local f1, f2 = f(x1), f(x2)
-	for _ = 1, GAP_REFINE do
-		if f1 <= f2 then hi, x2, f2 = x2, x1, f1 x1 = lo + (hi - lo) * g f1 = f(x1)
-		else lo, x1, f1 = x1, x2, f2 x2 = hi - (hi - lo) * g f2 = f(x2) end
-	end
-	return math.min(best, f1, f2)
+	return lo
 end
 -- the leaf's box corners in world space
 local function boxCorners(ent)
@@ -1062,31 +1038,63 @@ local function boxCorners(ent)
 	return out
 end
 --- Loss (dB) of the free part of the passage across a route at r (game state: traces): the leaf on the side
--- m at clearance h (0: the route grazes its edge), the world at g on the other side and at W beyond the leaf's
--- side (gapAlong across the way, whose direction at r is ray), the leaf covering from h to its far extent; d1,
--- d2 the Fresnel distances.
+-- m at clearance h (0: the route grazes its edge), the world at g on the other side (gapAlong), the leaf
+-- covering from h to its far extent across the way; d1, d2 the Fresnel distances.
 -- Taken relative to the leaf's edge alone (the same passage open on the other side): a lone edge costs what
 -- every edge costs (AC.Corner, AC.Diffraction: nothing at grazing, the way round's length beyond), the gap
 -- the narrowness the world adds on the other side: a slit.
 local GAP_OPEN = 1e4
-local function gapLoss(ent, r, m, h, ray, d1, d2, cfg)
-	local far = -math.huge
-	for _, c in ipairs(boxCorners(ent)) do far = math.max(far, (c - r):Dot(m)) end
-	local W = gapAlong(r, m, ray)
-	local top = math.min(far, W)
-	if top <= h then return 0 end -- the leaf is outside the passage (behind a jamb, flat against a wall)
-	local g = gapAlong(r, -m, ray)
+local function gapLoss(ent, r, m, h, d1, d2, cfg)
+	-- the world's side first: a way whose edge point is pressed against the world there (or inside it: its
+	-- cross traces start in solid) goes through no passage at all, whatever lies on the leaf's side (measured
+	-- first, a leaf corner against a jamb read "the leaf is behind the world": no loss)
+	local g = gapAlong(r, -m)
 	-- the frame's play (a door model is a unit or so narrower than its opening, the same gaps round the shut
 	-- leaf): sealed, as the shut leaf is, so the leaf going from shut to ajar does not open those cracks at once
 	-- (2.2 dB in its first half degree). Taken off the world's side first, then off the leaf's.
+	local h0 = h
 	local play = math.min(GAP_PLAY, g + h)
 	g, h = math.max(g - play, 0), h - math.max(play - g, 0)
 	if g + h <= 0 then return GAP_MAX_DB end
+	-- the leaf covers the passage from h to its far extent across the way. Not cut by the world beyond it on
+	-- its side: measured there, a route bending at a jamb's corner found that jamb on the leaf's side at once
+	-- and the leaf "outside the passage" (an ajar door as loud as an open one); a leaf truly behind the world
+	-- leaves the passage open on the other side, and the edge-alone reference below makes that nothing
+	local top = -math.huge
+	for _, c in ipairs(boxCorners(ent)) do top = math.max(top, (c - r):Dot(m)) end
+	if top <= h0 then return 0 end
 	d1, d2 = math.max(d1, 1), math.max(d2, 1)
 	local slit = AC.GapRatio(-g, h, top, d1, d2, cfg.diff_freq)
 	local edge = AC.GapRatio(-GAP_OPEN, h, top, d1, d2, cfg.diff_freq)
 	local ratio = math.min(slit / math.max(edge, 1e-9), 1)
 	return math.min(-AC.GainToDb(math.max(ratio, 1e-9)), GAP_MAX_DB)
+end
+--- The least move (units) and its direction (local unit vector, away from the box) that takes segment a..b
+-- (local) off box mn..mx: separating axes (the box's three, and the segment's direction across each), the
+-- axis of least overlap. nil when the segment does not meet the box.
+local AXES3 = { Vector(1, 0, 0), Vector(0, 1, 0), Vector(0, 0, 1) }
+local function segBoxPush(a, b, mn, mx)
+	local c, half = (mn + mx) * 0.5, (mx - mn) * 0.5
+	local d = b - a
+	local axes = { AXES3[1], AXES3[2], AXES3[3] }
+	for _, u in ipairs(AXES3) do
+		local x = d:Cross(u)
+		if x:LengthSqr() > 1e-6 then x:Normalize() axes[#axes + 1] = x end
+	end
+	local best, bdir
+	local sm = (a + b) * 0.5
+	for _, u in ipairs(axes) do
+		local bc = c:Dot(u)
+		local br = math.abs(half.x * u.x) + math.abs(half.y * u.y) + math.abs(half.z * u.z)
+		local s0, s1 = math.min(a:Dot(u), b:Dot(u)), math.max(a:Dot(u), b:Dot(u))
+		-- moving the segment along +u by s1 - (bc - br) or along -u by (bc + br) - s0 separates it
+		local up, down = (bc + br) - s0, s1 - (bc - br)
+		if up <= 0 or down <= 0 then return nil end
+		local o, dir = up, u
+		if down < up then o, dir = down, -u end
+		if not best or o < best then best, bdir = o, dir end
+	end
+	return best, bdir
 end
 --- Clearance (units) of the polyline V from the leaf's box, 0 when it crosses it; then the segment index, the
 -- fraction along it and the box point nearest (local) when it does not.
@@ -1104,6 +1112,32 @@ local function leafClearance(ent, V)
 	return best, bi, bt, bq
 end
 P.LeafClearance = leafClearance
+-- The bend of a leg a -> b that the world blocks, from route vertex v seeing both (P.CornerPoint), taken again
+-- from where it got to until it stops moving: one pass from a vertex far from the leg (a leaf's top corner and
+-- a route vertex 70 u below it, round a vertical jamb edge) stopped half way, and the way round was 50 u too
+-- long until the leg came clear, then dropped to its true length at once (pba_tworooms, 3 dB in 0.5 degree).
+local TAUT_PASSES = 4
+-- the length of world a straight leg a -> b cuts (from its first entry to its last exit: thin traces both ways)
+local LEG_BLOCK = 4 -- units of world cut by a leg from which its way is sealed
+local function blockedChunk(a, b)
+	detTr.start, detTr.endpos = a, b
+	util.TraceLine(detTr)
+	if not detOut.Hit then return 0 end
+	local t1 = detOut.StartSolid and 0 or detOut.Fraction
+	detTr.start, detTr.endpos = b, a
+	util.TraceLine(detTr)
+	local t2 = detOut.Hit and (detOut.StartSolid and 0 or detOut.Fraction) or 0
+	return math.max(1 - t1 - t2, 0) * a:Distance(b)
+end
+local function tautCorner(a, v, b)
+	local q = P.CornerPoint(a, v, b)
+	for _ = 2, TAUT_PASSES do
+		local q2 = P.CornerPoint(a, q, b)
+		if q2:DistToSqr(q) < 0.01 then return q2 end
+		q = q2
+	end
+	return q
+end
 local EDGE_PAIRS = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
 --- The way a route V (world points; clear: its segments are clear of the world) takes past leaf `ent` (game
 -- state: traces). d0, d9: the route's length before V[1] and after V[#V] (Fresnel distances). Returns the
@@ -1122,9 +1156,38 @@ function P.LeafWay(ent, V, cfg, d0, d9, clear)
 		m:Normalize()
 		local d1 = d0 + polyLen(V, 1, i) + V[i]:Distance(r)
 		local d2 = r:Distance(V[i + 1]) + polyLen(V, i + 1, n) + d9
-		bestGap = gapLoss(ent, r, m, h, (V[i + 1] - V[i]):GetNormalized(), d1, d2, cfg)
+		bestGap = gapLoss(ent, r, m, h, d1, d2, cfg)
 		bestCost, bestD = bestGap, 0
 		if bestGap <= 0 then return 0, 0, h end
+	else
+		-- crossing: the route itself pushed off the leaf by the least it must move (its overlap with the box,
+		-- separating axes), through the free part there. A route just touching a face (not an edge) costs a
+		-- way round an edge some units off, and a beside route nothing: 11 dB in 0.25 degree as a leaf's face
+		-- swung off a route (pba_twodoors). Pushed by p, the way is p longer at most: nothing as p goes to 0.
+		local push, pdir = segBoxPush(ent:WorldToLocal(V[i]), ent:WorldToLocal(V[i + 1]), ent:OBBMins(), ent:OBBMaxs())
+		if push then
+			local r = V[i] + (V[i + 1] - V[i]) * t
+			local wdir = ent:LocalToWorld(pdir) - ent:LocalToWorld(Vector(0, 0, 0))
+			local rp = r + wdir * (push + 0.01)
+			-- only when the pushed route is off the leaf (its other segments too: a route vertex inside the
+			-- leaf is no route pushed off it)
+			local lrp = ent:WorldToLocal(rp)
+			local mn0, mx0 = ent:OBBMins(), ent:OBBMaxs()
+			if segBoxDist(ent:WorldToLocal(V[i]), lrp, mn0, mx0) <= 0 or segBoxDist(lrp, ent:WorldToLocal(V[i + 1]), mn0, mx0) <= 0 then push = nil end
+			for k = 1, n - 1 do
+				if push and k ~= i and segBoxDist(ent:WorldToLocal(V[k]), ent:WorldToLocal(V[k + 1]), mn0, mx0) <= 0 then push = nil end
+			end
+		end
+		if push then
+			local r = V[i] + (V[i + 1] - V[i]) * t
+			local wdir = ent:LocalToWorld(pdir) - ent:LocalToWorld(Vector(0, 0, 0))
+			local rp = r + wdir * (push + 0.01)
+			local delta = math.max(V[i]:Distance(rp) + rp:Distance(V[i + 1]) - V[i]:Distance(V[i + 1]), 0)
+			local d1 = d0 + polyLen(V, 1, i) + V[i]:Distance(rp)
+			local d2 = rp:Distance(V[i + 1]) + polyLen(V, i + 1, n) + d9
+			local gap = gapLoss(ent, rp, -wdir, 0, d1, d2, cfg)
+			bestCost, bestD, bestGap = AC.Diffraction(delta, cfg.diff_freq, cfg.diff_max_edge) + gap, delta, gap
+		end
 	end
 	-- the ways round the edges (crossing; beside too, when the route's own passage is narrow: a way round the
 	-- leaf's far corner through a wider part is the same choice either side of h = 0), each edge at its point
@@ -1158,50 +1221,73 @@ function P.LeafWay(ent, V, cfg, d0, d9, clear)
 		if AC.Diffraction(math.max(c[1] - route, 0), cfg.diff_freq, cfg.diff_max_edge) >= bestCost then break end
 		if tries >= WAY_TRIES then break end
 		local e = ent:LocalToWorld(c[2])
-		-- forward leg: from e to the last route vertex it sees, bent round the world to the next one
-		local fwd, nxt
-		for k = n, 1, -1 do
-			if detClear(e, V[k]) then
-				if k == n then
-					fwd, nxt = e:Distance(V[n]), V[n]
-				elseif clear then
-					local qq = P.CornerPoint(e, V[k], V[k + 1])
-					fwd, nxt = e:Distance(qq) + qq:Distance(V[k + 1]) + polyLen(V, k + 1, n), qq
-				end
-				break
-			end
-		end
-		-- back leg: from the first route vertex that sees e, bent round the world from the one before it
-		local back, prv
-		if fwd then
-			for k = 1, n do
-				if detClear(V[k], e) then
-					if k == 1 then
-						back, prv = V[1]:Distance(e), V[1]
-					elseif clear then
-						local qq = P.CornerPoint(V[k - 1], V[k], e)
-						back, prv = polyLen(V, 1, k - 1) + V[k - 1]:Distance(qq) + qq:Distance(e), qq
+		-- The legs from e to the route's ends. Each is the straight leg when the world leaves it clear; else
+		-- the better of (a) bent round the world from the route vertex nearest the end that e sees (tautCorner)
+		-- and (b) the straight leg with the length of world it cuts (blockedChunk) as a penalty, 0 when it just
+		-- grazes, the sealed loss from LEG_BLOCK. A way is never dropped or let in at once when a leg comes
+		-- clear: a bend found from a vertex far from the leg was 50 u too long, then the leg came clear and the
+		-- way entered 3 dB under the others (pba_tworooms); a way that saw no vertex was left out, entered when
+		-- it saw one.
+		local fwd, nxt, fwdDb = e:Distance(V[n]), V[n], 0
+		if not detClear(e, V[n]) then
+			fwdDb = GAP_MAX_DB * ramp(blockedChunk(e, V[n]), 0, LEG_BLOCK)
+			if clear then
+				for k = n - 1, 1, -1 do
+					if detClear(e, V[k]) then
+						local qq = tautCorner(e, V[k], V[k + 1])
+						local len = e:Distance(qq) + qq:Distance(V[k + 1]) + polyLen(V, k + 1, n)
+						if fwdDb > 0 and AC.Diffraction(len - fwd, cfg.diff_freq, cfg.diff_max_edge) < fwdDb then
+							fwd, nxt, fwdDb = len, qq, 0
+						end
+						break
 					end
-					break
 				end
 			end
 		end
-		if fwd and back then
+		local back, prv, backDb = V[1]:Distance(e), V[1], 0
+		if not detClear(V[1], e) then
+			backDb = GAP_MAX_DB * ramp(blockedChunk(V[1], e), 0, LEG_BLOCK)
+			if clear then
+				for k = 2, n do
+					if detClear(V[k], e) then
+						local qq = tautCorner(V[k - 1], V[k], e)
+						local len = polyLen(V, 1, k - 1) + V[k - 1]:Distance(qq) + qq:Distance(e)
+						if backDb > 0 and AC.Diffraction(len - back, cfg.diff_freq, cfg.diff_max_edge) < backDb then
+							back, prv, backDb = len, qq, 0
+						end
+						break
+					end
+				end
+			end
+		end
+		local legDb = fwdDb + backDb
+		if legDb < GAP_MAX_DB then
 			tries = tries + 1
 			local delta = math.max(back + fwd - route, 0)
 			-- across the way at e: perpendicular to the edge and to the way's direction, towards the leaf
 			local te = ent:LocalToWorld(c[2] + c[3]) - e
 			te:Normalize()
-			local dir = (e - prv):GetNormalized() + (nxt - e):GetNormalized()
-			dir = dir - te * dir:Dot(te)
-			dir:Normalize()
-			local m = center - e
-			m = m - te * m:Dot(te) - dir * m:Dot(dir)
-			local gap = 0
-			if m:LengthSqr() > 1e-6 then
-				m:Normalize()
-				gap = gapLoss(ent, e, m, 0, dir, d0 + back, fwd + d9, cfg)
+			local ray = (e - prv):GetNormalized() + (nxt - e):GetNormalized()
+			ray:Normalize()
+			-- An edge along the way (a leaf's thickness edge, the way grazing the leaf's end along it) is no edge the
+			-- sound bends round: its cross-section is undefined (the way's direction less its part along the edge
+			-- was noise, and the cross traces went anywhere: into the jamb beside the hinge, "no passage on the
+			-- leaf's side", a free way 30 u round, 10 dB under the shut leaf for 1.6 degrees, pba_twodoors right
+			-- listener at 6.2-7.8 degrees, its line parallel to those edges at 6.84). Such a way costs the sealed
+			-- gap, fading in as the edge turns across the way, so it never enters below the ways round the others.
+			local across = te:Cross(ray):Length()
+			local gap = GAP_MAX_DB
+			if across > EDGE_ALONG0 then
+				local dir = ray - te * ray:Dot(te)
+				dir:Normalize()
+				local m = center - e
+				m = m - te * m:Dot(te) - dir * m:Dot(dir)
+				if m:LengthSqr() > 1e-6 then
+					m:Normalize()
+					gap = gapLoss(ent, e, m, 0, d0 + back, fwd + d9, cfg)
+				end
 			end
+			gap = math.min(gap + GAP_MAX_DB * (1 - ramp(across, EDGE_ALONG0, EDGE_ALONG1)) + legDb, GAP_MAX_DB)
 			local cost = AC.Diffraction(delta, cfg.diff_freq, cfg.diff_max_edge) + gap
 			if cost < bestCost then bestCost, bestD, bestGap = cost, delta, gap end
 		end

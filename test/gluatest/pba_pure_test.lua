@@ -178,11 +178,15 @@ end
 -- World boxes and one leaf for the duration of fn(state) only (restored even on error): traces whose filter
 -- takes the leaf see it (its box grown by the hull, in its own frame), traces without ignoreworld see the
 -- boxes; state is the leaf's door state (pba.Doors.byEnt), closed at first.
+-- WORLD_EPS: the engine's traces hit a surface they come within DIST_EPSILON (1/32 u) of; a test may set
+-- leafSceneEps to that to see the grazing a real map gives (a route vertex or a leaf's edge on a jamb's face)
+local leafSceneEps = 0
 local function withLeafScene(world, leaf, fn)
-	local function worldHit(a, b)
+	local function worldHit(a, b, pad)
 		local best
+		local e = Vector(leafSceneEps + (pad or 0), leafSceneEps + (pad or 0), leafSceneEps + (pad or 0))
 		for _, w in ipairs(world) do
-			local t0, t1 = segBox(a, b, w[1], w[2])
+			local t0, t1 = segBox(a, b, w[1] - e, w[2] + e)
 			if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
 		end
 		return best
@@ -195,7 +199,7 @@ local function withLeafScene(world, leaf, fn)
 	local function tr(t)
 		local o = traceOut(t)
 		local f, ent
-		if not t.ignoreworld then f = worldHit(t.start, t.endpos) end
+		if not t.ignoreworld then f = worldHit(t.start, t.endpos, t.maxs and t.maxs.x or 0) end
 		if type(t.filter) == "function" and t.filter(leaf) == true then
 			local g = leafHit(t.start, t.endpos, t.maxs and t.maxs.x or 0)
 			if g and (not f or g < f) then f, ent = g, leaf end
@@ -226,10 +230,16 @@ end
 -- two rooms (A x < 512, B x > 528, z 0..192) and the doorway y0..y1 (z 0..112) in their 16 u wall:
 -- pba_twodoors' door_s 96..144, pba_tworooms' door1 64..112
 local WB = 4000
-local function twoRoomsWorld(y0, y1)
-	return { { Vector(-WB, -WB, -16), Vector(WB, WB, 0) }, { Vector(-WB, -WB, 192), Vector(WB, WB, 208) },
+-- ymax: the rooms' far side (y 0..ymax, x 0..1040, the maps' outer walls), none when nil
+local function twoRoomsWorld(y0, y1, ymax)
+	local w = { { Vector(-WB, -WB, -16), Vector(WB, WB, 0) }, { Vector(-WB, -WB, 192), Vector(WB, WB, 208) },
 		{ Vector(512, -WB, 0), Vector(528, y0, 192) }, { Vector(512, y1, 0), Vector(528, WB, 192) },
 		{ Vector(512, y0, 112), Vector(528, y1, 192) } }
+	if ymax then
+		for _, b in ipairs({ { Vector(-16, -16, 0), Vector(1056, 0, 192) }, { Vector(-16, ymax, 0), Vector(1056, ymax + 16, 192) },
+			{ Vector(-16, 0, 0), Vector(0, ymax, 192) }, { Vector(1040, 0, 0), Vector(1056, ymax, 192) } }) do w[#w + 1] = b end
+	end
+	return w
 end
 -- largest step of f(x) over the list xs
 local function worstStep(xs, f)
@@ -3061,6 +3071,33 @@ local SUITE = {
 				end
 			end)
 			util.GetSurfacePropName, A.cfg.door_3d = savedProp, saved3d
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Door in 3-D: door_s of pba_twodoors turned 0.1 degree at a time to 15, P.SegmentDoorLoss on door_sweep_real's straight lines (right, left, doorway): every way's cost continuous (in game the right listener went 24 -> 10.1 -> 19.0 dB: a way along the leaf's thickness edges, parallel to that line at 6.84 degrees, measured as a free passage)", func = function()
+			-- the brush door as the client sees it: origin (520, 100, 5), its box with the origin brush (y from 96),
+			-- traces that hit a face they come within 1/32 u of (DIST_EPSILON); the map's rooms and outer walls
+			local leaf = leafEnt(9977, Vector(520, 100, 5), Vector(-4, -4, -4), Vector(4, 43, 106))
+			local cfg = setmetatable({ door_3d = 1 }, { __index = CFG })
+			local S = Vector(640, 120, 56)
+			local Ls = { right = Vector(440, 96, 56), left = Vector(440, 144, 56), doorway = Vector(440, 120, 56) }
+			local savedEps = leafSceneEps
+			leafSceneEps = 1 / 32
+			local ok, err = pcall(withLeafScene, twoRoomsWorld(96, 144, 768), leaf, function(st)
+				st.closedDb = 34
+				for name, L in pairs(Ls) do
+					local prev, worst, at = nil, 0, nil
+					for k = 5, 150 do
+						local th = k * 0.1
+						leaf.yaw, st.frac = th, th / 90
+						local l = P.SegmentDoorLoss(S, L, cfg)
+						if prev and math.abs(l - prev) > worst then worst, at = math.abs(l - prev), th end
+						prev = l
+					end
+					if DEBUGDOOR then print(name, worst, at) end
+					if worst > 1 then error(string.format("%s: %.2f dB in 0.1 degree at %.1f", name, worst, at)) end
+				end
+			end)
+			leafSceneEps = savedEps
 			if not ok then error(err, 0) end
 		end },
 		{ name = "Door in 3-D: a leaf wide open across the line costs its way round and nothing more (door_sweep open, pba_demo room 12: 3.6 dB behind the leaf, the same in the former model's straight line; 0 once the line passes its free end)", func = function()
