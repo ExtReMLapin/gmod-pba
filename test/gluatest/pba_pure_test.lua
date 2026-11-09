@@ -3073,6 +3073,37 @@ local SUITE = {
 			util.GetSurfacePropName, A.cfg.door_3d = savedProp, saved3d
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Door in 3-D: a straight line through a plaster wall then an open leaf pays the leaf's way round from the wall on (was no way at all: every leg from the source crossed the wall, the leaf a solid, 14 dB on at once; rp_downtown open slide 32.6 -> 22.0 -> 33.4 dB)", func = function()
+			-- a plaster wall x 100..111 with a doorway y 0..48; the leaf hinged at the doorway's south jamb on the
+			-- listener's side, swung open along the wall's face; the source just behind the wall, the listener
+			-- sliding 2 u at a time so the line comes to cross the leaf
+			local B = 1e4
+			local world = { { Vector(-B, -B, -16), Vector(B, B, 0) }, { Vector(-B, -B, 192), Vector(B, B, 208) },
+				{ Vector(100, -B, 0), Vector(111, 0, 192) }, { Vector(100, 48, 0), Vector(111, B, 192) }, { Vector(100, 0, 108), Vector(111, 48, 192) } }
+			local leaf = leafEnt(9978, Vector(113, 1.5, 54), Vector(-1.5, 0, -54), Vector(1.5, 47, 54))
+			local cfg = setmetatable({ door_3d = 1 }, { __index = CFG })
+			local S = Vector(90, -10, 50)
+			local savedProp, saved3d = util.GetSurfacePropName, A.cfg.door_3d
+			util.GetSurfacePropName = util.GetSurfacePropName or function() return "default" end
+			A.cfg.door_3d = 1 -- P.Walls reads the global setting
+			local ok, err = pcall(withLeafScene, world, leaf, function(st)
+				leaf.yaw, st.frac = -90, 1
+				local prev, worst, at, crossed = nil, 0, nil, 0
+				for y = -40, 40, 2 do
+					local L = Vector(220, y, 56)
+					local walls = P.Walls(S, L, 6)
+					for _, w in ipairs(walls) do if w.ent == leaf then crossed = crossed + 1 end end
+					local l = P.EvalWalls(walls, cfg)
+					if prev and math.abs(l - prev) > worst then worst, at = math.abs(l - prev), y end
+					prev = l
+				end
+				if DEBUGDOOR then print("worst", worst, at, crossed) end
+				expect(crossed >= 10).to.beTrue()
+				if worst > 1.5 then error(string.format("%.2f dB in 2 u at y=%d", worst, at)) end
+			end)
+			util.GetSurfacePropName, A.cfg.door_3d = savedProp, saved3d
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Door in 3-D: door_s of pba_twodoors turned 0.1 degree at a time to 15, P.SegmentDoorLoss on door_sweep_real's straight lines (right, left, doorway): every way's cost continuous (in game the right listener went 24 -> 10.1 -> 19.0 dB: a way along the leaf's thickness edges, parallel to that line at 6.84 degrees, measured as a free passage)", func = function()
 			-- the brush door as the client sees it: origin (520, 100, 5), its box with the origin brush (y from 96),
 			-- traces that hit a face they come within 1/32 u of (DIST_EPSILON); the map's rooms and outer walls

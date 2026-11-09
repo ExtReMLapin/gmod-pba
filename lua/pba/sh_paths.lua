@@ -840,7 +840,15 @@ local function wallsOneWay(S, L, maxWalls, srcEnt)
 		end
 		if hitEnt and OPENABLE[hitEnt:GetClass()] and (A.cfg.door_3d or 0) >= 0.5 then
 			-- a leaf in 3-D (P.LeafWay): the straight line is a route of two points, the leaf's one model
-			if closureWeight(hitEnt) < 1 then w.detour, w.gapDb = P.LeafWay(hitEnt, { S, L }, A.cfg, 0, 0, detClear(S, L)) end
+			-- The world this line crosses is its transmission, paid as such: a leg of a way round the leaf is
+			-- charged only for the world it cuts beyond what the line cuts on that side (blockedChunk). Charged
+			-- for all of it, every way's legs crossed the wall: no way, the leaf a solid, 14 dB on at once as the
+			-- line reached it, and one leg slipping past a jamb at one position (rp_downtown, open door behind
+			-- plaster: 32.6 -> 22.0 -> 33.4 dB in 2 u steps). A stretch of the line between walls instead jumped
+			-- where the line grazed a corner.
+			if closureWeight(hitEnt) < 1 then
+				w.detour, w.gapDb = P.LeafWay(hitEnt, { S, L }, A.cfg, 0, 0, false, P.BlockedChunk(S, entry), P.BlockedChunk(entry, L))
+			end
 		elseif hitEnt and closureWeight(hitEnt) < 1 then
 			w.detour = objectDetour(hitEnt, S, L)
 		end
@@ -1129,6 +1137,7 @@ local function blockedChunk(a, b)
 	local t2 = detOut.Hit and (detOut.StartSolid and 0 or detOut.Fraction) or 0
 	return math.max(1 - t1 - t2, 0) * a:Distance(b)
 end
+P.BlockedChunk = blockedChunk
 local function tautCorner(a, v, b)
 	local q = P.CornerPoint(a, v, b)
 	for _ = 2, TAUT_PASSES do
@@ -1140,10 +1149,12 @@ local function tautCorner(a, v, b)
 end
 local EDGE_PAIRS = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
 --- The way a route V (world points; clear: its segments are clear of the world) takes past leaf `ent` (game
--- state: traces). d0, d9: the route's length before V[1] and after V[#V] (Fresnel distances). Returns the
+-- state: traces). d0, d9: the route's length before V[1] and after V[#V] (Fresnel distances). cutBefore,
+-- cutAfter (a straight line through walls): the world it cuts before and after the leaf, not charged again to
+-- the ways' legs. Returns the
 -- extra length of the way round the leaf over the route's own (0 beside it, math.huge when there is none),
 -- the loss (dB) of the free part of the passage it goes through, and the route's clearance from the leaf.
-function P.LeafWay(ent, V, cfg, d0, d9, clear)
+function P.LeafWay(ent, V, cfg, d0, d9, clear, cutBefore, cutAfter)
 	cfg = cfg or A.cfg
 	d0, d9 = d0 or 0, d9 or 0
 	local n = #V
@@ -1230,7 +1241,7 @@ function P.LeafWay(ent, V, cfg, d0, d9, clear)
 		-- it saw one.
 		local fwd, nxt, fwdDb = e:Distance(V[n]), V[n], 0
 		if not detClear(e, V[n]) then
-			fwdDb = GAP_MAX_DB * ramp(blockedChunk(e, V[n]), 0, LEG_BLOCK)
+			fwdDb = GAP_MAX_DB * ramp(blockedChunk(e, V[n]) - (cutAfter or 0), 0, LEG_BLOCK)
 			if clear then
 				for k = n - 1, 1, -1 do
 					if detClear(e, V[k]) then
@@ -1246,7 +1257,7 @@ function P.LeafWay(ent, V, cfg, d0, d9, clear)
 		end
 		local back, prv, backDb = V[1]:Distance(e), V[1], 0
 		if not detClear(V[1], e) then
-			backDb = GAP_MAX_DB * ramp(blockedChunk(V[1], e), 0, LEG_BLOCK)
+			backDb = GAP_MAX_DB * ramp(blockedChunk(V[1], e) - (cutBefore or 0), 0, LEG_BLOCK)
 			if clear then
 				for k = 2, n do
 					if detClear(V[k], e) then
