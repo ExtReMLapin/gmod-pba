@@ -50,11 +50,17 @@ bool IsStaticProp(void* handle) {
 struct Vec3 { float x, y, z; };
 
 // ITraceFilter (IEngineTrace.h): ShouldHitEntity, GetTraceType (TraceType_t: TRACE_EVERYTHING 0,
-// TRACE_WORLD_ONLY 1, TRACE_ENTITIES_ONLY 2, TRACE_EVERYTHING_FILTER_PROPS 3)
+// TRACE_WORLD_ONLY 1, TRACE_ENTITIES_ONLY 2, TRACE_EVERYTHING_FILTER_PROPS 3), then a THIRD virtual that
+// GMod's engine added (not in the 2013 SDK): a bool, false in the engine's own filters (engine.dll x64,
+// vtables of CTraceFilterWorldOnly / CTraceFilterWorldAndPropsOnly: slot 2 = the same "return false" as
+// slot 0). The engine calls it when it clips the ray against a static prop (true ORs 8 into the mask it
+// gives vphysics), so it is only reached with TRACE_EVERYTHING: with two virtuals the call read past the
+// vtable and jumped into the strings after it (access violation on the first trace near a static prop).
 class TraceFilterWorld {
 public:
 	virtual bool ShouldHitEntity(void*, int) { return false; }
 	virtual int GetTraceType() const { return 1; }
+	virtual bool Slot2() const { return false; } // GMod's third ITraceFilter virtual (see above)
 };
 // world through TRACE_EVERYTHING (the BSP is always traced), static props kept, entities refused:
 // what util.Trace* gives with a filter returning false for every entity
@@ -62,6 +68,7 @@ class TraceFilterStatic {
 public:
 	virtual bool ShouldHitEntity(void* h, int) { return h && IsStaticProp(h); }
 	virtual int GetTraceType() const { return 0; }
+	virtual bool Slot2() const { return false; } // GMod's third ITraceFilter virtual (see above)
 };
 TraceFilterWorld g_world;
 TraceFilterStatic g_static;
