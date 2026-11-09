@@ -44,6 +44,9 @@ local function nativeTraces()
 	if not (T and T.Init and T.Init()) then return false end
 	local L = LocalPlayer and IsValid(LocalPlayer()) and LocalPlayer():EyePos() or Vector()
 	local mn, mx = Vector(-4, -4, -4), Vector(4, 4, 4)
+	-- a wrong layout (vtable, Ray_t) makes most traces differ; a rare hull difference exists (rp_downtown:
+	-- 1 hull in 1500, 24 u off, lines all identical) and must not switch the whole path off at a map load
+	local bad = 0
 	for i = 1, 64 do
 		local a = L + Vector(math.random(-2000, 2000), math.random(-2000, 2000), math.random(-400, 400))
 		local b = L + Vector(math.random(-2000, 2000), math.random(-2000, 2000), math.random(-400, 400))
@@ -51,10 +54,11 @@ local function nativeTraces()
 		local t = hull and util.TraceHull({ start = a, endpos = b, mins = mn, maxs = mx, mask = LINK_MASK, filter = worldOnly })
 			or util.TraceLine({ start = a, endpos = b, mask = LINK_MASK, filter = worldOnly })
 		local f, ss = T.Trace(a, b, LINK_MASK, hull and mn or nil, hull and mx or nil)
-		if not f or math.abs(f - t.Fraction) > 1e-3 or ss ~= t.StartSolid then
-			MsgN("[PBA] native traces differ from util.Trace* on this map: left off")
-			return false
-		end
+		if not f or math.abs(f - t.Fraction) > 1e-3 or ss ~= t.StartSolid then bad = bad + 1 end
+	end
+	if bad > 2 then
+		MsgN("[PBA] native traces differ from util.Trace* on this map (" .. bad .. " of 64): left off")
+		return false
 	end
 	NT = T
 	return NT

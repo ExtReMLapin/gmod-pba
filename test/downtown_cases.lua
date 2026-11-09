@@ -51,7 +51,8 @@ local Sd, Ld = Vector(-2149.338, -6898.178, -59.647), Vector(-2196.6, -6960.969,
 local d = compute(Sd, Ld)
 local dp = d.paths and d.paths[1]
 local doorway = dp and { length = math.Round(dp.length), diffDb = math.Round(dp.diffDb or 0, 1), lp = dp.lp, voices = voices(d) } or { none = true }
-local doorwayOk = dp ~= nil and (dp.diffDb or 99) <= 7 and (dp.lp or 4) <= 1 and dp.length <= Sd:Distance(Ld) * 1.25
+-- the route's shape only (the door of that doorway is closed after a map load: its leaf adds its own loss)
+local doorwayOk = dp ~= nil and (dp.diffDb or 99) <= 7 and dp.length <= Sd:Distance(Ld) * 1.25
 
 -- native room reverb send (pba.Native.SendK): grows with the distance inside an enclosed space only. In the
 -- street outside the building (open sky) a radio 1268 u away got x24: the street's reverb 28 dB over the
