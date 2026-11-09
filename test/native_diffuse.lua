@@ -40,6 +40,9 @@ local cv = GetConVar("pba_native_diffuse_send")
 local k = cv and cv:GetFloat() or 1.5
 local rev = math.max(a.total - a.direct, 0)
 local pred = db(b.direct + rev * (1 + k * b.share) ^ 2, a.total)
-return { pass = a.id > 0 and b.id > 0 and drop > 6 and math.abs(tot) <= 3, directDropDb = math.Round(drop, 2),
+-- the total depends on the room where it is measured (reverb over direct at share 0: 0.2 in pba_demo, 1.95
+-- under gm_melancholia's overhang: +5.4 dB predicted, +5.5 measured): what must hold is the energy law
+-- itself, the measured total within 1.5 dB of the one predicted from the share-0 measure
+return { pass = a.id > 0 and b.id > 0 and drop > 6 and math.abs(tot - pred) <= 1.5, directDropDb = math.Round(drop, 2),
 	totalDb = math.Round(tot, 2), predictedTotalDb = math.Round(pred, 2), k = k,
 	reverbOverDirect = math.Round(rev / math.max(a.direct, 1e-9), 3), rows = { a, b } }

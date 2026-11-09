@@ -3,7 +3,10 @@ Offline check only: the in-game suite (run_battery.py) stays the reference.
 Needs `pip install lupa` (or a local copy in test/offline/pylib). Agents use it to prepare code and pure
 tests without the game, in parallel; the in-game suite stays the reference before a merge.
 Usage: python -I test/offline/run_pure.py [repo] [extra.lua]   (repo defaults to this checkout; extra.lua
-       runs after the suite, with the repo path as `...`, e.g. test/offline/oneshot_follow_sim.lua)"""
+       runs after the suites, with the repo path as `...`, e.g. test/offline/oneshot_follow_sim.lua)
+Then the native helpers' suite (test/gluatest/pba_pure_native_test.lua): cl_native.lua is loaded after the
+first suite and the static lock (a timer.Remove stub is all the shim lacks for it), so the first suite
+runs exactly as before."""
 import os
 import sys
 
@@ -56,5 +59,12 @@ for root, _, names in os.walk(os.path.join(repo, "lua")):
 ok_static = len(raw) == 1 and raw[0].startswith("lua/pba/sh_core.lua:") and len(pat) == 1 and pat[0].startswith("lua/pba/sh_core.lua:")
 print("%s static: SoundDuration only via A.SoundDuration, prefix pattern only in A.SoundFile (raw calls %s, patterns %s)"
       % ("PASS" if ok_static else "FAIL", raw, pat))
+
+# The native helpers (cl_native.lua: distance law, sends, directivity, EQ) and their suite. Loaded last:
+# the suite above runs without pba.Native, as before.
+L.execute("timer.Remove = timer.Remove or function() end")
+L.execute(open(os.path.join(repo, "lua", "pba", "cl_native.lua"), encoding="utf-8").read())
+src_native = open(os.path.join(repo, "test", "gluatest", "pba_pure_native_test.lua"), encoding="utf-8").read()
+print(L.execute(runner.replace('"pba_pure_test"', '"pba_pure_native_test"'), src_native))
 if len(sys.argv) > 2:
     print(L.execute(open(sys.argv[2], encoding="utf-8").read(), repo))  # the repo path as `...`
