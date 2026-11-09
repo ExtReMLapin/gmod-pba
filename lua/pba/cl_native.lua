@@ -433,12 +433,39 @@ N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 -- a real one), so a send that followed the direct gain kept the reverb/direct balance of a source about
 -- 1 m away at every distance: far sources sounded dry (pba_native_reverb 0.15 right near, too low far).
 -- The send is the gain times distance / 1 m: the reverb/direct balance of a real source at that distance,
--- whatever the game's distance law. Capped at 100 (+40 dB). lvl is unused (kept for the callers).
+-- whatever the game's distance law. That growth is the diffuse field of an ENCLOSED space: it stops at the
+-- size of the listener's space, and there is none in the open (outside a house, a radio 1268 u away got
+-- its send x24: the street's reverb 28 dB over the direct, an ambience with no direction). d is the last
+-- leg (from the opening or wall the sound enters the listener's space through), capped at N.enclosure
+-- (mean distance to the walls around the listener; 1 m under the open sky: send = gain).
 N.REF_UNITS = 52.49 -- 1 m
-function N.SendK(len)
-	if not len then return 1 end
-	return math.Clamp(len / N.REF_UNITS, 1, 100)
+N.enclosure = N.enclosure or N.REF_UNITS
+function N.SendK(d)
+	if not d then return 1 end
+	return math.Clamp(math.min(d, N.enclosure or N.REF_UNITS) / N.REF_UNITS, 1, 100)
 end
+
+-- the listener's space: open sky above (a trace up of 2048 u reaching the sky or nothing) = open; else the
+-- mean horizontal distance to the walls (8 directions, 1024 u max). Refreshed twice a second.
+local encTr = { mask = MASK_SOLID_BRUSHONLY }
+function N.UpdateEnclosure(L)
+	encTr.start, encTr.endpos = L, L + Vector(0, 0, 2048)
+	local up = util.TraceLine(encTr)
+	if not up.Hit or up.HitSky then N.enclosure = N.REF_UNITS return N.enclosure end
+	local sum = 0
+	for k = 0, 7 do
+		local a = k * math.pi / 4
+		encTr.endpos = L + Vector(math.cos(a) * 1024, math.sin(a) * 1024, 0)
+		local t = util.TraceLine(encTr)
+		sum = sum + (t.Hit and t.Fraction or 1) * 1024
+	end
+	N.enclosure = math.max(sum / 8, N.REF_UNITS)
+	return N.enclosure
+end
+timer.Create("pba_native_enclosure", 0.5, 0, function()
+	local ply = LocalPlayer()
+	if IsValid(ply) and N.render then N.UpdateEnclosure(ply:EyePos()) end
+end)
 
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
 -- lvl = sound level (dB, for the room reverb send: see N.SendK; without it the send follows the gain),
@@ -454,7 +481,9 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and opt.sh or nil
 	local g = gain * A.cfg.native_gain
-	local send = opt.lvl and g * N.SendK(opt.len, opt.lvl) or nil
+	-- last leg: from the apparent position (opening, wall, or the source) to the listener
+	local ply = LocalPlayer()
+	local send = opt.lvl and IsValid(ply) and g * N.SendK(pos:Distance(ply:EyePos())) or nil
 	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, send)
 	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
 		-- direct voice of a moving entity: follows it every frame like the engine does

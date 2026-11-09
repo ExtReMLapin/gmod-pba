@@ -111,13 +111,13 @@ local function applyNative(m, S, L)
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
 	if m.clearPath then
 		pos, gain, lp = S, AC.EngineGain(S:Distance(L), m.lvl), 0
-		send = gain * N.SendK(S:Distance(L), m.lvl)
+		send = gain * N.SendK(S:Distance(L))
 		m.diffuse = 0
 	else
 		local p, dp, ps = 0, 0, 0
 		for _, v in ipairs(r.voices) do
 			p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain
-			local s = v.gain * N.SendK(v.len, m.lvl) -- room reverb send: without the distance law
+			local s = v.gain * N.SendK(v.pos:Distance(L)) -- room reverb send: last leg (see N.SendK)
 			ps = ps + s * s
 		end
 		pos, gain, lp, send = r.voices[1].pos, math.sqrt(p), r.voices[1].lp, math.sqrt(ps)

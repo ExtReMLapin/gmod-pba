@@ -75,7 +75,7 @@ local function nativeParams(ch, r, L)
 	local gain = (r.vol or 1) * bassGain(ch, dS) * (r.gRel or 1) * A.cfg.native_gain
 	local el, em, eh = A.Native.VoiceEQ(r.lp or 0, r.len or dS)
 	-- room reverb send: the reverb/direct balance of a real source at this distance (see N.SendK)
-	local send = gain * A.Native.SendK(r.len or dS)
+	local send = gain * A.Native.SendK(pos:Distance(L))
 	return pos, gain, el, em, eh, send
 end
 
