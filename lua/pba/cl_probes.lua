@@ -708,7 +708,7 @@ PR.LinkSegs = linkSegs
 function PR.Start()
 	PR.current, PR.building = nil, nil
 	PR.pathCache, PR.pathCacheN, PR.queue = {}, 0, {}
-	PR.bridgeMemo, PR.sticky = nil, nil
+	PR.bridgeMemo, PR.sticky, PR.fieldAway = nil, nil, nil
 	local g = A.Graph.Get()
 	if not g then return end
 	local map = g.map
@@ -1228,7 +1228,7 @@ local FIELD_SEEDS, FIELD_REACH = 8, 3
 -- relaxation towards a probe already popped, is ruled out by the key / cost comparison itself.
 -- `reuse`: a field no longer used (the one just replaced), whose tables are cleared and filled again
 -- instead of growing new ones (three tables of 22 000 entries: ~0.7 MB of garbage per build).
-function PR.BuildField(g, L, yield, reuse)
+function PR.BuildField(g, L, yield, reuse, costs)
 	local cost, nxt, root = {}, {}, {}
 	if reuse and reuse.g == g and reuse.root then
 		cost, nxt, root = reuse.cost, reuse.nxt, reuse.root
@@ -1238,9 +1238,11 @@ function PR.BuildField(g, L, yield, reuse)
 	local f = { g = g, L = L, cost = cost, nxt = nxt, root = root, base = {}, seeds = {}, pulled = {}, arr = {}, arrEpoch = PR.doorEpoch }
 	local adj = g.adj or PR.Prepare(g)
 	local first, nid, elen = adj.first, adj.nid, adj.len
-	-- paths_model 1: the doors and portals on the links are part of their cost (PR.LinkCosts)
+	-- the doors and portals on the links as part of their cost: `costs` (PR.LinkCosts' table), false for
+	-- none, nil for paths_model's choice (1: the current door costs)
 	local extra
-	if (A.cfg.paths_model or 0) >= 0.5 then extra, f.stateSig = PR.LinkCosts(g) end
+	if costs then extra = costs
+	elseif costs == nil and (A.cfg.paths_model or 0) >= 0.5 then extra, f.stateSig = PR.LinkCosts(g) end
 	local hk, hv, n = {}, {}, 0
 	for _, s in ipairs(PR.Visible(g, L, FIELD_SEEDS, 2)) do
 		local c = s.pos:Distance(L)
@@ -1270,10 +1272,28 @@ function PR.BuildField(g, L, yield, reuse)
 	return f
 end
 
+--- The listener's fields. paths_model 0: one, by length (as before). paths_model 1: by length (f: the
+-- shortest way, its doors paid on the route by P.EvalPolyline) and, when a door or portal on the links
+-- costs something, a second one with those costs (f.doors: the way round a shut door). One field at a fixed
+-- exchange rate (40 u per dB) gave one route per probe, and with door_s shut every probe of the room went
+-- round by the other door, 15 dB quieter than through the leaf (pba_twodoors): the routes of both fields
+-- are ranked by their level afterwards (PR.DistinctRoutes), as the portal chains are (rankChains).
+function PR.BuildFields(g, L, yield, reuse)
+	if (A.cfg.paths_model or 0) < 0.5 then return PR.BuildField(g, L, yield, reuse) end
+	local extra, sig = PR.LinkCosts(g)
+	local f = PR.BuildField(g, L, yield, reuse, false)
+	f.stateSig = sig
+	if next(extra) then
+		f.doors = PR.BuildField(g, L, yield, reuse and reuse.doors, extra)
+		f.doors.stateSig = sig
+	end
+	return f
+end
+
 --- Built at once around L (tests: as if the listener had been standing there); the background
 -- upkeep around the real listener is held for 2 s so that it does not replace it.
 function PR.BuildFieldNow(L)
-	if PR.current then PR.field, PR.fieldJob, PR.fieldHold = PR.BuildField(PR.current, L), nil, SysTime() + 2 end
+	if PR.current then PR.field, PR.fieldJob, PR.fieldHold = PR.BuildFields(PR.current, L), nil, SysTime() + 2 end
 end
 
 --- Which of field f's seeds the listener at L sees (set of probe ids), and whether it sees the field's
@@ -1382,7 +1402,7 @@ hook.Add("Think", "pba_probes_field", function()
 		local spare = PR.fieldSpare
 		PR.fieldSpare = nil
 		job.co = coroutine.create(function()
-			return PR.BuildField(g, L, function() if SysTime() >= PR.fieldDeadline then coroutine.yield() end end, spare)
+			return PR.BuildFields(g, L, function() if SysTime() >= PR.fieldDeadline then coroutine.yield() end end, spare)
 		end)
 		PR.fieldJob = job
 	end
@@ -2013,23 +2033,53 @@ function PR.FieldRoutes(S, L, k, cfg)
 	local g = PR.current
 	if not g then return {} end
 	doorLeaves()
-	local f = PR.field
-	if not f or f.g ~= g or f.L:DistToSqr(L) > (FIELD_REACH * g.spacing) ^ 2 then
-		f = PR.BuildField(g, L)
-		PR.field, PR.fieldJob = f, nil
+	-- The nearest usable field: the upkeep's (around the player, PR.field) or the one built for a listener
+	-- elsewhere (PR.fieldAway: a test, a camera). Building the away field into PR.field made the upkeep
+	-- replace it at its next turn, and the routes of one listener switched between two fields' joins (a
+	-- 10 dB step in the open slide of door_sweep_real). Reach FIELD_REACH spacings, door states current.
+	local reach2 = (FIELD_REACH * g.spacing) ^ 2
+	local sig
+	local function usable(c)
+		if not c or c.g ~= g or c.L:DistToSqr(L) > reach2 then return false end
+		if c.stateSig then
+			sig = sig or PR.StateSig(g)
+			if c.stateSig ~= sig then return false end
+		end
+		fieldSeen(c, L)
+		return c.seenAny
 	end
-	fieldSeen(f, L)
-	if not f.seenAny then return {} end
+	local f
+	for _, c in ipairs({ PR.field or false, PR.fieldAway or false }) do
+		if c and usable(c) and (not f or c.L:DistToSqr(L) < f.L:DistToSqr(L)) then f = c end
+	end
+	if not f then
+		f = PR.BuildFields(g, L)
+		if not PR.field or PR.field.g ~= g then PR.field, PR.fieldJob = f, nil else PR.fieldAway = f end
+		fieldSeen(f, L)
+		if not f.seenAny then return {} end
+	end
 	local starts = PR.Visible(g, S, (k or 3) + 2)
 	if #starts == 0 then return {} end
-	local inners = fieldPaths(f, starts, S, L)
 	local out = {}
-	for _, inner in ipairs(inners) do
-		local pulled = attach(inner, S, L, inners.via)
-		if pulled and #pulled >= 3 then
-			local p = A.Paths.EvalRoute(pulled, cfg)
-			p.probe = true
-			out[#out + 1] = p
+	-- A route tightened down to the straight line (the world lets a hull through: only a leaf cuts the line)
+	-- is kept, once: it is the way through that doorway, and the doorway's route is the one model of its
+	-- leaf whether the line crosses the leaf or the wall beside it (P.Compute takes a leaf a route crosses
+	-- off the line, as a portal chain's). Dropped, the leaf went back to the line one step and to the route
+	-- the next: the voice changed kind at the leaf's edge, and both paid it where a bent copy survived.
+	local straight = false
+	-- the shortest ways (f) and the ways round the doors' costs (f.doors, PR.BuildFields), ranked together
+	for _, fx in ipairs({ f, f.doors or false }) do
+		if fx and (fx == f or (fieldSeen(fx, L) and fx.seenAny)) then
+			local inners = fieldPaths(fx, starts, S, L)
+			for _, inner in ipairs(inners) do
+				local pulled = attach(inner, S, L, inners.via)
+				if pulled and (#pulled >= 3 or (#pulled == 2 and not straight)) then
+					straight = straight or #pulled == 2
+					local p = A.Paths.EvalRoute(pulled, cfg)
+					p.probe = true
+					out[#out + 1] = p
+				end
+			end
 		end
 	end
 	return PR.DistinctRoutes(S, L, out)

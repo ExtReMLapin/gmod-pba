@@ -1898,6 +1898,72 @@ return {
 			util.TraceLine, util.TraceHull, D.byEnt[9999] = savedTr, savedHull, saved
 			if not ok then error(err, 0) end
 		end },
+		{ name = "CornerPoint: a vertex left on its probe in the next room ends on the edge its other leg grazes (was 98 u off it: 2.6 dB for 0.4)", func = function()
+			-- pba_twodoors' wall x 512..528 with the doorway y 97..143; S in room B, L in room A above the doorway's
+			-- line, the vertex on a probe of room B below it
+			local boxes = { { Vector(512, -1000, -100), Vector(528, 97, 300) }, { Vector(512, 143, -100), Vector(528, 1000, 300) } }
+			local savedTL, savedNT = util.TraceLine, A.cfg.native_traces
+			util.TraceLine = function(t)
+				local o = traceOut(t)
+				local best
+				if not t.ignoreworld then
+					for _, b in ipairs(boxes) do
+						local t0, t1 = segBox(t.start, t.endpos, b[1], b[2])
+						if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+					end
+				end
+				o.Hit, o.HitWorld, o.Fraction, o.StartSolid, o.Entity = best ~= nil, best ~= nil, best or 1, false, nil
+				o.HitPos = t.start + (t.endpos - t.start) * (best or 1)
+				return o
+			end
+			A.cfg.native_traces = 0
+			local ok, err = pcall(function()
+				local S, V, L = Vector(640, 120, 56), Vector(576, 64, 48), Vector(424, 180, 56)
+				local q = P.CornerPoint(S, V, L)
+				-- on the doorway's upper edge (x 512..528 at y 143), within 2 u
+				local cx = math.Clamp(q.x, 512, 528)
+				expect(math.sqrt((q.x - cx) ^ 2 + (q.y - 143) ^ 2) < 2).to.beTrue()
+			end)
+			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
+			if not ok then error(err, 0) end
+		end },
+		{ name = "EvalPolyline: a route vertex inside an open leaf (the probes pass the leaves) costs the leaf on the span round it: 5 u or 2 u deep, the same (was 18 dB 'enclosed' vs 0.1)", func = function()
+			-- the open leaf of pba_twodoors' door_s (world box 476..524 x 95..105), the route from room B round the
+			-- jamb into room A, its clearance vertex in the leaf; the world is empty (every detour point clear)
+			local mn, mx = Vector(476, 95, 0), Vector(524, 105, 112)
+			local leaf = { IsValid = function() return true end, GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9989 end,
+				OBBMins = function() return mn end, OBBMaxs = function() return mx end,
+				WorldToLocal = function(_, v) return v end, LocalToWorld = function(_, v) return v end }
+			local D = pba.Doors
+			D.byEnt = D.byEnt or {}
+			local saved, savedTr, savedHull = D.byEnt[9989], util.TraceLine, util.TraceHull
+			util.TraceLine = function(t)
+				local o = traceOut(t)
+				o.Hit, o.Fraction, o.StartSolid, o.HitPos = false, 1, false, t.endpos
+				return o
+			end
+			util.TraceHull = function(t)
+				local o = traceOut(t)
+				local pad = t.maxs and t.maxs.x or 0
+				local t0 = segBox(t.start, t.endpos, mn - Vector(pad, pad, pad), mx + Vector(pad, pad, pad))
+				o.Hit, o.Fraction, o.Entity = t0 ~= nil, t0 or 1, t0 and leaf or nil
+				o.HitPos = t.start + (t.endpos - t.start) * (t0 or 1)
+				o.StartSolid = t0 == 0
+				return o
+			end
+			local cfg = setmetatable({ prop_max_db = 18, corner_refine = 0 }, { __index = CFG })
+			local ok, err = pcall(function()
+				D.byEnt[9989] = { frac = 1, closedDb = 28, closedLp = 3 }
+				local S, L = Vector(640, 120, 56), Vector(424, 70, 56)
+				local deep = P.EvalPolyline({ S, Vector(508, 100, 55), L }, cfg)
+				local shallow = P.EvalPolyline({ S, Vector(516, 103, 50), L }, cfg)
+				expect(deep.leaves and deep.leaves[leaf] and shallow.leaves and shallow.leaves[leaf]).to.beTrue()
+				expect(math.abs(deep.doorDb - shallow.doorDb) < 3).to.beTrue()
+				expect(deep.doorDb < 18 - 1e-6).to.beTrue()
+			end)
+			util.TraceLine, util.TraceHull, D.byEnt[9989] = savedTr, savedHull, saved
+			if not ok then error(err, 0) end
+		end },
 		{ name = "EvalChain: a door opening from shut: muffling falls a level at a time, level steps < 1.5 dB per 10 % more opening (no 'open <= 1 % is shut' step: 4 dB)", func = function()
 			local g = G.Build(synthBsp())
 			local p1 = g.byKey[1]
@@ -2400,7 +2466,9 @@ return {
 				local mn, mx = Vector(510, 14, 0), Vector(530, 66, 112)
 				local door = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9990 end,
 					IsValid = function() return true end, WorldSpaceAABB = function() return mn, mx end,
-					NearestPoint = function(_, p) return Vector(math.Clamp(p.x, mn.x, mx.x), math.Clamp(p.y, mn.y, mx.y), math.Clamp(p.z, mn.z, mx.z)) end }
+					NearestPoint = function(_, p) return Vector(math.Clamp(p.x, mn.x, mx.x), math.Clamp(p.y, mn.y, mx.y), math.Clamp(p.z, mn.z, mx.z)) end,
+					OBBMins = function() return mn end, OBBMaxs = function() return mx end,
+					WorldToLocal = function(_, v) return v end, LocalToWorld = function(_, v) return v end }
 				local savedEnts, savedDoors, savedList = _G.ents, A.Doors, PR.doorList
 				_G.ents = { FindByClass = function(cls) return cls == "prop_door_rotating" and { door } or {} end } -- (_G: the suite runs in its own environment)
 				A.Doors = { byEnt = { [9990] = { frac = 0, closedDb = 28, closedLp = 3 } } }
@@ -2421,6 +2489,29 @@ return {
 					local far = false
 					for _, v in ipairs(ps[1].points) do if v.y > 300 then far = true end end
 					expect(far).to.beTrue() -- by the far hole
+					-- both fields (PR.BuildFields): the way through the shut door (its leaf paid on the route) and the
+					-- way round it, ranked by level afterwards. The scene's traces see the leaf (P.SegmentDoorLoss).
+					local sceneHull = util.TraceHull
+					util.TraceHull = function(t)
+						if not t.ignoreworld then return sceneHull(t) end
+						local o = traceOut(t)
+						local pad = t.maxs and t.maxs.x or 0
+						local t0 = segBox(t.start, t.endpos, mn - Vector(pad, pad, pad), mx + Vector(pad, pad, pad))
+						o.Hit, o.Fraction, o.Entity, o.StartSolid = t0 ~= nil, t0 or 1, t0 and door or nil, t0 == 0
+						o.HitPos = t.start + (t.endpos - t.start) * (t0 or 1)
+						return o
+					end
+					PR.field = PR.BuildFields(g, L)
+					expect(PR.field.doors ~= nil).to.beTrue()
+					ps = PR.FieldRoutes(S, L, 3, cfg)
+					local thru, round = false, false
+					for _, p in ipairs(ps) do
+						local hi = false
+						for _, v in ipairs(p.points) do if v.y > 300 then hi = true end end
+						if hi then round = true elseif p.doorDb > 1 then thru = true end
+					end
+					util.TraceHull = sceneHull
+					expect(thru and round).to.beTrue()
 					-- opened: the short way again
 					A.Doors.byEnt[9990].frac = 1
 					PR.doorList = nil
