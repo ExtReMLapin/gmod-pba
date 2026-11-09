@@ -341,6 +341,8 @@ steps = [
     ("downtown_stream rp_downtown", lambda: py("downtown_stream.py")),
     # end to end, native: outside, under an overhang vs one metre left under the open sky, same window: the same level, no enclosure-boosted reverb
     ("melancholia_overhang", lambda: py("melancholia_overhang.py")),
+    # a small room downstairs reached through openings: its reverb is there, and one metre does not switch it
+    ("melancholia_small_room", lambda: py("melancholia_small_room.py")),
     # other addons' radios keep the distance law their addon chose (a 'same volume everywhere' radio came
     # out 14 dB weaker at 5 m under the physical law): native level = channel law, flat and 250 u ranges
     ("stream_addon_range", lambda: seq(any_map, lambda: native_on(True), lambda: job("client", "stream_addon_range.lua", 60))),

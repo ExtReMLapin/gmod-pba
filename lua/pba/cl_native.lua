@@ -527,11 +527,14 @@ N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 --    falls much more gently (a radio 290 u away is ~13 dB louder than a real one): the slot is fed the
 --    game's level at that distance without the path's losses, times distance / 1 m (N.SrcSend), which keeps
 --    a real source's reverb / direct balance against the game's direct.
---  * The listener's room (listener-centric reverb, the module's room bus): only what reaches the
---    listener's space THROUGH walls and floors (the transmission voice: a radio upstairs makes the room
---    below resonate). Its "source" is the wall it comes out of, a boundary of the listener's space, at
---    |wall - listener| (N.RoomSend). Without a slot (pool full, older module) a voice falls back to the
---    room bus at its gain (the 1.0 behaviour), no distance factor.
+--  * The listener's room (listener-centric reverb, the module's room bus): everything that ENTERS the
+--    listener's space from elsewhere, through an opening or through a wall (a radio upstairs heard by the
+--    stairwell or through the floor makes the room below resonate). Its "source" is the point it enters
+--    by (the opening, the wall), a boundary of the listener's space, at |entry - listener| (N.RoomSend).
+--    In clear sight there is one space: the slot only. (With the transmission alone, a listener in a
+--    small room reached through openings got no reverb at all where the slot's simulation found no ray
+--    to the source room: gm_melancholia, reverb -150 dB, then audible one metre further.) Without a slot
+--    (pool full, older module) a voice falls back to the room bus at its gain (the 1.0 behaviour).
 -- (An earlier version grew the room send with the distance and guessed whether the listener was enclosed
 -- from one trace upwards: under an overhang, one metre from the open sky, the output jumped 17 dB.)
 N.REF_UNITS = 52.49 -- 1 m

@@ -136,7 +136,8 @@ local function applyNative(m, S, L)
 			local g = N.PhysPath(v.gain, v.len, m.lvl, v.rawLossDb) -- the loss before headroom (N.PhysPath)
 			p, dp = p + g * g, dp + (v.diffuse or 0) * g * g
 			-- what comes through walls: the listener's room resonates with it (N.RoomSend)
-			if v.kind == "transmission" then local s = N.RoomSend(g, v.pos, L) pt = pt + s * s end
+			-- what enters the listener's space, through an opening or a wall: that space resonates with it
+			do local s = N.RoomSend(g, v.pos, L) pt = pt + s * s end
 		end
 		pos, gain, lp, trans = r.voices[1].pos, math.sqrt(p), r.voices[1].lp, math.sqrt(pt)
 		lpDb = r.voices[1].lpDb -- the continuous loss behind lp: the EQ follows it without steps (N.LowpassDb)

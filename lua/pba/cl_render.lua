@@ -384,7 +384,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
 		local dominant = slot == 1 and not echoed and S
 		local srcSend = dominant and (data.Volume or 1) * A.Native.PhysSrcSend(data.SoundLevel or 75, S:Distance(L)) * dirK
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
-			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, trans = v.kind == "transmission", noRoom = true })
+			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, trans = true, noRoom = true })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
 			local t0 = RealTime() + delay

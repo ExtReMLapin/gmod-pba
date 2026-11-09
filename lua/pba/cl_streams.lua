@@ -222,10 +222,11 @@ local function evaluate(ch, r, L)
 		local loss = v.gain / math.max(AC.EngineGain(len, 75), 1e-6)
 		local gv = loss * bassGain(ch, len)
 		p, pd = p + gv * gv, pd + gv * gv * (v.diffuse or 0)
-		if v.kind == "transmission" then trG, trPos = gv, v.pos end
+		-- what ENTERS the listener's space (through an opening or a wall): it makes that space resonate
+		do local s = gv * (v.pos and 1 or 0) if s > 0 then trG = math.sqrt((trG or 0) ^ 2 + s * s) trPos = trPos or v.pos end end
 	end
 	r.gNative = math.sqrt(p)
-	r.transG, r.transPos = trG, trPos -- what comes through walls (the listener's room resonates with it)
+	r.transG, r.transPos = trG, trPos -- what enters the listener's space (the listener's room resonates with it)
 	-- energy-weighted diffuse share (diffuse model): rendered by the native module only (BASS has no DSP)
 	r.diffuse = pd / math.max(p, 1e-12)
 	local g = math.sqrt(p) / math.max(bassGain(ch, dS), 1e-6)
