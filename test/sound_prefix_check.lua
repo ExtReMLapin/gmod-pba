@@ -3,6 +3,8 @@
 -- sound character"). Expected: the "raw" column is 0 (or wrong) for every prefixed name, the "pba"
 -- column (A.SoundDuration) equals the bare duration on every line, and the verdict is "OK".
 -- Run it in the server realm too (A.SoundDuration is shared; sv_loops uses it for long sounds).
+-- Returns { pass, rawFails, bad, lines }: pass = that verdict (no wrong pba duration, and the long
+-- music file really is long: the sounds exist on this install).
 local names = { "music/hl2_song12_long.wav", "ambient/alarms/klaxon1.wav" }
 local prefixes = { "", "*", "^", ")", "#", "^)", "*#" }
 local out, bad, rawFails = {}, 0, 0
@@ -15,6 +17,7 @@ for _, n in ipairs(names) do
 		out[#out + 1] = string.format("%-34s raw %7.3f  pba %7.3f  bare %7.3f", p .. n, raw, fixed, bare)
 	end
 end
+local pass = bad == 0 and (SoundDuration(names[1]) or 0) > 8
 out[#out + 1] = string.format("raw SoundDuration wrong on %d prefixed names; pba.SoundDuration wrong on %d -> %s",
-	rawFails, bad, (bad == 0 and SoundDuration(names[1]) > 8) and "OK" or "FAIL")
-return table.concat(out, "\n")
+	rawFails, bad, pass and "OK" or "FAIL")
+return { pass = pass, rawFails = rawFails, bad = bad, lines = table.concat(out, "\n") }

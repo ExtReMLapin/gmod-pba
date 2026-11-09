@@ -4,7 +4,7 @@ the brick building's upper room, heard in that room then from the street outside
     following the direct gain the empty room sounded dry (+1 dB at the 1.0 default).
   * just outside the room's doorway, in the corridor, no line of sight: the room's reverb spills out of
     the doorway (source reverb slot, pba_native.SourceReflect): >= +3 dB.
-  * in the street (open sky, ~1000 u away through the building): next to nothing, >= 40 dB below the room
+  * in the street (open sky, ~1000 u away through the building): next to nothing, >= 60 dB below the room (-71 dB measured)
     (what leaks out is reverberant by nature, so the reverb/direct ratio is not the criterion). The send grew with the distance everywhere (x24 there: +28 dB, an ambience with no
     direction), and the gliding updates never passed the send (the voice kept the one of its start).
 Energies are the module's own mix (RenderDebug, pba.Native.energyL/R): total - direct = reverb.
@@ -99,8 +99,8 @@ lua("client", "if IsValid(PBA_T_CH) then PBA_T_CH:Stop() end PBA_T_CH = nil "
 ok_room = bool(room and room["native"] and room["revOverDirDb"] >= 6)
 # from the street the direct sound through the walls is next to nothing and what leaks out of the windows
 # is reverberant, so the ratio is high by nature (+14 dB measured); what must hold is the LEVEL: far below
-# the room's (the bug was an ambience you could hear: listener-centric send x24). Measured -71 dB.
-ok_street = bool(street and room and street["native"] and street["total"] <= room["total"] * 1e-4)
+# the room's (the bug was an ambience you could hear: listener-centric send x24). Measured -71 dB: limit -60 dB.
+ok_street = bool(street and room and street["native"] and street["total"] <= room["total"] * 1e-6)
 # just outside the doorway the room's reverb spills out (source reverb slot): clearly there, not the
 # corridor's thin one (listener-centric only: ~-3 dB measured before the slots)
 ok_door = bool(door and door["native"] and door["revOverDirDb"] >= 3)

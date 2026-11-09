@@ -1,6 +1,8 @@
 -- HL2 broadcasts (Breencasts, city announcements, dispatch): how the current map wires them.
--- lua_job, server realm, any map. Report only: env_microphone / env_speaker / matching ambient_generic /
--- choreographed scenes.
+-- lua_job, server realm, any map. Reports env_microphone / env_speaker / matching ambient_generic /
+-- choreographed scenes. pass = the map wires at least one broadcast (a microphone, a matching
+-- ambient_generic or a scene): the battery runs it on d1_trainstation_01, whose Breencast
+-- (breencast_speaker.lua) goes through an env_microphone; on a map without broadcasts it fails.
 local out = { map = game.GetMap(), microphones = {}, speakers = {}, ambients = {}, scenes = 0 }
 for _, e in ipairs(ents.FindByClass("env_microphone")) do
 	out.microphones[#out.microphones + 1] = { name = e:GetName(), speaker = e:GetInternalVariable("m_iszSpeakerName"),
@@ -20,4 +22,5 @@ end
 for _, c in ipairs({ "logic_choreographed_scene", "instanced_scripted_scene", "scripted_scene" }) do
 	out.scenes = out.scenes + #ents.FindByClass(c)
 end
+out.pass = #out.microphones > 0 or #out.ambients > 0 or out.scenes > 0
 return out

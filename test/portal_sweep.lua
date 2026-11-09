@@ -1,10 +1,18 @@
 -- Sweep over every areaportal of the current map (client, lua_exec_file / lua_job): source a
 -- few units behind the opening, listener in front; the computed path must cross that portal
 -- (apparent position within the opening). Works on any map: real-map sanity check.
+-- A "clear" answer (nothing to do) is only accepted when the line really is free: a trace against
+-- the world AND entities (doors, windows) must not hit anything; a clear answer through a closed door
+-- is a failure, not a free pass.
+-- Returns { pass, total, tested, ok, clear, skipped, fails }: pass = no failure and at least 80 % of
+-- the portals tested (a sweep that finds no free spot round most openings proves nothing).
 local A = pba
 local g = A.Graph.current
-if not g then return "no graph" end
-local res = { total = 0, tested = 0, ok = 0, skipped = 0, fails = {} }
+if not g then return { pass = false, err = "no area graph on this map" } end
+local res = { total = 0, tested = 0, ok = 0, clear = 0, skipped = 0, fails = {} }
+local function lineFree(S, L)
+	return not util.TraceLine({ start = S, endpos = L, mask = MASK_SOLID, filter = LocalPlayer() }).Hit
+end
 local function free(p) return bit.band(util.PointContents(p), CONTENTS_SOLID) == 0 end
 for _, p in ipairs(g.portals) do
 	res.total = res.total + 1
@@ -21,7 +29,9 @@ for _, p in ipairs(g.portals) do
 				done = true
 				local good = false
 				if r.clear then
-					good = true -- straight through the opening: nothing to do, also correct
+					-- straight through the opening: nothing to do, correct only if nothing is in the way
+					good = lineFree(S, L)
+					if good then res.clear = res.clear + 1 end
 				elseif r.paths and r.paths[1] then
 					local last = r.paths[1].chain and r.paths[1].chain[#r.paths[1].chain]
 					good = (last and last.key == p.key) or r.paths[1].pos:Distance(p.center) <= p.radius * 1.5
@@ -40,4 +50,5 @@ for _, p in ipairs(g.portals) do
 	end
 	if not done then res.skipped = res.skipped + 1 end
 end
+res.pass = #res.fails == 0 and res.total > 0 and res.tested >= 0.8 * res.total
 return res

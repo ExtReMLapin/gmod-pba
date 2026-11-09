@@ -1,9 +1,20 @@
 -- Native feature checks (client lua_job, native rendering on, pba_tworooms):
 -- echoes, output modes, start delay, path-effect field, bake disk cache, reflection thread load.
+-- Pass (res.checks, res.fails name what failed):
+--   headphones: a voice 200 u to the right is louder in the right ear (R > 2 L) and reaches it first
+--     (ITD lag <= -3 samples; + = left ear first);
+--   speakers: no ITD (|lag| <= 1 sample);
+--   delay: nothing during the first 0.5 s of a voice started 0.8 s late (first < 0.05 x after);
+--   pathfx: a path field arriving from the right is louder on the right (R > L);
+--   bake: the cache file is deleted first, so bake 1 is a real bake and bake 2 loads it back from the
+--     disk cache (fromCache) in under a fifth of the bake time.
 local N = pba.Native
 local NA = pba_native
 local ply = LocalPlayer()
 local res = {}
+if not (N and N.ready and N.render and NA) then
+	return { pass = false, err = "native renderer not running (pba_native_render 1, module loaded)" }
+end
 local function cvar(n, v) RunConsoleCommand(n, tostring(v)) end
 -- every client pba_* setting is put back at the end: the player's choices must survive the test
 local saved = {}
@@ -85,8 +96,13 @@ end
 cvar("pba_native_reverb", 0.3)
 cvar("pba_native_echo", 1)
 
--- 5. bake disk cache
+-- 5. bake disk cache: start from no cache and no baked paths, so bake 1 really bakes
 do
+	cvar("pba_native_cache", 1)
+	cvar("pba_native_paths", 0)
+	job:sleep(0.5)
+	N.pathsReady = false
+	file.Delete("pba/" .. game.GetMap() .. "_sa.dat")
 	cvar("pba_native_paths", 1)
 	job:wait(function() return N.pathsReady end, 30)
 	res.bake1 = { ready = N.pathsReady, fromCache = N.fromCache, ms = N.bakeMs, cached = N.bakeCached }
@@ -98,4 +114,17 @@ do
 	cvar("pba_native_paths", 0)
 end
 for n, v in pairs(saved) do if GetConVar("pba_" .. n):GetString() ~= v then RunConsoleCommand("pba_" .. n, v) end end
+local h, s, d, pf, b1, b2 = res.headphones, res.speakers, res.delay, res.pathfx, res.bake1, res.bake2
+local function num(x) return tonumber(x) or 0 end
+res.checks = {
+	headphones = num(h.R) > 2 * num(h.L) and h.lag ~= nil and h.lag <= -3,
+	speakers = s.lag ~= nil and math.abs(s.lag) <= 1,
+	delay = num(d.after) > 0 and num(d.first) < 0.05 * num(d.after),
+	pathfx = num(pf.R) > num(pf.L),
+	bake = b1.ready == true and b2.ready == true and b1.fromCache ~= true and b2.fromCache == true
+		and num(b1.ms) > 0 and num(b2.ms) < 0.2 * num(b1.ms),
+}
+res.fails = {}
+for k, ok in SortedPairs(res.checks) do if not ok then res.fails[#res.fails + 1] = k end end
+res.pass = #res.fails == 0
 return res

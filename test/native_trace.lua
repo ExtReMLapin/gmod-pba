@@ -4,7 +4,7 @@
 -- Returns { pass, contents = {n, bad}, line = {n, bad, worst}, hull = {...}, cost = {lua_us, native_us, batch_us} }.
 local args = job.args or {}
 local pbatrace = pba_native and pba_native.trace
-if not pbatrace then return { pass = nil, note = "module without pba_native.trace (Light, or an older DLL)" } end
+if not pbatrace then return { pass = false, err = "module without pba_native.trace (Light, or an older DLL): precondition not met" } end
 local ok, err = pbatrace.Init()
 if not ok then return { pass = false, err = err } end
 pbatrace.SetLayout(args.layout or 0, args.traceIdx or 4, args.pcIdx or 0)

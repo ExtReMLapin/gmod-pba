@@ -2,12 +2,29 @@
 -- stream played by "another addon" (sound.PlayFile "3d") in the other room.
 -- Checks: transparent getters, apparent position + level change, native EQ (GetLevel ignores the
 -- channel volume, so a lower level with the filter on proves the DSP runs).
+-- Preconditions (set by the runner: pba_demo tworooms_closed then stop, native module loaded) are
+-- checked first: a wrong state returns pass = false with the reason, not a vacuous pass.
 local ST = pba.Streams
 local res = {}
+if game.GetMap() ~= "pba_tworooms" then return { pass = false, err = "needs pba_tworooms" } end
+if not (pba.Native and pba.Native.ready) then return { pass = false, err = "native module not loaded (pba_native 1)" } end
+do
+	local p = LocalPlayer():GetPos()
+	if math.abs(p.x - 256) > 48 or math.abs(p.y - 256) > 48 then
+		return { pass = false, err = "listener not at 256,256 (pba_demo tworooms_closed)", pos = tostring(p) }
+	end
+	for _, d in ipairs(ents.FindByClass("prop_door_rotating")) do
+		local s = pba.Doors and pba.Doors.byEnt and pba.Doors.byEnt[d:EntIndex()]
+		if s and s.frac > 0.02 then
+			return { pass = false, err = "door not closed (pba_demo tworooms_closed)", frac = s.frac }
+		end
+		res.doorFrac = s and s.frac or "unknown (no pba.Doors state received)"
+	end
+end
 local ch
 sound.PlayFile("sound/music/hl2_song20_submix0.mp3", "3d noblock", function(c, err) ch = c res.err = err end)
 job:wait(function() return ch ~= nil or res.err ~= nil end, 10)
-if not IsValid(ch) then return { fail = "no channel", err = res.err } end
+if not IsValid(ch) then return { pass = false, fail = "no channel", err = res.err } end
 local src = Vector(784, 256, 40)
 -- engine rendering for the BASS part (filter); the native part switches it on itself
 -- every client pba_* setting is put back at the end: the player's choices must survive the test
