@@ -60,7 +60,7 @@ return {
 	cases = {
 		{ name = "Native helpers present (cl_native loaded), 1 m = 52.49 u", func = function()
 			expect(N ~= nil and N.PhysClear ~= nil and N.PhysPath ~= nil and N.PhysSrcSend ~= nil and N.PhysStream ~= nil
-				and N.RoomSend ~= nil and N.Directivity ~= nil and N.VoiceEQ ~= nil).to.beTrue()
+				and N.EntrySend ~= nil and N.SlotSend ~= nil and N.LossLin ~= nil and N.Law ~= nil and N.Directivity ~= nil and N.VoiceEQ ~= nil).to.beTrue()
 			expect(near(N.REF_UNITS, 1 / 0.01905, 0.01)).to.beTrue()
 		end },
 		{ name = "PhysClear: 1/r, -6.02 dB per doubling beyond 1 m, flat below 1 m, the engine's gain at 1 m", func = function()
@@ -200,20 +200,21 @@ return {
 			end
 			expect(near(N.PhysStream(10 * REF), 0.1, 1e-4)).to.beTrue()
 		end },
-		{ name = "RoomSend: the gain x |wall - listener| / 1 m, at least the gain (within 1 m), at most x100", func = function()
-			local W = Vector(0, 0, 0)
-			expect(near(N.RoomSend(0.5, W, Vector(10, 0, 0)), 0.5, 1e-9)).to.beTrue()
-			expect(near(N.RoomSend(0.5, W, Vector(REF, 0, 0)), 0.5, 1e-4)).to.beTrue()
-			expect(near(N.RoomSend(0.5, W, Vector(0, 2 * REF, 0)), 1.0, 1e-4)).to.beTrue()
-			expect(near(N.RoomSend(0.01, W, Vector(0, 0, 10 * REF)), 0.1, 1e-5)).to.beTrue()
-			expect(near(N.RoomSend(0.001, W, Vector(1000 * REF, 0, 0)), 0.1, 1e-6)).to.beTrue()
-			expect(N.RoomSend(0, W, Vector(5 * REF, 0, 0))).to.equal(0)
-			-- continuous in the distance (no step above 0.2 dB per unit)
-			local prev = N.RoomSend(0.2, W, Vector(0, 0, 0))
-			for x = 1, 6000 do
-				local s = N.RoomSend(0.2, W, Vector(x, 0, 0))
-				if math.abs(db(s) - db(prev)) > 0.2 then error(string.format("%d u: %.2f dB step", x, db(s) - db(prev))) end
-				prev = s
+		{ name = "EntrySend / SlotSend: one rule for every law (the energy where a path enters the listener's space; the slot never grows with distance under a flat law)", func = function()
+			local REF = N.REF_UNITS
+			-- a path of 600 u whose apparent position (the entry) is 100 u from the listener: entry at 500 u
+			local L = Vector(0, 0, 0)
+			local v = { len = 600, pos = Vector(100, 0, 0), rawLossDb = 6 }
+			local inv = function(d) return math.min(REF / math.max(d, REF), 1) end
+			local flat = function() return 1 end
+			expect(near(N.EntrySend(inv, v, L, N.LossLin(v, 75)), REF / 500 * 10 ^ (-6 / 20), 1e-9)).to.beTrue()
+			expect(near(N.EntrySend(flat, v, L, 0.5), 0.5, 1e-9)).to.beTrue()
+			-- the entry never closer than 1 m
+			expect(near(N.EntrySend(inv, { len = 120, pos = Vector(100, 0, 0) }, L, 1), 1, 1e-9)).to.beTrue()
+			-- slot: 1 m level under 1/r at any distance; a flat law: its 1 m level, never x distance
+			for _, d in ipairs({ 10, REF, 200, 1000, 5000 }) do
+				expect(near(N.SlotSend(inv, d), 1, 1e-9)).to.beTrue()
+				expect(near(N.SlotSend(flat, d), 1, 1e-9)).to.beTrue()
 			end
 		end },
 		{ name = "Directivity: 1 in front, 1 - 2w behind (floor 0.05), 1 - w to the side; props and w = 0 omnidirectional", func = function()

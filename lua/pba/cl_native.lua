@@ -519,26 +519,24 @@ end
 -- treble cut, low / mid / high gains) stands for it.
 N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 
--- Reverb of natively rendered sounds: two simulations, one model.
---  * Source reverb (pba_native.SourceReflect, a pool of slots shared by position): reflections simulated
---    FROM the source: its room, what spills out of the room's openings, a street's facades. It carries the
---    reverb of everything that travels through the air, for every sound that gets a slot. The simulation
---    has the geometry and its energy follows the real (1/r) propagation, while the game's direct sound
---    falls much more gently (a radio 290 u away is ~13 dB louder than a real one): the slot is fed the
---    game's level at that distance without the path's losses, times distance / 1 m (N.SrcSend), which keeps
---    a real source's reverb / direct balance against the game's direct.
---  * The listener's room (listener-centric reverb, the module's room bus): everything that ENTERS the
---    listener's space from elsewhere, through an opening or through a wall (a radio upstairs heard by the
---    stairwell or through the floor makes the room below resonate). Its "source" is the point it enters
---    by (the opening, the wall), a boundary of the listener's space, at |entry - listener| (N.RoomSend).
---    In clear sight there is one space: the slot only. (With the transmission alone, a listener in a
---    small room reached through openings got no reverb at all where the slot's simulation found no ray
---    to the source room: gm_melancholia, reverb -150 dB, then audible one metre further.) Without a slot
---    (pool full, older module) a voice falls back to the room bus at its gain (the 1.0 behaviour).
--- (An earlier version grew the room send with the distance and guessed whether the listener was enclosed
--- from one trace upwards: under an overhang, one metre from the open sky, the output jumped 17 dB.)
+-- Reverb of natively rendered sounds: one rule for every sound (one-shots, loops, other addons' streams).
+-- A sound has a source power and a distance law; only the law depends on the kind of sound (the full
+-- version's physical law N.Law(lvl) for the game's sounds, the channel's own law for a stream, which its
+-- addon chose). Everything else is derived the same way, never from how loud the game makes the direct:
+--  * direct  = power x law(path length) x the path's losses;
+--  * source reverb (pba_native.SourceReflect, a pool of slots shared by position: reflections simulated
+--    FROM the source: its room, what spills out of its openings, a street's facades) = the source's power,
+--    its level at 1 m (N.SlotSend: never more than the direct a 1/r law would give times d / 1 m, so a loud
+--    source clipped at full scale does not get a reverb louder than what is heard);
+--  * the listener's room (listener-centric reverb, the module's room bus) = what ENTERS the listener's space
+--    by an opening or a wall: the energy at that entry point = power x law(source -> entry) x the losses on
+--    the way (N.EntrySend). In clear sight there is one space: the slot only. Without a slot (pool full, an
+--    older module) a voice falls back to the room bus at its gain (the 1.0 behaviour).
+-- History of the shortcuts this replaces (each one gave cliffs): the send following the direct gain (dry
+-- far sources), a one-trace enclosure guess (17 dB under an overhang), the room fed only through walls (a
+-- small room reached by openings: no reverb at all), a x distance factor on the room send (with a flat
+-- stream law the reverb depended on where the entry point lay: 16 dB in 80 u on gm_melancholia's stairs).
 N.REF_UNITS = 52.49 -- 1 m
-local function distK(d) return math.Clamp((d or 0) / N.REF_UNITS, 1, 100) end
 
 -- Distance law of the full version (user's decision, 2026-11-09): a natively rendered voice falls like a
 -- real sound, 1/r from 1 m (-6 dB per doubling), not by the engine's much gentler law (a sound of level 75
@@ -577,14 +575,36 @@ end
 -- 1 m level (a real balance against a 1/r direct); while the direct is clipped at full scale (a loud source
 -- near) no more than the clipped direct times d / 1 m, so the reverb never outgrows what is heard.
 function N.PhysSrcSend(lvl, d)
-	return math.min(spread(lvl, d), 1) * math.max(d or 0, N.REF_UNITS) / N.REF_UNITS
+	return N.SlotSend(N.Law(lvl), d, spread(lvl, N.REF_UNITS))
 end
 --- 1/r from 1 m without a sound level (full scale at 1 m). Not the law of other addons' BASS streams: they keep
 -- the channel's own (cl_streams, bassGain: the addon chose the range; a radio set to Set3DFadeDistance(1e6)
 -- came out 14 dB weaker at 5 m with this one).
 function N.PhysStream(d) return N.REF_UNITS / math.max(d or 0, N.REF_UNITS) end
---- Send into the listener's room for a transmission voice of gain g coming out of a wall at wallPos.
-function N.RoomSend(g, wallPos, L) return g * distK(wallPos:Distance(L)) end
+--- The full version's law of a sound of level lvl (clipped at full scale), as a function of distance.
+function N.Law(lvl) return function(d) return math.min(spread(lvl, d), 1) end end
+--- Source slot send for a law at the source-listener distance d: the source's power (its level at 1 m
+-- before any clipping, power1m, default law(1 m)), but never more than the clipped direct x d / 1 m: equal
+-- for an unclipped 1/r law; a loud source clipped at full scale near gets a reverb that grows as its direct
+-- stops being clipped (a far gunshot keeps a strong echo); a flat law (a stream heard everywhere alike)
+-- gives its 1 m level, never a reverb growing with the distance.
+function N.SlotSend(law, d, power1m)
+	d = math.max(d or 0, N.REF_UNITS)
+	return math.min(power1m or law(N.REF_UNITS), law(d) * d / N.REF_UNITS)
+end
+--- A voice's linear path losses: its raw loss (before any headroom) when known, else recovered from its
+-- engine-law gain.
+function N.LossLin(v, lvl)
+	if v.rawLossDb then return 10 ^ (-math.max(v.rawLossDb, 0) / 20) end
+	local len = math.max(v.len or 0, N.REF_UNITS)
+	return math.min((v.gain or 0) / math.max(A.AC.EngineGain(len, lvl or 75), 1e-6), 1)
+end
+--- Listener-room send of a path voice: the energy where it enters the listener's space (its apparent
+-- position: the last opening, or the wall it comes through) = law(source -> entry) x the path's losses.
+function N.EntrySend(law, v, L, lossLin)
+	local entry = math.max((v.len or 0) - (v.pos and v.pos:Distance(L) or 0), N.REF_UNITS)
+	return law(entry) * (lossLin or 1)
+end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
 -- the voice has a slot (then the room bus must only get the transmission part).
 function N.BindSource(id, S, srcSend)
@@ -597,7 +617,7 @@ timer.Remove("pba_native_enclosure") -- the former one-trace enclosure guess (au
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
 -- srcPos, srcSend = the source's true position and its slot send (N.PhysSrcSend x volume, before
 -- native_gain): the voice takes a source reverb slot (one voice per sound: the dominant one);
--- trans = true for a transmission voice (through walls: the listener's room resonates);
+-- roomSend = its listener-room send (N.EntrySend x volume, before native_gain) for a path voice;
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds, diffuse = share
 -- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction),
 -- lpDb = the voice's continuous loss behind lp (path.lpDb: N.LowpassDb), follow = { ent, vol, lvl, chan }
@@ -617,11 +637,11 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	-- everywhere else (looking through a camera, the eye position put the wall 'behind' the wrong ear)
 	local L = A.ListenerPos()
 	local roomSend
-	if opt.trans and L then roomSend = N.RoomSend(g, pos, L)
+	if opt.roomSend then roomSend = opt.roomSend * A.cfg.native_gain
 	elseif opt.srcPos or opt.noRoom then roomSend = 0 end
 	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
 	if id and id > 0 and opt.srcPos and L then
-		if not N.BindSource(id, opt.srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.trans then
+		if not N.BindSource(id, opt.srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g) -- no slot: the room bus at its gain
 		end
 	end

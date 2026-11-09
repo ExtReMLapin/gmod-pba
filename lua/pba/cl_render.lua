@@ -383,8 +383,12 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
 		local echoed = (A.cfg.native_all or 0) < 0.5 and (data.SoundLevel or 75) >= (A.cfg.native_echo_lvl or 95)
 		local dominant = slot == 1 and not echoed and S
 		local srcSend = dominant and (data.Volume or 1) * A.Native.PhysSrcSend(data.SoundLevel or 75, S:Distance(L)) * dirK
+		-- the listener's room: what this path brings to where it enters the listener's space (one rule for
+		-- every sound: N.EntrySend with the sound's law)
+		local lvl0 = data.SoundLevel or 75
+		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0))
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
-			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, trans = true, noRoom = true })
+			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
 			local t0 = RealTime() + delay
@@ -560,8 +564,10 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	-- what has been heard of it so far (the module's offset is playback time at the voice's pitch)
 	local offset = math.max(now - fv.t0, 0)
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and t.sh or nil
-	local trans = t.kind == "transmission"
-	local id = pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, trans and N.RoomSend(g, pos, L) or 0, offset)
+	-- the listener's room: what the path brings to its entry point (N.EntrySend), clear sight: none
+	local roomSend = t.len and t.pos and t.pos:DistToSqr(rec.S) > 1 and rec.vol * N.EntrySend(N.Law(rec.lvl), t, L, N.LossLin(t, rec.lvl))
+		* N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain or 0
+	local id = pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset)
 	if not id or id <= 0 then
 		fv.switchFails = (fv.switchFails or 0) + 1
 		return false
@@ -574,7 +580,7 @@ local function switchNative(rec, fv, t, L, now, dominant)
 		local srcSend = rec.vol * N.PhysSrcSend(rec.lvl, rec.S:Distance(L)) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain
 		bound = N.BindSource(id, rec.S, srcSend)
 	end
-	if not bound and not trans then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g) end
+	if not bound and roomSend <= 0 then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g) end
 	-- the engine copy stops once the module has it (stopCopy without cancelling the handle)
 	local a, name = fv.a, fv.name or rec.name
 	if anchorAlive(fv, name) then a:StopSound(name) a.pbaName = nil end

@@ -83,25 +83,21 @@ local function applyVol(ch, r)
 	O.SetVolume(ch, (r.vol or 1) * (r.hG or r.g or 1))
 end
 
---- Room-bus send of a stream's native voice (cl_native, "Reverb of natively rendered sounds"): the
--- air-borne reverb comes from a source reverb slot at the stream's position (refreshed every 0.3 s, the
--- module frees one not refreshed for 1 s); the listener's room only gets what comes through walls (the
--- transmission voice, r.transG / r.transPos from the last evaluation, channel-law gains). No slot: the
--- room bus at the gain.
+--- Reverb sends of a stream's native voice: the same rule as every sound (cl_native, "Reverb of natively
+-- rendered sounds"), with the channel's own distance law (bassGain: the addon chose the range): source
+-- slot = N.SlotSend(law, d) (refreshed every 0.3 s, the module frees one not refreshed for 1 s), listener
+-- room = what enters the listener's space (r.entryG, N.EntrySend per voice at the last evaluation). No
+-- slot: the room bus at the gain.
 local function streamSend(ch, r, L, g, pos)
 	local N = A.Native
 	local now = RealTime()
 	if r.nativeId and (not r.srcNext or now >= r.srcNext) then
 		r.srcNext = now + 0.3
-		-- the source's power: its level at 1 m, where BASS plays it at full volume whatever the fade
-		-- distance; constant with the listener's distance (the slot's simulation does the spreading)
-		r.srcBound = N.BindSource(r.nativeId, r.pos, (r.vol or 1) * A.cfg.native_gain)
+		local law = function(d) return bassGain(ch, d) end
+		r.srcBound = N.BindSource(r.nativeId, r.pos, (r.vol or 1) * N.SlotSend(law, r.pos:Distance(L)) * A.cfg.native_gain)
 	end
 	if not r.srcBound then return g end
-	-- what enters the listener's space, at its gain: no x distance / 1 m (N.RoomSend compensates a 1/r direct;
-	-- a stream's direct follows its addon's law, flat for rRadio: the factor, up to x100, made the reverb
-	-- depend on where the entry point lay: 16 dB in 40 u on gm_melancholia's stairs, reverb 24 dB over the direct)
-	if r.transG then return (r.vol or 1) * r.transG * A.cfg.native_gain end
+	if r.entryG then return (r.vol or 1) * r.entryG * A.cfg.native_gain end
 	return 0
 end
 
@@ -210,26 +206,27 @@ local function evaluate(ch, r, L)
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.lpDb, r.len, r.diffuse = nil, 1, { 1, 1, 1 }, 1, 0, nil, nil, 0
-		r.transG, r.transPos, r.gNative = nil, nil, nil -- native: the channel's law at the true distance
+		r.entryG, r.gNative = nil, nil -- native: the channel's law at the true distance; clear: slot only
 		return
 	end
 	-- each voice keeps its own losses (walls, doors, corners, absorption) but its distance law is the
 	-- channel's (BASS min / d), not the engine's at 75 dB: a long detour of a stream heard from far
 	-- (Set3DFadeDistance) lost tens of dB it never would have (room 14: -47 dB instead of -16).
 	-- The native voice uses the same channel-law gains (header: the addon chose the range)
-	local p, pd = 0, 0
-	local trG, trPos
+	local p, pd, pe = 0, 0, 0
 	local dS = S:Distance(L)
+	local N0 = A.Native
+	local law = function(d) return bassGain(ch, d) end
 	for _, v in ipairs(res.voices) do
 		local len = v.len or dS
-		local loss = v.gain / math.max(AC.EngineGain(len, 75), 1e-6)
+		local loss = N0 and N0.LossLin and N0.LossLin(v, 75) or v.gain / math.max(AC.EngineGain(len, 75), 1e-6)
 		local gv = loss * bassGain(ch, len)
 		p, pd = p + gv * gv, pd + gv * gv * (v.diffuse or 0)
-		-- what ENTERS the listener's space (through an opening or a wall): it makes that space resonate
-		do local s = gv * (v.pos and 1 or 0) if s > 0 then trG = math.sqrt((trG or 0) ^ 2 + s * s) trPos = trPos or v.pos end end
+		-- what ENTERS the listener's space (through an opening or a wall): the same rule as every sound
+		if N0 and N0.EntrySend then local s = N0.EntrySend(law, v, L, loss) pe = pe + s * s end
 	end
 	r.gNative = math.sqrt(p)
-	r.transG, r.transPos = trG, trPos -- what enters the listener's space (the listener's room resonates with it)
+	r.entryG = math.sqrt(pe)
 	-- energy-weighted diffuse share (diffuse model): rendered by the native module only (BASS has no DSP)
 	r.diffuse = pd / math.max(p, 1e-12)
 	local g = math.sqrt(p) / math.max(bassGain(ch, dS), 1e-6)
