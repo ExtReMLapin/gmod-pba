@@ -25,8 +25,9 @@ MAX_UNDER6 = next((float(a.split("=")[1]) for a in sys.argv[2:] if a.startswith(
 MAX_SILENT = 0.07  # warm, regression guard (0.033-0.067 today: street-to-rooftop bends in open air, target of the edge graph)
 MAX_COLD_SILENT = 0.15        # cold one-shots: ~1.0 before the inline probe solve (absolute guard)
 MAX_COLD_EXTRA_SILENT = 0.01  # cold silences beyond the warm ones: the listener field leaves none (check it with --set=pba_probe_inline_ms=0)
-MAX_COLD_GAP = None if "--no-gap" in sys.argv[2:] else 1.0  # dB, cold vs warm median (default settings;
-# --no-gap with --set=pba_probe_inline_ms=0: the field alone gives the best route, not the alternatives)
+MAX_COLD_GAP = 1.0  # dB, cold vs warm median, every variant (the field steps used --no-gap, which dropped
+# the check: the field alone (--set=pba_probe_inline_ms=0) measured 0.1 dB from warm on gm_construct once
+# cold was really cold)
 
 
 def call(tool, args, timeout=900):
@@ -55,6 +56,9 @@ for m in MAPS:
         call("lua_exec", {"realm": "server", "code": "local n = 0 for _, e in ipairs(ents.GetAll()) do local c = e:GetClass() "
                           "if c == 'prop_door_rotating' or c == 'func_door' or c == 'func_door_rotating' then e:Fire('Open') n = n + 1 end end return n"})
         time.sleep(4)  # leaves swing, door states reach the client
+    # cold = the first evaluation: no probe route solved by an earlier run on this map (a run after another
+    # one without a map load read every route from the cache: the field alone never got measured)
+    call("lua_exec", {"realm": "client", "code": "local PR = pba.Probes if PR then PR.pathCache, PR.pathCacheN, PR.queue = {}, 0, {} end return true"})
     for kv in SETS:
         k, v = kv.split("=", 1)
         call("console_exec", {"realm": "client", "cmd": f"{k} {v}"})
