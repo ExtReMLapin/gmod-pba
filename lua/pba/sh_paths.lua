@@ -411,25 +411,34 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	-- "enclosed" (none: the full object loss, 18 dB) and 2 u deep a graze (0.1 dB), one 2 u step apart
 	-- (pba_twodoors, paths_model 1). The span's ends are outside the leaf.
 	local paid, leaves -- the leaves paid (each once); every leaf crossed (open ones too: P.LeafOfPaths)
-	local i, nd = 1, #dp - 1
-	local segEnt, segLoss = {}, {}
-	for x = 1, nd do
-		local dl, dlp, dt, ent = P.SegmentDoorLoss(dp[x], dp[x + 1], cfg)
-		segEnt[x], segLoss[x] = ent or false, { dl, dlp, dt }
+	local nd = #dp - 1
+	-- the leaves of each segment (several in a row: P.SegmentDoors), each paid once, on its span: from the
+	-- vertex before the first segment that meets it to the vertex after the last one of that run
+	local segHits = {}
+	for x = 1, nd do segHits[x] = P.SegmentDoors(dp[x], dp[x + 1]) or false end
+	local function meets(x, ent)
+		local l = segHits[x]
+		if not l then return nil end
+		for _, h in ipairs(l) do if h[1] == ent then return h end end
+		return nil
 	end
-	while i <= nd do
-		local ent = segEnt[i]
-		local j = i
-		while ent and j < nd and segEnt[j + 1] == ent do j = j + 1 end
-		local dl, dlp, dt = segLoss[i][1], segLoss[i][2], segLoss[i][3]
-		if ent and j > i then dl, dlp, dt = P.DoorSpanLoss(ent, dp[i], dp[j + 1], cfg) end
-		if ent then leaves = leaves or {} leaves[ent] = true end
-		if dl > 0 and not (ent and paid and paid[ent]) then
-			if ent then paid = paid or {} paid[ent] = true end
-			door = door + dl
-			doorTilt = doorTilt + (dt or AC.LevelDb(dlp or 0, cfg)) -- doors in series, like a chain's openings
+	for x = 1, nd do
+		for _, h in ipairs(segHits[x] or {}) do
+			local ent = h[1]
+			leaves = leaves or {}
+			leaves[ent] = true
+			if not (paid and paid[ent]) then
+				paid = paid or {}
+				paid[ent] = true
+				local j = x
+				while j < nd and meets(j + 1, ent) do j = j + 1 end
+				local dl, dlp, dt = P.DoorSpanLoss(ent, dp[x], dp[j + 1], cfg, h[2], h[3])
+				if dl > 0 then
+					door = door + dl
+					doorTilt = doorTilt + (dt or AC.LevelDb(dlp or 0, cfg)) -- doors in series, like a chain's openings
+				end
+			end
 		end
-		i = j + 1
 	end
 	for i = 2, #pts - 1 do
 		local delta = pts[i - 1]:Distance(pts[i]) + pts[i]:Distance(pts[i + 1]) - pts[i - 1]:Distance(pts[i + 1])
@@ -858,15 +867,43 @@ function P.DoorSpanLoss(ent, a, b, cfg, hitPos, startSolid)
 	P.lastDoorWall = w -- diagnostics (w.lossDb, w.diffDb, w.detour)
 	return loss, lp, w.tiltDb
 end
+--- Every door leaf the segment a -> b meets (DOOR_HULL hull, doors only), in order: a list of
+-- { ent, hitPos, startSolid }. A trace stops at the first entity it hits: a segment through two shut doors
+-- in a row (pba_demo's corridor) saw the first only, and the route went through the second for nothing,
+-- 15 dB louder until a step of the source made a vertex fall between them. The trace is redone from the
+-- same start with the leaves found left out, at most MAX_DOORS_SEG times.
+local MAX_DOORS_SEG = 4
+local doorSkip = {}
+local function doorsOnlyNew(e) return DOORS_ONLY[e:GetClass()] and not doorSkip[e] or false end
+local doorTrN = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ignoreworld = true,
+	mins = Vector(-DOOR_HULL, -DOOR_HULL, -DOOR_HULL), maxs = Vector(DOOR_HULL, DOOR_HULL, DOOR_HULL) }
+function P.SegmentDoors(a, b)
+	local list
+	for k in pairs(doorSkip) do doorSkip[k] = nil end
+	for _ = 1, MAX_DOORS_SEG do
+		doorTrN.start, doorTrN.endpos = a, b
+		util.TraceHull(doorTrN)
+		local tr = doorOut
+		if not tr.Hit or not IsValid(tr.Entity) or doorSkip[tr.Entity] then break end
+		list = list or {}
+		list[#list + 1] = { tr.Entity, tr.HitPos, tr.StartSolid }
+		doorSkip[tr.Entity] = true
+	end
+	for k in pairs(doorSkip) do doorSkip[k] = nil end
+	return list
+end
+--- Door loss (dB), lowpass level, tilt (dB) and the first door entity of segment a -> b: every leaf it
+-- meets (P.SegmentDoors), each at its P.DoorSpanLoss, in series.
 function P.SegmentDoorLoss(a, b, cfg)
 	cfg = cfg or A.cfg
-	doorTr.start, doorTr.endpos = a, b
-	util.TraceHull(doorTr)
-	local tr = doorOut
-	if not tr.Hit or not IsValid(tr.Entity) then return 0 end
-	local ent = tr.Entity
-	local loss, lp, tilt = P.DoorSpanLoss(ent, a, b, cfg, tr.HitPos, tr.StartSolid)
-	return loss, lp, tilt, ent
+	local list = P.SegmentDoors(a, b)
+	if not list then return 0 end
+	local loss, lp, tilt = 0, 0, 0
+	for _, h in ipairs(list) do
+		local l, p, t = P.DoorSpanLoss(h[1], a, b, cfg, h[2], h[3])
+		loss, lp, tilt = loss + l, math.max(lp, p or 0), tilt + (t or AC.LevelDb(p or 0, cfg))
+	end
+	return loss, lp, tilt, list[1][1]
 end
 
 --- Smallest path difference (units) for going around a finite box obstacle (mins/maxs, in

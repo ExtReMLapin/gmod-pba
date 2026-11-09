@@ -122,7 +122,7 @@ local function withProbeRooms(holes, extra, over, fn)
 		return out
 	end
 	local saved = { util.TraceLine, util.TraceHull, util.PointContents }
-	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold" }
+	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold", "fieldsByKey", "seedMemo", "fieldAway" }
 	local savedPR, savedCfg = {}, {}
 	for _, k in ipairs(state) do savedPR[k] = PR[k] end
 	-- native_traces 0 always: the scene replaces util.Trace*, the engine's own traces would bypass it
@@ -134,7 +134,7 @@ local function withProbeRooms(holes, extra, over, fn)
 	util.TraceHull = function(t) return trace(t, t.maxs and t.maxs.x or 0) end
 	util.PointContents = function(p) return inside(p) and CONTENTS_SOLID or 0 end
 	local ok, err = pcall(function()
-		PR.queue, PR.pathCache, PR.pathCacheN, PR.inlineFrame, PR.field, PR.fieldHold = {}, {}, 0, nil, nil, nil
+		PR.queue, PR.pathCache, PR.pathCacheN, PR.inlineFrame, PR.field, PR.fieldHold, PR.fieldsByKey, PR.seedMemo = {}, {}, 0, nil, nil, nil, nil, nil
 		local g = PR.BuildCo({ Vector(256, 256, 49) }, 128)
 		PR.Prepare(g)
 		PR.current = g
@@ -1928,6 +1928,47 @@ local SUITE = {
 			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
 			if not ok then error(err, 0) end
 		end },
+		{ name = "EvalPolyline: a segment through two shut doors in a row pays both (the trace stopped at the first: 15 dB too loud, pba_demo)", func = function()
+			-- pba_demo's corridor: doors #36 and #34, 176 u apart, both shut, one route segment through both
+			local boxes = { { Vector(-3646, 232, 0), Vector(-3634, 280.5, 108.5) }, { Vector(-3822, 232, 0), Vector(-3810, 280.5, 108.5) } }
+			local doors = {}
+			for k, b in ipairs(boxes) do
+				local mn, mx = b[1], b[2]
+				doors[k] = { IsValid = function() return true end, GetClass = function() return "prop_door_rotating" end,
+					EntIndex = function() return 9980 + k end, OBBMins = function() return mn end, OBBMaxs = function() return mx end,
+					WorldToLocal = function(_, v) return v end, LocalToWorld = function(_, v) return v end }
+			end
+			local D = pba.Doors
+			D.byEnt = D.byEnt or {}
+			local saved = { D.byEnt[9981], D.byEnt[9982], util.TraceHull, util.TraceLine }
+			util.TraceLine = function(t)
+				local o = traceOut(t)
+				o.Hit, o.Fraction, o.StartSolid, o.HitPos = false, 1, false, t.endpos
+				return o
+			end
+			util.TraceHull = function(t)
+				local o = traceOut(t)
+				local pad = t.maxs and t.maxs.x or 0
+				local best, be
+				for k, b in ipairs(boxes) do
+					if not t.filter or t.filter(doors[k]) then
+						local t0 = segBox(t.start, t.endpos, b[1] - Vector(pad, pad, pad), b[2] + Vector(pad, pad, pad))
+						if t0 and (not best or t0 < best) then best, be = t0, doors[k] end
+					end
+				end
+				o.Hit, o.Fraction, o.Entity, o.StartSolid = best ~= nil, best or 1, be, best == 0
+				o.HitPos = t.start + (t.endpos - t.start) * (best or 1)
+				return o
+			end
+			local ok, err = pcall(function()
+				D.byEnt[9981] = { frac = 0, closedDb = 24, closedLp = 3 }
+				D.byEnt[9982] = { frac = 0, closedDb = 24, closedLp = 3 }
+				local p = P.EvalPolyline({ Vector(-3526, 287, 60), Vector(-3635, 275, 52), Vector(-3828, 276, 46), Vector(-4072, 384, 40) }, CFG)
+				expect(near(p.doorDb, 2 * AC.LeafDb(24, CFG), 1e-6)).to.beTrue()
+			end)
+			D.byEnt[9981], D.byEnt[9982], util.TraceHull, util.TraceLine = saved[1], saved[2], saved[3], saved[4]
+			if not ok then error(err, 0) end
+		end },
 		{ name = "EvalPolyline: a route vertex inside an open leaf (the probes pass the leaves) costs the leaf on the span round it: 5 u or 2 u deep, the same (was 18 dB 'enclosed' vs 0.1)", func = function()
 			-- the open leaf of pba_twodoors' door_s (world box 476..524 x 95..105), the route from room B round the
 			-- jamb into room A, its clearance vertex in the leaf; the world is empty (every detour point clear)
@@ -2484,12 +2525,14 @@ local SUITE = {
 					local through, beside = 0, 0
 					for e, c in pairs(costs) do if c > 1e-6 then through = through + 1 if near(c, AC.LeafDb(28, A.cfg) * 40, 1e-6) then beside = beside + 1 end end end
 					expect(through > 0 and beside == through).to.beTrue()
-					PR.field = PR.BuildField(g, L)
-					local ps = PR.FieldRoutes(S, L, 3, cfg)
-					expect(#ps > 0).to.beTrue()
+					-- the field with the door costs (PR.FieldFor: the field of the probes L sees) goes by the far hole
+					PR.fieldsByKey = nil
+					local f = PR.FieldFor(g, L)
+					expect(f ~= nil and f.doors ~= nil).to.beTrue()
 					local far = false
-					for _, v in ipairs(ps[1].points) do if v.y > 300 then far = true end end
+					for _, v in ipairs(PR.FieldPathFrom(f.doors, PR.Visible(g, S, 1)[1])) do if v.y > 300 then far = true end end
 					expect(far).to.beTrue() -- by the far hole
+					local ps
 					-- both fields (PR.BuildFields): the way through the shut door (its leaf paid on the route) and the
 					-- way round it, ranked by level afterwards. The scene's traces see the leaf (P.SegmentDoorLoss).
 					local sceneHull = util.TraceHull
@@ -2502,8 +2545,7 @@ local SUITE = {
 						o.HitPos = t.start + (t.endpos - t.start) * (t0 or 1)
 						return o
 					end
-					PR.field = PR.BuildFields(g, L)
-					expect(PR.field.doors ~= nil).to.beTrue()
+					PR.fieldsByKey = nil
 					ps = PR.FieldRoutes(S, L, 3, cfg)
 					local thru, round = false, false
 					for _, p in ipairs(ps) do
@@ -2516,14 +2558,14 @@ local SUITE = {
 					-- opened: the short way again
 					A.Doors.byEnt[9990].frac = 1
 					PR.doorList = nil
-					PR.field = PR.BuildField(g, L)
-					ps = PR.FieldRoutes(S, L, 3, cfg)
+					ps = PR.FieldRoutes(S, L, 3, cfg) -- (the field kept for these seeds is rebuilt: the state changed)
 					expect(#ps > 0).to.beTrue()
 					for _, v in ipairs(ps[1].points) do expect(v.y < 200).to.beTrue() end
 					-- the signature of the door states the field was built with changes with a state
-					expect(PR.field.stateSig ~= nil).to.beTrue()
+					local f2 = PR.FieldFor(g, L)
+					expect(f2.stateSig ~= nil and f2.doors == nil).to.beTrue()
 					A.Doors.byEnt[9990].frac = 0.5
-					expect(PR.StateSig(g) ~= PR.field.stateSig).to.beTrue()
+					expect(PR.StateSig(g) ~= f2.stateSig).to.beTrue()
 				end)
 				_G.ents, A.Doors, PR.doorList = savedEnts, savedDoors, savedList
 				if not ok then error(err, 0) end
@@ -2543,10 +2585,10 @@ local SUITE = {
 				local cfg = setmetatable({ paths_model = 1, probes = 1, probe_dist = 1e6, path_props = 0, water = 0, probe_field = 1 }, { __index = CFG })
 				local ok, err = pcall(function()
 					local S, L = Vector(700, 300, 64), Vector(300, 300, 64)
-					PR.field, PR.fieldJob = nil, nil
+					PR.fieldsByKey = nil
 					P.InvalidateCache()
 					local r1 = P.Compute(S, L, 75, cfg)
-					expect(PR.field ~= nil).to.beTrue() -- built at once for the first answer
+					expect(PR.fieldsByKey ~= nil).to.beTrue() -- built at once for the first answer
 					expect(#r1.paths > 0 and r1.provisional == nil).to.beTrue()
 					over = true
 					P.InvalidateCache()

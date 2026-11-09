@@ -708,7 +708,7 @@ PR.LinkSegs = linkSegs
 function PR.Start()
 	PR.current, PR.building = nil, nil
 	PR.pathCache, PR.pathCacheN, PR.queue = {}, 0, {}
-	PR.bridgeMemo, PR.sticky, PR.fieldAway = nil, nil, nil
+	PR.bridgeMemo, PR.sticky, PR.fieldAway, PR.fieldsByKey, PR.seedMemo = nil, nil, nil, nil, nil
 	local g = A.Graph.Get()
 	if not g then return end
 	local map = g.map
@@ -1230,7 +1230,7 @@ local FIELD_SEEDS, FIELD_REACH = 8, 3
 -- relaxation towards a probe already popped, is ruled out by the key / cost comparison itself.
 -- `reuse`: a field no longer used (the one just replaced), whose tables are cleared and filled again
 -- instead of growing new ones (three tables of 22 000 entries: ~0.7 MB of garbage per build).
-function PR.BuildField(g, L, yield, reuse, costs)
+function PR.BuildField(g, L, yield, reuse, costs, seedList)
 	local cost, nxt, root = {}, {}, {}
 	if reuse and reuse.g == g and reuse.root then
 		cost, nxt, root = reuse.cost, reuse.nxt, reuse.root
@@ -1246,8 +1246,10 @@ function PR.BuildField(g, L, yield, reuse, costs)
 	if costs then extra = costs
 	elseif costs == nil and (A.cfg.paths_model or 0) >= 0.5 then extra, f.stateSig = PR.LinkCosts(g) end
 	local hk, hv, n = {}, {}, 0
-	for _, s in ipairs(PR.Visible(g, L, FIELD_SEEDS, 2)) do
-		local c = s.pos:Distance(L)
+	-- seedList (paths_model 1): the field of a set of seeds, at cost 0 each, whatever the listener's exact
+	-- position (fieldCost adds the seed's distance to the listener at query time): see PR.FieldRoutes
+	for _, s in ipairs(seedList or PR.Visible(g, L, FIELD_SEEDS, 2)) do
+		local c = seedList and 0 or s.pos:Distance(L)
 		cost[s.id], root[s.id], f.base[s.id] = c, s.id, c
 		f.seeds[#f.seeds + 1] = s.id
 		n = hpush(hk, hv, n, c, s.id)
@@ -1280,15 +1282,55 @@ end
 -- exchange rate (40 u per dB) gave one route per probe, and with door_s shut every probe of the room went
 -- round by the other door, 15 dB quieter than through the leaf (pba_twodoors): the routes of both fields
 -- are ranked by their level afterwards (PR.DistinctRoutes), as the portal chains are (rankChains).
-function PR.BuildFields(g, L, yield, reuse)
+function PR.BuildFields(g, L, yield, reuse, seedList)
 	if (A.cfg.paths_model or 0) < 0.5 then return PR.BuildField(g, L, yield, reuse) end
 	local extra, sig = PR.LinkCosts(g, yield)
-	local f = PR.BuildField(g, L, yield, reuse, false)
+	local f = PR.BuildField(g, L, yield, reuse, false, seedList)
 	f.stateSig = sig
 	if next(extra) then
-		f.doors = PR.BuildField(g, L, yield, reuse and reuse.doors, extra)
+		f.doors = PR.BuildField(g, L, yield, reuse and reuse.doors, extra, seedList)
 		f.doors.stateSig = sig
 	end
+	return f
+end
+
+-- paths_model 1: a field is the field of the probes the listener sees (FIELD_SEEDS of PR.Visible), not of
+-- where it was built. Built around a position and reused within reach, the answer at one listener point
+-- depended on that position: the routes ended at seeds round it and were joined to the listener through it,
+-- and one point of pba_demo heard -33.7 dB at its first evaluation and -47.8 at the next, once the upkeep
+-- had moved the field to the player (path_perceptual). Now the same seen probes give the same field (cost 0
+-- at every seed, each seed's distance to the listener added when read), and the same answer. Kept by key
+-- (sorted seed ids), the last FIELD_KEEP of them; the seed set is looked up once per listener position.
+local FIELD_KEEP = 6
+local function seedSet(g, L)
+	local m = PR.seedMemo
+	local lx, ly, lz = L:Unpack()
+	if m and m.g == g and m[1] == lx and m[2] == ly and m[3] == lz then return m.key, m.seeds end
+	local seeds = PR.Visible(g, L, FIELD_SEEDS, 2)
+	local ids = {}
+	for i, n in ipairs(seeds) do ids[i] = n.id end
+	table.sort(ids)
+	local key = table.concat(ids, ",")
+	PR.seedMemo = { lx, ly, lz, g = g, key = key, seeds = seeds }
+	return key, seeds
+end
+PR.SeedSet = seedSet
+--- The field of the probes L sees (built at once when not kept), or nil when L sees no probe.
+function PR.FieldFor(g, L)
+	local key, seeds = seedSet(g, L)
+	if #seeds == 0 then return nil end
+	local sig = PR.StateSig(g)
+	local kept = PR.fieldsByKey
+	if not kept or kept.g ~= g then kept = { g = g, order = {} } PR.fieldsByKey = kept end
+	local f = kept[key]
+	if f and f.stateSig == sig then return f end
+	f = PR.BuildFields(g, L, nil, nil, seeds)
+	f.key = key
+	if not kept[key] then
+		kept.order[#kept.order + 1] = key
+		if #kept.order > FIELD_KEEP then kept[table.remove(kept.order, 1)] = nil end
+	end
+	kept[key] = f
 	return f
 end
 
@@ -1383,8 +1425,10 @@ end
 -- so its cost per frame is bounded whatever the speed.
 hook.Add("Think", "pba_probes_field", function()
 	local g = PR.current
-	local model1 = (A.cfg.paths_model or 0) >= 0.5 -- the field is the one topology: always kept
-	if not g or (not model1 and (A.cfg.probe_field or 1) < 0.5) or (PR.fieldHold and SysTime() < PR.fieldHold) then return end
+	-- (paths_model 1 keeps its fields by seed set, PR.FieldFor: no upkeep around the player)
+	if (A.cfg.paths_model or 0) >= 0.5 then return end
+	local model1 = false
+	if not g or (A.cfg.probe_field or 1) < 0.5 or (PR.fieldHold and SysTime() < PR.fieldHold) then return end
 	local L = A.ListenerPos and A.ListenerPos()
 	if not L then
 		local ply = LocalPlayer()
@@ -2042,31 +2086,9 @@ function PR.FieldRoutes(S, L, k, cfg)
 	end
 	if not g then return {} end
 	doorLeaves()
-	-- The nearest usable field: the upkeep's (around the player, PR.field) or the one built for a listener
-	-- elsewhere (PR.fieldAway: a test, a camera). Building the away field into PR.field made the upkeep
-	-- replace it at its next turn, and the routes of one listener switched between two fields' joins (a
-	-- 10 dB step in the open slide of door_sweep_real). Reach FIELD_REACH spacings, door states current.
-	local reach2 = (FIELD_REACH * g.spacing) ^ 2
-	local sig
-	local function usable(c)
-		if not c or c.g ~= g or c.L:DistToSqr(L) > reach2 then return false end
-		if c.stateSig then
-			sig = sig or PR.StateSig(g)
-			if c.stateSig ~= sig then return false end
-		end
-		fieldSeen(c, L)
-		return c.seenAny
-	end
-	local f
-	for _, c in ipairs({ PR.field or false, PR.fieldAway or false }) do
-		if c and usable(c) and (not f or c.L:DistToSqr(L) < f.L:DistToSqr(L)) then f = c end
-	end
-	if not f then
-		f = PR.BuildFields(g, L)
-		if not PR.field or PR.field.g ~= g then PR.field, PR.fieldJob = f, nil else PR.fieldAway = f end
-		fieldSeen(f, L)
-		if not f.seenAny then return {} end
-	end
+	local f = PR.FieldFor(g, L)
+	if not f then return {} end
+	fieldSeen(f, L)
 	local starts = PR.Visible(g, S, (k or 3) + 2)
 	if #starts == 0 then return {} end
 	local out = {}
@@ -2078,10 +2100,12 @@ function PR.FieldRoutes(S, L, k, cfg)
 	local straight = false
 	-- the shortest ways (f) and the ways round the doors' costs (f.doors, PR.BuildFields), ranked together
 	for _, fx in ipairs({ f, f.doors or false }) do
-		if fx and (fx == f or (fieldSeen(fx, L) and fx.seenAny)) then
+		if fx then
+			fieldSeen(fx, L)
 			local inners = fieldPaths(fx, starts, S, L)
 			for _, inner in ipairs(inners) do
-				local pulled = attach(inner, S, L, inners.via)
+				-- (no join through a field position: every route ends at a seed, which L sees)
+				local pulled = attach(inner, S, L, nil)
 				if pulled and (#pulled >= 3 or (#pulled == 2 and not straight)) then
 					straight = straight or #pulled == 2
 					local p = A.Paths.EvalRoute(pulled, cfg)
