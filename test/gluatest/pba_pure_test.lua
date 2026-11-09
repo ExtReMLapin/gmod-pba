@@ -2390,6 +2390,84 @@ return {
 				expect(math.abs(PR.FieldCost(f, id, L1) - (f.cost[id] - f.base[r] + g.nodes[r].pos:Distance(L1))) < 1e-6).to.beTrue()
 			end)
 		end },
+		-- paths_model 1 (plan B): the listener field is the one topology; a door on a link is a cost of the
+		-- link (closed: its loss at 40 u per dB, as the chain search), so the field routes round a shut door
+		-- by the open doorway and back through it once opened. A mock door (prop_door_rotating) fills the
+		-- first hole; the second hole, 400 u down the wall, stays open.
+		{ name = "Field links pay their doors (paths_model 1): a shut door on the short way sends the field round by the open doorway, and back once opened", func = function()
+			withProbeRooms({ { 16, 64, 112 }, { 400, 448, 112 } }, nil, { native_traces = 0, paths_model = 1 }, function(g)
+				local PR = A.Probes
+				local mn, mx = Vector(510, 14, 0), Vector(530, 66, 112)
+				local door = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9990 end,
+					IsValid = function() return true end, WorldSpaceAABB = function() return mn, mx end,
+					NearestPoint = function(_, p) return Vector(math.Clamp(p.x, mn.x, mx.x), math.Clamp(p.y, mn.y, mx.y), math.Clamp(p.z, mn.z, mx.z)) end }
+				local savedEnts, savedDoors, savedList = _G.ents, A.Doors, PR.doorList
+				_G.ents = { FindByClass = function(cls) return cls == "prop_door_rotating" and { door } or {} end } -- (_G: the suite runs in its own environment)
+				A.Doors = { byEnt = { [9990] = { frac = 0, closedDb = 28, closedLp = 3 } } }
+				PR.doorList = nil
+				local ok, err = pcall(function()
+					-- out of each other's sight, off the hole's line: the routes are the links' (the probes L sees are seeds)
+					local S, L = Vector(700, 150, 64), Vector(300, 150, 64)
+					expect(not PR.ClearSeg(S, L)).to.beTrue()
+					local cfg = setmetatable({ paths_model = 1, probe_field = 1 }, { __index = A.cfg })
+					-- the link costs: a link through the shut door costs its length + the leaf's loss x 40 u
+					local costs = PR.LinkCosts(g)
+					local through, beside = 0, 0
+					for e, c in pairs(costs) do if c > 1e-6 then through = through + 1 if near(c, AC.LeafDb(28, A.cfg) * 40, 1e-6) then beside = beside + 1 end end end
+					expect(through > 0 and beside == through).to.beTrue()
+					PR.field = PR.BuildField(g, L)
+					local ps = PR.FieldRoutes(S, L, 3, cfg)
+					expect(#ps > 0).to.beTrue()
+					local far = false
+					for _, v in ipairs(ps[1].points) do if v.y > 300 then far = true end end
+					expect(far).to.beTrue() -- by the far hole
+					-- opened: the short way again
+					A.Doors.byEnt[9990].frac = 1
+					PR.doorList = nil
+					PR.field = PR.BuildField(g, L)
+					ps = PR.FieldRoutes(S, L, 3, cfg)
+					expect(#ps > 0).to.beTrue()
+					for _, v in ipairs(ps[1].points) do expect(v.y < 200).to.beTrue() end
+					-- the signature of the door states the field was built with changes with a state
+					expect(PR.field.stateSig ~= nil).to.beTrue()
+					A.Doors.byEnt[9990].frac = 0.5
+					expect(PR.StateSig(g) ~= PR.field.stateSig).to.beTrue()
+				end)
+				_G.ents, A.Doors, PR.doorList = savedEnts, savedDoors, savedList
+				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "Compute (paths_model 1): the answer is the field's whatever the frame budget, never provisional, and the first field is built at once", func = function()
+			withProbeRooms({ { 16, 64, 112 } }, nil, { native_traces = 0, paths_model = 1 }, function(g)
+				local PR = A.Probes
+				local savedWalls, savedBudget, savedGet = P.Walls, A.FrameBudgetExceeded, A.Graph.Get
+				local over = false
+				P.Walls = function(a, b)
+					local e, x = a + (b - a) * 0.45, a + (b - a) * 0.55
+					return { { t = 0.45, entry = e, exit = x, thickness = 16, mat = MAT_CONCRETE, surf = "concrete" } }
+				end
+				A.FrameBudgetExceeded = function() return over end
+				A.Graph.Get = function() return nil end -- no area graph: the field needs none
+				local cfg = setmetatable({ paths_model = 1, probes = 1, probe_dist = 1e6, path_props = 0, water = 0, probe_field = 1 }, { __index = CFG })
+				local ok, err = pcall(function()
+					local S, L = Vector(700, 300, 64), Vector(300, 300, 64)
+					PR.field, PR.fieldJob = nil, nil
+					P.InvalidateCache()
+					local r1 = P.Compute(S, L, 75, cfg)
+					expect(PR.field ~= nil).to.beTrue() -- built at once for the first answer
+					expect(#r1.paths > 0 and r1.provisional == nil).to.beTrue()
+					over = true
+					P.InvalidateCache()
+					local r2 = P.Compute(S, L, 75, cfg)
+					expect(#r2.paths == #r1.paths and r2.provisional == nil).to.beTrue()
+					expect(near(r2.paths[1].lossDb, r1.paths[1].lossDb, 1e-9) and near(r2.paths[1].length, r1.paths[1].length, 1e-9)).to.beTrue()
+					expect(r2.legBlocked == nil and r2.viaProbes == true).to.beTrue()
+				end)
+				P.Walls, A.FrameBudgetExceeded, A.Graph.Get = savedWalls, savedBudget, savedGet
+				P.InvalidateCache()
+				if not ok then error(err, 0) end
+			end)
+		end },
 		{ name = "Probe pair hysteresis: the probe a route is keyed on is kept while seen and at most half a spacing farther than the nearest; per graph", func = function()
 			local PR = A.Probes
 			local saved = PR.sticky

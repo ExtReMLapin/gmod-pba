@@ -716,7 +716,7 @@ function PR.Start()
 	local js = file.Read(cachePath(map), "DATA")
 	local cached = js and PR.Deserialize(js, hash, A.cfg.probe_spacing)
 	if cached then
-		cached.map, cached.hash, cached.fromCache = map, hash, true
+		cached.map, cached.hash, cached.fromCache, cached.area = map, hash, true, g
 		PR.Prepare(cached)
 		setNativeSegs(linkSegs(cached))
 		PR.current = cached
@@ -768,7 +768,7 @@ function PR.Start()
 		end
 		if coroutine.status(b.co) == "dead" then
 			hook.Remove("Think", "pba_probes_build")
-			res.map, res.hash = b.map, b.hash
+			res.map, res.hash, res.area = b.map, b.hash, A.Graph.Get()
 			res.buildTime = SysTime() - b.t0
 			PR.Prepare(res)
 			setNativeSegs(linkSegs(res))
@@ -1014,6 +1014,200 @@ local function advance(ck, job)
 	end -- suspended: continued later
 end
 
+-- ------------------------------------------------------------------ doors and portals on the links
+-- (paths_model 1.) The graph's links are world geometry only: a link through a doorway exists whether
+-- its door is open or shut, and the field (shortest length) sent a route through a shut door where an
+-- open doorway stood 200 u farther. A door is a cost of the links through it, at the chain search's rate
+-- (P.DOOR_UNITS_PER_DB: 40 u per dB of door, the same exchange rate so that a map with areaportals and
+-- one without route alike): a link crossing a portal's opening pays that portal's state (an engine-closed
+-- areaportal, a linked door's leaves: sh_doors replicates p.open / p.closedDb), a link crossing the leaf
+-- of a door no portal owns (maps without areaportals) pays that leaf's replicated state. The links a door
+-- or a portal can touch are found once per graph (its columns around the door); the costs are redone when
+-- a door or portal state changes (PR.StateSig) and the field is rebuilt with them.
+local LINK_DOOR_PAD = 4 -- P.SegmentDoorLoss's hull: a link within it of a leaf goes through that leaf
+local DOOR_CLASS_LIST = { "prop_door_rotating", "func_door", "func_door_rotating" }
+
+-- segment a-b meets the box (mn, mx) grown by pad
+local function segBoxHit(a, b, mn, mx, pad)
+	local t0, t1 = 0, 1
+	for _, k in ipairs({ "x", "y", "z" }) do
+		local lo, hi = mn[k] - pad, mx[k] + pad
+		local d = b[k] - a[k]
+		if abs(d) < 1e-9 then
+			if a[k] < lo or a[k] > hi then return false end
+		else
+			local u, v = (lo - a[k]) / d, (hi - a[k]) / d
+			if u > v then u, v = v, u end
+			if u > t0 then t0 = u end
+			if v < t1 then t1 = v end
+			if t0 > t1 then return false end
+		end
+	end
+	return true
+end
+
+-- segment a-b passes within R of c
+local function segSphereHit(a, b, c, R)
+	local ab = b - a
+	local l2 = ab:LengthSqr()
+	local t = l2 > 0 and math.Clamp((c - a):Dot(ab) / l2, 0, 1) or 0
+	return (a + ab * t):DistToSqr(c) <= R * R
+end
+
+-- segment a-b crosses portal p's opening (its convex polygon)
+local function segPortalHit(a, b, p)
+	local n = p.normal
+	local da, db = (a - p.center):Dot(n), (b - p.center):Dot(n)
+	if (da > 0) == (db > 0) or abs(da - db) < 1e-9 then return false end
+	local q = a + (b - a) * (da / (da - db))
+	local poly = p.poly
+	local m = #poly
+	if m < 3 then return q:DistToSqr(p.center) <= (p.radius or 64) ^ 2 end
+	local sign
+	for i = 1, m do
+		local v1, v2 = poly[i], poly[i % m + 1]
+		local s = (v2 - v1):Cross(q - v1):Dot(n)
+		if abs(s) > 1e-6 then
+			if sign == nil then sign = s > 0 elseif (s > 0) ~= sign then return false end
+		end
+	end
+	return true
+end
+
+-- The links each door or portal can touch, once per graph and set of doors: g.linkPortals[e] = portals
+-- whose opening link e crosses; g.linkDoors[e] = { a, via, b, ents } for the doors (not owned by a portal)
+-- whose swing sphere link e passes; e = index in g.adj (each undirected link twice, once per direction).
+local function linkCands(g)
+	local doors = {}
+	if ents and ents.FindByClass then
+		for _, cls in ipairs(DOOR_CLASS_LIST) do
+			for _, e in ipairs(ents.FindByClass(cls)) do
+				if IsValid(e) then doors[#doors + 1] = e end
+			end
+		end
+	end
+	local sig = #doors
+	for _, e in ipairs(doors) do sig = sig + e:EntIndex() end
+	if g.linkDoors and g.linkCandsSig == sig then return end
+	local adj = g.adj or PR.Prepare(g)
+	local first, nid, nodes = adj.first, adj.nid, g.nodes
+	local s = g.spacing
+	-- every link of a probe within R + s of c (by columns): fn(e, a, via, b)
+	local function segsNear(c, R, fn)
+		local ci, cj = floor(c.x / s), floor(c.y / s)
+		local r = math.ceil((R + s) / s)
+		for di = -r, r do for dj = -r, r do
+			local list = g.cols[colKey(ci + di, cj + dj)]
+			if list then
+				for _, id in ipairs(list) do
+					local n = nodes[id]
+					if abs(n.pos.z - c.z) <= R + s then
+						for e = first[id], first[id + 1] - 1 do
+							local m = nodes[nid[e]]
+							local via = n.nb[m.id]
+							fn(e, n.pos, via ~= true and via or nil, m.pos)
+						end
+					end
+				end
+			end
+		end end
+	end
+	local linkDoors, linkPortals, owned = {}, {}, {}
+	local ag = g.area
+	for _, p in ipairs(ag and ag.portals or {}) do
+		if p.target then -- the leaves in a linked portal's opening are that portal's (as P.LeafOfPaths)
+			for _, d in ipairs(doors) do
+				if d:NearestPoint(p.center):Distance(p.center) <= (p.radius or 64) then owned[d] = true end
+			end
+		end
+		segsNear(p.center, p.radius or 64, function(e, a, via, b)
+			if segPortalHit(a, via or b, p) or (via and segPortalHit(via, b, p)) then
+				local l = linkPortals[e]
+				if not l then l = {} linkPortals[e] = l end
+				l[#l + 1] = p
+			end
+		end)
+	end
+	for _, d in ipairs(doors) do
+		if not owned[d] then
+			local mn, mx = d:WorldSpaceAABB()
+			local c, R = (mn + mx) * 0.5, mn:Distance(mx) * 1.5 + LINK_DOOR_PAD -- the leaf wherever it swings
+			segsNear(c, R, function(e, a, via, b)
+				if segSphereHit(a, via or b, c, R) or (via and segSphereHit(via, b, c, R)) then
+					local l = linkDoors[e]
+					if not l then l = { a = a, via = via, b = b, ents = {} } linkDoors[e] = l end
+					l.ents[#l.ents + 1] = d
+				end
+			end)
+		end
+	end
+	g.linkDoors, g.linkPortals, g.linkCandsSig, g.linkCosts = linkDoors, linkPortals, sig, nil
+end
+
+--- A number that changes with any door or portal state the link costs read (and with the door boxes,
+-- PR.doorEpoch): the field remembers the one it was built with and is rebuilt when it differs.
+function PR.StateSig(g)
+	doorLeaves()
+	local acc = PR.doorEpoch
+	local function mix(v) acc = (acc * 31 + v) % 2147483647 end
+	local D = A.Doors
+	if D and D.byEnt then
+		for idx, st in pairs(D.byEnt) do
+			mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0)
+		end
+	end
+	local ag = g.area
+	if ag then
+		for _, p in ipairs(ag.portals) do
+			mix(floor((p.open or 1) * 255)) mix(p.closedDb or 0)
+		end
+	end
+	return acc
+end
+
+--- Extra length (units) of each link for the doors and portals on it: { [e] = units }, sparse (links
+-- without a door are absent), and the state signature it was computed for. Kept until a state changes.
+function PR.LinkCosts(g)
+	local sig = PR.StateSig(g)
+	local m = g.linkCosts
+	if m and m.sig == sig then return m.extra, sig end
+	linkCands(g)
+	local AC = A.AC
+	local cfg = A.cfg
+	local rate = A.Paths.DOOR_UNITS_PER_DB or 40
+	local closedDef = cfg.door_closed_db or 28
+	local db = {}
+	local D = A.Doors
+	for e, l in pairs(g.linkDoors) do
+		local d = 0
+		for _, ent in ipairs(l.ents) do
+			if IsValid(ent) then
+				local st = D and D.byEnt and D.byEnt[ent:EntIndex()]
+				local frac = st and st.frac or 0 -- no state yet: shut, as the straight line's model takes it
+				if frac < 1 then
+					local mn, mx = ent:WorldSpaceAABB()
+					if segBoxHit(l.a, l.via or l.b, mn, mx, LINK_DOOR_PAD) or (l.via and segBoxHit(l.via, l.b, mn, mx, LINK_DOOR_PAD)) then
+						d = d - AC.GainToDb(AC.DoorGain(frac, AC.LeafDb(st and st.closedDb or closedDef, cfg)))
+					end
+				end
+			end
+		end
+		if d > 0 then db[e] = d end
+	end
+	for e, list in pairs(g.linkPortals) do
+		local d = db[e] or 0
+		for _, p in ipairs(list) do
+			local o = p.open or 1
+			if o < 1 then d = d - AC.GainToDb(AC.DoorGain(o, AC.LeafDb(p.closedDb or closedDef, cfg))) end
+		end
+		if d > 0 then db[e] = d end
+	end
+	local extra = {}
+	for e, d in pairs(db) do extra[e] = d * rate end
+	g.linkCosts = { sig = sig, extra = extra }
+	return extra, sig
+end
+
 -- ------------------------------------------------------------------ listener-centred field
 -- One Dijkstra over the probe graph from the probes the listener sees (as Hitman and Wwise do: the
 -- search starts from the listener): every probe gets its cost to the listener and its next hop. A
@@ -1044,6 +1238,9 @@ function PR.BuildField(g, L, yield, reuse)
 	local f = { g = g, L = L, cost = cost, nxt = nxt, root = root, base = {}, seeds = {}, pulled = {}, arr = {}, arrEpoch = PR.doorEpoch }
 	local adj = g.adj or PR.Prepare(g)
 	local first, nid, elen = adj.first, adj.nid, adj.len
+	-- paths_model 1: the doors and portals on the links are part of their cost (PR.LinkCosts)
+	local extra
+	if (A.cfg.paths_model or 0) >= 0.5 then extra, f.stateSig = PR.LinkCosts(g) end
 	local hk, hv, n = {}, {}, 0
 	for _, s in ipairs(PR.Visible(g, L, FIELD_SEEDS, 2)) do
 		local c = s.pos:Distance(L)
@@ -1061,6 +1258,7 @@ function PR.BuildField(g, L, yield, reuse)
 			local rb = root[best]
 			for e = first[best], first[best + 1] - 1 do
 				local id, c = nid[e], key + elen[e]
+				if extra then c = c + (extra[e] or 0) end
 				local ci = cost[id]
 				if not ci or c < ci then
 					cost[id], nxt[id], root[id] = c, best, rb
@@ -1163,7 +1361,8 @@ end
 -- so its cost per frame is bounded whatever the speed.
 hook.Add("Think", "pba_probes_field", function()
 	local g = PR.current
-	if not g or (A.cfg.probe_field or 1) < 0.5 or (PR.fieldHold and SysTime() < PR.fieldHold) then return end
+	local model1 = (A.cfg.paths_model or 0) >= 0.5 -- the field is the one topology: always kept
+	if not g or (not model1 and (A.cfg.probe_field or 1) < 0.5) or (PR.fieldHold and SysTime() < PR.fieldHold) then return end
 	local L = A.ListenerPos and A.ListenerPos()
 	if not L then
 		local ply = LocalPlayer()
@@ -1172,7 +1371,13 @@ hook.Add("Think", "pba_probes_field", function()
 	end
 	local f, job = PR.field, PR.fieldJob
 	if job and job.g ~= g then job = nil end
-	if not job and (not f or f.g ~= g or f.L:DistToSqr(L) > (g.spacing / 2) ^ 2) then
+	local stale = not f or f.g ~= g or f.L:DistToSqr(L) > (g.spacing / 2) ^ 2
+	-- paths_model 1: a door or portal state the field's link costs read has changed (checked 4 times a second)
+	if not stale and not job and model1 and (PR.sigNext or 0) <= SysTime() then
+		PR.sigNext = SysTime() + 0.25
+		if f.stateSig ~= PR.StateSig(g) then stale = true end
+	end
+	if not job and stale then
 		job = { g = g }
 		local spare = PR.fieldSpare
 		PR.fieldSpare = nil
@@ -1795,8 +2000,44 @@ function PR.DistinctRoutes(S, L, paths)
 	return out
 end
 
+--- paths_model 1: the routes of S to L read from the listener field, one per physical route, best first:
+-- the field's routes from the probes S sees (k + 2 nearest seen, each a route down its own tree branch),
+-- joined to S and L (attach: tightened, kept per S and L and door epoch), costed on their real edges
+-- (P.EvalRoute), the copies of one route dropped (PR.DistinctRoutes). No search per sound, no queue, no
+-- budget: the first field of a graph, or one left more than FIELD_REACH behind (the listener teleported),
+-- is built at once (15-27 ms once); otherwise the background upkeep keeps it within half a spacing. Empty
+-- when the listener sees no seed of the field (a wall between it and where the field was built) or S
+-- sees no probe: the sound keeps its transmission and the way over the edge (P.Compute).
+function PR.FieldRoutes(S, L, k, cfg)
+	cfg = cfg or A.cfg
+	local g = PR.current
+	if not g then return {} end
+	doorLeaves()
+	local f = PR.field
+	if not f or f.g ~= g or f.L:DistToSqr(L) > (FIELD_REACH * g.spacing) ^ 2 then
+		f = PR.BuildField(g, L)
+		PR.field, PR.fieldJob = f, nil
+	end
+	fieldSeen(f, L)
+	if not f.seenAny then return {} end
+	local starts = PR.Visible(g, S, (k or 3) + 2)
+	if #starts == 0 then return {} end
+	local inners = fieldPaths(f, starts, S, L)
+	local out = {}
+	for _, inner in ipairs(inners) do
+		local pulled = attach(inner, S, L, inners.via)
+		if pulled and #pulled >= 3 then
+			local p = A.Paths.EvalRoute(pulled, cfg)
+			p.probe = true
+			out[#out + 1] = p
+		end
+	end
+	return PR.DistinctRoutes(S, L, out)
+end
+
 function PR.Paths(S, L, k, cfg)
 	cfg = cfg or A.cfg
+	if (cfg.paths_model or 0) >= 0.5 then return PR.FieldRoutes(S, L, k, cfg) end
 	local g = PR.current
 	if not g then return {} end
 	doorLeaves() -- the door epoch (routes kept per S and L are redone when a leaf moved)

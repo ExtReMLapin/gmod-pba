@@ -405,9 +405,10 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	local len, diff, door, doorTilt = 0, 0, 0, 0
 	for i = 1, #pts - 1 do len = len + pts[i]:Distance(pts[i + 1]) end
 	local dp = doorPts or pts
-	local paid -- the leaves paid (each once)
+	local paid, leaves -- the leaves paid (each once); every leaf crossed (open ones too: P.LeafOfPaths)
 	for i = 1, #dp - 1 do
 		local dl, dlp, dt, ent = P.SegmentDoorLoss(dp[i], dp[i + 1], cfg)
+		if ent then leaves = leaves or {} leaves[ent] = true end
 		if dl > 0 and not (ent and paid and paid[ent]) then
 			if ent then paid = paid or {} paid[ent] = true end
 			door = door + dl
@@ -426,7 +427,7 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	local lp = AC.LowpassLevel(diff + doorTilt, cfg)
 	if door <= 0 then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
 	return { chain = {}, points = inner, length = len, diffDb = diff, doorDb = door, lossDb = diff + door,
-		pos = pts[#pts - 1], lp = lp, lpDb = diff + doorTilt, direct = direct, bendDeg = bend }
+		pos = pts[#pts - 1], lp = lp, lpDb = diff + doorTilt, direct = direct, bendDeg = bend, leaves = leaves }
 end
 
 -- ------------------------------------------------------------------ portal search
@@ -440,6 +441,7 @@ end
 -- dropped the open route of a loud source, whose level barely falls over those 900 units, 10 dB louder.
 -- limit: chains returned (default max_paths); sndlvl: the source's level for the distance law (75).
 local DOOR_UNITS_PER_DB = 40
+P.DOOR_UNITS_PER_DB = DOOR_UNITS_PER_DB -- the probe field's links use the same rate (cl_probes PR.LinkCosts)
 local function rankChains(cands, limit, sndlvl)
 	for _, c in ipairs(cands) do c.lvl = AC.GainToDb(AC.EngineGain(c.len, sndlvl or 75)) - c.doorDb end
 	table.sort(cands, function(x, y)
@@ -615,10 +617,12 @@ local function isClosure(ent) return closureWeight(ent) >= 1 end
 P.IsClosure = isClosure
 P.ClosureWeight = closureWeight
 
---- True when one of the portal paths goes through the doorway that door entity `ent` fills
--- (portal linked to a door, leaf touching its opening: hinge side when open, in it when closed).
+--- True when one of the paths goes through the doorway that door entity `ent` fills: a portal path
+-- through a portal linked to a door (leaf touching its opening: hinge side when open, in it when closed),
+-- or a probe route whose segments cross that leaf (P.EvalPolyline: it pays the leaf, open or shut).
 local function leafOfPaths(ent, paths)
 	for _, path in ipairs(paths) do
+		if path.leaves and path.leaves[ent] then return true end
 		for _, p in ipairs(path.chain or {}) do
 			if p.target and ent:NearestPoint(p.center):Distance(p.center) <= (p.radius or 64) then return true end
 		end
@@ -2334,7 +2338,17 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			if oneModel and w.ent and OPENABLE[w.ent:GetClass()] then leafBlocked = true end
 		end
 		r.worldBlocked = worldBlocked
-		if g and (worldBlocked or leafBlocked) then
+		-- paths_model 1: the listener field over the probe graph is the one topology (doors and portals are
+		-- costs of its links, cl_probes): its routes, read at once, beside the way over the edge and the
+		-- transmission; no portal chain, no search per sound, nothing provisional (the answer does not
+		-- depend on the frame budget nor on the sounds evaluated before)
+		local fieldOnly = (cfg.paths_model or 0) >= 0.5 and CLIENT and A.Probes and A.Probes.FieldRoutes and true or false
+		if fieldOnly then
+			if (worldBlocked or leafBlocked) and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+				r.paths = A.Probes.Paths(S, L, cfg.max_paths, cfg)
+				r.viaProbes = #r.paths > 0
+			end
+		elseif g and (worldBlocked or leafBlocked) then
 			r.aS, r.aL = A.Graph.Area(g, S), A.Graph.Area(g, L)
 			if r.aS ~= 0 and r.aL ~= 0 and r.aS ~= r.aL then
 				-- twice max_paths candidates, cut once their levels are computed (P.KeepLoudest)
@@ -2429,7 +2443,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- the probes also search when a portal leg is blocked: the area graph is too coarse there (several
 		-- rooms in one area), the routes it misses are theirs. A route both find (the same doorway) is one
 		-- physical route: kept once, the louder (PR.DistinctRoutes)
-		if worldBlocked and (#r.paths == 0 or r.legBlocked) and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+		if not fieldOnly and worldBlocked and (#r.paths == 0 or r.legBlocked) and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
 			if A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
 				r.provisional = true -- searched later: a continuous sound re-evaluates at its next turn
 			else
@@ -2455,7 +2469,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- switched the edge off, so a listener stepping past a jamb heard the route's clearance vertex
 		-- (12 dB) where the edge gave 1, and the edge was heard only where the probes found nothing.
 		if worldBlocked and r.trans then
-			if A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
+			if not fieldOnly and A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
 				r.provisional = true
 			else
 				local e = P.WorldEdge(S, L, r.trans.walls, cfg)
