@@ -101,9 +101,42 @@ function C.Check()
 end
 
 --- rRadio's own occlusion (client table rRadio.config.Occlusion.Enabled): off while pba renders, back
--- when pba is off or pba_compat_auto 0. Re-applied every 2 s: rRadio may receive its settings again from
--- the server (its config sync), which would switch it back on.
+-- when pba is off or pba_compat_auto 0. rRadio writes every setting through rRadio.configSchema.SetValue
+-- (its server sync and its menu): that function is wrapped once, so a value the server sends for
+-- Occlusion.Enabled is kept as the one to give back and pba's stays in force (no polling, no tug of war).
+local OCC_ID = "Occlusion.Enabled"
+local function wrapRRadio()
+	local schema = rRadio and rRadio.configSchema
+	if not (istable(schema) and isfunction(schema.SetValue)) or schema.pbaWrapped then return end
+	local origSet, origReset = schema.SetValue, schema.ResetValue
+	local function after(definition)
+		local id = istable(definition) and definition.id or definition
+		if id ~= OCC_ID then return end
+		local cfg = rRadio.config and rRadio.config.Occlusion
+		if not istable(cfg) then return end
+		if C.rradioOcc ~= nil then
+			-- pba is in charge: what rRadio just received becomes the value to give back
+			C.rradioOcc = cfg.Enabled == nil and true or cfg.Enabled
+			cfg.Enabled = false
+		end
+	end
+	schema.SetValue = function(definition, ...)
+		local ok, v = origSet(definition, ...)
+		after(definition)
+		return ok, v
+	end
+	if isfunction(origReset) then
+		schema.ResetValue = function(definition, ...)
+			local ok, v = origReset(definition, ...)
+			after(definition)
+			return ok, v
+		end
+	end
+	schema.pbaWrapped = true
+end
+
 function C.RRadio()
+	wrapRRadio()
 	local cfg = rRadio and istable(rRadio.config) and rRadio.config.Occlusion
 	if not istable(cfg) then return end
 	local takeOver = A.Enabled() and (A.cfg.compat_auto or 1) >= 0.5
@@ -121,7 +154,10 @@ function C.RRadio()
 		C.rradioOcc = nil
 	end
 end
-if CLIENT then timer.Create("pba_compat_rradio", 2, 0, function() C.RRadio() end) end
+if CLIENT then
+	timer.Remove("pba_compat_rradio") -- the former 2 s re-application (autorefresh of a running game)
+	hook.Add("rRadio_ConfigChanged", "pba_compat", function() C.RRadio() end)
+end
 
 -- Multiplayer Distant Sounds Fix replaces EmitSound with its own global; our server detour
 -- must wrap what is installed when we load, and must not double its copies.
