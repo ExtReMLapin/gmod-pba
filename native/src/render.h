@@ -29,6 +29,9 @@ struct VoiceParams {
 	float delay = 0;     // start delay (seconds): propagation time
 	bool hasSH = false;  // baked path: rendered through IPLPathEffect with these coefficients
 	float sh[4] = {0, 0, 0, 0};
+	// Update only: back to straight-line rendering (the path slot is released after a one-block
+	// crossfade). Neither hasSH nor clearSH: the voice keeps its current mode and coefficients.
+	bool clearSH = false;
 	// share of the energy arriving diffuse (long winding path: scattered at every corner and wall):
 	// 0 = a clean wavefront; towards 1 less direct sound, more room reverb send, blurred direction
 	float diffuse = 0;
@@ -83,12 +86,22 @@ void SetRoomReverbOverride(const float* rt);
 void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory budget (LRU eviction)
 void Memory(double* mb, int* sounds, int* voices);
 bool SoundPending(const std::string& name);
-int Play(const std::string& name, const VoiceParams& p, bool loop); // voice id, 0 on failure
+// voice id, 0 on failure. pathFallback (optional): set when p.hasSH but every path slot is taken,
+// so the voice renders the straight line instead of the baked path (Update retries)
+int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFallback = nullptr);
 // reflections-only voice: the sound feeds echo slot `slot` once it is simulated at `gen`
 int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay);
 // voice fed by a captured stream (another addon's BASS radio); lives until the stream closes
 int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p);
-bool Update(int id, const VoiceParams& p);
+// false if the voice is gone or stopping; pathFallback as Play (the voice wants a path, none free)
+bool Update(int id, const VoiceParams& p, bool* pathFallback = nullptr);
+// live[k]: number of live (not dying) echo voices feeding echo slot k (Echo never retargets a slot
+// that still has some: they would ring with another place's response)
+void EchoSlotLive(int live[kEchoSlots]);
+// cumulative counters since Start: echo voices dropped because their slot was not simulated in
+// time, Play/Update requests for a baked path rendered as a straight line (no free path slot);
+// pathUsed: path slots held now (of kMaxPathVoices = 16)
+void Counters(int* echoDropped, int* pathFallback, int* pathUsed);
 void StopVoice(int id);
 // live voices; eL / eR: output energy per channel (pre master volume) since the previous call
 int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, double* eL, double* eR);

@@ -16,8 +16,10 @@
 //   SavePaths() -> bytes | nil ; LoadPaths(bytes) -> numProbes | false, err   (disk cache)
 //   Paths(sources, listener) -> array of { el, em, eh, w, sh1..3, dx, dy, dz } (eq + arrival field)
 //   Rendering (render.cpp): AudioStart([sofaBytes]), AudioStop(), HasSound(name),
-//     LoadSound(name, bytes), Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse, send]),
-//     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send]]), StopVoice(id),
+//     LoadSound(name, bytes),
+//     Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse, send]) -> id, pathFallback,
+//     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
+//     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send]]),
 //     SetListener(pos, fwd, up, master), SetOutputMode(0|1),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
@@ -33,6 +35,11 @@
 //     SetSourceSlots: active pool size (0..32, default 16); the reflections run cost grows with it
 //     send: room reverb send level (linear), independent from gain, which carries the distance law;
 //     absent = keep the voice's (a voice that never received one sends at its gain)
+//     sh (Play arg 10, Update arg 10): baked path arrival field {w, sh1, sh2, sh3} as Paths() gives;
+//     on Update: a table = path rendering with these (a straight-line voice switches to the path),
+//     false = back to straight-line rendering at pos, nil / absent = keep the current mode. Switches
+//     crossfade over one block. pathFallback: true when the voice wants a path but all 16 path
+//     effects are taken, so it renders the straight line meanwhile (Update retries; Stats().pathFallback)
 //   DynamicAdd(id, verts, tris, material), DynamicMove(id, matrixRows), DynamicRemove(id),
 //     DynamicCommit() -> committed   (doors and other moving objects in the scene)
 //   Shutdown()
@@ -157,10 +164,135 @@ std::atomic<float> g_revMs{0};
 // pauses: listener still, scene unchanged, no echo -> the simulation converges; run it less often
 std::atomic<int> g_stillPasses{0};
 std::atomic<float> g_reflMs{0}, g_reflMaxMs{0};
+// echoes refused because every echo slot still rang with another place's voices (Stats().echoBusy);
+// extra passes simulating only new echo / source slots (Stats().slotPasses)
+std::atomic<int> g_echoBusy{0}, g_slotPasses{0};
 float g_rt[3] = {0, 0, 0}; // smoothed room reverb times (under g_stageMtx)
 
 double Now() {
 	return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Reflection inputs of one source of the main simulator (g_simMtx held); on = simulated by the next
+// run (off: skipped, its last outputs stay readable)
+void SetReflInputs(IPLSource s, IPLVector3 p, bool on, IPLVector3 a = {0, 0, -1}, float dipole = 0) {
+	IPLSimulationInputs in{};
+	in.flags = on ? IPL_SIMULATIONFLAGS_REFLECTIONS : (IPLSimulationFlags)0;
+	// orthonormal frame around the facing (ahead = -z: Steam Audio's dipole points there)
+	IPLVector3 up{0, 1, 0};
+	const float ay = a.x * up.x + a.y * up.y + a.z * up.z;
+	up = {up.x - a.x * ay, up.y - a.y * ay, up.z - a.z * ay};
+	float ul = std::sqrt(up.x * up.x + up.y * up.y + up.z * up.z);
+	if (ul < 1e-3f) { up = {1, 0, 0}; ul = 1; } // facing straight up / down
+	up = {up.x / ul, up.y / ul, up.z / ul};
+	in.source.ahead = a;
+	in.source.up = up;
+	in.source.right = {a.y * up.z - a.z * up.y, a.z * up.x - a.x * up.z, a.x * up.y - a.y * up.x};
+	in.source.origin = p;
+	in.directivity.dipoleWeight = dipole; // weapons: louder where the shooter aims
+	in.directivity.dipolePower = 1.0f;
+	in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+	in.hybridReverbTransitionTime = render::kIRSeconds;
+	in.hybridReverbOverlapPercent = 0.25f;
+	iplSourceSetInputs(s, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
+}
+
+// shared inputs of the main simulator's reflection runs (g_simMtx held)
+void SetSharedReflInputs(const IPLCoordinateSpace3& lis) {
+	IPLSimulationSharedInputs sh{};
+	sh.listener = lis;
+	sh.numRays = std::min(g_reflRays.load(), g_simMaxRays.load());
+	// enough bounces to fill the simulated window: with too few, the energy of a
+	// reflective room stops early and the reverb time estimate is capped (~0.8 s)
+	sh.numBounces = g_reflBounces.load();
+	sh.duration = render::kIRSeconds;
+	sh.order = 1;
+	// Steam Audio DROPS (does not clamp, despite its doc) the energy of surfaces closer than
+	// this to the source; the reverb source sits on the listener, so 1 m removed corridor
+	// walls and the floor of a crouching player (reflection_simulator.cpp, v4.8.1)
+	sh.irradianceMinDistance = 0.25f;
+	iplSimulatorSetSharedInputs(g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
+}
+
+// an echo or source slot waits for its first simulation at its generation (g_stageMtx held). A
+// pending source slot counts only while still wanted: one whose one-shot ended before it was
+// simulated must not keep the loop at its fastest rate.
+bool SlotPending(double now) {
+	for (int k = 0; k < render::kEchoSlots; ++k)
+		if (g_echo[k].gen > g_simulatedGen[k]) return true;
+	for (int k = 0; k < g_srcPool.load(); ++k)
+		if (g_srcSlot[k].gen > g_srcSimulatedGen[k] && now - g_srcSlot[k].last < kSrcHold) return true;
+	return false;
+}
+
+// Simulates only the echo and source slots waiting for a new generation (reflection thread): the
+// room source and every settled slot are left out of the run, so it costs about one source's rays
+// instead of the whole pool's. The response depends on the listener too (Steam Audio traces from
+// the listener), so it uses the latest staged one. false when nothing was pending or runnable.
+bool RunSlotPass() {
+	if (!g_sim || !g_reverbSource) return false;
+	int sLive[render::kSrcSlotsMax];
+	render::SrcSlotLive(sLive); // before g_stageMtx (lock order, see SourceReflect)
+	const int sceneVer = g_sceneVersion.load();
+	IPLCoordinateSpace3 lis{};
+	bool pend[render::kEchoSlots] = {}, sPend[render::kSrcSlotsMax] = {}, any = false;
+	EchoSlot e[render::kEchoSlots], sl[render::kSrcSlotsMax];
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		if (!g_stageLisOk || !g_reflWanted.load() || !render::Running()) return false;
+		lis = g_stageLis;
+		const double now = Now();
+		for (int k = 0; k < render::kEchoSlots; ++k) {
+			e[k] = g_echo[k];
+			pend[k] = e[k].gen > 0 && e[k].gen > g_simulatedGen[k];
+			any = any || pend[k];
+		}
+		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+			sl[k] = g_srcSlot[k];
+			sPend[k] = SrcActive(k, sLive, now) && sl[k].gen > g_srcSimulatedGen[k];
+			any = any || sPend[k];
+		}
+	}
+	if (!any) return false;
+	const auto t0 = std::chrono::steady_clock::now();
+	bool failed = false;
+	{
+		std::lock_guard<std::mutex> lk(g_simMtx);
+		SetSharedReflInputs(lis);
+		SetReflInputs(g_reverbSource, lis.origin, false);
+		for (int k = 0; k < render::kEchoSlots; ++k)
+			if (g_echo[k].src) SetReflInputs(g_echo[k].src, e[k].pos, pend[k], e[k].ahead, e[k].dipole);
+		for (int k = 0; k < render::kSrcSlotsMax; ++k)
+			if (g_srcSlot[k].src) SetReflInputs(g_srcSlot[k].src, sl[k].pos, sPend[k]);
+		try {
+			iplSimulatorRunReflections(g_sim);
+		} catch (...) {
+			failed = true;
+		}
+	}
+	if (failed) g_reflErrors++;
+	else {
+		for (int k = 0; k < render::kEchoSlots; ++k)
+			if (pend[k]) render::PublishSimulated(k, e[k].gen);
+		for (int k = 0; k < render::kSrcSlotsMax; ++k)
+			if (sPend[k]) render::PublishSimulated(render::kEchoSlots + k, sl[k].gen);
+	}
+	{
+		// failed: marked simulated anyway, so that a failing slot does not spin the loop
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		for (int k = 0; k < render::kEchoSlots; ++k)
+			if (pend[k]) g_simulatedGen[k] = std::max(g_simulatedGen[k], e[k].gen);
+		for (int k = 0; k < render::kSrcSlotsMax; ++k)
+			if (sPend[k]) {
+				g_srcSimulatedGen[k] = std::max(g_srcSimulatedGen[k], sl[k].gen);
+				g_srcSimulatedPos[k] = sl[k].pos;
+				g_srcSimulatedVer[k] = failed ? -1 : sceneVer;
+			}
+	}
+	g_slotPasses++;
+	const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+	g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
+	return true;
 }
 
 // Runs when an echo slot waits for its first simulation (woken at once by Echo), otherwise every
@@ -206,45 +338,12 @@ void ReflectionLoop() {
 			bool failed = false;
 			{
 				std::lock_guard<std::mutex> lk(g_simMtx);
-				IPLSimulationSharedInputs sh{};
-				sh.listener = lis;
-				sh.numRays = std::min(g_reflRays.load(), g_simMaxRays.load());
-				// enough bounces to fill the simulated window: with too few, the energy of a
-				// reflective room stops early and the reverb time estimate is capped (~0.8 s)
-				sh.numBounces = g_reflBounces.load();
-				sh.duration = render::kIRSeconds;
-				sh.order = 1;
-				// Steam Audio DROPS (does not clamp, despite its doc) the energy of surfaces closer than
-				// this to the source; the reverb source sits on the listener, so 1 m removed corridor
-				// walls and the floor of a crouching player (reflection_simulator.cpp, v4.8.1)
-				sh.irradianceMinDistance = 0.25f;
-				iplSimulatorSetSharedInputs(g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
-				auto setSrc = [](IPLSource s, IPLVector3 p, bool on, IPLVector3 a = {0, 0, -1}, float dipole = 0) {
-					IPLSimulationInputs in{};
-					in.flags = on ? IPL_SIMULATIONFLAGS_REFLECTIONS : (IPLSimulationFlags)0;
-					// orthonormal frame around the facing (ahead = -z: Steam Audio's dipole points there)
-					IPLVector3 up{0, 1, 0};
-					const float ay = a.x * up.x + a.y * up.y + a.z * up.z;
-					up = {up.x - a.x * ay, up.y - a.y * ay, up.z - a.z * ay};
-					float ul = std::sqrt(up.x * up.x + up.y * up.y + up.z * up.z);
-					if (ul < 1e-3f) { up = {1, 0, 0}; ul = 1; } // facing straight up / down
-					up = {up.x / ul, up.y / ul, up.z / ul};
-					in.source.ahead = a;
-					in.source.up = up;
-					in.source.right = {a.y * up.z - a.z * up.y, a.z * up.x - a.x * up.z, a.x * up.y - a.y * up.x};
-					in.source.origin = p;
-					in.directivity.dipoleWeight = dipole; // weapons: louder where the shooter aims
-					in.directivity.dipolePower = 1.0f;
-					in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
-					in.hybridReverbTransitionTime = render::kIRSeconds;
-					in.hybridReverbOverlapPercent = 0.25f;
-					iplSourceSetInputs(s, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
-				};
-				setSrc(g_reverbSource, {lis.origin.x, lis.origin.y + 0.1f, lis.origin.z}, true);
+				SetSharedReflInputs(lis);
+				SetReflInputs(g_reverbSource, {lis.origin.x, lis.origin.y + 0.1f, lis.origin.z}, true);
 				for (int k = 0; k < render::kEchoSlots; ++k)
-					if (g_echo[k].src) setSrc(g_echo[k].src, pos[k], active[k], ahead[k], dipole[k]);
+					if (g_echo[k].src) SetReflInputs(g_echo[k].src, pos[k], active[k], ahead[k], dipole[k]);
 				for (int k = 0; k < render::kSrcSlotsMax; ++k)
-					if (g_srcSlot[k].src) setSrc(g_srcSlot[k].src, sPos[k], sActive[k]);
+					if (g_srcSlot[k].src) SetReflInputs(g_srcSlot[k].src, sPos[k], sActive[k]);
 				try {
 					iplSimulatorRunReflections(g_sim);
 				} catch (...) {
@@ -289,6 +388,10 @@ void ReflectionLoop() {
 			g_reflMs = g_reflMs * 0.9f + ms * 0.1f;
 			g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
 		}
+		// an echo fired during the main pass would otherwise wait for the long-window pass, the 80 ms
+		// floor and a whole main pass (more than kEchoWaitBlocks, ~250 ms, on a large map: dropped):
+		// the slots alone are simulated now, a fraction of a main pass's cost
+		if (ok) RunSlotPass();
 		// long-window room reverb time (parametric simulator, or the baked probes)
 		if (ok && g_revSim && g_revSrc) {
 			const auto r0 = std::chrono::steady_clock::now();
@@ -337,6 +440,7 @@ void ReflectionLoop() {
 			const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - r0).count();
 			g_revMs = g_revMs * 0.9f + ms * 0.1f;
 		}
+		if (ok) RunSlotPass(); // echoes fired during the long-window pass
 		// still listener + unchanged scene + no echo: the result has converged (Steam Audio averages
 		// successive passes), simulate once a second instead of four times
 		{
@@ -348,9 +452,18 @@ void ReflectionLoop() {
 			lastLis = lis.origin;
 			lastVersion = g_sceneVersion.load();
 		}
-		// at most ~12 passes per second whatever the rate of new echoes
-		std::this_thread::sleep_until(t0 + std::chrono::milliseconds(80));
+		// at most ~12 full passes per second whatever the rate of new echoes; a new echo or source slot
+		// arriving meanwhile gets its own slot-only pass at once instead of waiting for the floor
 		std::unique_lock<std::mutex> lk(g_stageMtx);
+		while (g_reflRun.load() && std::chrono::steady_clock::now() < t0 + std::chrono::milliseconds(80)) {
+			if (!g_reflCv.wait_until(lk, t0 + std::chrono::milliseconds(80), [] { return !g_reflRun.load() || SlotPending(Now()); }))
+				break; // floor reached
+			if (!g_reflRun.load()) break;
+			lk.unlock();
+			const bool ran = RunSlotPass();
+			lk.lock();
+			if (!ran) break; // nothing could be simulated (no world, reflections off): do not spin
+		}
 		const int idleMs = g_stillPasses.load() >= 10 ? 1000 : 250;
 		const IPLVector3 at = lis.origin;
 		g_reflCv.wait_until(lk, t0 + std::chrono::milliseconds(idleMs), [at] {
@@ -358,14 +471,7 @@ void ReflectionLoop() {
 			// a settled listener who starts moving again is simulated at once (SetListener notifies)
 			const IPLVector3 o = g_stageLis.origin;
 			if ((o.x - at.x) * (o.x - at.x) + (o.y - at.y) * (o.y - at.y) + (o.z - at.z) * (o.z - at.z) > 0.25f) return true;
-			for (int k = 0; k < render::kEchoSlots; ++k)
-				if (g_echo[k].gen > g_simulatedGen[k]) return true;
-			// a pending source slot still wanted (one whose one-shot ended before it was simulated must
-			// not keep the loop at its fastest rate)
-			const double now = Now();
-			for (int k = 0; k < g_srcPool.load(); ++k)
-				if (g_srcSlot[k].gen > g_srcSimulatedGen[k] && now - g_srcSlot[k].last < kSrcHold) return true;
-			return false;
+			return SlotPending(Now());
 		});
 	}
 }
@@ -1353,15 +1459,18 @@ LUA_FUNCTION(LoadSound) {
 	return 1;
 }
 
-// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send]]]]]]) -> voice id (0 = failed)
+// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send]]]]]])
+//   -> voice id (0 = failed), pathFallback (sh given but no free path effect: straight line)
 LUA_FUNCTION(Play) {
 	const char* name = LUA->CheckString(1);
 	LUA->CheckType(2, Type::Vector);
 	render::VoiceParams p = ReadVoice(LUA, 2);
 	const bool loop = LUA->IsType(8, Type::Bool) && LUA->GetBool(8);
 	ReadVoiceExtra(LUA, 9, p);
-	LUA->PushNumber(render::Play(name, p, loop));
-	return 1;
+	bool fallback = false;
+	LUA->PushNumber(render::Play(name, p, loop, &fallback));
+	LUA->PushBool(fallback);
+	return 2;
 }
 
 // Echo(name, pos, gain [, key [, pitch [, delay]]]) -> voice id, slot. Reflections only (no direct
@@ -1394,34 +1503,59 @@ LUA_FUNCTION(Echo) {
 	auto d2 = [](IPLVector3 a, IPLVector3 b) {
 		return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
 	};
+	// echo voices still feeding each slot, read before g_stageMtx (lock order, see SourceReflect)
+	int live[render::kEchoSlots];
+	render::EchoSlotLive(live);
 	int slot = -1, gen = 0;
 	{
 		std::lock_guard<std::mutex> lk(g_stageMtx);
 		const double now = Now();
-		// same source, or a source within 1 m: share its slot (no new simulation if it did not move)
+		// the response of slot k fits this echo as it is: an echo response barely changes within
+		// 2 m, and the aim matters only for a directional source (~18 degrees)
+		auto fits = [&](int k) {
+			const EchoSlot& e = g_echo[k];
+			if (e.gen == 0 || d2(e.pos, p) > 4.0f) return false;
+			const float da = d2(e.ahead, aim);
+			return dipole == e.dipole && !(dipole > 0 && da > 0.1f);
+		};
+		auto mine = [&](int k) { // same source, or a source within 1 m
+			return g_echo[k].gen > 0 && ((key != 0 && g_echo[k].key == key) || d2(g_echo[k].pos, p) < 1.0f);
+		};
+		// A slot is never retargeted while echo voices still feed it: they would ring with the new
+		// place's response (the LRU slot taken by a shot across the map while the previous gunfire's
+		// echoes were still sounding moved them all there). Order:
+		//   1. a slot of this source (or within 1 m) whose response fits: shared, no simulation;
+		//   2. a slot of this source with no live voice: retargeted;
+		//   3. the least recently used slot with no live voice: retargeted;
+		//   4. every slot rings: a slot of this source even if it no longer fits (a shooter walking
+		//      under full auto: his own response a few metres off beats none), else no echo.
+		bool retarget = false;
 		for (int k = 0; k < render::kEchoSlots && slot < 0; ++k)
-			if (g_echo[k].gen > 0 && ((key != 0 && g_echo[k].key == key) || d2(g_echo[k].pos, p) < 1.0f)) slot = k;
-		if (slot < 0) { // least recently used
-			slot = 0;
-			for (int k = 1; k < render::kEchoSlots; ++k)
-				if (g_echo[k].last < g_echo[slot].last) slot = k;
+			if (mine(k) && fits(k)) slot = k;
+		for (int k = 0; k < render::kEchoSlots && slot < 0; ++k)
+			if (mine(k) && live[k] == 0) slot = k, retarget = true;
+		if (slot < 0)
+			for (int k = 0; k < render::kEchoSlots; ++k)
+				if (live[k] == 0 && (slot < 0 || g_echo[k].last < g_echo[slot].last)) slot = k, retarget = true;
+		for (int k = 0; k < render::kEchoSlots && slot < 0; ++k)
+			if (mine(k)) slot = k;
+		if (slot >= 0) {
+			EchoSlot& e = g_echo[slot];
+			if (retarget && !fits(slot)) {
+				e.pos = p;
+				e.ahead = aim;
+				e.dipole = dipole;
+				e.gen++;
+			}
+			e.key = key;
+			e.last = now;
+			gen = e.gen;
 		}
-		EchoSlot& e = g_echo[slot];
-		// an echo response barely changes within 2 m: keep the simulated one (no new convolution
-		// transition in the renderer, no new simulation)
-		if (e.gen == 0 || d2(e.pos, p) > 4.0f) {
-			e.pos = p;
-			e.gen++;
-		}
-		const float da = (e.ahead.x - aim.x) * (e.ahead.x - aim.x) + (e.ahead.y - aim.y) * (e.ahead.y - aim.y) + (e.ahead.z - aim.z) * (e.ahead.z - aim.z);
-		if (dipole != e.dipole || (dipole > 0 && da > 0.1f)) { // ~18 degrees: resimulate
-			e.ahead = aim;
-			e.dipole = dipole;
-			e.gen++;
-		}
-		e.key = key;
-		e.last = now;
-		gen = e.gen;
+	}
+	if (slot < 0) {
+		g_echoBusy++;
+		LUA->PushNumber(0);
+		return 1;
 	}
 	g_reflCv.notify_one();
 	LUA->PushNumber(render::PlayEcho(name, slot, gen, gain, pitch, delay));
@@ -1790,19 +1924,45 @@ LUA_FUNCTION(Stats) {
 		LUA->PushNumber(g_srcPool.load());
 		LUA->SetField(-2, "srcPool");
 	}
+	{
+		// cumulative since AudioStart: echoes dropped because their slot was not simulated within
+		// ~250 ms (reflection thread too slow), echoes refused because every slot rang with another
+		// place's voices, path voices rendered as straight lines for want of a path effect
+		int dropped = 0, fallback = 0, used = 0;
+		render::Counters(&dropped, &fallback, &used);
+		LUA->PushNumber(dropped);
+		LUA->SetField(-2, "echoDropped");
+		LUA->PushNumber(g_echoBusy.load());
+		LUA->SetField(-2, "echoBusy");
+		LUA->PushNumber(fallback);
+		LUA->SetField(-2, "pathFallback");
+		LUA->PushNumber(used);
+		LUA->SetField(-2, "pathVoices");
+		LUA->PushNumber(g_slotPasses.load());
+		LUA->SetField(-2, "slotPasses");
+	}
 	return 1;
 }
 
-// Update(id, pos, gain, eqL, eqM, eqH [, pitch]) -> alive
-// Update(id, pos, gain, eqL, eqM, eqH [, pitch [, diffuse [, send]]])
+// Update(id, pos, gain, eqL, eqM, eqH [, pitch [, diffuse [, send [, sh]]]]) -> alive, pathFallback
+//   sh (index 10): {w, sh1, sh2, sh3} = render along the baked path with this arrival field;
+//   false = straight line from pos (releases the path effect); nil / absent = keep the mode
 LUA_FUNCTION(Update) {
 	const int id = (int)LUA->CheckNumber(1);
 	LUA->CheckType(2, Type::Vector);
 	render::VoiceParams p = ReadVoice(LUA, 2);
 	p.diffuse = LUA->IsType(8, Type::Number) ? (float)LUA->GetNumber(8) : -1.0f; // -1: keep the voice's
 	p.send = ReadSend(LUA, 9);
-	LUA->PushBool(render::Update(id, p));
-	return 1;
+	if (LUA->IsType(10, Type::Table)) {
+		for (int i = 0; i < 4; ++i) p.sh[i] = (float)TableNumber(LUA, 10, i + 1);
+		p.hasSH = true;
+	} else if (LUA->IsType(10, Type::Bool) && !LUA->GetBool(10)) {
+		p.clearSH = true;
+	}
+	bool fallback = false;
+	LUA->PushBool(render::Update(id, p, &fallback));
+	LUA->PushBool(fallback);
+	return 2;
 }
 
 LUA_FUNCTION(StopVoice) {

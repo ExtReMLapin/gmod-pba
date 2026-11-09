@@ -50,8 +50,17 @@ constexpr int kMaxPathVoices = 16;
 constexpr int kIR = (int)(kRate * kIRSeconds);
 constexpr int kAmbi = 4; // first-order ambisonics channels
 constexpr int kEchoWaitBlocks = 24; // ~250 ms: an echo not simulated by then is dropped
-// keep processing a reflection tail for max(2.5 s, 1.2 x the longest reverb time) after the last sound
-std::atomic<int> g_tailBlocks{(int)(kRate * 2.5 / kBlock)};
+// keep processing a reflection tail for max(2.5 s, 1.2 x the longest reverb time) after the last
+// sound, then fade it out over kTailFadeBlocks (~0.25 s) instead of stopping it in one block: a
+// hard stop at -40 dB of a 3 s hall was an audible click on headphones
+constexpr int kTailMinBlocks = (int)(kRate * 2.5 / kBlock);
+constexpr int kTailFadeBlocks = 24;
+int TailBlocks(const float rt[3]) {
+	const float mx = std::max({rt[0], rt[1], rt[2], 0.0f});
+	return (int)(kRate * std::max(2.5f, 1.2f * std::min(mx, 12.0f)) / kBlock);
+}
+// counters (Counters()): echo voices dropped unsimulated, baked paths rendered as straight lines
+std::atomic<int> g_echoDropped{0}, g_pathFallback{0};
 // Room reverb times from the long-window parametric simulator (pba_native.cpp); they replace the main simulator's estimate (biased by its 0.5 s window) for the room reverb.
 std::atomic<float> g_rtOv[3] = {0, 0, 0};
 std::atomic<bool> g_rtOvOn{false};
@@ -84,8 +93,13 @@ struct Voice {
 	IPLVector3 pos{};
 	float gain = 0, gainCur = -1;
 	float eq[3] = {1, 1, 1};
-	bool hasSH = false;
+	bool hasSH = false; // wants the baked path rendering (pathSlot may be missing: pool full)
 	float sh[4] = {0, 0, 0, 0};
+	// share of the output taken from the path effect (0 straight line .. 1 baked path), smoothed over
+	// one block: a voice switching between the two (Update with or without sh) crossfades instead of
+	// jumping from one spatialisation to the other mid-sound. -1: not rendered yet
+	float pathMixCur = -1;
+	bool pathFallback = false; // wants a path, none free: rendered as a straight line (counted once)
 	float diffuse = 0; // see VoiceParams::diffuse
 	float send = -1, sendCur = -1; // room reverb send (see VoiceParams::send); -1: follows gain
 	int slot = -1;     // index in the effect pool
@@ -96,7 +110,11 @@ struct Voice {
 	// time; later re-simulations of a moving source keep the previous response meanwhile)
 	int srcSlot = -1;
 	int srcGen = 0;
-	float srcSend = 0, srcSendCur = -1; // send into the slot, smoothed like send
+	// send into the slot, smoothed like send; srcSendCur is the level fed into srcFedSlot during the
+	// last block. Unbinding or rebinding fades the old slot's input to 0 over one block from there
+	// (a radio whose slot was dropped stopped feeding it in one step: a click in its reverb)
+	float srcSend = 0, srcSendCur = -1;
+	int srcFedSlot = -1;
 	float srcFbCur = -1; // the slot share sent to the room bus until the slot is simulated (smoothed)
 	int waited = 0;
 	bool dying = false; // fading to 0 over one block, then dead
@@ -122,6 +140,10 @@ struct Reflection {
 	std::atomic<int> simGen{0};
 	int idle = 1 << 20; // blocks since the last input
 	bool fed = false;
+	// this bus's own tail length (blocks), from the reverb times of its own response: an echo slot
+	// in a cathedral rings longer than the listener's small room (it was cut at the room's length)
+	int tailBlocks = kTailMinBlocks;
+	bool silent = true; // the effect was reset after its tail faded out (nothing stale left inside)
 };
 
 IPLContext g_ctx = nullptr;
@@ -147,6 +169,9 @@ double g_loadSum = 0, g_loadMax = 0; int g_loadN = 0;
 
 // audio-thread scratch buffers
 IPLAudioBuffer g_mono{}, g_mono2{}, g_stereo{}, g_amb{}, g_ambTmp{}, g_ambOut{};
+// path branch of a voice: its own copy of the source signal and its own output, so that a voice
+// crossfading between the path and the straight line can render both in the same block
+IPLAudioBuffer g_monoP{}, g_stereoP{};
 IPLAmbisonicsDecodeEffect g_decode = nullptr;
 Reflection g_room;                 // reverb at the listener, fed by every voice (send bus = g_room.in)
 // extra room-reverb send of a diffuse voice: send x (1 + g_diffuseSend x share). 1.5 keeps the total
@@ -192,26 +217,37 @@ void ReleaseVoice(Voice& v) {
 
 // Applies one reflection effect (if simulated) and adds its ambisonic output to g_amb.
 // Simulation outputs are only ever read here, on the audio thread (single consumer).
-void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr) {
+// minTail: floor of the tail length (the room's for echo and source slots: their own reverb time
+// comes from the 0.5 s main simulation window, which underestimates long reverbs; the room's has
+// the long-window estimate). The tail fades out over kTailFadeBlocks, then the effect is reset so
+// that a later sound does not restart the frozen remains of the old tail.
+void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTail = 0) {
 	if (r.fed) r.idle = 0;
 	else if (r.idle < (1 << 20)) r.idle++;
 	r.fed = false;
 	if (!r.src || !r.fx || r.simGen.load() == 0) return;
-	const int tail = g_tailBlocks.load();
-	if (!rtOut && (wet <= 0 || r.idle > tail)) return;
+	const int tail = std::max(r.tailBlocks, minTail);
+	const bool over = r.idle > tail + kTailFadeBlocks;
+	if (over && !r.silent && r.fx) {
+		iplReflectionEffectReset(r.fx);
+		r.silent = true;
+	}
+	if (!rtOut && (wet <= 0 || over)) return;
 	IPLSimulationOutputs out{};
 	iplSourceGetOutputs(r.src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
 	// reverb times: the long-window estimate for the room, else the main simulator's
 	float rt[3];
 	const bool ov = rtOut && g_rtOvOn.load();
 	for (int b = 0; b < 3; ++b) rt[b] = ov ? g_rtOv[b].load() : out.reflections.reverbTimes[b];
-	if (rtOut) {
+	r.tailBlocks = TailBlocks(rt);
+	if (rtOut)
 		for (int b = 0; b < 3; ++b) rtOut[b] = rt[b];
-		const float mx = std::max({rt[0], rt[1], rt[2]});
-		g_tailBlocks = (int)(kRate * std::max(2.5f, 1.2f * mx) / kBlock);
-	}
-	if (wet <= 0 || r.idle > tail) return;
+	if (wet <= 0 || over) return;
 	if (!out.reflections.ir) return;
+	r.silent = false;
+	// fade over the last kTailFadeBlocks of the tail (per-sample ramp across the block)
+	const float a0 = std::clamp(1.0f - (float)(r.idle - 1 - tail) / kTailFadeBlocks, 0.0f, 1.0f);
+	const float a1 = std::clamp(1.0f - (float)(r.idle - tail) / kTailFadeBlocks, 0.0f, 1.0f);
 	IPLReflectionEffectParams rp{};
 	rp.type = IPL_REFLECTIONEFFECTTYPE_HYBRID;
 	rp.ir = out.reflections.ir;
@@ -227,7 +263,10 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr) {
 	for (int c = 0; c < kAmbi; ++c) {
 		float* d = g_amb.data[c];
 		const float* s = g_ambTmp.data[c];
-		for (int i = 0; i < kBlock; ++i) d[i] += s[i] * wet;
+		if (a0 >= 1 && a1 >= 1)
+			for (int i = 0; i < kBlock; ++i) d[i] += s[i] * wet;
+		else
+			for (int i = 0; i < kBlock; ++i) d[i] += s[i] * wet * (a0 + (a1 - a0) * (float)i / kBlock);
 	}
 }
 
@@ -253,7 +292,10 @@ void RenderBlock() {
 		if (!v.alive.load()) continue;
 		if (v.echoSlot >= 0 && g_echo[v.echoSlot].simGen.load() < v.needGen) {
 			// impulse response for this position not simulated yet: hold the voice
-			if (++v.waited > kEchoWaitBlocks) v.alive = false;
+			if (++v.waited > kEchoWaitBlocks) {
+				v.alive = false;
+				g_echoDropped++; // the reflection thread was too slow (Stats().echoDropped)
+			}
 			continue;
 		}
 		float* m = g_mono.data[0];
@@ -346,9 +388,9 @@ void RenderBlock() {
 		Reflection* srcBus = nullptr;
 		const bool srcBound = v.srcSlot >= 0 && v.srcSlot < kSrcSlotsMax && g_src[v.srcSlot].fx;
 		if (srcBound && g_src[v.srcSlot].simGen.load() >= v.srcGen) srcBus = &g_src[v.srcSlot];
-		const float q1 = v.srcSend;
+		const int srcTo = srcBus ? v.srcSlot : -1;
+		const float q1 = srcBus ? v.srcSend : 0;
 		const float q0 = v.srcSendCur < 0 ? q1 : v.srcSendCur;
-		v.srcSendCur = srcBus ? q1 : 0; // a slot that becomes ready fades in over one block
 		// bound but not simulated yet: the slot's share goes to the room bus meanwhile, at the slot's
 		// level (wet room x g_srcScale). Lua lowers the room send of a bound voice, so without it a
 		// one-shot started dry for the 100-300 ms of its first simulation (or stayed dry entirely).
@@ -356,31 +398,60 @@ void RenderBlock() {
 		const float f1 = srcBound && !srcBus ? v.srcSend * g_srcScale : 0;
 		const float f0 = v.srcFbCur < 0 ? f1 : v.srcFbCur;
 		v.srcFbCur = f1;
-		// x: the signal for the listener's room (muffled like the direct sound: what reaches the
-		// listener's space through walls and openings). The source slot gets m, the voice's signal
-		// BEFORE the direct path's EQ: the simulation from the source has the geometry, and a room's
-		// diffuse field leaves through an open doorway unfiltered (fed through the direct's EQ, the
-		// reverb spilling out of a doorway round a corner was muffled like the diffracted direct)
-		auto feedRoom = [&](const float* x, float k, float kSrc) {
+		// The source slot gets m, the voice's signal BEFORE the direct path's EQ: the simulation from
+		// the source has the geometry, and a room's diffuse field leaves through an open doorway
+		// unfiltered (fed through the direct's EQ, the reverb spilling out of a doorway round a corner
+		// was muffled like the diffracted direct). No diffuse boost here: the diffuse share describes
+		// the route from the source to the listener, which the source's own simulation already
+		// contains (boosted, a radio down a winding corridor fed its own room up to x2.5 too loud).
+		auto feedSrc = [&](int k, float a0, float a1) {
+			if (k < 0 || (a0 <= 0 && a1 <= 0)) return;
+			float* d = g_src[k].in.data[0];
+			for (int i = 0; i < kBlock; ++i) d[i] += m[i] * (a0 + (a1 - a0) * (float)i / kBlock);
+			g_src[k].fed = true;
+		};
+		if (v.srcFedSlot == srcTo) feedSrc(srcTo, q0, q1);
+		else {
+			// unbound, rebound elsewhere or not simulated any more: the slot fed until now fades out
+			// over this block, the new one fades in
+			feedSrc(v.srcFedSlot, q0, 0);
+			feedSrc(srcTo, 0, q1);
+		}
+		v.srcFedSlot = srcTo;
+		v.srcSendCur = q1;
+		if (f0 > 0 || f1 > 0) {
 			float* snd = g_room.in.data[0];
-			for (int i = 0; i < kBlock; ++i) snd[i] += x[i] * (s0 + (s1 - s0) * (float)i / kBlock) * k;
-			if (f0 > 0 || f1 > 0)
-				for (int i = 0; i < kBlock; ++i) snd[i] += m[i] * (f0 + (f1 - f0) * (float)i / kBlock) * kSrc;
+			for (int i = 0; i < kBlock; ++i) snd[i] += m[i] * (f0 + (f1 - f0) * (float)i / kBlock);
 			g_room.fed = true;
-			if (srcBus && (q0 > 0 || q1 > 0)) {
-				float* d = srcBus->in.data[0];
-				for (int i = 0; i < kBlock; ++i) d[i] += m[i] * (q0 + (q1 - q0) * (float)i / kBlock) * kSrc;
-				srcBus->fed = true;
+		}
+		// x: the signal for the listener's room (muffled like the direct sound: what reaches the
+		// listener's space through walls and openings), weighted by the share of the branch (path or
+		// straight line) that renders it
+		auto feedRoom = [&](const float* x, float k, float w0, float w1) {
+			float* snd = g_room.in.data[0];
+			for (int i = 0; i < kBlock; ++i) {
+				const float t = (float)i / kBlock;
+				snd[i] += x[i] * (s0 + (s1 - s0) * t) * k * (w0 + (w1 - w0) * t);
 			}
+			g_room.fed = true;
 		};
 		// diffuse energy (long winding path): the direct part gives way to the room reverb send, and
 		// its direction blurs (binaural spatial blend); the total energy is kept
 		const float dif = v.diffuse;
 		const float directGain = std::sqrt(std::max(1.0f - dif, 0.0f));
 		const float sendBoost = 1.0f + g_diffuseSend * dif;
-		if (v.hasSH && v.pathSlot >= 0) {
-			feedRoom(m, v.eq[1] * sendBoost, sendBoost); // before the gain is applied to m
-			applyGain(m);
+		// path / straight-line share (see Voice::pathMixCur): a voice given a path by Update fades
+		// from the straight line into it over one block, and back when Update drops the path
+		const float pw1 = v.hasSH && v.pathSlot >= 0 ? 1.0f : 0.0f;
+		const float pw0 = v.pathMixCur < 0 ? pw1 : v.pathMixCur;
+		v.pathMixCur = pw1;
+		const bool pathOn = v.pathSlot >= 0 && (pw0 > 0 || pw1 > 0);
+		const bool directOn = pw0 < 1 || pw1 < 1;
+		if (pathOn) {
+			// own copy: the straight-line branch below still needs the untouched signal
+			std::copy(m, m + kBlock, g_monoP.data[0]);
+			feedRoom(g_monoP.data[0], v.eq[1] * sendBoost, pw0, pw1); // before the gain is applied
+			applyGain(g_monoP.data[0]);
 			IPLPathEffectParams pp{};
 			for (int b = 0; b < 3; ++b) pp.eqCoeffs[b] = v.eq[b];
 			pp.shCoeffs = v.sh;
@@ -389,8 +460,16 @@ void RenderBlock() {
 			pp.hrtf = g_hrtf;
 			pp.listener = lis;
 			pp.normalizeEQ = IPL_FALSE;
-			iplPathEffectApply(g_pathPool[v.pathSlot].fx, &pp, &g_mono, &g_stereo);
-		} else {
+			iplPathEffectApply(g_pathPool[v.pathSlot].fx, &pp, &g_monoP, &g_stereoP);
+		}
+		if (directOn) {
+			if (pw0 >= 1) {
+				// back from the path: the straight-line effects hold the state of their last use,
+				// possibly seconds ago (a stale HRTF overlap tail would play in the fade-in)
+				iplDirectEffectReset(g_pool[v.slot].direct);
+				iplBinauralEffectReset(g_pool[v.slot].binaural);
+				iplPanningEffectReset(g_pool[v.slot].pan);
+			}
 			// EQ first (linear), then the gain and send ramps: one EQ pass serves both the direct
 			// path and the send (same level and EQ as gain-then-EQ)
 			IPLAudioBuffer* bin_in = &g_mono;
@@ -403,7 +482,7 @@ void RenderBlock() {
 				iplDirectEffectApply(g_pool[v.slot].direct, &dp, &g_mono, &g_mono2);
 				bin_in = &g_mono2;
 			}
-			feedRoom(bin_in->data[0], sendBoost, sendBoost);
+			feedRoom(bin_in->data[0], sendBoost, 1 - pw0, 1 - pw1);
 			applyGain(bin_in->data[0]);
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
@@ -421,21 +500,37 @@ void RenderBlock() {
 			}
 			for (int i = 0; i < kBlock; ++i) g_dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
 		}
-		const float* L = g_stereo.data[0];
-		const float* R = g_stereo.data[1];
 		g_dbgVoices++;
 		for (int i = 0; i < kBlock; ++i) {
-			g_dbgL += (double)L[i] * L[i] * directGain * directGain;
-			g_dbgR += (double)R[i] * R[i] * directGain * directGain;
-			g_mix[i * 2] += L[i] * directGain;
-			g_mix[i * 2 + 1] += R[i] * directGain;
+			const float w = pw0 + (pw1 - pw0) * (float)i / kBlock; // path share at this sample
+			float l = 0, r = 0;
+			if (directOn) {
+				l += g_stereo.data[0][i] * (1 - w);
+				r += g_stereo.data[1][i] * (1 - w);
+			}
+			if (pathOn) {
+				l += g_stereoP.data[0][i] * w;
+				r += g_stereoP.data[1][i] * w;
+			}
+			l *= directGain;
+			r *= directGain;
+			g_dbgL += (double)l * l;
+			g_dbgR += (double)r * r;
+			g_mix[i * 2] += l;
+			g_mix[i * 2 + 1] += r;
+		}
+		// path dropped and faded out: its effect goes back to the pool for another voice
+		if (!v.hasSH && v.pathSlot >= 0 && pw1 <= 0) {
+			g_pathPool[v.pathSlot].used = false;
+			v.pathSlot = -1;
 		}
 	}
 
 	// reflections -> ambisonic bus -> decode
 	ApplyReflection(g_room, g_wetRoom, g_roomRt);
-	for (auto& e : g_echo) ApplyReflection(e, g_wetEcho);
-	for (auto& e : g_src) ApplyReflection(e, g_wetRoom * g_srcScale);
+	// echo and source slots: their own tail, never shorter than the room's (see ApplyReflection)
+	for (auto& e : g_echo) ApplyReflection(e, g_wetEcho, nullptr, g_room.tailBlocks);
+	for (auto& e : g_src) ApplyReflection(e, g_wetRoom * g_srcScale, nullptr, g_room.tailBlocks);
 	if (g_decode) {
 		IPLAmbisonicsDecodeEffectParams dp{};
 		dp.order = 1;
@@ -510,6 +605,8 @@ bool CreateReflection(Reflection& r, IPLAudioSettings& as) {
 	if (iplReflectionEffectCreate(g_ctx, &as, &rs, &r.fx) != IPL_STATUS_SUCCESS) return false;
 	iplAudioBufferAllocate(g_ctx, 1, kBlock, &r.in);
 	r.idle = 1 << 20;
+	r.tailBlocks = kTailMinBlocks;
+	r.silent = true;
 	return true;
 }
 
@@ -572,6 +669,8 @@ void Reap() {
 std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 	if (g_devOk) return "";
 	g_ctx = ctx;
+	g_echoDropped = 0;
+	g_pathFallback = 0;
 	IPLAudioSettings as{kRate, kBlock};
 	IPLHRTFSettings hs{};
 	hs.volume = 1.0f;
@@ -599,6 +698,8 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 	iplAudioBufferAllocate(g_ctx, kAmbi, kBlock, &g_amb);
 	iplAudioBufferAllocate(g_ctx, kAmbi, kBlock, &g_ambTmp);
 	iplAudioBufferAllocate(g_ctx, 2, kBlock, &g_ambOut);
+	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_monoP);
+	iplAudioBufferAllocate(g_ctx, 2, kBlock, &g_stereoP);
 	if (!CreateReflection(g_room, as)) return "reflection effect creation failed";
 	for (auto& e : g_echo)
 		if (!CreateReflection(e, as)) return "reflection effect creation failed";
@@ -680,7 +781,7 @@ void Stop() {
 	for (auto& e : g_src) ReleaseReflection(e);
 	if (g_decode) iplAmbisonicsDecodeEffectRelease(&g_decode);
 	if (g_hrtf) {
-		for (IPLAudioBuffer* b : {&g_mono, &g_mono2, &g_stereo, &g_amb, &g_ambTmp, &g_ambOut})
+		for (IPLAudioBuffer* b : {&g_mono, &g_mono2, &g_stereo, &g_amb, &g_ambTmp, &g_ambOut, &g_monoP, &g_stereoP})
 			if (b->data) iplAudioBufferFree(g_ctx, b);
 		iplHRTFRelease(&g_hrtf);
 	}
@@ -753,13 +854,11 @@ bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend) {
 	// at that place has simGen >= gen and is fed at once; one moved (or just taken) waits, the
 	// voice keeping its room send meanwhile. The other voices of the slot keep theirs: they go on
 	// feeding the previous response until the new one replaces it.
+	// srcSendCur / srcFbCur are left alone: the renderer fades the previous slot's input (or the
+	// room-bus stand-in) out from their current level over one block (see Voice::srcSendCur)
 	if (t->srcSlot != slot || gen < t->srcGen) { // new binding (or a new simulator)
 		t->srcGen = gen;
-		if (t->srcSlot != slot) {
-			t->srcSend = 0;
-			t->srcSendCur = 0;
-			t->srcFbCur = 0;
-		}
+		if (t->srcSlot != slot) t->srcSend = 0;
 	}
 	t->srcSlot = slot;
 	if (srcSend >= 0) t->srcSend = srcSend;
@@ -929,17 +1028,50 @@ std::string LoadSound(const std::string& name, const void* data, size_t size, do
 	return "";
 }
 
+// Gives a voice that wants a baked path a path effect from the pool. Lock held. A voice that finds
+// the pool full renders the straight line meanwhile (counted once per episode, g_pathFallback):
+// with 16 path voices playing, a 17th gunshot behind a corner came straight through the wall with
+// nothing to tell why. Retried on every Update, so it moves onto the path once a slot frees up
+// (crossfaded by the renderer).
+static void AcquirePath(Voice& v) {
+	if (!v.hasSH || v.pathSlot >= 0) {
+		v.pathFallback = false;
+		return;
+	}
+	for (int i = 0; i < (int)g_pathPool.size(); ++i)
+		if (!g_pathPool[i].used) {
+			g_pathPool[i].used = true;
+			iplPathEffectReset(g_pathPool[i].fx);
+			v.pathSlot = i;
+			v.pathFallback = false;
+			return;
+		}
+	if (!v.pathFallback) g_pathFallback++;
+	v.pathFallback = true;
+}
+
 static void SetVoice(Voice& v, const VoiceParams& p) {
 	v.pos = p.pos;
 	v.gain = p.gain;
 	v.rate = std::clamp(p.pitch / 100.0f, 0.05f, 4.0f);
 	std::copy(p.eq, p.eq + 3, v.eq);
-	if (p.hasSH) std::copy(p.sh, p.sh + 4, v.sh);
+	// baked path: new coefficients (acquiring a path effect if the voice had none), or back to the
+	// straight line (the renderer fades the path out, then releases its effect); neither: kept. A
+	// voice followed by Update used to keep its Play-time arrival field forever while its position
+	// was ignored (the path branch renders from sh only).
+	if (p.hasSH) {
+		std::copy(p.sh, p.sh + 4, v.sh);
+		v.hasSH = true;
+	} else if (p.clearSH) {
+		v.hasSH = false;
+	}
+	AcquirePath(v);
 	if (p.diffuse >= 0) v.diffuse = std::clamp(p.diffuse, 0.0f, 1.0f); // < 0: unchanged (Update without it)
 	if (p.send >= 0) v.send = p.send; // < 0: unchanged (Update without it)
 }
 
-int Play(const std::string& name, const VoiceParams& p, bool loop) {
+int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFallback) {
+	if (pathFallback) *pathFallback = false;
 	std::lock_guard<std::mutex> lk(g_mtx);
 	auto it = g_sounds.find(name);
 	if (it == g_sounds.end() || !g_devOk) return 0;
@@ -947,18 +1079,6 @@ int Play(const std::string& name, const VoiceParams& p, bool loop) {
 	const int slot = FindEffect();
 	if (slot < 0) return 0;
 	auto v = std::make_unique<Voice>();
-	if (p.hasSH) {
-		for (int i = 0; i < (int)g_pathPool.size(); ++i)
-			if (!g_pathPool[i].used) {
-				v->pathSlot = i;
-				break;
-			}
-		if (v->pathSlot >= 0) {
-			g_pathPool[v->pathSlot].used = true;
-			iplPathEffectReset(g_pathPool[v->pathSlot].fx);
-			v->hasSH = true;
-		}
-	}
 	g_pool[slot].used = true;
 	v->slot = slot;
 	iplDirectEffectReset(g_pool[slot].direct);
@@ -969,7 +1089,8 @@ int Play(const std::string& name, const VoiceParams& p, bool loop) {
 	it->second->lastUse = ++g_useClock;
 	v->loop = loop;
 	v->cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
-	SetVoice(*v, p);
+	SetVoice(*v, p); // takes a path effect if p.hasSH (see AcquirePath)
+	if (pathFallback) *pathFallback = v->pathFallback;
 	const int id = v->id;
 	g_voices.push_back(std::move(v));
 	return id;
@@ -1030,16 +1151,34 @@ int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch
 	return id;
 }
 
-bool Update(int id, const VoiceParams& p) {
+bool Update(int id, const VoiceParams& p, bool* pathFallback) {
+	if (pathFallback) *pathFallback = false;
 	std::lock_guard<std::mutex> lk(g_mtx);
 	for (auto& v : g_voices) {
 		if (v->id == id && v->alive.load()) {
 			if (v->dying) return false; // stopped or capped: an update must not bring it back
 			SetVoice(*v, p);
+			if (pathFallback) *pathFallback = v->pathFallback;
 			return true;
 		}
 	}
 	return false;
+}
+
+void EchoSlotLive(int live[kEchoSlots]) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	for (int k = 0; k < kEchoSlots; ++k) live[k] = 0;
+	for (auto& v : g_voices)
+		if (v->echoSlot >= 0 && v->echoSlot < kEchoSlots && v->alive.load() && !v->dying) live[v->echoSlot]++;
+}
+
+void Counters(int* echoDropped, int* pathFallback, int* pathUsed) {
+	*echoDropped = g_echoDropped.load();
+	*pathFallback = g_pathFallback.load();
+	std::lock_guard<std::mutex> lk(g_mtx);
+	int n = 0;
+	for (auto& p : g_pathPool) n += p.used ? 1 : 0;
+	*pathUsed = n;
 }
 
 void StopVoice(int id) {
