@@ -48,26 +48,65 @@ end
 
 -- ------------------------------------------------------------------ copies of one source
 -- The engine stops the previous sound of an entity on the same channel when a new one starts
--- (an NPC line, a weapon), and StopSound stops a sound by name. Copies re-emitted by pba are
--- tracked per (entity, channel): engine copies are played by small invisible anchors (one per
--- voice) on the original channel, so the engine applies those rules itself; native voices are
--- stopped explicitly. Unassigned channels (CHAN_AUTO / CHAN_STATIC) never replace.
-A.copies = A.copies or {} -- "idx:chan" -> { idx, chan, anchors = { slot -> ent }, native = { { id, name } }, t }
+-- (an NPC line, a weapon), and StopSound stops a sound by name. Copies re-emitted by pba must obey
+-- the same rules, whatever carries them: an anchor of a copy set (replacing channel), an anchor of
+-- the pool (CHAN_AUTO / CHAN_STATIC), a native voice, or a copy played at a fixed position (anchor
+-- cap reached). One registry holds every copy of a source entity, per entity index: StopSound (client
+-- or relayed by the server), the removal of the entity and a new sound on a replacing channel all stop
+-- copies from it. Before it, only the copy sets were walked: a CHAN_AUTO line of an NPC re-emitted on
+-- a pool anchor or natively played on after the server stopped it, and after the entity was removed.
+A.copies = A.copies or {} -- "idx:chan" -> { idx, chan, anchors = { slot -> ent }, t }: anchors of a replacing channel
+A.emitted = A.emitted or {} -- idx -> { handle, ... }: every copy re-emitted for that entity (handles: see emitVoice)
 local function replaces(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
 
--- one-shots followed while they play (see below): records, anchors of the sounds on unassigned
--- channels (CHAN_AUTO / CHAN_STATIC: no copy set), native voice id -> followed voice
+-- one-shots followed while they play (see below): records, the pool of anchors of the copies that
+-- have no copy set (unassigned channels), native voice id -> followed voice
 A.OneShots = A.OneShots or {}
 local OS = A.OneShots
 OS.recs = OS.recs or {}
-OS.pool = OS.pool or {}   -- { ent, busy = time its sound ends, t = last use }
+OS.pool = OS.pool or {}   -- { ent, t = last use }; ent.pbaEnd = time its sound ends (any anchor)
 OS.native = OS.native or {}
+
+-- A copy stays in the registry this long after its expected end: the length of a compressed file can
+-- be slightly off, and a StopSound right after the expected end must still reach the copy.
+local EXPIRE_MARGIN = 1
 
 --- Stops a native copy (a copy rule: new sound on the channel, StopSound): never driven again.
 local function stopNative(id)
 	if pba_native then pba_native.StopVoice(id) end
 	local fv = OS.native[id]
 	if fv then fv.dead = true OS.native[id] = nil end
+end
+
+--- Stops one copy, at once or before it starts (an emission still waiting for its propagation delay
+-- is cancelled: a StopSound 0.1 s after a far gunshot must not let the copy start 0.2 s later).
+local function stopCopy(h)
+	if h.cancelled then return end
+	h.cancelled = true
+	if h.id then
+		stopNative(h.id)
+	elseif h.a then
+		local a = h.a
+		if IsValid(a) and a.pbaSeq == h.seq and a.pbaName == h.name then a:StopSound(h.name) a.pbaName = nil end
+		if IsValid(a) and a.pbaSeqNext == h.seq then a.pbaEnd = 0 end -- free for the next copy
+	elseif h.pos and h.started and not A.IsSentence(h.name) and RealTime() <= h.tEnd + EXPIRE_MARGIN then
+		-- a copy at a fixed position: the engine's own stop of that name on the same source and channel
+		-- (EmitSound's index -1). Every fixed-position copy shares that source: an expired one is skipped,
+		-- its stop would cut another source's copy of the same name.
+		A.EmitAt(h.name, h.pos, -1, CHAN_AUTO, 0, h.lvl, SND_STOP, h.pitch, 0)
+	end
+end
+
+local function expired(h, now) return h.cancelled or now > h.tEnd + EXPIRE_MARGIN end
+
+--- Records a copy of entity idx (nothing for a source without an entity: no StopSound can name it).
+local function register(idx, h)
+	if not idx then return end
+	local list = A.emitted[idx]
+	if not list then list = {} A.emitted[idx] = list end
+	local now = RealTime()
+	for i = #list, 1, -1 do if expired(list[i], now) then table.remove(list, i) end end
+	list[#list + 1] = h
 end
 
 local function anchorCount()
@@ -79,29 +118,57 @@ local function anchorCount()
 	return n
 end
 
+--- An anchor taken for a new copy: whatever it still plays is cut (its expected end has passed: a
+-- length read too short must not leave a sound playing on, moved to the new copy's position).
+local function quiet(a)
+	if a.pbaName then a:StopSound(a.pbaName) a.pbaName = nil end
+end
+
+--- A new anchor; at the cap on client entities, one whose sound ended is taken from its owner (a copy
+-- set idle for 20 s held its anchors while a battle's gunfire fell back to fixed positions, which the
+-- channel rule and StopSound reach far less well). nil: none free, the caller plays at a position.
+local function newAnchor(now)
+	if anchorCount() < (A.cfg.max_anchors or 48) then
+		local a = ClientsideModel("models/hunter/blocks/cube025x025x025.mdl", RENDERGROUP_OTHER)
+		if not IsValid(a) then return nil end
+		a:SetNoDraw(true)
+		return a
+	end
+	for _, c in pairs(A.copies) do
+		for slot, x in pairs(c.anchors) do
+			if IsValid(x) and (x.pbaEnd or 0) < now then c.anchors[slot] = nil quiet(x) return x end
+		end
+	end
+	for i, pa in ipairs(OS.pool) do
+		if IsValid(pa.ent) and (pa.ent.pbaEnd or 0) < now then table.remove(OS.pool, i) quiet(pa.ent) return pa.ent end
+	end
+	return nil
+end
+
 local function sourceIndex(data)
 	local idx = data.EntIndex
 	if (not idx or idx == 0) and IsValid(data.Entity) and not data.Entity:IsWorld() then idx = data.Entity:EntIndex() end
 	return (idx and idx > 0) and idx or nil
 end
 
---- Copy set of a sound's source; a new sound on a replacing channel cuts the previous copies.
-local function beginCopies(data)
-	local idx = sourceIndex(data)
+--- Copy set of a sound's source on a replacing channel: a new sound there cuts every earlier copy of
+-- that channel (anchors, native voices, and those at a fixed position past the anchor cap).
+local function beginCopies(data, idx)
 	local chan = data.Channel or CHAN_AUTO
 	if not idx or not replaces(chan) then return nil end
+	local list = A.emitted[idx]
+	if list then
+		for i = #list, 1, -1 do
+			if list[i].srcChan == chan then stopCopy(list[i]) table.remove(list, i) end
+		end
+	end
 	local key = idx .. ":" .. chan
 	local c = A.copies[key]
 	if not c then
-		c = { idx = idx, chan = chan, anchors = {}, native = {} }
+		c = { idx = idx, chan = chan, anchors = {} }
 		A.copies[key] = c
 	end
 	c.t = RealTime()
-	for _, n in ipairs(c.native) do stopNative(n[1]) end
-	c.native = {}
-	for _, a in pairs(c.anchors) do
-		if IsValid(a) and a.pbaName then a:StopSound(a.pbaName) a.pbaName = nil end
-	end
 	return c
 end
 
@@ -109,68 +176,130 @@ local function anchorFor(c, slot)
 	local a = c.anchors[slot]
 	if IsValid(a) then return a end
 	-- cap on client entities: beyond it, the caller plays the copy at a position instead
-	if anchorCount() >= (A.cfg.max_anchors or 48) then return nil end
-	a = ClientsideModel("models/hunter/blocks/cube025x025x025.mdl", RENDERGROUP_OTHER)
-	if not IsValid(a) then return nil end
-	a:SetNoDraw(true)
+	a = newAnchor(RealTime())
+	if not a then return nil end
 	c.anchors[slot] = a
 	return a
 end
 
---- Stops the copies of `name` (all names if empty) re-emitted for entity idx.
+--- Stops the copies of `name` (all names if empty) re-emitted for entity idx, whatever their channel.
 function A.StopCopies(idx, name)
 	name = name or ""
-	for _, c in pairs(A.copies) do
-		if c.idx == idx then
-			for _, a in pairs(c.anchors) do
-				if IsValid(a) and a.pbaName and (name == "" or a.pbaName == name or a.pbaName == A.WithoutDryMix(name)) then a:StopSound(a.pbaName) a.pbaName = nil end
-			end
-			for i = #c.native, 1, -1 do
-				if name == "" or c.native[i][2] == name then
-					stopNative(c.native[i][1])
-					table.remove(c.native, i)
-				end
-			end
+	local list = A.emitted[idx]
+	if not list then return end
+	local bare = name ~= "" and A.WithoutDryMix(name)
+	for i = #list, 1, -1 do
+		local h = list[i]
+		-- the name asked, as given or as played (a muffled "#" sound is played without its "#")
+		if name == "" or h.orig == name or h.name == name or h.name == bare then
+			stopCopy(h)
+			table.remove(list, i)
 		end
 	end
+	if #list == 0 then A.emitted[idx] = nil end
 end
 
--- idle copy sets: anchors removed after 30 s
+local function anchorBusy(a, now) return IsValid(a) and (a.pbaEnd or 0) >= now end
+
+-- idle copy sets: anchors removed after 30 s without a new sound and once their sounds ended (a
+-- 3-minute song on a replacing channel was cut after 30 s); expired registry entries dropped
 timer.Create("pba_copies_gc", 5, 0, function()
 	local now = RealTime()
 	for key, c in pairs(A.copies) do
-		if now - (c.t or 0) > 30 then
+		local busy = false
+		for _, a in pairs(c.anchors) do if anchorBusy(a, now) then busy = true end end
+		if not busy and now - (c.t or 0) > 30 then
 			for _, a in pairs(c.anchors) do if IsValid(a) then a:Remove() end end
 			A.copies[key] = nil
 		end
 	end
 	for i = #OS.pool, 1, -1 do
 		local pa = OS.pool[i]
-		if not IsValid(pa.ent) or (pa.busy < now and now - pa.t > 30) then
+		if not IsValid(pa.ent) or (not anchorBusy(pa.ent, now) and now - pa.t > 30) then
 			if IsValid(pa.ent) then pa.ent:Remove() end
 			table.remove(OS.pool, i)
 		end
 	end
+	for idx, list in pairs(A.emitted) do
+		for i = #list, 1, -1 do if expired(list[i], now) then table.remove(list, i) end end
+		if #list == 0 then A.emitted[idx] = nil end
+	end
 end)
 
---- Anchor of a followed copy on an unassigned channel (no copy set): a sound played at a fixed
--- position cannot be moved, one played by an entity follows it. Busy until its sound ends.
+--- Anchor of a copy without a copy set (unassigned channel), busy until its sound ends: a sound played
+-- at a fixed position cannot be moved nor stopped by name, one played by an entity can.
 local function poolAnchor(tEnd)
 	local now = RealTime()
 	for _, pa in ipairs(OS.pool) do
-		if IsValid(pa.ent) and pa.busy < now then pa.busy, pa.t = tEnd, now return pa.ent end
+		if IsValid(pa.ent) and not anchorBusy(pa.ent, now) then
+			quiet(pa.ent)
+			pa.ent.pbaEnd, pa.t = tEnd, now
+			return pa.ent
+		end
 	end
-	if anchorCount() >= (A.cfg.max_anchors or 48) then return nil end
-	local a = ClientsideModel("models/hunter/blocks/cube025x025x025.mdl", RENDERGROUP_OTHER)
-	if not IsValid(a) then return nil end
-	a:SetNoDraw(true)
-	OS.pool[#OS.pool + 1] = { ent = a, busy = tEnd, t = now }
+	local a = newAnchor(now)
+	if not a then return nil end
+	a.pbaEnd = tEnd
+	OS.pool[#OS.pool + 1] = { ent = a, t = now }
 	return a
 end
 
---- Emits one voice. play: seconds the sound plays when it is to be followed (nil otherwise).
--- Returns false when nothing was emitted, else a handle: { id = native voice } or { a = anchor,
--- seq = emission number on it, chan } (both followable), or {} (a copy at a fixed position).
+-- ------------------------------------------------------------------ sounds of unknown length
+-- SoundDuration gives 0 for a VBR mp3 (and nil or 0 for a missing file, some sentences). Taken as
+-- 0.1 s, a 3-minute song of a radio entity was computed once, never followed, and its anchor counted
+-- as free at once. Unknown is taken as possibly long: followed (native voices until the module reports
+-- them ended) up to UNKNOWN_CAP, while the file's real length is read once by BASS (sound.PlayFile,
+-- "noplay"); the copies and records of that file then get their real end.
+local UNKNOWN_CAP = 600
+A.lengthProbe = A.lengthProbe or {} -- file -> seconds; false = unreadable; true = being read
+
+local function setLength(h, secs)
+	h.ukey = nil
+	h.tEnd = h.t0 + secs * 100 / math.max(h.pitch or 100, 1)
+	if IsValid(h.a) and h.a.pbaSeqNext == h.seq then h.a.pbaEnd = h.tEnd end
+end
+
+local function onLength(key, secs)
+	for _, list in pairs(A.emitted) do
+		for _, h in ipairs(list) do if h.ukey == key then setLength(h, secs) end end
+	end
+	for _, rec in ipairs(OS.recs) do
+		if rec.ukey == key then
+			rec.ukey = nil
+			local tEnd = 0
+			for _, fv in ipairs(rec.voices) do
+				if fv.ukey == key then setLength(fv, secs) end
+				tEnd = math.max(tEnd, fv.tEnd)
+			end
+			rec.tEnd = tEnd
+		end
+	end
+end
+
+--- Seconds `name` plays at `pitch`, and the key of its file while its length is unknown (then the
+-- seconds are UNKNOWN_CAP).
+local function playLength(name, pitch)
+	local secs = A.SoundDuration(name)
+	if secs and secs > 0 then return math.max(secs, 0.1) * 100 / math.max(pitch or 100, 1) end
+	if A.IsSentence(name) then return UNKNOWN_CAP, "!" end -- not a file: no length to read
+	local key = string.lower(A.SoundFile(name))
+	local p = A.lengthProbe[key]
+	if type(p) == "number" then return math.max(p, 0.1) * 100 / math.max(pitch or 100, 1) end
+	if p == nil and sound and sound.PlayFile then
+		A.lengthProbe[key] = true
+		sound.PlayFile("sound/" .. key, "noplay", function(ch)
+			local len = IsValid(ch) and ch:GetLength() or -1
+			if IsValid(ch) then ch:Stop() end
+			A.lengthProbe[key] = (len and len > 0) and len or false
+			if len and len > 0 then onLength(key, len) end
+		end)
+		-- (a callback run at once: the length is already known)
+		p = A.lengthProbe[key]
+		if type(p) == "number" then return math.max(p, 0.1) * 100 / math.max(pitch or 100, 1) end
+	end
+	return UNKNOWN_CAP, key
+end
+
 --- "^" (distance variant) stereo waves: the engine picks the near or far channel by the copy's OWN
 -- distance (crossfade 240 -> 1320 u). A copy at an opening 192 u away played the near wave of NPC
 -- gunfire 2400 u away. The copy is pushed out along its direction to the real source distance (at
@@ -184,7 +313,14 @@ function A.DistVariantPos(name, pos, L, S)
 	return L + (pos - L) * (want / d)
 end
 
-local function emitVoice(data, v, L, src, copies, slot, play)
+--- Emits one voice. life: seconds the sound plays (pitch included; UNKNOWN_CAP while its length is
+-- unknown, ukey then the key of its file); follow: it is to be followed; idx: its source entity (the
+-- copy is registered for the stop rules). Returns false when nothing was emitted, else a handle:
+-- { id = native voice } or { a = anchor, seq = emission number on it, chan } (both followable), or
+-- { pos } (a copy at a fixed position); each with t0 / tEnd (start, expected end), name (as played),
+-- orig (as asked), srcChan (the sound's own channel).
+local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
+	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
 	-- (a sentence is a sequence of words played by the engine: never by the module)
 	if A.Native and A.Native.render and not A.IsSentence(data.SoundName) then
@@ -204,8 +340,10 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, trans = v.kind == "transmission", noRoom = true })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
-			if copies then copies.native[#copies.native + 1] = { id, data.SoundName } end
-			return { id = id, t0 = RealTime() + delay }
+			local t0 = RealTime() + delay
+			local h = { id = id, t0 = t0, tEnd = t0 + life, ukey = ukey, pitch = pitch, name = data.SoundName, orig = orig, srcChan = srcChan }
+			register(idx, h)
+			return h
 		end
 	end
 	local lvl = data.SoundLevel
@@ -219,34 +357,42 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 	if dsp == 0 or ((A.cfg.keep_dsp or 1) >= 0.5 and (data.DSP or 0) ~= 0) then dsp = data.DSP or 0 end
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
 	local delay = voiceDelay(v, L)
-	local name, pos, pitch = data.SoundName, v.epos, data.Pitch or 100
+	local name, pos = data.SoundName, v.epos
 	-- a muffled "#" (dry mix) sound: the engine would skip the preset, the sound would stay clear
 	if dsp ~= 0 then name = A.WithoutDryMix(name) end
 	local sentence = A.IsSentence(name)
-	-- a sentence plays at a position (EmitSentence): no anchor, so not followed
+	local t0 = RealTime() + (delay >= 0.02 and delay or 0)
+	local tEnd = t0 + life
+	-- a sentence plays at a position (EmitSentence): no anchor, so not followed nor stopped by name
 	local anchor = not sentence and copies and anchorFor(copies, slot or 1)
-	-- a followed copy on an unassigned channel gets an anchor of its own (CHAN_AUTO, as before)
-	if not anchor and not sentence and not copies and play then anchor = poolAnchor(RealTime() + delay + play) end
+	-- a copy without a copy set (unassigned channel) gets an anchor of the pool (CHAN_AUTO, as before)
+	-- when it is followed or has an entity whose StopSound or removal must reach it
+	if not anchor and not sentence and not copies and (follow or idx) then anchor = poolAnchor(tEnd) end
 	local chan = copies and copies.chan or CHAN_AUTO
-	local h = {}
+	local h = { t0 = t0, tEnd = tEnd, ukey = ukey, pitch = pitch, name = name, orig = orig, srcChan = srcChan }
 	if anchor then
 		h.seq = (anchor.pbaSeqNext or 0) + 1
-		anchor.pbaSeqNext = h.seq
-		h.a, h.chan, h.dsp, h.pool = anchor, chan, dsp, not copies
-		h.name = name -- the name it plays (a muffled "#" sound drops its "#"): its later SND_CHANGE_VOL use it
+		anchor.pbaSeqNext, anchor.pbaEnd = h.seq, tEnd
+		h.a, h.chan, h.dsp = anchor, chan, dsp
+		-- (h.name: the name it plays, a muffled "#" sound without its "#": its later SND_CHANGE_VOL use it)
+	else
+		h.pos, h.lvl = pos, lvl
 	end
-	h.t0 = RealTime() + (delay >= 0.02 and delay or 0)
 	local function emit()
+		-- stopped during its propagation delay (StopSound, new sound on the channel): never starts
+		if h.cancelled then return end
 		if anchor then
-			if not IsValid(anchor) then return end
+			-- the anchor was given to another copy meanwhile
+			if not IsValid(anchor) or anchor.pbaSeqNext ~= h.seq then return end
 			anchor:SetPos(pos)
 			anchor.pbaName, anchor.pbaSeq = name, h.seq
 			A.Emit(anchor.EmitSound, anchor, name, lvl, pitch, vol, chan, flags, dsp)
-			h.started = true
 		else
 			A.EmitAt(name, pos, -1, CHAN_AUTO, vol, lvl, flags, pitch, dsp)
 		end
+		h.started = true
 	end
+	register(idx, h)
 	if delay >= 0.02 then timer.Simple(delay, emit) else emit() end
 	v.vol, v.dsp = vol, dsp
 	return h
@@ -261,7 +407,10 @@ end
 -- not split nor start midway: P.FollowAssign maps the new voices onto the ones heard (extra voices
 -- fade out, extra paths add their power). Native voices: pba_native.Update. Engine copies: their
 -- anchor moves (the engine places a sound at its entity) and the volume changes by SND_CHANGE_VOL on
--- the same anchor, channel and name; the DSP preset of an engine sound cannot change mid-sound.
+-- the same anchor, channel and name. The DSP preset of an engine sound cannot change mid-sound, and
+-- a copy cannot be emitted again with another one: EmitSound and the module's Play start a sound
+-- from its first sample (Play's delay is clamped to 0..3 s, render.cpp), so a line muffled at its
+-- start and clear 1.5 s later would be heard twice. A copy keeps its preset, its level follows.
 -- Not followed in their last MIN_LEFT seconds, and no volume change then: a SND_CHANGE_VOL that no
 -- longer finds its sound starts it again (engine rule), so the margin covers a duration slightly off;
 -- only .wav durations are trusted for it (SoundDuration of compressed files can be off).
@@ -279,18 +428,6 @@ local function anchorAlive(fv, name)
 	return IsValid(a) and a.pbaSeq == fv.seq and a.pbaName == name
 end
 
-local function freePool(fv)
-	if not fv.pool then return end
-	for _, pa in ipairs(OS.pool) do if pa.ent == fv.a then pa.busy = 0 end end
-end
-
-local function stopAnchor(fv, name)
-	if not anchorAlive(fv, name) then return end
-	fv.a:StopSound(name)
-	fv.a.pbaName = nil
-	freePool(fv)
-end
-
 --- Ends the following of rec: its voices play on as they are, except those fading out (stopped).
 local function dropRec(rec)
 	for _, fv in ipairs(rec.voices) do
@@ -304,7 +441,7 @@ local function dropRec(rec)
 				A.Native.follow[fv.id] = fv.nfollow -- clear sight of an entity: back to the per-frame follower
 			end
 		elseif fv.fading then
-			stopAnchor(fv, fv.name or rec.name)
+			stopCopy(fv) -- its anchor freed, its registry entry ended
 		end
 	end
 end
@@ -348,6 +485,7 @@ local function evaluate(rec, now, L)
 	for i, fv in ipairs(live) do
 		local t = targets[i]
 		if t then
+			fv.sh = t.sh or false -- its new path's baked field (none: straight line to its position)
 			P.RampTo(fv.ramp, now, dur, L, targetValues(rec, fv, t, L))
 		else
 			-- no path left for this voice: it fades out over the interval, then stops
@@ -368,6 +506,7 @@ local function followClear(rec, L)
 	local d = S:Distance(L)
 	for _, fv in ipairs(rec.voices) do
 		if not fv.fading and not fv.dead and fv.ramp.to then
+			fv.sh = false -- clear sight: straight from the source
 			A.Paths.Retarget(fv.ramp, targetValues(rec, fv, { pos = S, gain = AC.EngineGain(math.max(d, 1), rec.lvl), lp = 0, len = d }, L))
 			return -- the dominant one; the others fade out
 		end
@@ -378,7 +517,13 @@ local function applyVoice(rec, fv, now, L)
 	local g, e1, e2, e3, pos, pitch = A.Paths.RampAt(fv.ramp, now, L)
 	fv.pos = pos
 	if fv.id then
-		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch) then fv.dead = true return end -- sends kept
+		-- baked path field (native_path_fx): a voice played along its path kept its Play-time arrival
+		-- direction while the listener walked round the corner. Sent when it changes (a table: along the
+		-- new path; false: straight line at pos; nil: kept); diffuse and send (args 8, 9) nil: kept.
+		local want = (A.cfg.native_path_fx or 0) >= 0.5 and fv.sh or false
+		local sh = nil
+		if want ~= fv.shSent then sh, fv.shSent = want, want end
+		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch, nil, nil, sh) then fv.dead = true return end
 	else
 		local a = fv.a
 		a:SetPos(pos)
@@ -395,15 +540,16 @@ local function applyVoice(rec, fv, now, L)
 			pba_native.StopVoice(fv.id)
 			OS.native[fv.id] = nil
 		else
-			stopAnchor(fv, fv.name or rec.name)
+			stopCopy(fv) -- its anchor freed, its registry entry ended
 		end
 		fv.dead = true
 	end
 end
 
 --- Starts following a one-shot just emitted. list: { { h = handle from emitVoice, v = voice } } in
--- emission order (the dominant first); play: seconds it plays; r: the evaluation it was emitted with.
-function OS.Add(data, src, S, L, r, list, play)
+-- emission order (the dominant first); play: seconds it plays; r: the evaluation it was emitted with;
+-- ukey: key of its file while its length is unknown (play is then UNKNOWN_CAP, see playLength).
+function OS.Add(data, src, S, L, r, list, play, ukey)
 	local now = RealTime()
 	local tEnd = 0
 	for _, e in ipairs(list) do tEnd = math.max(tEnd, e.h.t0 + play) end
@@ -415,8 +561,9 @@ function OS.Add(data, src, S, L, r, list, play)
 	local name = data.SoundName
 	local rec = { key = OS.seq, name = name, ent = ent, dirEnt = IsValid(src) and src or nil, S = S, lvl = data.SoundLevel or 75,
 		vol = data.Volume or 1, pitch = data.Pitch or 100, tEnd = tEnd, tNext = now + followInterval(), hyst = {},
-		clearPath = r.clear or not r.voices or #r.voices == 0,
-		wav = string.lower(string.GetExtensionFromFilename(name) or "") == "wav", voices = {} }
+		clearPath = r.clear or not r.voices or #r.voices == 0, ukey = ukey,
+		-- volume changes need a trusted end (see MIN_LEFT): never for a sound of unknown length
+		wav = not ukey and string.lower(string.GetExtensionFromFilename(name) or "") == "wav", voices = {} }
 	A.Paths.Stable(rec.hyst, r) -- the hysteresis starts from what was emitted
 	local N = A.Native
 	for _, e in ipairs(list) do
@@ -426,6 +573,9 @@ function OS.Add(data, src, S, L, r, list, play)
 			local el, em, eh = N.VoiceEQ(v.lp, v.len)
 			A.Paths.RampTo(fv.ramp, now, 0, L, v.vol * A.cfg.native_gain, el, em, eh, v.pos, rec.pitch)
 			OS.native[fv.id] = fv
+			-- the path field it was played with (PlayVoice passes it only with native_path_fx)
+			fv.sh = v.sh or false
+			fv.shSent = (A.cfg.native_path_fx or 0) >= 0.5 and fv.sh or false
 			-- a clear voice bound to its entity (N.follow): driven from here now
 			if N.follow and N.follow[fv.id] then fv.nfollow, N.follow[fv.id] = N.follow[fv.id], nil end
 		else
@@ -453,6 +603,8 @@ hook.Add("Think", "pba_oneshots", A.PerfTimed("oneshots", function()
 		local alive = 0
 		for j = #rec.voices, 1, -1 do
 			local fv = rec.voices[j]
+			-- stopped by a copy rule (StopSound, new sound on its channel, entity removed): never driven again
+			if fv.cancelled then fv.dead = true end
 			if not fv.dead and fv.a then
 				-- an anchor whose copy was cut (new sound on its channel, StopSound) or never started
 				if fv.started then
@@ -491,6 +643,11 @@ function A.Process(data, relayed)
 	local L, ang = listenerPos()
 	local S = data.Pos
 	if not L or not S then return false end
+	-- a new sound on a replacing channel cuts the earlier copies of that channel, even when this one
+	-- is left to the engine (clear sight, too far): an NPC's new line heard in clear sight played over
+	-- its previous line still coming through the doorway
+	local idx = sourceIndex(data)
+	local copies = beginCopies(data, idx)
 	local lvl = data.SoundLevel or 75
 	if S:Distance(L) > A.cfg.lod_dist then return false end
 	local t0 = SysTime()
@@ -512,10 +669,14 @@ function A.Process(data, relayed)
 				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
+				local play, ukey = playLength(data.SoundName, data.Pitch)
+				local t0 = RealTime() + delay
+				local h = { id = id, t0 = t0, tEnd = t0 + play, ukey = ukey, pitch = data.Pitch or 100, name = data.SoundName,
+					orig = data.SoundName, srcChan = data.Channel or CHAN_AUTO }
+				register(idx, h)
 				-- followed while it plays: walking behind a wall must muffle it too
-				local play = math.max(A.SoundDuration(data.SoundName) or 0.5, 0.1) * 100 / math.max(data.Pitch or 100, 1)
 				if OS.Wanted(play) then
-					OS.Add(data, src, S, L, r, { { h = { id = id, t0 = RealTime() + delay }, v = { pos = S, vol = g, lp = 0, len = d } } }, play)
+					OS.Add(data, src, S, L, r, { { h = h, v = { pos = S, vol = g, lp = 0, len = d } } }, play, ukey)
 				end
 				return true
 			end
@@ -524,26 +685,26 @@ function A.Process(data, relayed)
 		return false
 	end
 	local now = RealTime()
-	local dur = math.max(A.SoundDuration(data.SoundName) or 0.5, 0.1)
 	local budget = A.cfg.max_active - activeCount(now)
-	local copies = beginCopies(data)
 	local emitted = 0
 	-- seconds it plays (pitch included): followed while it plays when long enough
-	local play = dur * 100 / math.max(data.Pitch or 100, 1)
+	local play, ukey = playLength(data.SoundName, data.Pitch)
+	-- voice budget: a sound of unknown length counts as one of max_duration (it may be a short VBR mp3)
+	local busy = ukey and math.min(play, A.cfg.max_duration or 10) or play
 	local follow = OS.Wanted(play) and {} or nil
 	for i, v in ipairs(r.voices) do
 		if i > 1 and emitted >= budget then A.stats.dropped = A.stats.dropped + 1 break end
-		local h = emitVoice(data, v, L, IsValid(src) and src or nil, copies, i, follow and play)
+		local h = emitVoice(data, v, L, IsValid(src) and src or nil, copies, i, play, ukey, follow ~= nil, idx)
 		if h then
 			emitted = emitted + 1
-			A.active[#A.active + 1] = now + dur
+			A.active[#A.active + 1] = now + busy
 			-- every voice must be drivable (a copy at a fixed position cannot move): else none is
 			if follow then
 				if h.id or h.a then follow[#follow + 1] = { h = h, v = v } else follow = nil end
 			end
 		end
 	end
-	if follow and #follow > 0 then OS.Add(data, src, S, L, r, follow, play) end
+	if follow and #follow > 0 then OS.Add(data, src, S, L, r, follow, play, ukey) end
 	A.stats.processed = A.stats.processed + 1
 	-- per-frame cost accounting (dev / perf campaign)
 	local ms = (SysTime() - t0) * 1000
