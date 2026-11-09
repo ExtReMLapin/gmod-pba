@@ -207,6 +207,9 @@ steps = [
     ("field_continuity noportal", lambda: (load("pba_noportal"), job("client", "field_continuity.lua", 300))[1]),
     # copies of one probe route counted once (report only: field and k-path, new vs former criterion)
     ("probe_dedupe gm_construct", lambda: (load("gm_construct"), job("client", "probe_dedupe.lua", 600))[1]),
+    # cases reported on rp_downtown: a radio upstairs heard through the ceiling (loudest voice first), and
+    # behind a pillar of the same room (probes off the floor, no doubled vertex: the route hugs the corner)
+    ("downtown_cases rp_downtown", lambda: (load("rp_downtown_v4c_v2"), job("client", "downtown_cases.lua", 400))[1]),
     # what a player can hear: level steps > 1 dB (JND) and
     # direction jumps when the source or the listener walks 16 u steps, level(S, L) vs level(L, S).
     # Limits None (report only) until the first in-game baseline; --check fails on too few walks.

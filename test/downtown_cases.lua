@@ -1,0 +1,46 @@
+-- Two cases reported on rp_downtown_v4c_v2 (a radio in the brick building's upper room), client lua_job:
+--  * ceiling: the radio on the floor above the listener. The ceiling (25 dB) brings 20 dB more than the
+--    stairwell route; a sound played on one channel (a stream, a loop mirror) takes voices[1], which was
+--    the stairwell because the transmission voice was always appended last. Expect the transmission first.
+--  * pillar: the radio behind a pillar of the same room. The probe route kept the grid's staircase (487 u
+--    for 325 straight, 265 degrees of bends, 14 dB, lp 3): probes 4 u above the floor made every fat trace
+--    start in solid, and a doubled last vertex blocked the tightening. Expect a route hugging the pillar's
+--    corner: close to the straight line, a few dB, lp <= 1.
+-- Returns { pass, ceiling = {...}, pillar = {...} }.
+if game.GetMap() ~= "rp_downtown_v4c_v2" then return { pass = false, err = "needs rp_downtown_v4c_v2" } end
+local A = pba
+-- the probe graph (built in the background on a first visit)
+job:wait(function() return A.Probes.current ~= nil and A.Probes.building == nil end, 300)
+A.Paths.InvalidateCache()
+local function compute(S, L)
+	local r
+	for _ = 1, 100 do
+		r = A.Paths.Compute(S, L, 75)
+		if not r.provisional then break end
+		job:sleep(0.1)
+	end
+	return r
+end
+local function voices(r)
+	local out = {}
+	for _, v in ipairs(r.voices or {}) do out[#out + 1] = { kind = v.kind, level = math.Round(v.level, 1), lp = v.lp } end
+	return out
+end
+
+local radio = Vector(-2120.334, -6872.2, -59.48)
+
+local c = compute(radio, Vector(-1967.958, -6921.166, -134.969))
+local cv = voices(c)
+local ceilingOk = cv[1] ~= nil and cv[1].kind == "transmission"
+for i = 2, #cv do if cv[i].level > cv[1].level + 1e-6 then ceilingOk = false end end
+
+local Lp = Vector(-1811.383, -6956.931, -3.969)
+local p = compute(radio, Lp)
+local path = p.paths and p.paths[1]
+local pillar = path and {
+	length = math.Round(path.length), direct = math.Round(radio:Distance(Lp)), bend = math.Round(path.bendDeg or 0),
+	diffDb = math.Round(path.diffDb or 0, 1), lp = path.lp, voices = voices(p) } or { none = true }
+local pillarOk = path ~= nil and path.length <= radio:Distance(Lp) * 1.15 and (path.bendDeg or 0) <= 60
+	and (path.diffDb or 99) <= 6 and (path.lp or 4) <= 1
+
+return { pass = ceilingOk and pillarOk, ceiling = { ok = ceilingOk, voices = cv }, pillar = { ok = pillarOk, path = pillar } }

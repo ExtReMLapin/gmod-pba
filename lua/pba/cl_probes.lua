@@ -10,7 +10,7 @@ local A = pba
 local PR = {}
 A.Probes = PR
 
-local CACHE_VERSION = 8 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways
+local CACHE_VERSION = 9 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways; 9: probes kept off floors
 local MAX_PROBES = 30000
 local DIRS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 
@@ -130,6 +130,28 @@ local function validCell(c, s)
 	return tr.Hit and not tr.StartSolid
 end
 
+-- A probe hugging a floor or a ceiling (a cell centre 4 u above the floor on rp_downtown) makes every fat
+-- trace from it start in solid: no route through it is ever tightened, sounds keep the grid's staircase
+-- (a radio round a pillar of the same room: 487 u, 265 degrees of bends, 14 dB). Moved CLEAR units off
+-- the surface, along z only, never through it.
+local CLEAR = 12
+local function offSurfaces(c)
+	local dn = util.TraceLine({ start = c, endpos = c - Vector(0, 0, CLEAR), mask = MASK_SOLID_BRUSHONLY, filter = worldOnly })
+	if dn.Hit and not dn.StartSolid then
+		local q = dn.HitPos + Vector(0, 0, CLEAR)
+		local up = util.TraceLine({ start = c, endpos = q, mask = MASK_SOLID_BRUSHONLY, filter = worldOnly })
+		if not up.Hit then c = q end
+	end
+	local up = util.TraceLine({ start = c, endpos = c + Vector(0, 0, CLEAR), mask = MASK_SOLID_BRUSHONLY, filter = worldOnly })
+	if up.Hit and not up.StartSolid then
+		local q = up.HitPos - Vector(0, 0, CLEAR)
+		local dn2 = util.TraceLine({ start = c, endpos = q, mask = MASK_SOLID_BRUSHONLY, filter = worldOnly })
+		if not dn2.Hit then c = q end
+	end
+	return c
+end
+PR.OffSurfaces = offSurfaces
+
 --- When the straight link between two neighbour cells is blocked, look for a passage
 -- (doorway, window) through their shared face: sample it every 16 units; a point q links
 -- the cells if it is not solid and both half-segments are clear. Returns q or nil.
@@ -164,7 +186,7 @@ function PR.BuildCo(seeds, s, budgetFn)
 		local c, o
 		for oi = 1, #OFFSETS do
 			local q = cellPoint(i, j, k, s, oi)
-			if validCell(q, s) then c, o = q, oi break end
+			if validCell(q, s) then c, o = offSurfaces(q), oi break end
 		end
 		if not c then index[kk] = false return end
 		local n = { i = i, j = j, k = k, o = o, pos = c, nb = {} }
@@ -206,8 +228,8 @@ end
 
 -- Cache format (text; util.JSONToTable silently truncates arrays at 15000 elements):
 --   line 1: JSON header { v, hash, spacing, truncated, count }
---   then one line per probe: "i j k o|nb nb x:y:z@nb ..." (o = offset of the probe in its cell;
---   neighbour ids, "@" = via waypoint)
+--   then one line per probe: "i j k o[:dz]|nb nb x:y:z@nb ..." (o = offset of the probe in its cell,
+--   dz = its move off a floor or ceiling; neighbour ids, "@" = via waypoint)
 function PR.Serialize(g, hash)
 	local out = { util.TableToJSON({ v = CACHE_VERSION, hash = hash, spacing = g.spacing, truncated = g.truncated, count = #g.nodes }) }
 	for _, n in ipairs(g.nodes) do
@@ -217,7 +239,9 @@ function PR.Serialize(g, hash)
 			else nb[#nb + 1] = string.format("%d@%.1f:%.1f:%.1f", id, q.x, q.y, q.z) end
 		end
 		table.sort(nb)
-		out[#out + 1] = n.i .. " " .. n.j .. " " .. n.k .. " " .. (n.o or 1) .. "|" .. table.concat(nb, " ")
+		local dz = n.pos.z - cellPoint(n.i, n.j, n.k, g.spacing, n.o or 1).z
+		local o = (n.o or 1) .. (math.abs(dz) > 0.05 and string.format(":%.1f", dz) or "")
+		out[#out + 1] = n.i .. " " .. n.j .. " " .. n.k .. " " .. o .. "|" .. table.concat(nb, " ")
 	end
 	return table.concat(out, "\n")
 end
@@ -232,10 +256,12 @@ function PR.Deserialize(text, hash)
 	local id = 0
 	for line in string.gmatch(string.sub(text, (nl or #text) + 1), "[^\n]+") do
 		id = id + 1
-		local i, j, k, o, rest = string.match(line, "^(%-?%d+) (%-?%d+) (%-?%d+) (%d+)|(.*)$")
+		local i, j, k, o, dz, rest = string.match(line, "^(%-?%d+) (%-?%d+) (%-?%d+) (%d+):?(%-?[%d%.]*)|(.*)$")
 		i, j, k, o = tonumber(i), tonumber(j), tonumber(k), tonumber(o)
 		if not o or not OFFSETS[o] then return nil end
-		local n = { id = id, i = i, j = j, k = k, o = o, pos = cellPoint(i, j, k, s, o), nb = {} }
+		local pos = cellPoint(i, j, k, s, o)
+		if dz and dz ~= "" then pos.z = pos.z + tonumber(dz) end
+		local n = { id = id, i = i, j = j, k = k, o = o, pos = pos, nb = {} }
 		for tok in string.gmatch(rest or "", "%S+") do
 			local nid, x, y, z = string.match(tok, "^(%d+)@(%-?[%d%.]+):(%-?[%d%.]+):(%-?[%d%.]+)$")
 			if nid then n.nb[tonumber(nid)] = Vector(tonumber(x), tonumber(y), tonumber(z))
@@ -762,9 +788,15 @@ local function attach(inner, S, L)
 	local i, j = 1, #inner
 	while i < j and i < 8 and clearFat(S, inner[i + 1]) do i = i + 1 end
 	while j > i and #inner - j < 8 and clearFat(L, inner[j - 1]) do j = j - 1 end
+	-- consecutive copies of a vertex (a route ending on the probe it started from) are one vertex: a
+	-- copy made a zero-length segment that every tightening step tested from a probe touching a wall,
+	-- so the route kept the grid's staircase (rp_downtown: a radio round a pillar of the same room)
 	local pulled = { S }
-	for x = i, j do pulled[#pulled + 1] = inner[x] end
-	pulled[#pulled + 1] = L
+	for x = i, j do
+		local v = inner[x]
+		if v:DistToSqr(pulled[#pulled]) > 0.01 then pulled[#pulled + 1] = v end
+	end
+	if L:DistToSqr(pulled[#pulled]) > 0.01 then pulled[#pulled + 1] = L end
 	pulled = tighten(pulled)
 	if #memo >= 8 then table.remove(memo, 1) end
 	memo[#memo + 1] = { sx, sy, sz, lx, ly, lz, pulled }
