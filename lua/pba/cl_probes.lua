@@ -15,6 +15,8 @@
 -- aborts. Measured on rp_downtown_v4c_v2 (2026-11-09): one route 45 ms compiled, 7.8 interpreted;
 -- BuildFieldNow x5 55 -> 15 ms; a column scan unchanged. Same results: the interpreter and the
 -- compiled code compute the same doubles.
+-- The pure-number loops (the field's Dijkstra, the link tests of the door / portal costs) are kernels in
+-- cl_probes_kernels.lua, which LuaJIT compiles: they call no engine function (field 2.4 -> 0.85 ms offline).
 if jit and jit.off then jit.off(true, true) end
 
 local A = pba
@@ -1027,25 +1029,6 @@ end
 local LINK_DOOR_PAD = 4 -- P.SegmentDoorLoss's hull: a link within it of a leaf goes through that leaf
 local DOOR_CLASS_LIST = { "prop_door_rotating", "func_door", "func_door_rotating" }
 
--- segment a-b meets the box (mn, mx) grown by pad
-local function segBoxHit(a, b, mn, mx, pad)
-	local t0, t1 = 0, 1
-	for _, k in ipairs({ "x", "y", "z" }) do
-		local lo, hi = mn[k] - pad, mx[k] + pad
-		local d = b[k] - a[k]
-		if abs(d) < 1e-9 then
-			if a[k] < lo or a[k] > hi then return false end
-		else
-			local u, v = (lo - a[k]) / d, (hi - a[k]) / d
-			if u > v then u, v = v, u end
-			if u > t0 then t0 = u end
-			if v < t1 then t1 = v end
-			if t0 > t1 then return false end
-		end
-	end
-	return true
-end
-
 -- segment a-b passes within R of c
 local function segSphereHit(a, b, c, R)
 	local ab = b - a
@@ -1074,6 +1057,30 @@ local function segPortalHit(a, b, p)
 	return true
 end
 
+-- The probes' and gap points' coordinates as flat numbers for the link kernels, once per graph (kept in
+-- g.adj, so a new adj gets new ones): via[e] = 0 for a straight link, else the index of its gap point in
+-- qx, qy, qz. oe, oid, ocl: the kernel's output arrays, reused.
+local function linkGeo(g, adj)
+	local geo = adj.geo
+	if geo then return geo end
+	local first, nid, nodes = adj.first, adj.nid, g.nodes
+	local px, py, pz, via, qx, qy, qz, q = {}, {}, {}, {}, {}, {}, {}, 0
+	for id, n in ipairs(nodes) do
+		px[id], py[id], pz[id] = n.pos:Unpack()
+		for e = first[id], first[id + 1] - 1 do
+			local v = n.nb[nid[e]]
+			if v == true then via[e] = 0
+			else
+				q = q + 1
+				via[e], qx[q], qy[q], qz[q] = q, v:Unpack()
+			end
+		end
+	end
+	geo = { px = px, py = py, pz = pz, via = via, qx = qx, qy = qy, qz = qz, oe = {}, oid = {}, ocl = {} }
+	adj.geo = geo
+	return geo
+end
+
 -- The links each door or portal can touch, once per graph and set of doors: g.linkPortals[e] = portals
 -- whose opening link e crosses; g.linkDoors[e] = { a, via, b, ents } for the doors (not owned by a portal)
 -- whose swing sphere link e passes; e = index in g.adj (each undirected link twice, once per direction).
@@ -1091,26 +1098,23 @@ local function linkCands(g, yield)
 	if g.linkDoors and g.linkCandsSig == sig then return end
 	local adj = g.adj or PR.Prepare(g)
 	local first, nid, nodes = adj.first, adj.nid, g.nodes
-	local s = g.spacing
-	-- every link of a probe within R + s of c (by columns): fn(e, a, via, b)
-	local function segsNear(c, R, fn)
-		local ci, cj = floor(c.x / s), floor(c.y / s)
-		local r = math.ceil((R + s) / s)
-		for di = -r, r do for dj = -r, r do
-			local list = g.cols[colKey(ci + di, cj + dj)]
-			if list then
-				for _, id in ipairs(list) do
-					local n = nodes[id]
-					if abs(n.pos.z - c.z) <= R + s then
-						for e = first[id], first[id + 1] - 1 do
-							local m = nodes[nid[e]]
-							local via = n.nb[m.id]
-							fn(e, n.pos, via ~= true and via or nil, m.pos)
-						end
-					end
-				end
-			end
-		end end
+	local geo = linkGeo(g, adj)
+	local nearLinks = A.ProbeKernels.NearLinks
+	local oe, oid, ocl = geo.oe, geo.oid, geo.ocl
+	-- every link of a probe within R + s of c (by columns) that may touch the door sphere (mode 1) or the
+	-- portal plane (mode 2), from the compiled kernel: fn(e, a, via, b, sure) for each, sure when it surely does
+	local function segsNear(mode, c, R, nrm, fn)
+		local nx, ny, nz = 0, 0, 0
+		if nrm then nx, ny, nz = nrm:Unpack() end
+		local cx, cy, cz = c:Unpack()
+		local cnt = nearLinks(g.cols, first, nid, geo.px, geo.py, geo.pz, geo.via, geo.qx, geo.qy, geo.qz, g.spacing,
+			mode, cx, cy, cz, R, nx, ny, nz, oe, oid, ocl)
+		for x = 1, cnt do
+			local e, n = oe[x], nodes[oid[x]]
+			local m = nodes[nid[e]]
+			local via = n.nb[m.id]
+			fn(e, n.pos, via ~= true and via or nil, m.pos, ocl[x] == 1)
+		end
 	end
 	local linkDoors, linkPortals, owned = {}, {}, {}
 	local ag = g.area
@@ -1121,7 +1125,7 @@ local function linkCands(g, yield)
 			end
 		end
 		if yield then yield() end
-		segsNear(p.center, p.radius or 64, function(e, a, via, b)
+		segsNear(2, p.center, p.radius or 64, p.normal, function(e, a, via, b)
 			if segPortalHit(a, via or b, p) or (via and segPortalHit(via, b, p)) then
 				local l = linkPortals[e]
 				if not l then l = {} linkPortals[e] = l end
@@ -1134,10 +1138,17 @@ local function linkCands(g, yield)
 			local mn, mx = d:WorldSpaceAABB()
 			local c, R = (mn + mx) * 0.5, mn:Distance(mx) * 1.5 + LINK_DOOR_PAD -- the leaf wherever it swings
 			if yield then yield() end
-			segsNear(c, R, function(e, a, via, b)
-				if segSphereHit(a, via or b, c, R) or (via and segSphereHit(via, b, c, R)) then
+			segsNear(1, c, R, nil, function(e, a, via, b, sure)
+				if sure or segSphereHit(a, via or b, c, R) or (via and segSphereHit(via, b, c, R)) then
 					local l = linkDoors[e]
-					if not l then l = { a = a, via = via, b = b, ents = {} } linkDoors[e] = l end
+					if not l then
+						-- the link's points as numbers too, for the box tests of PR.LinkCosts
+						l = { a = a, via = via, b = b, ents = {} }
+						l.ax, l.ay, l.az = a:Unpack()
+						l.bx, l.by, l.bz = b:Unpack()
+						if via then l.vx, l.vy, l.vz = via:Unpack() end
+						linkDoors[e] = l
+					end
 					l.ents[#l.ents + 1] = d
 				end
 			end)
@@ -1180,18 +1191,38 @@ function PR.LinkCosts(g, yield)
 	local closedDef = cfg.door_closed_db or 28
 	local db = {}
 	local D = A.Doors
+	-- each door read once (engine calls) instead of once per link it is on: false when open or gone, else
+	-- its box as numbers and its loss in dB (a gain in dB, <= 0)
+	local doorInfo = {}
+	local segBox = A.ProbeKernels.SegBoxHit
+	local pad = LINK_DOOR_PAD
 	for e, l in pairs(g.linkDoors) do
 		local d = 0
 		for _, ent in ipairs(l.ents) do
-			if IsValid(ent) then
-				local st = D and D.byEnt and D.byEnt[ent:EntIndex()]
-				local frac = st and st.frac or 0 -- no state yet: shut, as the straight line's model takes it
-				if frac < 1 then
-					local mn, mx = ent:WorldSpaceAABB()
-					if segBoxHit(l.a, l.via or l.b, mn, mx, LINK_DOOR_PAD) or (l.via and segBoxHit(l.via, l.b, mn, mx, LINK_DOOR_PAD)) then
-						d = d - AC.GainToDb(AC.DoorGain(frac, AC.LeafDb(st and st.closedDb or closedDef, cfg)))
+			local di = doorInfo[ent]
+			if di == nil then
+				di = false
+				if IsValid(ent) then
+					local st = D and D.byEnt and D.byEnt[ent:EntIndex()]
+					local frac = st and st.frac or 0 -- no state yet: shut, as the straight line's model takes it
+					if frac < 1 then
+						local mn, mx = ent:WorldSpaceAABB()
+						di = { AC.GainToDb(AC.DoorGain(frac, AC.LeafDb(st and st.closedDb or closedDef, cfg))), mn:Unpack() }
+						di[5], di[6], di[7] = mx:Unpack()
 					end
 				end
+				doorInfo[ent] = di
+			end
+			if di then
+				local mnx, mny, mnz, mxx, mxy, mxz = di[2], di[3], di[4], di[5], di[6], di[7]
+				local hit
+				if l.vx then
+					hit = segBox(l.ax, l.ay, l.az, l.vx, l.vy, l.vz, mnx, mny, mnz, mxx, mxy, mxz, pad)
+						or segBox(l.vx, l.vy, l.vz, l.bx, l.by, l.bz, mnx, mny, mnz, mxx, mxy, mxz, pad)
+				else
+					hit = segBox(l.ax, l.ay, l.az, l.bx, l.by, l.bz, mnx, mny, mnz, mxx, mxy, mxz, pad)
+				end
+				if hit then d = d - di[1] end
 			end
 		end
 		if d > 0 then db[e] = d end
@@ -1230,6 +1261,7 @@ local FIELD_SEEDS, FIELD_REACH = 8, 3
 -- relaxation towards a probe already popped, is ruled out by the key / cost comparison itself.
 -- `reuse`: a field no longer used (the one just replaced), whose tables are cleared and filled again
 -- instead of growing new ones (three tables of 22 000 entries: ~0.7 MB of garbage per build).
+local denseCosts = setmetatable({}, { __mode = "k" }) -- costs table -> K.DenseCosts array
 function PR.BuildField(g, L, yield, reuse, costs, seedList)
 	local cost, nxt, root = {}, {}, {}
 	if reuse and reuse.g == g and reuse.root then
@@ -1254,24 +1286,23 @@ function PR.BuildField(g, L, yield, reuse, costs, seedList)
 		f.seeds[#f.seeds + 1] = s.id
 		n = hpush(hk, hv, n, c, s.id)
 	end
-	local k = 0
-	while n > 0 do
-		local best, key
-		best, key, n = hpop(hk, hv, n)
-		if key == cost[best] then
-			k = k + 1
-			if yield and k % 64 == 0 then yield() end
-			local rb = root[best]
-			for e = first[best], first[best + 1] - 1 do
-				local id, c = nid[e], key + elen[e]
-				if extra then c = c + (extra[e] or 0) end
-				local ci = cost[id]
-				if not ci or c < ci then
-					cost[id], nxt[id], root[id] = c, best, rb
-					n = hpush(hk, hv, n, c, id)
-				end
-			end
+	-- the search itself is a compiled kernel (cl_probes_kernels.lua), by slices of 64 settled probes when
+	-- sliced (the yield is a coroutine's: not in compiled code)
+	local K = A.ProbeKernels
+	local dijkstra = K.Dijkstra
+	if extra then
+		-- the costs as an array, made once per costs table (a costs table is not changed once made)
+		local d = denseCosts[extra]
+		if not d then d = K.DenseCosts(extra, #nid) denseCosts[extra] = d end
+		extra = d
+	end
+	if yield then
+		while n > 0 do
+			n = dijkstra(first, nid, elen, extra, cost, nxt, root, hk, hv, n, 64)
+			if n > 0 then yield() end
 		end
+	else
+		dijkstra(first, nid, elen, extra, cost, nxt, root, hk, hv, n, math.huge)
 	end
 	return f
 end

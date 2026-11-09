@@ -17,7 +17,7 @@ from lupa import luajit21 as lj  # noqa: E402
 repo = sys.argv[1] if len(sys.argv) > 1 else os.path.abspath(os.path.join(HERE, "..", ".."))
 L = lj.LuaRuntime(unpack_returned_tuples=True)
 L.execute(open(os.path.join(HERE, "gmshim.lua"), encoding="utf-8").read())
-for f in ("sh_config.lua", "sh_bsp.lua", "sh_acoustics.lua", "sh_graph.lua", "sh_paths.lua", "sh_core.lua", "cl_probes.lua"):
+for f in ("sh_config.lua", "sh_bsp.lua", "sh_acoustics.lua", "sh_graph.lua", "sh_paths.lua", "sh_core.lua", "cl_probes_kernels.lua", "cl_probes.lua"):
     src = open(os.path.join(repo, "lua", "pba", f), encoding="utf-8").read()
     L.execute(src)
 runner = r"""
