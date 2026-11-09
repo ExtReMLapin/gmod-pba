@@ -20,6 +20,7 @@ local files = {
 	{ "pba/sv_loops.lua", "sv" },
 	{ "pba/cl_loops.lua", "cl" },
 	{ "pba/cl_streams.lua", "cl" },
+	{ "pba/cl_probes_kernels.lua", "cl" }, -- compiled kernels of cl_probes (which runs interpreted)
 	{ "pba/cl_probes.lua", "cl" },
 	{ "pba/cl_native.lua", "cl" },
 	{ "pba/cl_render.lua", "cl" },
