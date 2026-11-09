@@ -179,6 +179,23 @@ for name, c in pairs(A.CONFIG) do
 	end
 end
 
+-- Defaults that changed after a release: a saved value equal to the OLD default is the old default kept
+-- by the config file, not the player's choice: moved to the new one, once (a cookie remembers it, so a
+-- player who sets the old value again later keeps it).
+if CLIENT and cookie then
+	local MIGRATE = {
+		-- 1.0.x: 0.15 with the send following the direct gain; the send now follows the distance (1.1)
+		{ name = "native_reverb", old = 0.15, key = "pba_mig_native_reverb_v2" },
+	}
+	for _, m in ipairs(MIGRATE) do
+		local cv = A.cv[m.name]
+		if cv and cookie.GetNumber(m.key, 0) == 0 then
+			cookie.Set(m.key, "1")
+			if math.abs(cv:GetFloat() - m.old) < 1e-4 then RunConsoleCommand(cv:GetName(), tostring(A.CONFIG[m.name][1])) end
+		end
+	end
+end
+
 -- Change callbacks do not fire on the client for replicated convars: poll them.
 if CLIENT then
 	timer.Create("pba_cfgpoll", 0.5, 0, function()
