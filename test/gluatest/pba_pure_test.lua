@@ -1928,6 +1928,27 @@ local SUITE = {
 			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
 			if not ok then error(err, 0) end
 		end },
+		{ name = "EvalRoute: a vertex whose neighbours see each other is no corner (a walking source went 2-3 dB up and down with the copy kept, pba_demo)", func = function()
+			-- empty world: every thin trace clear; the route keeps a vertex 40 u off the straight line between
+			-- its neighbours (its hull grazed a wall)
+			local savedTL, savedTH, savedNT = util.TraceLine, util.TraceHull, A.cfg.native_traces
+			util.TraceLine = function(t)
+				local o = traceOut(t)
+				o.Hit, o.Fraction, o.StartSolid, o.HitPos = false, 1, false, t.endpos
+				return o
+			end
+			util.TraceHull = util.TraceLine
+			A.cfg.native_traces = 0
+			local ok, err = pcall(function()
+				local a, v, b, c = Vector(0, 0, 0), Vector(200, 40, 0), Vector(400, 0, 0), Vector(400, 300, 0)
+				local p = P.EvalRoute({ a, v, b, c }, CFG)
+				local q = P.EvalRoute({ a, b, c }, CFG)
+				expect(near(p.diffDb, q.diffDb, 1e-6)).to.beTrue()
+				expect(near(p.length, q.length, 1e-6)).to.beTrue()
+			end)
+			util.TraceLine, util.TraceHull, A.cfg.native_traces = savedTL, savedTH, savedNT
+			if not ok then error(err, 0) end
+		end },
 		{ name = "EvalPolyline: a segment through two shut doors in a row pays both (the trace stopped at the first: 15 dB too loud, pba_demo)", func = function()
 			-- pba_demo's corridor: doors #36 and #34, 176 u apart, both shut, one route segment through both
 			local boxes = { { Vector(-3646, 232, 0), Vector(-3634, 280.5, 108.5) }, { Vector(-3822, 232, 0), Vector(-3810, 280.5, 108.5) } }

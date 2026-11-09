@@ -1160,7 +1160,21 @@ function P.RefineCorners(pts, cfg)
 	cfg = cfg or A.cfg
 	local out = { pts[1] }
 	if (cfg.corner_refine or 1) >= 0.5 then
-		for i = 2, #pts - 1 do out[i] = P.CornerPoint(pts[i - 1], pts[i], pts[i + 1]) end
+		-- first the vertices that are no corner at all: kept by the tightening because its hull grazes a
+		-- wall where the thin line between their neighbours is clear. Left in, such a vertex bent the route
+		-- (a corner of 4 dB between two that see each other) whenever the copy of the route kept came from
+		-- that probe, and a walking source on pba_demo went 2-3 dB up and down every few steps
+		-- (path_perceptual). Pulled with the corners' own thin trace: from each kept vertex, the farthest
+		-- one it sees.
+		local kept, i = { pts[1] }, 1
+		while i < #pts do
+			local j = #pts
+			while j > i + 1 and not cornerClear(pts[i], pts[j]) do j = j - 1 end
+			kept[#kept + 1] = pts[j]
+			i = j
+		end
+		pts = kept
+		for x = 2, #pts - 1 do out[x] = P.CornerPoint(pts[x - 1], pts[x], pts[x + 1]) end
 	else
 		for i = 2, #pts - 1 do out[i] = pts[i] end
 	end
