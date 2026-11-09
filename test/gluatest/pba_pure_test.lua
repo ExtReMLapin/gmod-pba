@@ -202,6 +202,15 @@ local function withLeafScene(world, leaf, fn)
 		end
 		o.Hit, o.Fraction, o.Entity, o.StartSolid = f ~= nil, f or 1, ent, f == 0
 		o.HitPos = t.start + (t.endpos - t.start) * (f or 1)
+		if f == 0 and not ent then
+			-- started in the world: where it leaves it (P.Walls' exit face)
+			local left = 0
+			for _, w in ipairs(world) do
+				local t0, t1 = segBox(t.start, t.endpos, w[1], w[2])
+				if t0 == 0 then left = math.max(left, t1) end
+			end
+			o.FractionLeftSolid, o.AllSolid = left, left >= 1
+		end
 		return o
 	end
 	local D = pba.Doors
@@ -3014,9 +3023,10 @@ local SUITE = {
 						local p = P.EvalRoute(pts, cfg)
 						if #pts == 2 then
 							-- the straight line pays the leaf as this route of two points does: one model (a leaf beside
-							-- the line costing under 0.05 dB is left out of its walls: the line stays clear)
+							-- the line costing under 0.05 dB is left out of its walls: the line stays clear; a route
+							-- keeps no door gain, the line's leaf in power with what passes it may give a hair under 0)
 							local walls = P.LineLeaves(pts[1], pts[2], P.Walls(pts[1], pts[2], 6), cfg)
-							local line = #walls > 0 and P.EvalWalls(walls, cfg) or 0
+							local line = math.max(#walls > 0 and P.EvalWalls(walls, cfg) or 0, 0)
 							if math.abs(line - p.doorDb) > 0.06 then error(string.format("%.2f deg: line %.2f dB, route %.2f dB", th, line, p.doorDb)) end
 						end
 						return p.lossDb
@@ -3024,6 +3034,70 @@ local SUITE = {
 					if DEBUGDOOR then print("route", k, worst, at) end
 					expect(worst < 1.5).to.beTrue()
 				end
+			end)
+			util.GetSurfacePropName, A.cfg.door_3d = savedProp, saved3d
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Door in 3-D: the gap is measured continuously as the leaf turns (door_sweep_real's four listeners at pba_twodoors, the straight line, 0.1 degree steps to 15: was 1.4 dB per 0.1 degree, in steps where the leaf's edge passed a depth sample along the jamb)", func = function()
+			local leaf = leafEnt(9975, Vector(520, 100, 5), Vector(-4, -3, -4), Vector(4, 43, 106))
+			local cfg = setmetatable({ door_3d = 1 }, { __index = CFG })
+			local S = Vector(640, 120, 56)
+			-- doorway L0, beyond (L0 + n * 24), left and right (L0 -+ t * 24)
+			local Ls = { Vector(440, 120, 56), Vector(416, 120, 56), Vector(440, 144, 56), Vector(440, 96, 56) }
+			local angles = {}
+			for k = 5, 150 do angles[#angles + 1] = k * 0.1 end
+			local savedProp, saved3d = util.GetSurfacePropName, A.cfg.door_3d
+			util.GetSurfacePropName = util.GetSurfacePropName or function() return "default" end
+			A.cfg.door_3d = 1
+			local ok, err = pcall(withLeafScene, twoRoomsWorld(96, 144), leaf, function(st)
+				for k, L in ipairs(Ls) do
+					local worst, at = worstStep(angles, function(th)
+						leaf.yaw, st.frac = th, th / 90
+						local walls = P.LineLeaves(S, L, P.Walls(S, L, 6), cfg)
+						return #walls > 0 and P.EvalWalls(walls, cfg) or 0
+					end)
+					if DEBUGDOOR then print("listener", k, worst, at) end
+					if worst >= 0.5 then error(string.format("listener %d: %.2f dB in 0.1 degree at %.1f", k, worst, at)) end
+				end
+			end)
+			util.GetSurfacePropName, A.cfg.door_3d = savedProp, saved3d
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Door in 3-D: a leaf wide open across the line costs its way round and nothing more (door_sweep open, pba_demo room 12: 3.6 dB behind the leaf, the same in the former model's straight line; 0 once the line passes its free end)", func = function()
+			-- room 12 (boombox): wall y 512..528, doorway x 4944..4992 z 0..108, door01 hinged at (4945.25, 520)
+			-- swung open 90 degrees into the listener's room (a 47 u fin along x = 4945 from the wall); the
+			-- radio at (5180, 800, 52) beyond the wall, the listener sliding along y = 440 behind the fin
+			local B = 1e5
+			local world = { { Vector(-B, -B, -16), Vector(B, B, 0) }, { Vector(-B, -B, 192), Vector(B, B, 208) },
+				{ Vector(-B, 512, 0), Vector(4944, 528, 192) }, { Vector(4992, 512, 0), Vector(B, 528, 192) },
+				{ Vector(4944, 512, 108), Vector(4992, 528, 192) } }
+			local leaf = leafEnt(9976, Vector(4945.25, 520, 54.25), Vector(-2, 0, -54.25), Vector(2, 47.5, 54.25))
+			local S = Vector(5180, 800, 52)
+			local savedProp, saved3d = util.GetSurfacePropName, A.cfg.door_3d
+			util.GetSurfacePropName = util.GetSurfacePropName or function() return "default" end
+			local ok, err = pcall(withLeafScene, world, leaf, function(st)
+				leaf.yaw, st.frac = 180, 1
+				local function line(d3, L)
+					A.cfg.door_3d = d3
+					local cfg = setmetatable({ door_3d = d3 }, { __index = CFG })
+					local walls = P.Walls(S, L, 6)
+					if d3 >= 0.5 then P.LineLeaves(S, L, walls, cfg) end
+					return #walls > 0 and P.EvalWalls(walls, cfg) or 0, cfg
+				end
+				local prev
+				for x = 4884, 4930, 2 do
+					local L = Vector(x, 440, 64)
+					local new, cfg = line(1, L)
+					local old = line(0, L)
+					local delta, gap = P.LeafWay(leaf, { S, L }, cfg, 0, 0, true)
+					-- the way round the fin's free end, its gap nothing (a lone edge), as the former model
+					expect(gap < 0.5).to.beTrue()
+					expect(math.abs(new - old) < 0.5).to.beTrue()
+					if prev then expect(math.abs(new - prev) < 0.5).to.beTrue() end
+					prev = new
+					if DEBUGDOOR then print(x, new, old, delta, gap) end
+				end
+				expect(prev < 0.1).to.beTrue()
 			end)
 			util.GetSurfacePropName, A.cfg.door_3d = savedProp, saved3d
 			if not ok then error(err, 0) end
