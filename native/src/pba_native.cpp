@@ -22,11 +22,15 @@
 //     SetListener(pos, fwd, up, master), SetOutputMode(0|1),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
-//     SourceReflect(voiceId, pos [, srcSend]) -> slot | -1, SetSourceReverbScale(k)
+//     SourceReflect(voiceId, pos [, srcSend]) -> slot | -1, SetSourceReverbScale(k),
+//     SetSourceSlots(n) -> n
 //     SourceReflect: binds a voice to a source reverb slot (reflections simulated at pos, Vector,
 //     Source units) that the voice feeds at srcSend (linear, absent = keep; 0 at bind) on top of its
-//     room send; call it at least every 0.5 s to keep the binding (a slot not refreshed for 1 s, or
-//     whose voice is gone, is free; no stealing from live voices). pos not a Vector: unbinds.
+//     room send. Slots are shared by position: a slot within 1.5 m of pos is reused (its response
+//     is fed at once), else a free one is taken (never one with a live voice; none: -1, room send
+//     only). A slot lives as long as one of its voices (bind once right after Play; call again on
+//     Update for a moving source), an unbound one 1 s. pos not a Vector: unbinds that voice.
+//     SetSourceSlots: active pool size (0..32, default 16); the reflections run cost grows with it
 //     send: room reverb send level (linear), independent from gain, which carries the distance law;
 //     absent = keep the voice's (a voice that never received one sends at its gain)
 //   DynamicAdd(id, verts, tris, material), DynamicMove(id, matrixRows), DynamicRemove(id),
@@ -96,16 +100,32 @@ struct EchoSlot {
 	int gen = 0;
 	int key = 0;
 	double last = -1e9;
+	IPLVector3 genPos{}; // source reverb slots: where gen was set (pos may drift within kSrcNear)
 };
 EchoSlot g_echo[render::kEchoSlots];
-// source reverb slots (render::kSrcSlots): same sources as the echo slots, omni, key = voice id;
-// active while SourceReflect refreshed them in the last kSrcHold seconds
-EchoSlot g_srcSlot[render::kSrcSlots];
+// source reverb slots (render::kSrcSlotsMax buffers, g_srcPool active): same sources as the echo
+// slots, omni, shared by every voice played within kSrcNear of the slot (key = latest binder);
+// simulated while a bound voice lives, or for kSrcHold seconds after the last bind
+EchoSlot g_srcSlot[render::kSrcSlotsMax];
 constexpr double kSrcHold = 1.0;
+// one response serves sounds this close together (m): a source room's reverberant field barely
+// changes over a step, and every footstep or shot reusing it costs no simulation and no wait
+constexpr float kSrcNear = 1.5f;
+std::atomic<int> g_srcPool{16}; // SetSourceSlots
+// incremented on every scene change (doors, props): a response simulated before it is stale
+std::atomic<int> g_sceneVersion{0};
+// under g_stageMtx; live: render::SrcSlotLive
+bool SrcActive(int k, const int* live, double now) {
+	return k < g_srcPool.load() && g_srcSlot[k].gen > 0 && (live[k] > 0 || now - g_srcSlot[k].last < kSrcHold);
+}
 std::mutex g_stageMtx, g_simMtx;
 std::condition_variable g_reflCv; // woken by Echo() (with g_stageMtx)
 int g_simulatedGen[render::kEchoSlots] = {}; // last generation simulated per slot (reflection thread)
-int g_srcSimulatedGen[render::kSrcSlots] = {}; // same, source reverb slots
+// same, source reverb slots, with where and in which scene version (under g_stageMtx: read by
+// SourceReflect, a new binder near that place in that scene uses the generation at once)
+int g_srcSimulatedGen[render::kSrcSlotsMax] = {};
+IPLVector3 g_srcSimulatedPos[render::kSrcSlotsMax] = {};
+int g_srcSimulatedVer[render::kSrcSlotsMax] = {};
 IPLCoordinateSpace3 g_stageLis{};
 bool g_stageLisOk = false;
 std::thread g_reflThread;
@@ -135,7 +155,6 @@ std::atomic<bool> g_revBaked{false};
 float g_revRt[3] = {0, 0, 0};       // reflection thread
 std::atomic<float> g_revMs{0};
 // pauses: listener still, scene unchanged, no echo -> the simulation converges; run it less often
-std::atomic<int> g_sceneVersion{0};
 std::atomic<int> g_stillPasses{0};
 std::atomic<float> g_reflMs{0}, g_reflMaxMs{0};
 float g_rt[3] = {0, 0, 0}; // smoothed room reverb times (under g_stageMtx)
@@ -154,10 +173,15 @@ void ReflectionLoop() {
 		float dipole[render::kEchoSlots];
 		int gen[render::kEchoSlots];
 		bool active[render::kEchoSlots];
-		IPLVector3 sPos[render::kSrcSlots];
-		int sGen[render::kSrcSlots];
-		bool sActive[render::kSrcSlots];
+		IPLVector3 sPos[render::kSrcSlotsMax];
+		int sGen[render::kSrcSlotsMax];
+		bool sActive[render::kSrcSlotsMax];
 		bool ok, anyEcho = false;
+		// voices bound per source slot, read before g_stageMtx (see SourceReflect)
+		int sLive[render::kSrcSlotsMax];
+		render::SrcSlotLive(sLive);
+		// scene simulated by this run (read before it: a change during the run makes it stale)
+		const int sceneVer = g_sceneVersion.load();
 		{
 			std::lock_guard<std::mutex> lk(g_stageMtx);
 			ok = g_stageLisOk && g_reflWanted.load() && render::Running();
@@ -172,10 +196,10 @@ void ReflectionLoop() {
 				anyEcho = anyEcho || active[k];
 			}
 			// not counted in anyEcho: a still source converges like the still listener
-			for (int k = 0; k < render::kSrcSlots; ++k) {
+			for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 				sPos[k] = g_srcSlot[k].pos;
 				sGen[k] = g_srcSlot[k].gen;
-				sActive[k] = sGen[k] > 0 && now - g_srcSlot[k].last < kSrcHold;
+				sActive[k] = SrcActive(k, sLive, now);
 			}
 		}
 		if (ok && g_sim && g_reverbSource) {
@@ -219,7 +243,7 @@ void ReflectionLoop() {
 				setSrc(g_reverbSource, {lis.origin.x, lis.origin.y + 0.1f, lis.origin.z}, true);
 				for (int k = 0; k < render::kEchoSlots; ++k)
 					if (g_echo[k].src) setSrc(g_echo[k].src, pos[k], active[k], ahead[k], dipole[k]);
-				for (int k = 0; k < render::kSrcSlots; ++k)
+				for (int k = 0; k < render::kSrcSlotsMax; ++k)
 					if (g_srcSlot[k].src) setSrc(g_srcSlot[k].src, sPos[k], sActive[k]);
 				try {
 					iplSimulatorRunReflections(g_sim);
@@ -232,8 +256,11 @@ void ReflectionLoop() {
 				std::lock_guard<std::mutex> lk(g_stageMtx); // do not spin on a failing slot
 				for (int k = 0; k < render::kEchoSlots; ++k)
 					if (active[k]) g_simulatedGen[k] = gen[k];
-				for (int k = 0; k < render::kSrcSlots; ++k)
-					if (sActive[k]) g_srcSimulatedGen[k] = sGen[k];
+				for (int k = 0; k < render::kSrcSlotsMax; ++k)
+					if (sActive[k]) {
+						g_srcSimulatedGen[k] = sGen[k];
+						g_srcSimulatedVer[k] = -1;
+					}
 			} else {
 				render::PublishSimulated(-1, 1);
 				for (int k = 0; k < render::kEchoSlots; ++k)
@@ -241,14 +268,17 @@ void ReflectionLoop() {
 						render::PublishSimulated(k, gen[k]);
 						g_simulatedGen[k] = gen[k];
 					}
-				for (int k = 0; k < render::kSrcSlots; ++k)
-					if (sActive[k]) {
-						render::PublishSimulated(render::kEchoSlots + k, sGen[k]);
-						g_srcSimulatedGen[k] = sGen[k];
-					}
+				for (int k = 0; k < render::kSrcSlotsMax; ++k)
+					if (sActive[k]) render::PublishSimulated(render::kEchoSlots + k, sGen[k]);
 				float now[3];
 				render::RoomReverbTimes(now);
 				std::lock_guard<std::mutex> lk(g_stageMtx);
+				for (int k = 0; k < render::kSrcSlotsMax; ++k)
+					if (sActive[k]) {
+						g_srcSimulatedGen[k] = sGen[k];
+						g_srcSimulatedPos[k] = sPos[k];
+						g_srcSimulatedVer[k] = sceneVer;
+					}
 				for (int b = 0; b < 3; ++b) {
 					const float v = now[b];
 					g_rt[b] = g_rt[b] <= 0 ? v : g_rt[b] * 0.7f + v * 0.3f;
@@ -295,11 +325,13 @@ void ReflectionLoop() {
 				if (done) {
 					IPLSimulationOutputs o{};
 					iplSourceGetOutputs(g_revSrc, IPL_SIMULATIONFLAGS_REFLECTIONS, &o);
+					// 0 is a result (outdoors: no tail), not a missing one: skipping it kept the last
+					// indoor reverb time forever once outside
 					for (int b = 0; b < 3; ++b) {
 						const float v = o.reflections.reverbTimes[b];
-						if (v > 0) g_revRt[b] = g_revRt[b] <= 0 ? v : g_revRt[b] * 0.7f + v * 0.3f;
+						if (std::isfinite(v) && v >= 0) g_revRt[b] = g_revRt[b] <= 0 ? v : g_revRt[b] * 0.7f + v * 0.3f;
 					}
-					if (g_revRt[1] > 0) render::SetRoomReverbOverride(g_revRt);
+					render::SetRoomReverbOverride(g_revRt);
 				}
 			}
 			const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - r0).count();
@@ -328,8 +360,11 @@ void ReflectionLoop() {
 			if ((o.x - at.x) * (o.x - at.x) + (o.y - at.y) * (o.y - at.y) + (o.z - at.z) * (o.z - at.z) > 0.25f) return true;
 			for (int k = 0; k < render::kEchoSlots; ++k)
 				if (g_echo[k].gen > g_simulatedGen[k]) return true;
-			for (int k = 0; k < render::kSrcSlots; ++k)
-				if (g_srcSlot[k].gen > g_srcSimulatedGen[k]) return true;
+			// a pending source slot still wanted (one whose one-shot ended before it was simulated must
+			// not keep the loop at its fastest rate)
+			const double now = Now();
+			for (int k = 0; k < g_srcPool.load(); ++k)
+				if (g_srcSlot[k].gen > g_srcSimulatedGen[k] && now - g_srcSlot[k].last < kSrcHold) return true;
 			return false;
 		});
 	}
@@ -520,7 +555,7 @@ bool EnsureSimulator() {
 	sim.maxNumRays = g_simMaxRays.load(); // see g_simMaxRays
 	sim.numDiffuseSamples = 1024; // as Unity: diffuse bounces pick among this many fixed directions
 	sim.maxDuration = render::kIRSeconds;
-	sim.maxNumSources = kMaxSources + 1 + render::kEchoSlots + render::kSrcSlots;
+	sim.maxNumSources = kMaxSources + 1 + render::kEchoSlots + render::kSrcSlotsMax;
 	{
 		const int hc = (int)std::thread::hardware_concurrency();
 		const int opt = g_optThreads.load();
@@ -552,13 +587,19 @@ bool EnsureSimulator() {
 			if (iplSourceCreate(g_sim, &rs, &g_echo[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_echo[k].src, g_sim);
 			es[k] = g_echo[k].src;
 		}
-		IPLSource ss[render::kSrcSlots] = {};
-		for (int k = 0; k < render::kSrcSlots; ++k) {
+		IPLSource ss[render::kSrcSlotsMax] = {};
+		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 			g_srcSlot[k] = EchoSlot{};
+			{
+				// generations restart at 1 with the new simulator
+				std::lock_guard<std::mutex> lk(g_stageMtx);
+				g_srcSimulatedGen[k] = 0;
+				g_srcSimulatedVer[k] = -1;
+			}
 			if (iplSourceCreate(g_sim, &rs, &g_srcSlot[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlot[k].src, g_sim);
 			ss[k] = g_srcSlot[k].src;
 		}
-		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots, ss, render::kSrcSlots);
+		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots, ss, render::kSrcSlotsMax);
 	}
 	iplSimulatorCommit(g_sim);
 	// long-window parametric simulator for the room reverb time (see g_revSim)
@@ -1388,70 +1429,92 @@ LUA_FUNCTION(Echo) {
 	return 2;
 }
 
-// SourceReflect(voiceId, pos [, srcSend]) -> slot (0-based) | -1. Source reverb slot for a continuous
-// voice (radio, engine loop): reflections simulated from the source's position, so the source room's
-// reverberant field reaches a listener standing outside it. The voice feeds the slot at srcSend on top
-// of its room send (Lua sets the balance: the source-centric simulation does not cross walls and
-// floors, the listener-centric room reverb renders transmitted sound). The voice keeps its slot while
-// refreshed (key = voice id); otherwise it takes a free slot, never one of a live, refreshed voice.
-// The slot is re-simulated only when the source moved more than 1 m. pos not a Vector: unbinds.
+// SourceReflect(voiceId, pos [, srcSend]) -> slot (0-based) | -1. Source reverb slot for a voice:
+// reflections simulated from the source's position, so the source room's reverberant field reaches
+// a listener standing outside it. The voice feeds the slot at srcSend on top of its room send (Lua
+// sets the balance: the source-centric simulation does not cross walls and floors, the
+// listener-centric room reverb renders transmitted sound). Slots are shared by position, so every
+// sound (one-shots included: bound once right after Play) can have one from a bounded pool:
+//   1. the voice's own slot, still within kSrcNear of pos (a loop or a moving source re-binding);
+//   2. the nearest slot within kSrcNear (several voices share it; its response is reused);
+//   3. the voice's own slot following it, if no other live voice feeds it;
+//   4. a free slot (no live voice, not bound for kSrcHold), else the least recently bound one whose
+//      voices are all gone. A slot with another live voice is never moved: its voices would switch
+//      to another place's response mid-sound. None: -1 (the voice keeps its room send only).
+// A slot is re-simulated (new generation) when it moves more than kSrcNear or the scene changed
+// since its last simulation. The direct sound never waits: until its response is simulated the
+// voice's slot share goes to the room bus (render.cpp), then crossfades into the slot. pos not a
+// Vector: unbinds that voice only (the slot stays with its other voices).
 LUA_FUNCTION(SourceReflect) {
 	const int id = (int)LUA->CheckNumber(1);
 	const float srcSend = LUA->IsType(3, Type::Number) ? std::max((float)LUA->GetNumber(3), 0.0f) : -1.0f;
-	auto release = [](int key) {
-		std::lock_guard<std::mutex> lk(g_stageMtx);
-		for (auto& e : g_srcSlot)
-			if (e.key == key) {
-				e.key = 0;
-				e.last = -1e9;
-			}
-	};
-	if (!LUA->IsType(2, Type::Vector) || !g_sim || !g_srcSlot[0].src || id <= 0) {
-		release(id);
+	const int n = std::clamp(g_srcPool.load(), 0, render::kSrcSlotsMax);
+	if (!LUA->IsType(2, Type::Vector) || !g_sim || !g_srcSlot[0].src || id <= 0 || n == 0) {
 		render::SetVoiceSrcSlot(id, -1, 0, 0);
 		LUA->PushNumber(-1);
 		return 1;
 	}
 	const IPLVector3 p = ToSA(LUA->GetVector(2));
-	// which voices still hold their slot, read before taking g_stageMtx (the audio thread holds the
-	// render lock for whole blocks: the reflection thread must not wait on it through g_stageMtx)
-	int bound[render::kSrcSlots];
-	render::SrcSlotVoices(bound);
+	// voices bound per slot (and this voice's slot), read before taking g_stageMtx (the audio thread
+	// holds the render lock for whole blocks: the reflection thread must not wait on it through
+	// g_stageMtx)
+	int live[render::kSrcSlotsMax];
+	const int cur = render::SrcSlotLive(live, id);
 	auto d2 = [](IPLVector3 a, IPLVector3 b) {
 		return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
 	};
+	constexpr float kNear2 = kSrcNear * kSrcNear;
+	const int ver = g_sceneVersion.load();
 	int slot = -1, gen = 0;
 	{
 		std::lock_guard<std::mutex> lk(g_stageMtx);
 		const double now = Now();
-		for (int k = 0; k < render::kSrcSlots && slot < 0; ++k)
-			if (g_srcSlot[k].key == id) slot = k;
+		const bool own = cur >= 0 && cur < n;
+		auto others = [&](int k) { return live[k] - (k == cur ? 1 : 0); }; // live voices but this one
+		if (own && g_srcSlot[cur].gen > 0 && d2(g_srcSlot[cur].pos, p) <= kNear2) slot = cur;
 		if (slot < 0) {
-			// free: not refreshed lately, or its voice is gone; prefer one already simulated within
-			// 1 m (no new simulation), else the least recently used
-			int best = -1;
-			bool bestNear = false;
-			for (int k = 0; k < render::kSrcSlots; ++k) {
+			float best = kNear2;
+			for (int k = 0; k < n; ++k) {
 				const EchoSlot& e = g_srcSlot[k];
-				const bool free = e.key == 0 || now - e.last >= kSrcHold || bound[k] != e.key;
-				if (!free) continue;
-				const bool isNear = e.gen > 0 && d2(e.pos, p) <= 1.0f;
-				if (best < 0 || (isNear && !bestNear) || (isNear == bestNear && e.last < g_srcSlot[best].last)) {
-					best = k;
-					bestNear = isNear;
+				if (e.gen == 0) continue;
+				const float d = d2(e.pos, p);
+				if (d <= best) {
+					best = d;
+					slot = k;
 				}
 			}
-			slot = best;
+		}
+		if (slot < 0 && own && others(cur) == 0) slot = cur;
+		if (slot < 0) {
+			bool bestFree = false;
+			for (int k = 0; k < n; ++k) {
+				const EchoSlot& e = g_srcSlot[k];
+				if (others(k) > 0) continue;
+				const bool isFree = live[k] == 0 && now - e.last >= kSrcHold;
+				if (slot < 0 || (isFree && !bestFree) || (isFree == bestFree && e.last < g_srcSlot[slot].last)) {
+					slot = k;
+					bestFree = isFree;
+				}
+			}
 		}
 		if (slot >= 0) {
 			EchoSlot& e = g_srcSlot[slot];
-			if (e.gen == 0 || d2(e.pos, p) > 1.0f) {
-				e.pos = p;
+			// the position follows its binder only when no other live voice feeds the slot (within
+			// kSrcNear: same response, refined by the next runs)
+			if (others(slot) == 0) e.pos = p;
+			const int sg = g_srcSimulatedGen[slot];
+			const bool fresh = sg > 0 && g_srcSimulatedVer[slot] == ver;
+			if (e.gen == 0 || d2(e.genPos, p) > kNear2) {
+				e.genPos = p;
 				e.gen++;
+			} else if (!fresh && sg >= e.gen) {
+				e.gen++; // the scene changed (a door): a stale response must not be reused
 			}
 			e.key = id;
 			e.last = now;
-			gen = e.gen;
+			// a response already simulated near pos, in this scene, serves at once (a new binder of
+			// a shared slot never waits for a newer generation); otherwise wait for this one
+			gen = fresh && sg <= e.gen && d2(g_srcSimulatedPos[slot], p) <= kNear2 ? sg : e.gen;
 		}
 	}
 	if (slot < 0) {
@@ -1460,12 +1523,29 @@ LUA_FUNCTION(SourceReflect) {
 		return 1;
 	}
 	g_reflCv.notify_one();
-	if (!render::SetVoiceSrcSlot(id, slot, gen, srcSend)) { // the voice is gone: free the slot again
-		release(id);
+	if (!render::SetVoiceSrcSlot(id, slot, gen, srcSend)) { // the voice is gone (the slot frees itself)
 		LUA->PushNumber(-1);
 		return 1;
 	}
 	LUA->PushNumber(slot);
+	return 1;
+}
+
+// SetSourceSlots(n) -> n: size of the source reverb slot pool (0..kSrcSlotsMax, default 16). Every
+// active slot is one more source in each reflections run (Stats().reflMs, srcSlots); slots beyond n
+// are not simulated and their voices fall back to the room send.
+LUA_FUNCTION(SetSourceSlots) {
+	const int n = std::clamp((int)LUA->CheckNumber(1), 0, render::kSrcSlotsMax);
+	g_srcPool = n;
+	render::LimitSrcSlots(n);
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		for (int k = n; k < render::kSrcSlotsMax; ++k) {
+			g_srcSlot[k].key = 0;
+			g_srcSlot[k].last = -1e9;
+		}
+	}
+	LUA->PushNumber(n);
 	return 1;
 }
 
@@ -1697,14 +1777,18 @@ LUA_FUNCTION(Stats) {
 	LUA->PushNumber(g_stillPasses.load());
 	LUA->SetField(-2, "stillPasses");
 	{
+		int live[render::kSrcSlotsMax];
+		render::SrcSlotLive(live);
 		int n = 0;
 		{
 			std::lock_guard<std::mutex> lk(g_stageMtx);
 			const double now = Now();
-			for (const auto& e : g_srcSlot) n += e.gen > 0 && e.key != 0 && now - e.last < kSrcHold ? 1 : 0;
+			for (int k = 0; k < render::kSrcSlotsMax; ++k) n += SrcActive(k, live, now) ? 1 : 0;
 		}
-		LUA->PushNumber(n);
+		LUA->PushNumber(n); // sources simulated in each reflections run besides the room and echoes
 		LUA->SetField(-2, "srcSlots");
+		LUA->PushNumber(g_srcPool.load());
+		LUA->SetField(-2, "srcPool");
 	}
 	return 1;
 }
@@ -1885,6 +1969,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "Echo");
 	LUA->PushCFunction(SourceReflect);
 	LUA->SetField(-2, "SourceReflect");
+	LUA->PushCFunction(SetSourceSlots);
+	LUA->SetField(-2, "SetSourceSlots");
 	LUA->PushCFunction(SetSourceReverbScale);
 	LUA->SetField(-2, "SetSourceReverbScale");
 	LUA->PushCFunction(SetOutputMode);

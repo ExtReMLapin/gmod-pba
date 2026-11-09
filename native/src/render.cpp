@@ -8,9 +8,9 @@
 //   echoes       : loud sounds feed one of kEchoSlots reflection effects whose impulse response
 //                  is simulated for that source position (convolution early part + parametric
 //                  tail) -> ambisonic bus
-//   source reverb: continuous voices bound to one of kSrcSlots reflection effects simulated at
-//                  their own position also send there (the source room's reverberant field,
-//                  heard through doorways) -> ambisonic bus
+//   source reverb: voices bound to one of kSrcSlotsMax reflection effects simulated at their
+//                  own position (shared by nearby sounds) also send there (the source room's
+//                  reverberant field, heard through doorways) -> ambisonic bus
 //   ambisonic bus -> IPLAmbisonicsDecodeEffect (HRTF / speakers) -> mix
 // The engine still plays every sound pba does not take over (clear line of sight...).
 // Licence: MIT (see native/LICENSE).
@@ -97,6 +97,7 @@ struct Voice {
 	int srcSlot = -1;
 	int srcGen = 0;
 	float srcSend = 0, srcSendCur = -1; // send into the slot, smoothed like send
+	float srcFbCur = -1; // the slot share sent to the room bus until the slot is simulated (smoothed)
 	int waited = 0;
 	bool dying = false; // fading to 0 over one block, then dead
 };
@@ -152,7 +153,7 @@ Reflection g_room;                 // reverb at the listener, fed by every voice
 // (direct + reverb) about constant in a typical room (measured on pba_demo: direct x 0.11 at share 0.85)
 float g_diffuseSend = 1.5f;
 Reflection g_echo[kEchoSlots];     // per-source reflections
-Reflection g_src[kSrcSlots];       // source reverb slots (continuous voices, see kSrcSlots)
+Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax)
 float g_wetRoom = 0, g_wetEcho = 0;
 float g_srcScale = 1; // source reverb level, relative to the room reverb's wet
 bool g_paused = false;
@@ -340,13 +341,21 @@ void RenderBlock() {
 		const float s0 = v.sendCur < 0 ? s1 : v.sendCur;
 		v.sendCur = s1;
 		// source reverb slot: an extra send (own level), once the slot's response for this source
-		// is simulated; until then the room send alone (no silence gap, no response of another place)
+		// is simulated; until then its share goes to the room bus (no silence gap, no response of
+		// another place)
 		Reflection* srcBus = nullptr;
-		if (v.srcSlot >= 0 && v.srcSlot < kSrcSlots && g_src[v.srcSlot].fx && g_src[v.srcSlot].simGen.load() >= v.srcGen)
-			srcBus = &g_src[v.srcSlot];
+		const bool srcBound = v.srcSlot >= 0 && v.srcSlot < kSrcSlotsMax && g_src[v.srcSlot].fx;
+		if (srcBound && g_src[v.srcSlot].simGen.load() >= v.srcGen) srcBus = &g_src[v.srcSlot];
 		const float q1 = v.srcSend;
 		const float q0 = v.srcSendCur < 0 ? q1 : v.srcSendCur;
 		v.srcSendCur = srcBus ? q1 : 0; // a slot that becomes ready fades in over one block
+		// bound but not simulated yet: the slot's share goes to the room bus meanwhile, at the slot's
+		// level (wet room x g_srcScale). Lua lowers the room send of a bound voice, so without it a
+		// one-shot started dry for the 100-300 ms of its first simulation (or stayed dry entirely).
+		// It crossfades into the slot over the block where the response becomes ready.
+		const float f1 = srcBound && !srcBus ? v.srcSend * g_srcScale : 0;
+		const float f0 = v.srcFbCur < 0 ? f1 : v.srcFbCur;
+		v.srcFbCur = f1;
 		// x: the signal for the listener's room (muffled like the direct sound: what reaches the
 		// listener's space through walls and openings). The source slot gets m, the voice's signal
 		// BEFORE the direct path's EQ: the simulation from the source has the geometry, and a room's
@@ -355,6 +364,8 @@ void RenderBlock() {
 		auto feedRoom = [&](const float* x, float k, float kSrc) {
 			float* snd = g_room.in.data[0];
 			for (int i = 0; i < kBlock; ++i) snd[i] += x[i] * (s0 + (s1 - s0) * (float)i / kBlock) * k;
+			if (f0 > 0 || f1 > 0)
+				for (int i = 0; i < kBlock; ++i) snd[i] += m[i] * (f0 + (f1 - f0) * (float)i / kBlock) * kSrc;
 			g_room.fed = true;
 			if (srcBus && (q0 > 0 || q1 > 0)) {
 				float* d = srcBus->in.data[0];
@@ -514,7 +525,15 @@ int FindEffect() {
 	return -1;
 }
 
-// drops dead voices; caps the voice count (drops the quietest). Lock held.
+// how much a voice is heard, for the voice cap: its direct gain alone ranked a distant voice with a
+// strong reverb (send carries no distance law) as the quietest
+float Audibility(const Voice& v) {
+	const float send = v.send < 0 ? v.gain : v.send;
+	return std::max({v.gain, send * g_wetRoom, v.srcSend * g_wetRoom * g_srcScale});
+}
+
+// drops dead voices; caps the voice count: the least audible voices fade out (dying, one block)
+// instead of being cut. Lock held.
 void Reap() {
 	g_voices.erase(std::remove_if(g_voices.begin(), g_voices.end(),
 	                              [](const std::unique_ptr<Voice>& v) {
@@ -523,9 +542,26 @@ void Reap() {
 		                              return true;
 	                              }),
 	               g_voices.end());
-	while (!g_voices.empty() && (int)g_voices.size() >= g_maxVoices.load()) {
-		auto q = std::min_element(g_voices.begin(), g_voices.end(),
-		                          [](const auto& a, const auto& b) { return a->gain < b->gain; });
+	int n = 0;
+	for (auto& v : g_voices) n += v->dying ? 0 : 1;
+	while (n >= g_maxVoices.load()) {
+		Voice* q = nullptr;
+		for (auto& v : g_voices)
+			if (!v->dying && (!q || Audibility(*v) < Audibility(*q))) q = v.get();
+		if (!q) break;
+		q->dying = true;
+		q->gain = 0;
+		q->send = 0;
+		q->srcSend = 0;
+		if (q->gainCur < 0) q->alive = false; // never rendered yet
+		--n;
+	}
+	// hard ceiling (the effect pool): fading voices still hold their effects for one block
+	while ((int)g_voices.size() >= kMaxVoices) {
+		auto q = std::min_element(g_voices.begin(), g_voices.end(), [](const auto& a, const auto& b) {
+			if (a->dying != b->dying) return a->dying; // the fading ones first
+			return Audibility(*a) < Audibility(*b);
+		});
 		ReleaseVoice(**q);
 		g_voices.erase(q);
 	}
@@ -691,7 +727,7 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IP
 	}
 	// new simulator: the slots restart at generation 1; bindings of the previous one are dropped
 	// (their generations would never be reached again)
-	for (int k = 0; k < kSrcSlots; ++k) {
+	for (int k = 0; k < kSrcSlotsMax; ++k) {
 		g_src[k].src = (srcs && k < nSrc) ? srcs[k] : nullptr;
 		g_src[k].simGen = 0;
 	}
@@ -708,18 +744,21 @@ bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend) {
 	Voice* t = nullptr;
 	for (auto& v : g_voices)
 		if (v->id == id && v->alive.load() && !v->dying && v->echoSlot < 0) t = v.get();
-	if (slot < 0 || slot >= kSrcSlots) {
+	if (slot < 0 || slot >= kSrcSlotsMax) {
 		if (t) t->srcSlot = -1;
 		return t != nullptr && slot < 0;
 	}
 	if (!t || !g_src[slot].fx) return false;
-	for (auto& v : g_voices) // one voice per slot: the slot was taken over (its owner went quiet)
-		if (v.get() != t && v->srcSlot == slot) v->srcSlot = -1;
-	if (t->srcSlot != slot || gen < t->srcGen) { // new binding (or a new simulator): wait for this gen
+	// a new binding waits for gen (the slot's generation at bind time): a slot already simulated
+	// at that place has simGen >= gen and is fed at once; one moved (or just taken) waits, the
+	// voice keeping its room send meanwhile. The other voices of the slot keep theirs: they go on
+	// feeding the previous response until the new one replaces it.
+	if (t->srcSlot != slot || gen < t->srcGen) { // new binding (or a new simulator)
 		t->srcGen = gen;
 		if (t->srcSlot != slot) {
 			t->srcSend = 0;
 			t->srcSendCur = 0;
+			t->srcFbCur = 0;
 		}
 	}
 	t->srcSlot = slot;
@@ -727,11 +766,22 @@ bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend) {
 	return true;
 }
 
-void SrcSlotVoices(int ids[kSrcSlots]) {
+int SrcSlotLive(int live[kSrcSlotsMax], int id) {
 	std::lock_guard<std::mutex> lk(g_mtx);
-	for (int k = 0; k < kSrcSlots; ++k) ids[k] = 0;
+	for (int k = 0; k < kSrcSlotsMax; ++k) live[k] = 0;
+	int mine = -1;
 	for (auto& v : g_voices)
-		if (v->srcSlot >= 0 && v->srcSlot < kSrcSlots && v->alive.load() && !v->dying) ids[v->srcSlot] = v->id;
+		if (v->srcSlot >= 0 && v->srcSlot < kSrcSlotsMax && v->alive.load() && !v->dying) {
+			live[v->srcSlot]++;
+			if (id > 0 && v->id == id) mine = v->srcSlot;
+		}
+	return mine;
+}
+
+void LimitSrcSlots(int n) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	for (auto& v : g_voices)
+		if (v->srcSlot >= n) v->srcSlot = -1; // back to the room send alone (fades through srcSendCur)
 }
 
 void RoomTailEq(float eq[3]) {
@@ -746,7 +796,7 @@ void RoomReverbTimes(float rt[3]) {
 void PublishSimulated(int slot, int gen) {
 	if (slot < 0) g_room.simGen = gen;
 	else if (slot < kEchoSlots) g_echo[slot].simGen = gen;
-	else if (slot < kEchoSlots + kSrcSlots) g_src[slot - kEchoSlots].simGen = gen;
+	else if (slot < kEchoSlots + kSrcSlotsMax) g_src[slot - kEchoSlots].simGen = gen;
 }
 
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
@@ -984,6 +1034,7 @@ bool Update(int id, const VoiceParams& p) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	for (auto& v : g_voices) {
 		if (v->id == id && v->alive.load()) {
+			if (v->dying) return false; // stopped or capped: an update must not bring it back
 			SetVoice(*v, p);
 			return true;
 		}
@@ -999,7 +1050,7 @@ void StopVoice(int id) {
 			v->dying = true;
 			v->gain = 0;
 			v->send = 0; // the reverb send fades out with the direct sound
-			v->srcSend = 0; // fades out too; a dying voice no longer holds its slot (SrcSlotVoices)
+			v->srcSend = 0; // fades out too; a dying voice no longer holds its slot (SrcSlotLive)
 			if (v->gainCur < 0) v->alive = false; // never rendered yet
 		}
 }
