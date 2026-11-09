@@ -22,8 +22,9 @@ local PR = {}
 A.Probes = PR
 
 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways; 9: probes kept off
--- floors; 10: probes follow the floors (one per storey and column, explicit positions), map seeds only
-local CACHE_VERSION = 11
+-- floors; 10: probes follow the floors (one per storey and column, explicit positions), map seeds only;
+-- 12: a displacement's underside adds no empty segments (floors below it no longer hidden)
+local CACHE_VERSION = 12
 local MAX_PROBES = 30000
 -- a build that reaches MAX_PROBES is redone at a wider spacing, up to this one, instead of keeping the
 -- part of the map flood-filled first (the far side of a big map had no probe at all)
@@ -388,13 +389,24 @@ end
 -- floors seen from above and their underside is the ceiling of the air below. Second result: whether
 -- the line crossed solid thicker than 2 x EAR_HEIGHT between two air segments (a pillar or a wall
 -- standing on a floor under the line, not a floor slab): a floor may lie beside it.
+-- A displacement's collision has a thickness of a few units seen from its underside: a trace starting
+-- just under it hits again at its start, not in solid (gm_construct (-3136, -832): 69, 68.5, 68, then
+-- the floor at -156; 15 such steps under the skybox's displacements). Those hits are no floor (an empty
+-- segment): skipped with a step doubled each time (1 to 8 u), not counted against the 64 segments,
+-- which a run of 0.5 u steps used up before the floors below were reached.
 function PR.ScanColumn(x, y, top, bottom)
 	local out, thick = {}, false
 	local z, ceil = top, top
-	for _ = 1, 64 do
-		if z <= bottom then break end
+	local n, step = 0, 1
+	for _ = 1, 256 do
+		if z <= bottom or n >= 64 then break end
 		local o = buildLine(Vector(x, y, z), Vector(x, y, bottom), MASK_SOLID_BRUSHONLY)
-		if o.StartSolid then
+		if o.Hit and not o.StartSolid and o.HitPos.z > z - 1 and #out > 0 then
+			-- inside a displacement's shell: no floor, the segment below starts under it
+			z, ceil = z - step, z - step
+			step = math.min(step * 2, 8)
+		elseif o.StartSolid then
+			n = n + 1
 			if o.AllSolid then break end
 			local fls, nz = o.FractionLeftSolid
 			if fls then
@@ -409,7 +421,7 @@ function PR.ScanColumn(x, y, top, bottom)
 		elseif o.Hit then
 			local fz = o.HitPos.z
 			out[#out + 1] = { fz, ceil }
-			z, ceil = fz - 0.5, fz - 0.5
+			z, ceil, n, step = fz - 0.5, fz - 0.5, n + 1, 1
 		else
 			break -- no floor below: the bottom of the bounds (or the void)
 		end
