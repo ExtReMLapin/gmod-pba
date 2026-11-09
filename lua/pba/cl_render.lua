@@ -325,7 +325,9 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
 	-- (a sentence is a sequence of words played by the engine: never by the module)
 	if A.Native and A.Native.render and not A.IsSentence(data.SoundName) then
 		-- the full version's distance law (N.PhysPath): real spreading instead of the engine's law
-		local g = (data.Volume or 1) * A.Native.PhysPath(v.gain, v.len, data.SoundLevel or 75) * A.Native.Directivity(src, L)
+		-- a weapon's dipole: the aim taken now, at emission (N.Directivity)
+		local dirK = A.Native.Directivity(src, L, data.Channel)
+		local g = (data.Volume or 1) * A.Native.PhysPath(v.gain, v.len, data.SoundLevel or 75, v.rawLossDb) * dirK
 		if g < 0.001 then return false end
 		local delay = voiceDelay(v, L)
 		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
@@ -335,8 +337,8 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
 		-- a loud sound already echoed by the echo slots (not "all native") takes no source slot too
 		local echoed = (A.cfg.native_all or 0) < 0.5 and (data.SoundLevel or 75) >= (A.cfg.native_echo_lvl or 95)
 		local dominant = slot == 1 and not echoed and S
-		local srcSend = dominant and (data.Volume or 1) * A.Native.PhysSrcSend(data.SoundLevel or 75, S:Distance(L)) * A.Native.Directivity(src, L)
-		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk,
+		local srcSend = dominant and (data.Volume or 1) * A.Native.PhysSrcSend(data.SoundLevel or 75, S:Distance(L)) * dirK
+		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
 			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, trans = v.kind == "transmission", noRoom = true })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
@@ -451,10 +453,10 @@ end
 local function targetValues(rec, fv, t, L)
 	if fv.id then
 		local N = A.Native
-		local el, em, eh = N.VoiceEQ(t.lp, t.len)
+		local el, em, eh = N.VoiceEQ(t.lp, t.len, t.lpDb)
 		-- Doppler of a moving source or listener, as loops and clear voices (N.UpdateFollowers) have it
 		local k = N.Doppler and N.Doppler(rec.S, N.VelocityOf(rec.ent), L, N.ListenerVelocity()) or 1
-		return rec.vol * N.PhysPath(t.gain, t.len, rec.lvl) * N.Directivity(rec.dirEnt, L) * A.cfg.native_gain, el, em, eh, t.pos, rec.pitch * k
+		return rec.vol * N.PhysPath(t.gain, t.len, rec.lvl, t.rawLossDb) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain, el, em, eh, t.pos, rec.pitch * k
 	end
 	local pos = A.DistVariantPos(rec.name, t.pos, L, rec.S)
 	local d = pos:Distance(L)
@@ -559,7 +561,10 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 	OS.seq = (OS.seq or 0) + 1
 	local ent = IsValid(src) and not src:IsWorld() and src or nil
 	local name = data.SoundName
+	-- chan / aim: a weapon's dipole keeps the aim it was fired with (N.Directivity)
+	local _, aim0 = A.Native and A.Native.WeaponAim and A.Native.WeaponAim(IsValid(src) and src or nil, data.Channel)
 	local rec = { key = OS.seq, name = name, ent = ent, dirEnt = IsValid(src) and src or nil, S = S, lvl = data.SoundLevel or 75,
+		chan = data.Channel, aim = aim0,
 		vol = data.Volume or 1, pitch = data.Pitch or 100, tEnd = tEnd, tNext = now + followInterval(), hyst = {},
 		clearPath = r.clear or not r.voices or #r.voices == 0, ukey = ukey,
 		-- volume changes need a trusted end (see MIN_LEFT): never for a sound of unknown length
@@ -570,7 +575,7 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 		local fv, v = e.h, e.v
 		fv.tEnd, fv.pos, fv.ramp = fv.t0 + play, v.epos or v.pos, {}
 		if fv.id then
-			local el, em, eh = N.VoiceEQ(v.lp, v.len)
+			local el, em, eh = N.VoiceEQ(v.lp, v.len, v.lpDb)
 			A.Paths.RampTo(fv.ramp, now, 0, L, v.vol * A.cfg.native_gain, el, em, eh, v.pos, rec.pitch)
 			OS.native[fv.id] = fv
 			-- the path field it was played with (PlayVoice passes it only with native_path_fx)
@@ -659,10 +664,10 @@ function A.Process(data, relayed)
 		-- "everything native": a clear sound is played by the module at its real position
 		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 and not A.IsSentence(data.SoundName) then
 			local d = S:Distance(L)
-			local dir = A.Native.Directivity(IsValid(src) and src or nil, L)
+			local dir = A.Native.Directivity(IsValid(src) and src or nil, L, data.Channel)
 			local g = (data.Volume or 1) * A.Native.PhysClear(lvl, d) * dir
 			-- PlayVoice only (no engine fallback here: the caller plays the original if this fails)
-			local follow = IsValid(src) and not src:IsWorld() and { ent = src, vol = data.Volume or 1, lvl = lvl } or nil
+			local follow = IsValid(src) and not src:IsWorld() and { ent = src, vol = data.Volume or 1, lvl = lvl, chan = data.Channel } or nil
 			local delay = voiceDelay({ len = d, pos = S }, L)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,

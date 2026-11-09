@@ -553,12 +553,18 @@ local function spread(lvl, d)
 end
 --- Direct gain (before volume and native_gain) of a source of level lvl at distance d in clear sight.
 function N.PhysClear(lvl, d) return math.min(spread(lvl, d), 1) end
---- Direct gain of a path voice: gEng = its engine-law gain (path losses included) at path length len.
--- Its losses are taken back out (the headroom the path model gave a loud source included) and the real
--- spreading applied instead.
-function N.PhysPath(gEng, len, lvl)
+--- Direct gain of a path voice: gEng = its engine-law gain (path losses included) at path length len,
+-- rawLossDb = the voice's own loss before any headroom (v.rawLossDb, sh_paths). The real spreading is
+-- applied with that loss. The headroom is already in spread() (a loud source above full scale), so the
+-- raw loss must be used: the path model takes the headroom off the loss (AC.Headroom, ~48 dB for a level
+-- 140 gunshot at 10 m), and a 49.5 dB wall then reached gEng as "no loss" (clamped to 0 dB): recovered
+-- from gEng, the shot came out at full scale instead of -20 dB.
+-- Without rawLossDb (an older caller), the loss is recovered from gEng as before (exact while the headroom
+-- did not absorb all of it).
+function N.PhysPath(gEng, len, lvl, rawLossDb)
 	local AC = A.AC
 	local d = math.max(len or 0, N.REF_UNITS)
+	if rawLossDb then return math.min(spread(lvl, d) * 10 ^ (-math.max(rawLossDb, 0) / 20), 1) end
 	local eng = math.max(AC.EngineGain(d, lvl or 75), 1e-6)
 	local ratio = math.min(gEng / eng, 1)
 	local loss = ratio >= 0.999 and 1 or ratio * 10 ^ (-AC.Headroom(lvl or 75, d, A.cfg.fullscale_db or 90) / 20)

@@ -116,7 +116,7 @@ local function applyNative(m, S, L)
 	else
 		local p, dp, pt = 0, 0, 0
 		for _, v in ipairs(r.voices) do
-			local g = N.PhysPath(v.gain, v.len, m.lvl)
+			local g = N.PhysPath(v.gain, v.len, m.lvl, v.rawLossDb) -- the loss before headroom (N.PhysPath)
 			p, dp = p + g * g, dp + (v.diffuse or 0) * g * g
 			-- what comes through walls: the listener's room resonates with it (N.RoomSend)
 			if v.kind == "transmission" then local s = N.RoomSend(g, v.pos, L) pt = pt + s * s end
