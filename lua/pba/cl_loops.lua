@@ -107,40 +107,37 @@ local function applyNative(m, S, L)
 	local N = A.Native
 	local r = pathOf(m, S, L)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
-	local pos, gain, lp, send
+	local pos, gain, lp, trans
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
 	if m.clearPath then
 		pos, gain, lp = S, AC.EngineGain(S:Distance(L), m.lvl), 0
-		send = gain * N.SendK(S:Distance(L))
 		m.diffuse = 0
 	else
-		local p, dp, ps = 0, 0, 0
+		local p, dp, pt = 0, 0, 0
 		for _, v in ipairs(r.voices) do
 			p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain
-			local s = v.gain * N.SendK(v.pos:Distance(L)) -- room reverb send: last leg (see N.SendK)
-			ps = ps + s * s
+			-- what comes through walls: the listener's room resonates with it (N.RoomSend)
+			if v.kind == "transmission" then local s = N.RoomSend(v.gain, v.pos, L) pt = pt + s * s end
 		end
-		pos, gain, lp, send = r.voices[1].pos, math.sqrt(p), r.voices[1].lp, math.sqrt(ps)
+		pos, gain, lp, trans = r.voices[1].pos, math.sqrt(p), r.voices[1].lp, math.sqrt(pt)
 		m.diffuse = dp / math.max(p, 1e-12) -- diffuse share (long winding path): the module blurs and reverbs it
 	end
 	-- same meters as the patch path (gain relative to the engine's direct law, DSP equivalent)
 	m.g = math.min(gain / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6), 1)
 	m.curDsp = AC.DSPForVoice(lp or 0, m.diffuse)
-	-- source reverb slot (reflections simulated from the loop's position: its room's reverb spilling out
-	-- of the openings included; see streamSend in cl_streams): the simulation has the geometry, the send
-	-- is the game's level at this distance without the path's losses, times distance / 1 m
-	-- the listener's room keeps the send computed above (what reaches the listener's space: a loop upstairs
-	-- makes the room below resonate), except in clear sight where the slot simulates that same room
+	-- reverb (cl_native, "Reverb of natively rendered sounds"): the air-borne part from a source slot at
+	-- the loop's position; the listener's room only gets what comes through walls. No slot: the room bus
+	-- at the voice's gain
 	local now = RealTime()
 	local d = S:Distance(L)
-	m.srcSend = AC.EngineGain(math.max(d, 1), m.lvl) * math.Clamp(d / N.REF_UNITS, 1, 100) * m.vol * A.cfg.native_gain
-	if m.nativeId and pba_native.SourceReflect and (not m.srcNext or now >= m.srcNext) then
+	m.srcSend = N.SrcSend(AC.EngineGain(math.max(d, 1), m.lvl) * m.vol * A.cfg.native_gain, d)
+	if m.nativeId and (not m.srcNext or now >= m.srcNext) then
 		m.srcNext = now + 0.3
-		m.srcSlot = pba_native.SourceReflect(m.nativeId, S, m.srcSend)
+		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
 	end
-	if m.srcSlot and m.srcSlot >= 0 and m.clearPath then send = 0 end
 	gain = gain * m.vol * A.cfg.native_gain
-	send = send * m.vol * A.cfg.native_gain
+	local send = m.srcBound and (trans or 0) * m.vol * A.cfg.native_gain or gain
+	m.roomSend = send
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L))
 	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
 	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
@@ -167,6 +164,12 @@ local function applyNative(m, S, L)
 	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
 	m.started = true
 	m.nativeId = id > 0 and id or nil
+	-- its source reverb slot at once (else only at the next evaluation)
+	if m.nativeId then
+		m.srcNext = RealTime() + 0.3
+		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
+		if m.srcBound then pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, (trans or 0) * m.vol * A.cfg.native_gain) end
+	end
 	-- a new voice starts at its target: the next ramp starts from there
 	m.ramp = nil
 	if m.nativeId and (A.cfg.continuous_ramp or 0) >= 0.5 then
@@ -348,10 +351,10 @@ function LP.FollowNative(L)
 	for _, m in pairs(LP.mirrors) do
 		if m.nativeId and not m.done then
 			-- keep its source reverb slot (pba_native.SourceReflect needs a call at least every 0.5 s)
-			if m.srcSlot and m.srcSlot >= 0 and pba_native.SourceReflect and (not m.srcNext or now >= m.srcNext) then
+			if m.srcBound and (not m.srcNext or now >= m.srcNext) then
 				m.srcNext = now + 0.3
 				local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
-				if S then m.srcSlot = pba_native.SourceReflect(m.nativeId, S, m.srcSend) end
+				if S then m.srcBound = N.BindSource(m.nativeId, S, m.srcSend) end
 			end
 			local ramp = m.ramp
 			local ent = m.clearPath and IsValid(m.ent) and m.ent or nil
@@ -364,15 +367,13 @@ function LP.FollowNative(L)
 				if ramp then
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
-					-- clear sight: with a source reverb slot, that slot is the room (no listener-room send)
-					local send = (m.srcSlot and m.srcSlot >= 0) and 0 or g * N.SendK(d)
-					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, send)
+					-- clear sight: nothing through walls; the reverb is the slot's (no slot: the room at the gain)
+					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, m.srcBound and 0 or g)
 				end
 			end
 			if ramp and ramp.pending then
 				local g, el, em, eh, pos, pitch = P.RampAt(ramp, now, L)
-				local send = (m.srcSlot and m.srcSlot >= 0 and m.clearPath) and 0 or g * N.SendK(pos:Distance(L))
-				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch, nil, send)
+				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch) -- sends: kept from the last evaluation
 			end
 		end
 	end

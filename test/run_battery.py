@@ -215,6 +215,8 @@ steps = [
     # end to end, native: a radio stream in the upper room is reverberant there, and from the street the
     # reverb does not swamp it (send capped by the listener's enclosure, passed on gliding updates too)
     ("downtown_stream rp_downtown", lambda: py("downtown_stream.py")),
+    # end to end, native: outside, under an overhang vs one metre left under the open sky, same window: the same level, no enclosure-boosted reverb
+    ("melancholia_overhang", lambda: py("melancholia_overhang.py")),
     # what a player can hear: level steps > 1 dB (JND) and
     # direction jumps when the source or the listener walks 16 u steps, level(S, L) vs level(L, S).
     # Limits None (report only) until the first in-game baseline; --check fails on too few walks.

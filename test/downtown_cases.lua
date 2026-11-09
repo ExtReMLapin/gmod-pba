@@ -54,20 +54,5 @@ local doorway = dp and { length = math.Round(dp.length), diffDb = math.Round(dp.
 -- the route's shape only (the door of that doorway is closed after a map load: its leaf adds its own loss)
 local doorwayOk = dp ~= nil and (dp.diffDb or 99) <= 7 and dp.length <= Sd:Distance(Ld) * 1.25
 
--- native room reverb send (pba.Native.SendK): grows with the distance inside an enclosed space only. In the
--- street outside the building (open sky) a radio 1268 u away got x24: the street's reverb 28 dB over the
--- direct sound, an ambience with no direction. Expect x1 outside, > x3 for 290 u in the upper room.
-local enclosure
-local N = A.Native
-if N and N.UpdateEnclosure then
-	local keep = N.enclosure
-	N.UpdateEnclosure(Vector(-829.15, -6324.33, -139.97))
-	local street = N.SendK(1001)
-	N.UpdateEnclosure(Vector(-1968.5, -6676.3, -4))
-	local room = N.SendK(290)
-	N.enclosure = keep
-	enclosure = { ok = street <= 1.01 and room > 3, street = math.Round(street, 2), room = math.Round(room, 2) }
-end
-
-return { pass = ceilingOk and pillarOk and doorwayOk and (enclosure == nil or enclosure.ok), ceiling = { ok = ceilingOk, voices = cv },
-	pillar = { ok = pillarOk, path = pillar }, doorway = { ok = doorwayOk, path = doorway }, enclosure = enclosure }
+return { pass = ceilingOk and pillarOk and doorwayOk, ceiling = { ok = ceilingOk, voices = cv },
+	pillar = { ok = pillarOk, path = pillar }, doorway = { ok = doorwayOk, path = doorway } }

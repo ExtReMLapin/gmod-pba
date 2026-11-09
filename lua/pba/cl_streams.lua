@@ -68,27 +68,21 @@ local function applyVol(ch, r)
 	O.SetVolume(ch, (r.vol or 1) * (r.hG or r.g or 1))
 end
 
---- Reverb sends of a stream's native voice. Two reverbs:
---  * source reverb slot (pba_native.SourceReflect): reflections simulated FROM the stream's position:
---    its room's reverb, also spilling out of the room's openings (heard in the corridor outside). The
---    simulation has the geometry: its send is the game's level at this distance without the path's
---    losses, times distance / 1 m (a real source's reverb/direct balance against the game's gentle law).
---  * the listener's room (listener-centric reverb, N.SendK on the last leg): what reaches the listener's
---    space through walls, floors and openings makes it resonate (a radio upstairs, heard below). In clear
---    sight with a slot it is the same room as the slot's: 0, not counted twice.
--- Returns the listener-room send; the slot's is passed to SourceReflect (refreshed every 0.3 s, the module
--- frees a slot not refreshed for 1 s).
+--- Room-bus send of a stream's native voice (cl_native, "Reverb of natively rendered sounds"): the
+-- air-borne reverb comes from a source reverb slot at the stream's position (refreshed every 0.3 s, the
+-- module frees one not refreshed for 1 s); the listener's room only gets what comes through walls (the
+-- transmission voice, r.transG / r.transPos from the last evaluation). No slot: the room bus at the gain.
 local function streamSend(ch, r, L, g, pos)
 	local N = A.Native
 	local now = RealTime()
-	if r.nativeId and pba_native.SourceReflect and (not r.srcNext or now >= r.srcNext) then
+	if r.nativeId and (not r.srcNext or now >= r.srcNext) then
 		r.srcNext = now + 0.3
 		local dS = r.pos:Distance(L)
-		local srcSend = (r.vol or 1) * bassGain(ch, dS) * A.cfg.native_gain * math.Clamp(dS / N.REF_UNITS, 1, 100)
-		r.srcSlot = pba_native.SourceReflect(r.nativeId, r.pos, srcSend)
+		r.srcBound = N.BindSource(r.nativeId, r.pos, N.SrcSend((r.vol or 1) * bassGain(ch, dS) * A.cfg.native_gain, dS))
 	end
-	if r.srcSlot and r.srcSlot >= 0 and not r.apparent then return 0 end -- clear sight: the slot is the room
-	return g * N.SendK(pos:Distance(L))
+	if not r.srcBound then return g end
+	if r.transG and r.transPos then return N.RoomSend((r.vol or 1) * r.transG * A.cfg.native_gain, r.transPos, L) end
+	return 0
 end
 
 --- Native voice of a stream: position, gain (owner volume x BASS distance law x path), EQ.
@@ -193,18 +187,22 @@ local function evaluate(ch, r, L)
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len, r.diffuse = nil, 1, { 1, 1, 1 }, 1, 0, nil, 0
+		r.transG, r.transPos = nil, nil
 		return
 	end
 	-- each voice keeps its own losses (walls, doors, corners, absorption) but its distance law is the
 	-- channel's (BASS min / d), not the engine's at 75 dB: a long detour of a stream heard from far
 	-- (Set3DFadeDistance) lost tens of dB it never would have (room 14: -47 dB instead of -16)
 	local p, pd = 0, 0
+	local trG, trPos
 	local dS = S:Distance(L)
 	for _, v in ipairs(res.voices) do
 		local len = v.len or dS
 		local gv = v.gain / math.max(AC.EngineGain(len, 75), 1e-6) * bassGain(ch, len)
 		p, pd = p + gv * gv, pd + gv * gv * (v.diffuse or 0)
+		if v.kind == "transmission" then trG, trPos = gv, v.pos end
 	end
+	r.transG, r.transPos = trG, trPos -- what comes through walls (the listener's room resonates with it)
 	-- energy-weighted diffuse share (diffuse model): rendered by the native module only (BASS has no DSP)
 	r.diffuse = pd / math.max(p, 1e-12)
 	local g = math.sqrt(p) / math.max(bassGain(ch, dS), 1e-6)

@@ -192,8 +192,13 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 		if g < 0.001 then return false end
 		local delay = voiceDelay(v, L)
 		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
+		-- the dominant voice carries the source's air-borne reverb (its slot); a transmission voice feeds
+		-- the listener's room; the other voices no reverb of their own (no double count)
+		local S = data.Pos
+		local dominant = slot == 1 and S
+		local srcLevel = dominant and (data.Volume or 1) * AC.EngineGain(math.max(S:Distance(L), 1), data.SoundLevel or 75) * A.Native.Directivity(src, L)
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk,
-			diffuse = v.diffuse, lvl = data.SoundLevel or 75 })
+			diffuse = v.diffuse, srcPos = dominant or nil, srcLevel = srcLevel, trans = v.kind == "transmission", noRoom = true })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
 			if copies then copies.native[#copies.native + 1] = { id, data.SoundName } end
@@ -370,7 +375,7 @@ local function applyVoice(rec, fv, now, L)
 	local g, e1, e2, e3, pos, pitch = A.Paths.RampAt(fv.ramp, now, L)
 	fv.pos = pos
 	if fv.id then
-		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch, nil, g * A.Native.SendK(pos:Distance(L))) then fv.dead = true return end
+		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch) then fv.dead = true return end -- sends kept
 	else
 		local a = fv.a
 		a:SetPos(pos)
@@ -499,7 +504,7 @@ function A.Process(data, relayed)
 			local follow = IsValid(src) and not src:IsWorld() and { ent = src, vol = data.Volume or 1, lvl = lvl } or nil
 			local delay = voiceDelay({ len = d, pos = S }, L)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
-			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, lvl = lvl })
+			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S, srcLevel = g })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
 				-- followed while it plays: walking behind a wall must muffle it too

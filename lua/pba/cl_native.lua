@@ -426,49 +426,40 @@ end
 -- treble cut, low / mid / high gains) stands for it.
 N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 
--- Room reverb send of a voice. In a room the reverberant field is the same everywhere, excited by the
--- source's power, while the direct sound falls as 1/r: the farther the source, the more the reverb
--- dominates (an empty room: reverb = direct at ~0.7 m, +17 dB at 5.5 m). The game's direct sound does not
--- fall as 1/r (the engine's and BASS's laws are much gentler: a radio 290 u away is ~13 dB louder than
--- a real one), so a send that followed the direct gain kept the reverb/direct balance of a source about
--- 1 m away at every distance: far sources sounded dry (pba_native_reverb 0.15 right near, too low far).
--- The send is the gain times distance / 1 m: the reverb/direct balance of a real source at that distance,
--- whatever the game's distance law. That growth is the diffuse field of an ENCLOSED space: it stops at the
--- size of the listener's space, and there is none in the open (outside a house, a radio 1268 u away got
--- its send x24: the street's reverb 28 dB over the direct, an ambience with no direction). d is the last
--- leg (from the opening or wall the sound enters the listener's space through), capped at N.enclosure
--- (mean distance to the walls around the listener; 1 m under the open sky: send = gain).
+-- Reverb of natively rendered sounds: two simulations, one model.
+--  * Source reverb (pba_native.SourceReflect, a pool of slots shared by position): reflections simulated
+--    FROM the source: its room, what spills out of the room's openings, a street's facades. It carries the
+--    reverb of everything that travels through the air, for every sound that gets a slot. The simulation
+--    has the geometry and its energy follows the real (1/r) propagation, while the game's direct sound
+--    falls much more gently (a radio 290 u away is ~13 dB louder than a real one): the slot is fed the
+--    game's level at that distance without the path's losses, times distance / 1 m (N.SrcSend), which keeps
+--    a real source's reverb / direct balance against the game's direct.
+--  * The listener's room (listener-centric reverb, the module's room bus): only what reaches the
+--    listener's space THROUGH walls and floors (the transmission voice: a radio upstairs makes the room
+--    below resonate). Its "source" is the wall it comes out of, a boundary of the listener's space, at
+--    |wall - listener| (N.RoomSend). Without a slot (pool full, older module) a voice falls back to the
+--    room bus at its gain (the 1.0 behaviour), no distance factor.
+-- (An earlier version grew the room send with the distance and guessed whether the listener was enclosed
+-- from one trace upwards: under an overhang, one metre from the open sky, the output jumped 17 dB.)
 N.REF_UNITS = 52.49 -- 1 m
-N.enclosure = N.enclosure or N.REF_UNITS
-function N.SendK(d)
-	if not d then return 1 end
-	return math.Clamp(math.min(d, N.enclosure or N.REF_UNITS) / N.REF_UNITS, 1, 100)
+local function distK(d) return math.Clamp((d or 0) / N.REF_UNITS, 1, 100) end
+--- Send into a source slot: the game's level of the source at distance d WITHOUT the path's losses.
+function N.SrcSend(gameLevel, d) return gameLevel * distK(d) end
+--- Send into the listener's room for a transmission voice of gain g coming out of a wall at wallPos.
+function N.RoomSend(g, wallPos, L) return g * distK(wallPos:Distance(L)) end
+--- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
+-- the voice has a slot (then the room bus must only get the transmission part).
+function N.BindSource(id, S, srcSend)
+	if not (id and pba_native.SourceReflect) then return false end
+	local slot = pba_native.SourceReflect(id, S, srcSend)
+	return slot ~= nil and slot >= 0
 end
-
--- the listener's space: open sky above (a trace up of 2048 u reaching the sky or nothing) = open; else the
--- mean horizontal distance to the walls (8 directions, 1024 u max). Refreshed twice a second.
-local encTr = { mask = MASK_SOLID_BRUSHONLY }
-function N.UpdateEnclosure(L)
-	encTr.start, encTr.endpos = L, L + Vector(0, 0, 2048)
-	local up = util.TraceLine(encTr)
-	if not up.Hit or up.HitSky then N.enclosure = N.REF_UNITS return N.enclosure end
-	local sum = 0
-	for k = 0, 7 do
-		local a = k * math.pi / 4
-		encTr.endpos = L + Vector(math.cos(a) * 1024, math.sin(a) * 1024, 0)
-		local t = util.TraceLine(encTr)
-		sum = sum + (t.Hit and t.Fraction or 1) * 1024
-	end
-	N.enclosure = math.max(sum / 8, N.REF_UNITS)
-	return N.enclosure
-end
-timer.Create("pba_native_enclosure", 0.5, 0, function()
-	local ply = LocalPlayer()
-	if IsValid(ply) and N.render then N.UpdateEnclosure(ply:EyePos()) end
-end)
+timer.Remove("pba_native_enclosure") -- the former one-trace enclosure guess (autorefresh of a running game)
 
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
--- lvl = sound level (dB, for the room reverb send: see N.SendK; without it the send follows the gain),
+-- srcPos, srcLevel = the source's true position and the game's level there without the path's losses
+-- (before native_gain): the voice takes a source reverb slot (one voice per sound: the dominant one);
+-- trans = true for a transmission voice (through walls: the listener's room resonates);
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds, diffuse = share
 -- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction) }.
 -- Returns true on success.
@@ -481,10 +472,20 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and opt.sh or nil
 	local g = gain * A.cfg.native_gain
-	-- last leg: from the apparent position (opening, wall, or the source) to the listener
+	-- reverb sends (see "Reverb of natively rendered sounds" above): the listener's room only for what
+	-- comes through walls; the air-borne reverb from the source's slot
 	local ply = LocalPlayer()
-	local send = opt.lvl and IsValid(ply) and g * N.SendK(pos:Distance(ply:EyePos())) or nil
-	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, send)
+	local L = IsValid(ply) and ply:EyePos()
+	local roomSend
+	if opt.trans and L then roomSend = N.RoomSend(g, pos, L)
+	elseif opt.srcPos or opt.noRoom then roomSend = 0 end
+	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
+	if id and id > 0 and opt.srcPos and L then
+		local srcLevel = (opt.srcLevel or gain) * A.cfg.native_gain
+		if not N.BindSource(id, opt.srcPos, N.SrcSend(srcLevel, opt.srcPos:Distance(L))) and not opt.trans then
+			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g) -- no slot: the room bus at its gain
+		end
+	end
 	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100
@@ -542,7 +543,8 @@ function N.UpdateFollowers(L)
 			local g = f.vol * A.AC.EngineGain(math.max(d, 1), f.lvl) * N.Directivity(e, L) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)
 			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
-			if not pba_native.Update(id, S, g, l, m, h, pitch, nil, g * N.SendK(d)) then N.follow[id] = nil end
+			-- clear line: the reverb is the source slot's (bound at Play), kept alive while the voice lives
+			if not pba_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil end
 		end
 	end
 end
