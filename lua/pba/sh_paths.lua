@@ -446,7 +446,11 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	cfg = cfg or A.cfg
 	local len, diff, door, doorTilt = 0, 0, 0, 0
 	for i = 1, #pts - 1 do len = len + pts[i]:Distance(pts[i + 1]) end
-	local dp = doorPts or pts
+	-- pba_door_3d: the leaves on the route the sound takes (taut on its corners): a clearance vertex 6 u off a
+	-- jamb crossed a leaf's free end swinging past it while the taut route stayed clear of it (5 dB on and off);
+	-- the leaf's way round bends round the world (P.LeafWay), a leg grazing an edge no longer flips it
+	local d3 = (cfg.door_3d or 0) >= 0.5
+	local dp = (not d3 and doorPts) or pts
 	-- A leaf crossed by several consecutive segments is judged on the whole span, from the vertex before it
 	-- to the vertex after it: the probes' routes pass the leaves (they are not shape obstacles), so a
 	-- clearance vertex can lie inside an open leaf, and its way round from a vertex 5 u deep in the leaf was
@@ -457,7 +461,9 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	-- the leaves of each segment (several in a row: P.SegmentDoors), each paid once, on its span: from the
 	-- vertex before the first segment that meets it to the vertex after the last one of that run
 	local segHits = {}
-	for x = 1, nd do segHits[x] = P.SegmentDoors(dp[x], dp[x + 1]) or false end
+	-- pba_door_3d: also the leaves beside the route (P.LeafWay: the free part of the passage), each on the
+	-- route's stretch past it, with the route's length before and after it (Fresnel distances)
+	for x = 1, nd do segHits[x] = P.SegmentDoors(dp[x], dp[x + 1], d3) or false end
 	local function meets(x, ent)
 		local l = segHits[x]
 		if not l then return nil end
@@ -467,14 +473,28 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	for x = 1, nd do
 		for _, h in ipairs(segHits[x] or {}) do
 			local ent = h[1]
-			leaves = leaves or {}
-			leaves[ent] = true
+			if not d3 then
+				leaves = leaves or {}
+				leaves[ent] = true
+			end
 			if not (paid and paid[ent]) then
 				paid = paid or {}
 				paid[ent] = true
 				local j = x
 				while j < nd and meets(j + 1, ent) do j = j + 1 end
-				local dl, dlp, dt = P.DoorSpanLoss(ent, dp[x], dp[j + 1], cfg, h[2], h[3])
+				local span, d0, d9
+				if d3 then
+					span, d0, d9 = {}, 0, 0
+					for k = x, j + 1 do span[#span + 1] = dp[k] end
+					for k = 1, x - 1 do d0 = d0 + dp[k]:Distance(dp[k + 1]) end
+					for k = j + 1, #dp - 1 do d9 = d9 + dp[k]:Distance(dp[k + 1]) end
+				end
+				local dl, dlp, dt, hc = P.DoorSpanLoss(ent, dp[x], dp[j + 1], cfg, h[2], h[3], span, d0, d9)
+				-- crossed (within the hull): the route is that leaf's model (P.LeafOfPaths)
+				if d3 and hc and hc <= P.DOOR_HULL then
+					leaves = leaves or {}
+					leaves[ent] = true
+				end
 				if dl > 0 then
 					door = door + dl
 					doorTilt = doorTilt + (dt or AC.LevelDb(dlp or 0, cfg)) -- doors in series, like a chain's openings
@@ -672,12 +692,15 @@ local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, pro
 local OPENABLE = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
 local CLOSURE_FRAC0, CLOSURE_FRAC1 = 0.005, 0.2
 --- 1: the entity closes an opening (wall), 0: an object in the room, in between: a door just ajar.
-local function closureWeight(ent)
+-- pba_door_3d: a leaf is a closure while shut only; ajar, the narrowness of its gap is measured
+-- (P.LeafWay: the free part of the passage, AC.GapRatio), which the blend over the fraction stood for.
+local function closureWeight(ent, cfg)
 	local cls = ent:GetClass()
 	if not DOOR_CLASSES[cls] then return 0 end
 	if not OPENABLE[cls] then return 1 end -- func_brush, func_wall...: part of the structure
 	local st = doorState(ent)
 	if not st then return 1 end -- state unknown: as before
+	if ((cfg or A.cfg).door_3d or 0) >= 0.5 then return (st.frac or 0) <= CLOSURE_FRAC0 and 1 or 0 end
 	return 1 - ramp(st.frac or 0, CLOSURE_FRAC0, CLOSURE_FRAC1)
 end
 local function isClosure(ent) return closureWeight(ent) >= 1 end
@@ -815,7 +838,12 @@ local function wallsOneWay(S, L, maxWalls, srcEnt)
 			w.minExtent = math.min(ext.x, ext.y, ext.z) -- panel or closed volume (P.EvalWalls)
 			w.fromInside = tr.StartSolid or nil -- the ray starts inside it: one sheet crossed
 		end
-		if hitEnt and closureWeight(hitEnt) < 1 then w.detour = objectDetour(hitEnt, S, L) end
+		if hitEnt and OPENABLE[hitEnt:GetClass()] and (A.cfg.door_3d or 0) >= 0.5 then
+			-- a leaf in 3-D (P.LeafWay): the straight line is a route of two points, the leaf's one model
+			if closureWeight(hitEnt) < 1 then w.detour, w.gapDb = P.LeafWay(hitEnt, { S, L }, A.cfg, 0, 0, detClear(S, L)) end
+		elseif hitEnt and closureWeight(hitEnt) < 1 then
+			w.detour = objectDetour(hitEnt, S, L)
+		end
 		if hitEnt or not P.PassTool(tr) then walls[#walls + 1] = w end
 		if exit == L then break end
 		start = exit + dir * 0.5
@@ -892,25 +920,339 @@ end
 -- every route: the straight line, traced thin, does not.)
 local DOORS_ONLY = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
 local DOOR_HULL = 4
+P.DOOR_HULL = DOOR_HULL
 local doorOut = {}
 local function doorsOnly(e) return DOORS_ONLY[e:GetClass()] or false end
 local doorTr = { mask = MASK_SOLID, filter = doorsOnly, output = doorOut, ignoreworld = true,
 	mins = Vector(-DOOR_HULL, -DOOR_HULL, -DOOR_HULL), maxs = Vector(DOOR_HULL, DOOR_HULL, DOOR_HULL) }
 local doorWalls = { false }
+
+-- ------------------------------------------------------------------ a door leaf in 3-D (pba_door_3d)
+-- One model of a leaf on a route, whatever its angle and wherever the route passes it:
+--   * crossing it, the sound goes round it: the way round one of its edges, each leg that the world blocks
+--     bent taut round the world (P.CornerPoint from the route's own vertices: a double diffraction, the
+--     leaf's edge then the wall's corner), its extra length over the ROUTE's own (not over the chord of the
+--     span: a span over the route's corner paid that corner twice); the shortest of the edges' ways, by its
+--     whole cost. No way is rejected because a straight leg is blocked: an edge coming into view behind a
+--     corner was a jump to the next edge;
+--   * through the free part of the passage: across the way at the leaf's edge, the passage the world leaves
+--     (thin traces each side, gapAlong) and the part the leaf covers (its box projected): the Fresnel law of
+--     an opening masked by an object (AC.GapRatio, AC.ApertureBand), relative to the leaf's edge alone, so a
+--     slit between a free edge and a jamb pays its narrowness, a lone edge or a leaf flat against a wall
+--     nothing more than its way round;
+--   * beside the route (not crossing it, within LEAF_REACH): the same free part with the route at its
+--     clearance h from the leaf, faded out from DOOR_HULL to LEAF_REACH. At h = 0 the two are one, so a leaf
+--     swinging off a route or a listener stepping past its edge changes the level by degrees.
+-- A shut leaf (closureWeight 1) stays its one loss (leafLoss); ajar, the object above, its gap measured.
+local LEAF_REACH = 32
+local GAP_FAR = 128 -- units: a passage wider than this on one side is open on that side
+local WAY_TRIES = 6 -- ways round costed in full, the best by their lower bound
+local WAY_HALVINGS = 16 -- bisection along an edge for its best point
+local GAP_MAX_DB = 60
+P.LEAF_REACH = LEAF_REACH
+
+local function polyLen(V, i, j)
+	local s = 0
+	for k = i, j - 1 do s = s + V[k]:Distance(V[k + 1]) end
+	return s
+end
+-- closest point of box mn..mx to p (all local)
+local function boxClamp(p, mn, mx)
+	return Vector(math.Clamp(p.x, mn.x, mx.x), math.Clamp(p.y, mn.y, mx.y), math.Clamp(p.z, mn.z, mx.z))
+end
+-- distance from segment a..b to box mn..mx (local): 0 and the entry fraction when it crosses the box, else
+-- the least distance (convex along the segment: ternary search), the fraction there and the box point
+local function segBoxDist(a, b, mn, mx)
+	local t0, t1 = 0, 1
+	local hit = true
+	for _, k in ipairs({ "x", "y", "z" }) do
+		local d = b[k] - a[k]
+		if math.abs(d) < 1e-9 then
+			if a[k] < mn[k] or a[k] > mx[k] then hit = false break end
+		else
+			local u, v = (mn[k] - a[k]) / d, (mx[k] - a[k]) / d
+			if u > v then u, v = v, u end
+			t0, t1 = math.max(t0, u), math.min(t1, v)
+			if t0 > t1 then hit = false break end
+		end
+	end
+	if hit then return 0, (t0 + t1) * 0.5 end
+	local function f(t)
+		local p = a + (b - a) * t
+		return p:Distance(boxClamp(p, mn, mx))
+	end
+	local lo, hi = 0, 1
+	for _ = 1, 40 do
+		local m1, m2 = lo + (hi - lo) / 3, hi - (hi - lo) / 3
+		if f(m1) <= f(m2) then hi = m2 else lo = m1 end
+	end
+	local t = (lo + hi) * 0.5
+	local p = a + (b - a) * t
+	return p:Distance(boxClamp(p, mn, mx)), t, boxClamp(p, mn, mx)
+end
+-- How far the passage reaches from r along dir (across the way, whose direction at r is ray): thin traces of
+-- the world across the way, as a doorway's gap is measured across its portal (P.Aperture), from r and from
+-- points before and after it along the way. A wall met from depth t counts depthPen(t) farther: a jamb a
+-- little before or after the leaf's edge along the way narrows the passage too, the less the farther, and
+-- not at all from GAP_DEPTH (so a wall coming within reach adds nothing at once). The depth where a jamb starts
+-- is bisected: the reach is continuous as the leaf or the way moves past that edge. Not traced to the route's
+-- vertices: a corner the route bends round farther on is the way's second bend, paid in its length (double
+-- diffraction), not the other side of a slit (a leaf's free edge and a wall corner just past it across the way
+-- made a shut slit, 60 dB), and legs to a vertex next to a bend were pinched by that bend's own corner.
+local GAP_DEPTH, GAP_HALVINGS = 16, 6
+local GAP_DEPTHS = { 2, 4, 6, 8, 10, 12, 14, 15 } -- sample depths (units, < GAP_DEPTH)
+local function depthPen(t) return 0.5 * t / (1 - t / GAP_DEPTH) end
+local gapOut = {}
+local gapTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = gapOut }
+local function crossDist(p, dir)
+	gapTr.start, gapTr.endpos = p, p + dir * GAP_FAR
+	util.TraceLine(gapTr)
+	if not gapOut.Hit then return nil end
+	if gapOut.StartSolid then return 0 end
+	return gapOut.Fraction * GAP_FAR
+end
+local function gapAlong(r, dir, ray)
+	local d0 = crossDist(r, dir) or GAP_FAR
+	local best = d0
+	for side = -1, 1, 2 do
+		local prevT, prevD = 0, d0
+		for _, t in ipairs(GAP_DEPTHS) do
+			if depthPen(t) >= best then break end
+			local d = crossDist(r + ray * (t * side), dir) or GAP_FAR
+			local tb = t
+			if d < prevD - 1 then
+				-- a nearer wall starts between prevT and t: where (the reach is continuous as it moves)
+				local cut = (prevD + d) * 0.5
+				local lo, hi = prevT, t
+				for _ = 1, GAP_HALVINGS do
+					local m = (lo + hi) * 0.5
+					local dm = crossDist(r + ray * (m * side), dir) or GAP_FAR
+					if dm < cut then hi, d = m, dm else lo = m end
+				end
+				tb = hi
+			end
+			best = math.min(best, d + depthPen(tb))
+			prevT, prevD = t, d
+		end
+	end
+	return best
+end
+-- the leaf's box corners in world space
+local function boxCorners(ent)
+	local mn, mx = ent:OBBMins(), ent:OBBMaxs()
+	local out = {}
+	for i = 0, 7 do
+		out[#out + 1] = ent:LocalToWorld(Vector(bit.band(i, 1) == 0 and mn.x or mx.x, bit.band(i, 2) == 0 and mn.y or mx.y,
+			bit.band(i, 4) == 0 and mn.z or mx.z))
+	end
+	return out
+end
+--- Loss (dB) of the free part of the passage across a route at r (game state: traces): the leaf on the side
+-- m at clearance h (0: the route grazes its edge), the world at g on the other side and at W beyond the leaf's
+-- side (gapAlong across the way, whose direction at r is ray), the leaf covering from h to its far extent; d1,
+-- d2 the Fresnel distances.
+-- Taken relative to the leaf's edge alone (the same passage open on the other side): a lone edge costs what
+-- every edge costs (AC.Corner, AC.Diffraction: nothing at grazing, the way round's length beyond), the gap
+-- the narrowness the world adds on the other side: a slit.
+local GAP_OPEN = 1e4
+local function gapLoss(ent, r, m, h, ray, d1, d2, cfg)
+	local far = -math.huge
+	for _, c in ipairs(boxCorners(ent)) do far = math.max(far, (c - r):Dot(m)) end
+	local W = gapAlong(r, m, ray)
+	local top = math.min(far, W)
+	if top <= h then return 0 end -- the leaf is outside the passage (behind a jamb, flat against a wall)
+	local g = gapAlong(r, -m, ray)
+	d1, d2 = math.max(d1, 1), math.max(d2, 1)
+	local slit = AC.GapRatio(-g, h, top, d1, d2, cfg.diff_freq)
+	local edge = AC.GapRatio(-GAP_OPEN, h, top, d1, d2, cfg.diff_freq)
+	local ratio = math.min(slit / math.max(edge, 1e-9), 1)
+	return math.min(-AC.GainToDb(math.max(ratio, 1e-9)), GAP_MAX_DB)
+end
+--- Clearance (units) of the polyline V from the leaf's box, 0 when it crosses it; then the segment index, the
+-- fraction along it and the box point nearest (local) when it does not.
+local function leafClearance(ent, V)
+	local mn, mx = ent:OBBMins(), ent:OBBMaxs()
+	local best, bi, bt, bq = math.huge, 1, 0, nil
+	local prev = ent:WorldToLocal(V[1])
+	for i = 1, #V - 1 do
+		local nxt = ent:WorldToLocal(V[i + 1])
+		local d, t, q = segBoxDist(prev, nxt, mn, mx)
+		if d < best then best, bi, bt, bq = d, i, t, q end
+		if d <= 0 then break end
+		prev = nxt
+	end
+	return best, bi, bt, bq
+end
+P.LeafClearance = leafClearance
+local EDGE_PAIRS = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
+--- The way a route V (world points; clear: its segments are clear of the world) takes past leaf `ent` (game
+-- state: traces). d0, d9: the route's length before V[1] and after V[#V] (Fresnel distances). Returns the
+-- extra length of the way round the leaf over the route's own (0 beside it, math.huge when there is none),
+-- the loss (dB) of the free part of the passage it goes through, and the route's clearance from the leaf.
+function P.LeafWay(ent, V, cfg, d0, d9, clear)
+	cfg = cfg or A.cfg
+	d0, d9 = d0 or 0, d9 or 0
+	local n = #V
+	local h, i, t, q = leafClearance(ent, V)
+	local bestCost, bestD, bestGap = math.huge, math.huge, 0
+	if h > 0 then
+		-- beside: the route itself, through the free part across it at its point nearest the leaf
+		local r = V[i] + (V[i + 1] - V[i]) * t
+		local m = ent:LocalToWorld(q) - r
+		m:Normalize()
+		local d1 = d0 + polyLen(V, 1, i) + V[i]:Distance(r)
+		local d2 = r:Distance(V[i + 1]) + polyLen(V, i + 1, n) + d9
+		bestGap = gapLoss(ent, r, m, h, (V[i + 1] - V[i]):GetNormalized(), d1, d2, cfg)
+		bestCost, bestD = bestGap, 0
+		if bestGap <= 0 then return 0, 0, h end
+	end
+	-- the ways round the edges (crossing; beside too, when the route's own passage is narrow: a way round the
+	-- leaf's far corner through a wider part is the same choice either side of h = 0), each edge at its point
+	-- best for the span's ends (convex along the edge), cheapest lower bound first
+	local mn, mx = ent:OBBMins(), ent:OBBMaxs()
+	local lA, lB = ent:WorldToLocal(V[1]), ent:WorldToLocal(V[n])
+	local route = polyLen(V, 1, n)
+	local cands = {}
+	for _, pr in ipairs(EDGE_PAIRS) do
+		local function corner(k)
+			return Vector(bit.band(k, 1) == 0 and mn.x or mx.x, bit.band(k, 2) == 0 and mn.y or mx.y, bit.band(k, 4) == 0 and mn.z or mx.z)
+		end
+		local p0, p1 = corner(pr[1]), corner(pr[2])
+		local dv = p1 - p0
+		local lo, hi = 0, 1
+		for _ = 1, WAY_HALVINGS do
+			local tm = (lo + hi) * 0.5
+			local x = p0 + dv * tm
+			local sa, sb = x - lA, x - lB
+			local slope = sa:Dot(dv) / math.max(sa:Length(), 1e-6) + sb:Dot(dv) / math.max(sb:Length(), 1e-6)
+			if slope > 0 then hi = tm else lo = tm end
+		end
+		local x = p0 + dv * ((lo + hi) * 0.5)
+		cands[#cands + 1] = { x:Distance(lA) + x:Distance(lB), x, dv }
+	end
+	table.sort(cands, function(u, v) return u[1] < v[1] end)
+	local center = ent:LocalToWorld((mn + mx) * 0.5)
+	local tries = 0
+	for _, c in ipairs(cands) do
+		-- the way round is never shorter than via this point in straight lines
+		if AC.Diffraction(math.max(c[1] - route, 0), cfg.diff_freq, cfg.diff_max_edge) >= bestCost then break end
+		if tries >= WAY_TRIES then break end
+		local e = ent:LocalToWorld(c[2])
+		-- forward leg: from e to the last route vertex it sees, bent round the world to the next one
+		local fwd, nxt
+		for k = n, 1, -1 do
+			if detClear(e, V[k]) then
+				if k == n then
+					fwd, nxt = e:Distance(V[n]), V[n]
+				elseif clear then
+					local qq = P.CornerPoint(e, V[k], V[k + 1])
+					fwd, nxt = e:Distance(qq) + qq:Distance(V[k + 1]) + polyLen(V, k + 1, n), qq
+				end
+				break
+			end
+		end
+		-- back leg: from the first route vertex that sees e, bent round the world from the one before it
+		local back, prv
+		if fwd then
+			for k = 1, n do
+				if detClear(V[k], e) then
+					if k == 1 then
+						back, prv = V[1]:Distance(e), V[1]
+					elseif clear then
+						local qq = P.CornerPoint(V[k - 1], V[k], e)
+						back, prv = polyLen(V, 1, k - 1) + V[k - 1]:Distance(qq) + qq:Distance(e), qq
+					end
+					break
+				end
+			end
+		end
+		if fwd and back then
+			tries = tries + 1
+			local delta = math.max(back + fwd - route, 0)
+			-- across the way at e: perpendicular to the edge and to the way's direction, towards the leaf
+			local te = ent:LocalToWorld(c[2] + c[3]) - e
+			te:Normalize()
+			local dir = (e - prv):GetNormalized() + (nxt - e):GetNormalized()
+			dir = dir - te * dir:Dot(te)
+			dir:Normalize()
+			local m = center - e
+			m = m - te * m:Dot(te) - dir * m:Dot(dir)
+			local gap = 0
+			if m:LengthSqr() > 1e-6 then
+				m:Normalize()
+				gap = gapLoss(ent, e, m, 0, dir, d0 + back, fwd + d9, cfg)
+			end
+			local cost = AC.Diffraction(delta, cfg.diff_freq, cfg.diff_max_edge) + gap
+			if cost < bestCost then bestCost, bestD, bestGap = cost, delta, gap end
+		end
+	end
+	return bestD, bestGap, h
+end
+
 --- Loss (dB) and lowpass level of door entity `ent` for the stretch of a route from a to b that crosses it
--- (P.EvalWalls, one wall: its closure part, and its object part with the way round it from a to b).
-function P.DoorSpanLoss(ent, a, b, cfg, hitPos, startSolid)
+-- (P.EvalWalls, one wall: its closure part, and its object part with the way round it from a to b), its tilt
+-- and the route's clearance from it (0: crossing). pba_door_3d: V (optional) the route's stretch a .. b, d0 /
+-- d9 its length before a and after b; the leaf in 3-D (P.LeafWay), also beside the route up to LEAF_REACH.
+function P.DoorSpanLoss(ent, a, b, cfg, hitPos, startSolid, V, d0, d9)
 	cfg = cfg or A.cfg
 	local ext = ent:OBBMaxs() - ent:OBBMins()
 	hitPos = hitPos or a
 	-- (no material: a leaf's loss is its state's, P.EvalWalls / leafLoss, not its surface's)
 	local w = { entry = hitPos, exit = hitPos, thickness = 0, ent = ent,
 		minExtent = math.min(ext.x, ext.y, ext.z), fromInside = startSolid or nil }
-	if closureWeight(ent) < 1 then w.detour = objectDetour(ent, a, b) end
+	local h = 0
+	if (cfg.door_3d or 0) >= 0.5 and OPENABLE[ent:GetClass()] then
+		local clear = V ~= nil
+		V = V or { a, b }
+		if closureWeight(ent, cfg) >= 1 then
+			-- shut: its one loss within the hull, as before; nothing beside the route
+			h = leafClearance(ent, V)
+			if h > DOOR_HULL then return 0, 0, 0, h end
+		else
+			w.detour, w.gapDb, h = P.LeafWay(ent, V, cfg, d0, d9, clear or detClear(a, b))
+			w.fade = 1 - ramp(h, DOOR_HULL, LEAF_REACH)
+			if w.fade <= 0 then return 0, 0, 0, h end
+		end
+	elseif closureWeight(ent, cfg) < 1 then
+		w.detour = objectDetour(ent, a, b)
+	end
 	doorWalls[1] = w
 	local loss, lp = P.EvalWalls(doorWalls, cfg)
 	P.lastDoorWall = w -- diagnostics (w.lossDb, w.diffDb, w.detour)
-	return loss, lp, w.tiltDb
+	return loss, lp, w.tiltDb, h
+end
+--- pba_door_3d: the leaves ajar beside a straight line S -> L that the world leaves clear (the line's walls
+-- given): appended to walls as `beside` walls (P.EvalWalls: the free part of the passage the line goes
+-- through, faded out with its clearance), so the line pays a leaf's gap as a route does (P.EvalPolyline): a
+-- leaf swinging off the line, or a listener stepping past its edge, changes the level by degrees instead of
+-- dropping the slit's loss at once. Game state (traces).
+function P.LineLeaves(S, L, walls, cfg)
+	cfg = cfg or A.cfg
+	local on = {}
+	for _, w in ipairs(walls) do
+		if not w.ent and not w.water then return walls end -- through the world: not a way past the leaf
+		if w.ent then on[w.ent] = true end
+	end
+	local list = P.SegmentDoors(S, L, true)
+	if not list then return walls end
+	for _, h in ipairs(list) do
+		local ent = h[1]
+		if not on[ent] and OPENABLE[ent:GetClass()] and closureWeight(ent, cfg) < 1 then
+			local delta, gapDb, hc = P.LeafWay(ent, { S, L }, cfg, 0, 0, true)
+			if hc > 0 and hc < LEAF_REACH then
+				local ext = ent:OBBMaxs() - ent:OBBMins()
+				local w = { entry = h[2], exit = h[2], thickness = 0, ent = ent, minExtent = math.min(ext.x, ext.y, ext.z),
+					detour = delta, gapDb = gapDb, fade = 1 - ramp(hc, DOOR_HULL, LEAF_REACH), beside = true }
+				if P.EvalWalls({ w }, cfg) > 0.05 then
+					local d = h[2]:DistToSqr(S)
+					local at = #walls + 1
+					for i, x in ipairs(walls) do if x.entry:DistToSqr(S) > d then at = i break end end
+					table.insert(walls, at, w)
+				end
+			end
+		end
+	end
+	return walls
 end
 --- Every door leaf the segment a -> b meets (DOOR_HULL hull, doors only), in order: a list of
 -- { ent, hitPos, startSolid }. A trace stops at the first entity it hits: a segment through two shut doors
@@ -922,12 +1264,17 @@ local doorSkip = {}
 local function doorsOnlyNew(e) return DOORS_ONLY[e:GetClass()] and not doorSkip[e] or false end
 local doorTrN = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ignoreworld = true,
 	mins = Vector(-DOOR_HULL, -DOOR_HULL, -DOOR_HULL), maxs = Vector(DOOR_HULL, DOOR_HULL, DOOR_HULL) }
-function P.SegmentDoors(a, b)
+-- the leaves near a segment (pba_door_3d: a leaf beside a route narrows its passage, P.LeafWay)
+local doorTrR = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ignoreworld = true,
+	mins = Vector(-LEAF_REACH, -LEAF_REACH, -LEAF_REACH), maxs = Vector(LEAF_REACH, LEAF_REACH, LEAF_REACH) }
+--- reach: true for the leaves within LEAF_REACH of the segment instead of DOOR_HULL.
+function P.SegmentDoors(a, b, reach)
 	local list
+	local tr0 = reach and doorTrR or doorTrN
 	for k in pairs(doorSkip) do doorSkip[k] = nil end
 	for _ = 1, MAX_DOORS_SEG do
-		doorTrN.start, doorTrN.endpos = a, b
-		util.TraceHull(doorTrN)
+		tr0.start, tr0.endpos = a, b
+		util.TraceHull(tr0)
 		local tr = doorOut
 		if not tr.Hit or not IsValid(tr.Entity) or doorSkip[tr.Entity] then break end
 		list = list or {}
@@ -941,7 +1288,7 @@ end
 -- meets (P.SegmentDoors), each at its P.DoorSpanLoss, in series.
 function P.SegmentDoorLoss(a, b, cfg)
 	cfg = cfg or A.cfg
-	local list = P.SegmentDoors(a, b)
+	local list = P.SegmentDoors(a, b, (cfg.door_3d or 0) >= 0.5)
 	if not list then return 0 end
 	local loss, lp, tilt = 0, 0, 0
 	for _, h in ipairs(list) do
@@ -1494,7 +1841,11 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 		-- as a closure: the material, no way round it, never capped
 		local through = math.max(db * cfg.trans_scale - cfg.trans_lf_bonus, 0)
 		local midDb = db * cfg.trans_scale
-		local c = (w.ent and not w.water) and closureWeight(w.ent) or 1
+		local c = (w.ent and not w.water) and closureWeight(w.ent, cfg) or 1
+		-- a leaf in 3-D (P.LeafWay): its way round pays the narrowness of the gap it goes through, and neither
+		-- the surface's mass law (a leaf's loss is its state's) nor the cap (the room's reflections reach
+		-- round it through that same gap)
+		local leaf3d = w.gapDb ~= nil
 		local dd
 		w.tiltDb = AC.LevelDb(l, cfg) -- its spectral tilt (dB), continuous where the lowpass level is not
 		if c < 1 then
@@ -1505,7 +1856,7 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 			-- (thin box) is one sheet.
 			local pdb = db
 			local data = w.surfIdx and util.GetSurfaceData(w.surfIdx)
-			if data and (data.thickness or 0) > 0 then
+			if data and (data.thickness or 0) > 0 and not leaf3d then
 				-- both sheets crossed: the ray enters and leaves the volume (not from or to inside it)
 				if (w.minExtent or 0) > HOLLOW_MIN and not w.fromInside and w.thickness > 2 * data.thickness / 0.75 then
 					pdb = math.min(pdb, AC.DoubleWall(data.density, data.thickness, w.thickness, 500))
@@ -1518,6 +1869,7 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 			-- (can, crate) gives a tiny detour, hence ~0 dB: it barely shadows.
 			if w.detour and w.detour < math.huge and not noDetour then
 				dd = AC.Diffraction(w.detour, cfg.diff_freq, cfg.diff_max_edge)
+				if leaf3d then dd = dd + w.gapDb end
 				w.diffDb = dd
 			end
 			-- the transmitted part is rendered low-passed: low-frequency loss (table - bonus);
@@ -1537,7 +1889,7 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 			-- 2 u step while its loss moved 0.4 dB (pba_twodoors, paths_model 1).
 			local tObj = AC.LevelDb(l, cfg)
 			if dd then tObj = AC.MixTilt(10 ^ (-transDb / 10), tObj, 10 ^ (-dd / 10), dd) end
-			if not noCap and pThrough > cap then
+			if not noCap and not leaf3d and pThrough > cap then
 				-- the reflected sound dominates: capped loss, muffled like that level of loss
 				pThrough, pMid = cap, math.min(pMid, cap + cfg.trans_lf_bonus)
 				pl = math.min(pl, AC.LowpassLevel(cap, cfg))
@@ -1554,6 +1906,11 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 				midDb = c * midDb + (1 - c) * pMid
 				l = AC.LowpassLevel(c * AC.LevelDb(l, cfg) + (1 - c) * AC.LevelDb(pl, cfg), cfg)
 			end
+		end
+		if w.fade and w.fade < 1 then
+			-- a leaf beside the route, fading out with its clearance (P.DoorSpanLoss)
+			through, midDb, w.tiltDb = through * w.fade, midDb * w.fade, w.tiltDb * w.fade
+			l = AC.LowpassLevel(AC.LevelDb(l, cfg) * w.fade, cfg)
 		end
 		w.lossDb = through
 		loss = loss + through
@@ -2629,6 +2986,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt)
+	if (cfg.door_3d or 0) >= 0.5 then P.LineLeaves(S, L, walls, cfg) end
 	if #walls == 0 then
 		r.clear = true
 	else
@@ -2642,7 +3000,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		local oneModel = (cfg.door_leaf_portal or 1) >= 0.5
 		for _, w in ipairs(walls) do
 			if not w.ent and not w.water then worldBlocked = true end
-			if oneModel and w.ent and OPENABLE[w.ent:GetClass()] then leafBlocked = true end
+			if oneModel and w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
 		end
 		r.worldBlocked = worldBlocked
 		-- paths_model 1: the listener field over the probe graph is the one topology (doors and portals are
