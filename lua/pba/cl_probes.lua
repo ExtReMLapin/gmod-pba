@@ -9,6 +9,14 @@
 -- Path query: A* between probes visible from the source and from the listener, then string
 -- pulling; the last pulled vertex is the apparent position (the "opening").
 
+-- This file runs interpreted: LuaJIT off for every function in it (jit.off(true, true): this chunk
+-- and all the functions it defines). Its hot loops call the engine's C functions at every step
+-- (traces, Vector methods); GMod's LuaJIT cannot compile through them and keeps starting traces it
+-- aborts. Measured on rp_downtown_v4c_v2 (2026-11-09): one route 45 ms compiled, 7.8 interpreted;
+-- BuildFieldNow x5 55 -> 15 ms; a column scan unchanged. Same results: the interpreter and the
+-- compiled code compute the same doubles.
+if jit and jit.off then jit.off(true, true) end
+
 local A = pba
 local PR = {}
 A.Probes = PR
@@ -208,30 +216,83 @@ local function doorLeaves()
 	return list
 end
 PR.DoorLeaves = doorLeaves
--- whether segment a-b, widened by pad, crosses the box mn-mx (slabs)
-local function segBox(a, b, mn, mx, pad)
-	local t0, t1 = 0, 1
-	for _, k in ipairs({ "x", "y", "z" }) do
-		local o, d = a[k], b[k] - a[k]
-		local lo, hi = mn[k] - pad, mx[k] + pad
-		if abs(d) < 1e-9 then
-			if o < lo or o > hi then return false end
-		else
-			local u, v = (lo - o) / d, (hi - o) / d
-			if u > v then u, v = v, u end
-			if u > t0 then t0 = u end
-			if v < t1 then t1 = v end
-			if t0 > t1 then return false end
+-- The leaves' boxes, widened by DOOR_PAD, as plain numbers (6 per leaf), and a grid over x, y (cells of
+-- DOOR_CELL units: cell -> the boxes overlapping it), rebuilt when the list changes. clearOfDoors runs
+-- thousands of times per route (tighten's slides) and rp_downtown_v4c_v2 has 207 leaves: testing every box
+-- with a slab test on Vectors (a[k] is a C call, a key table per call) cost 50-125 ms per stream update,
+-- a freeze every 0.25 s while walking with a radio playing. A segment now tests the boxes of the cells
+-- its own box covers (once each: a box spans several cells).
+local DOOR_PAD, DOOR_CELL = 5, 256
+local boxesFor, boxes, grid, stamp, query = nil, {}, {}, {}, 0
+local function cellKey(cx, cy) return (cx + 32768) * 65536 + (cy + 32768) end
+local function doorBoxes(list)
+	if boxesFor == list then return boxes, grid end
+	boxes, grid, stamp = {}, {}, {}
+	for i, d in ipairs(list) do
+		local mn, mx, j = d[1], d[2], (i - 1) * 6 + 1
+		boxes[j], boxes[j + 1], boxes[j + 2] = mn.x - DOOR_PAD, mn.y - DOOR_PAD, mn.z - DOOR_PAD
+		boxes[j + 3], boxes[j + 4], boxes[j + 5] = mx.x + DOOR_PAD, mx.y + DOOR_PAD, mx.z + DOOR_PAD
+		for cx = floor(boxes[j] / DOOR_CELL), floor(boxes[j + 3] / DOOR_CELL) do
+			for cy = floor(boxes[j + 1] / DOOR_CELL), floor(boxes[j + 4] / DOOR_CELL) do
+				local k = cellKey(cx, cy)
+				local c = grid[k]
+				if not c then c = {} grid[k] = c end
+				c[#c + 1] = j
+			end
 		end
 	end
-	return true
+	boxesFor = list
+	return boxes, grid
+end
+-- one slab of the segment o + t d, t in [t0, t1], against [lo, hi]: the clipped t0, t1 (t0 > t1: missed)
+local function slab(o, d, lo, hi, t0, t1)
+	if abs(d) < 1e-9 then
+		if o < lo or o > hi then return 1, 0 end
+		return t0, t1
+	end
+	local u, v = (lo - o) / d, (hi - o) / d
+	if u > v then u, v = v, u end
+	if u > t0 then t0 = u end
+	if v < t1 then t1 = v end
+	return t0, t1
+end
+-- whether segment a-b crosses one of the widened leaf boxes
+local function nearDoor(a, b)
+	local bx, gr = doorBoxes(doorLeaves())
+	if #bx == 0 then return false end
+	local ax, ay, az = a.x, a.y, a.z
+	local dx, dy, dz = b.x - ax, b.y - ay, b.z - az
+	local x0, x1 = ax, ax + dx
+	if x0 > x1 then x0, x1 = x1, x0 end
+	local y0, y1 = ay, ay + dy
+	if y0 > y1 then y0, y1 = y1, y0 end
+	local z0, z1 = az, az + dz
+	if z0 > z1 then z0, z1 = z1, z0 end
+	query = query + 1
+	for cx = floor(x0 / DOOR_CELL), floor(x1 / DOOR_CELL) do
+		for cy = floor(y0 / DOOR_CELL), floor(y1 / DOOR_CELL) do
+			local c = gr[cellKey(cx, cy)]
+			if c then
+				for n = 1, #c do
+					local j = c[n]
+					if stamp[j] ~= query then
+						stamp[j] = query
+						local lx, ly, lz, hx, hy, hz = bx[j], bx[j + 1], bx[j + 2], bx[j + 3], bx[j + 4], bx[j + 5]
+						if x1 >= lx and x0 <= hx and y1 >= ly and y0 <= hy and z1 >= lz and z0 <= hz then
+							local t0, t1 = slab(ax, dx, lx, hx, 0, 1)
+							if t0 <= t1 then t0, t1 = slab(ay, dy, ly, hy, t0, t1) end
+							if t0 <= t1 then t0, t1 = slab(az, dz, lz, hz, t0, t1) end
+							if t0 <= t1 then return true end
+						end
+					end
+				end
+			end
+		end
+	end
+	return false
 end
 local function clearOfDoors(a, b)
-	local list = doorLeaves()
-	local near = false
-	for _, d in ipairs(list) do
-		if segBox(a, b, d[1], d[2], 5) then near = true break end
-	end
+	local near = nearDoor(a, b)
 	if not near then return true end
 	doorTr.start, doorTr.endpos = a, b
 	util.TraceHull(doorTr)
