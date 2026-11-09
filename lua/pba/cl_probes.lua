@@ -1077,7 +1077,7 @@ end
 -- The links each door or portal can touch, once per graph and set of doors: g.linkPortals[e] = portals
 -- whose opening link e crosses; g.linkDoors[e] = { a, via, b, ents } for the doors (not owned by a portal)
 -- whose swing sphere link e passes; e = index in g.adj (each undirected link twice, once per direction).
-local function linkCands(g)
+local function linkCands(g, yield)
 	local doors = {}
 	if ents and ents.FindByClass then
 		for _, cls in ipairs(DOOR_CLASS_LIST) do
@@ -1120,6 +1120,7 @@ local function linkCands(g)
 				if d:NearestPoint(p.center):Distance(p.center) <= (p.radius or 64) then owned[d] = true end
 			end
 		end
+		if yield then yield() end
 		segsNear(p.center, p.radius or 64, function(e, a, via, b)
 			if segPortalHit(a, via or b, p) or (via and segPortalHit(via, b, p)) then
 				local l = linkPortals[e]
@@ -1132,6 +1133,7 @@ local function linkCands(g)
 		if not owned[d] then
 			local mn, mx = d:WorldSpaceAABB()
 			local c, R = (mn + mx) * 0.5, mn:Distance(mx) * 1.5 + LINK_DOOR_PAD -- the leaf wherever it swings
+			if yield then yield() end
 			segsNear(c, R, function(e, a, via, b)
 				if segSphereHit(a, via or b, c, R) or (via and segSphereHit(via, b, c, R)) then
 					local l = linkDoors[e]
@@ -1167,11 +1169,11 @@ end
 
 --- Extra length (units) of each link for the doors and portals on it: { [e] = units }, sparse (links
 -- without a door are absent), and the state signature it was computed for. Kept until a state changes.
-function PR.LinkCosts(g)
+function PR.LinkCosts(g, yield)
 	local sig = PR.StateSig(g)
 	local m = g.linkCosts
 	if m and m.sig == sig then return m.extra, sig end
-	linkCands(g)
+	linkCands(g, yield) -- (41 ms once on rp_downtown, 404 links: sliced like the field when built in it)
 	local AC = A.AC
 	local cfg = A.cfg
 	local rate = A.Paths.DOOR_UNITS_PER_DB or 40
@@ -1280,7 +1282,7 @@ end
 -- are ranked by their level afterwards (PR.DistinctRoutes), as the portal chains are (rankChains).
 function PR.BuildFields(g, L, yield, reuse)
 	if (A.cfg.paths_model or 0) < 0.5 then return PR.BuildField(g, L, yield, reuse) end
-	local extra, sig = PR.LinkCosts(g)
+	local extra, sig = PR.LinkCosts(g, yield)
 	local f = PR.BuildField(g, L, yield, reuse, false)
 	f.stateSig = sig
 	if next(extra) then
