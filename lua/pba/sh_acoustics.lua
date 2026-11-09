@@ -200,7 +200,7 @@ end
 --- Engine preset of a voice (one preset per sound): from diffuse_dsp_at, a diffuse voice (long winding
 -- path) gets the engine's own "tunnel, diffuse" reverb (117 HUGE DULL when muffled, 116 SMALL BRIGHT
 -- otherwise) instead of the plain low-pass: heard as a smeared, reverberant sound. A continuous sound
--- holds this choice near the threshold (AC.DiffuseHold, applied by P.Stable to the voices it returns).
+-- holds this choice near the threshold (AC.DiffuseHold, applied by the renderers that choose the preset (cl_loops, cl_render) to the voices it returns).
 function AC.DSPForVoice(level, diffuse, cfg)
 	cfg = cfg or A.cfg
 	if (cfg.diffuse or 0) >= 0.5 and (diffuse or 0) >= (cfg.diffuse_dsp_at or 0.4) then

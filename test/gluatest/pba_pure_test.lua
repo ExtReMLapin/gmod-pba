@@ -1916,29 +1916,6 @@ return {
 			expect(#m).to.equal(1)
 			expect(near(m[1].rawLossDb, (10 * 1 + 20 * 0.1) / 1.1, 1e-6)).to.beTrue()
 		end },
-		{ name = "Stable: the tunnel preset of a continuous sound holds near diffuse_dsp_at (share 0.38 <-> 0.42 never flips it), cached voices untouched", func = function()
-			local cfg = setmetatable({ diffuse = 1, diffuse_dsp_at = 0.4, diffuse_dsp_hyst = 0.05, lp_hyst_db = 0, path_hyst_db = 0 }, { __index = CFG })
-			local L = Vector(0, 0, 0)
-			local function result(share)
-				return { L = L, voices = { { pos = Vector(100, 0, 0), gain = 0.5, level = -6, lp = 1, diffuse = share } } }
-			end
-			local st = {}
-			local function dsp(share)
-				local r = result(share)
-				local out = P.Stable(st, r, cfg)
-				expect(r.voices[1].diffuse).to.equal(share)
-				return AC.DSPForVoice(out.voices[1].lp, out.voices[1].diffuse, cfg)
-			end
-			local tunnel, plain = AC.DSPForVoice(1, 1, cfg), AC.DSPForLevel(1, cfg)
-			expect(tunnel ~= plain).to.beTrue()
-			expect(dsp(0.42)).to.equal(tunnel)
-			for _, s in ipairs({ 0.38, 0.41, 0.36, 0.43 }) do expect(dsp(s)).to.equal(tunnel) end
-			expect(dsp(0.3)).to.equal(plain)
-			for _, s in ipairs({ 0.42, 0.39, 0.44 }) do expect(dsp(s)).to.equal(plain) end
-			expect(dsp(0.46)).to.equal(tunnel)
-			expect(AC.DiffuseHold(0.41, nil, 0.05, cfg)).to.beTrue()
-			expect(AC.DiffuseHold(0.39, nil, 0.05, cfg)).to.equal(false)
-		end },
 		{ name = "FindChains: routes ranked by predicted level, not 40 units per dB (three short closed doors no longer push out the open doorway of a loud source)", func = function()
 			local areas, ents = { [0] = {}, [1] = {}, [2] = {} }, {}
 			for k, iv in ipairs({ { 0, 48 }, { 52, 100 }, { 104, 152 }, { 600, 648 } }) do

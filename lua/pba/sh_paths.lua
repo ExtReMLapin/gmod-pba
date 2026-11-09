@@ -1301,9 +1301,8 @@ function P.Stable(state, r, cfg)
 	end
 	local vs = r and r.voices
 	if not vs or #vs == 0 or not r.L then
-		if state then -- clear sight: heard without low-pass nor tunnel preset
+		if state then -- clear sight: heard without low-pass
 			state.lp = r and r.clear and 0 or nil
-			state.tunnel = r and r.clear and false or nil
 		end
 		return r
 	end
@@ -1334,33 +1333,7 @@ function P.Stable(state, r, cfg)
 		r = setmetatable({ voices = nv }, { __index = r })
 	end
 	state.lp = lp
-	-- the engine's tunnel preset (AC.DSPForVoice) holds the same way near diffuse_dsp_at (AC.DiffuseHold,
-	-- diffuse_dsp_hyst, 0.05 by default): the renderers read it from the voices' diffuse shares, so when
-	-- the choice held differs from the share's, every voice's share is scaled to just the held side of
-	-- the threshold (by at most the margin: the native blur barely moves)
-	local margin = cfg.diffuse_dsp_hyst or 0.05
-	if (cfg.diffuse or 0) >= 0.5 and margin > 0 then
-		local at = cfg.diffuse_dsp_at or 0.4
-		local pw, dw = 0, 0
-		for _, v in ipairs(r.voices) do
-			local e = (v.gain or 0) ^ 2
-			pw, dw = pw + e, dw + (v.diffuse or 0) * e
-		end
-		local share = dw / math.max(pw, 1e-12)
-		local on = AC.DiffuseHold(share, state.tunnel, margin, cfg)
-		if on ~= (share >= at) and share > 1e-6 then
-			local k = (on and at * (1 + 1e-6) or at * (1 - 1e-6)) / share
-			local nv = {}
-			for i, v in ipairs(r.voices) do
-				local held = {}
-				for key, x in pairs(v) do held[key] = x end
-				held.diffuse = math.min((v.diffuse or 0) * k, 1)
-				nv[i] = held
-			end
-			r = setmetatable({ voices = nv }, { __index = r })
-		end
-		state.tunnel = on
-	end
+	-- (the tunnel preset's hysteresis is held by the renderers, which choose it: cl_loops, cl_render)
 	return r
 end
 
