@@ -212,6 +212,9 @@ steps = [
     # cases reported on rp_downtown: a radio upstairs heard through the ceiling (loudest voice first), and
     # behind a pillar of the same room (probes off the floor, no doubled vertex: the route hugs the corner)
     ("downtown_cases rp_downtown", lambda: (load("rp_downtown_v4c_v2"), job("client", "downtown_cases.lua", 400))[1]),
+    # end to end, native: a radio stream in the upper room is reverberant there, and from the street the
+    # reverb does not swamp it (send capped by the listener's enclosure, passed on gliding updates too)
+    ("downtown_stream rp_downtown", lambda: py("downtown_stream.py")),
     # what a player can hear: level steps > 1 dB (JND) and
     # direction jumps when the source or the listener walks 16 u steps, level(S, L) vs level(L, S).
     # Limits None (report only) until the first in-game baseline; --check fails on too few walks.

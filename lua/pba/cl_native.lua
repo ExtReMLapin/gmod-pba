@@ -542,7 +542,7 @@ function N.UpdateFollowers(L)
 			local g = f.vol * A.AC.EngineGain(math.max(d, 1), f.lvl) * N.Directivity(e, L) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)
 			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
-			if not pba_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil end
+			if not pba_native.Update(id, S, g, l, m, h, pitch, nil, g * N.SendK(d)) then N.follow[id] = nil end
 		end
 	end
 end

@@ -231,7 +231,9 @@ local function retarget(ch, r, L) A.Paths.Retarget(r.ramp, rampTarget(ch, r, L))
 local function applyRamp(ch, r, L, now)
 	local g, e1, e2, e3, pos = A.Paths.RampAt(r.ramp, now, L)
 	if r.nativeId then
-		if not pba_native.Update(r.nativeId, pos, g, e1, e2, e3, 100, r.diffuse or 0) then r.nativeId = nil end
+		-- the room reverb send too, from what is heard now (else the voice kept the send of its start)
+		local send = g * A.Native.SendK(pos:Distance(L))
+		if not pba_native.Update(r.nativeId, pos, g, e1, e2, e3, 100, r.diffuse or 0, send) then r.nativeId = nil end
 		return
 	end
 	r.hG, r.hPos = g, pos

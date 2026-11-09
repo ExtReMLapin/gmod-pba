@@ -370,7 +370,7 @@ local function applyVoice(rec, fv, now, L)
 	local g, e1, e2, e3, pos, pitch = A.Paths.RampAt(fv.ramp, now, L)
 	fv.pos = pos
 	if fv.id then
-		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch) then fv.dead = true return end
+		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch, nil, g * A.Native.SendK(pos:Distance(L))) then fv.dead = true return end
 	else
 		local a = fv.a
 		a:SetPos(pos)

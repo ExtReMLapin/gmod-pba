@@ -345,12 +345,12 @@ function LP.FollowNative(L)
 				if ramp then
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
-					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch)
+					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, g * N.SendK(d))
 				end
 			end
 			if ramp and ramp.pending then
 				local g, el, em, eh, pos, pitch = P.RampAt(ramp, now, L)
-				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch)
+				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch, nil, g * N.SendK(pos:Distance(L)))
 			end
 		end
 	end
