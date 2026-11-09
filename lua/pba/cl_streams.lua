@@ -78,7 +78,8 @@ local function streamSend(ch, r, L, g, pos)
 	if r.nativeId and (not r.srcNext or now >= r.srcNext) then
 		r.srcNext = now + 0.3
 		local dS = r.pos:Distance(L)
-		r.srcBound = N.BindSource(r.nativeId, r.pos, N.SrcSend((r.vol or 1) * bassGain(ch, dS) * A.cfg.native_gain, dS))
+		-- the source's power: its level at 1 m (a real balance against the 1/r direct)
+		r.srcBound = N.BindSource(r.nativeId, r.pos, (r.vol or 1) * N.PhysStream(dS) * math.max(dS, N.REF_UNITS) / N.REF_UNITS * A.cfg.native_gain)
 	end
 	if not r.srcBound then return g end
 	if r.transG and r.transPos then return N.RoomSend((r.vol or 1) * r.transG * A.cfg.native_gain, r.transPos, L) end
@@ -89,7 +90,8 @@ end
 local function nativeParams(ch, r, L)
 	local pos = r.apparent or r.pos
 	local dS = r.pos:Distance(L)
-	local gain = (r.vol or 1) * bassGain(ch, dS) * (r.gRel or 1) * A.cfg.native_gain
+	-- the full version's distance law: 1/r from 1 m (N.PhysStream), whatever the channel's fade distance
+	local gain = (r.vol or 1) * (r.gNative or A.Native.PhysStream(dS)) * A.cfg.native_gain
 	local el, em, eh = A.Native.VoiceEQ(r.lp or 0, r.len or dS)
 	local send = streamSend(ch, r, L, gain, pos)
 	return pos, gain, el, em, eh, send
@@ -187,21 +189,30 @@ local function evaluate(ch, r, L)
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.len, r.diffuse = nil, 1, { 1, 1, 1 }, 1, 0, nil, 0
-		r.transG, r.transPos = nil, nil
+		r.transG, r.transPos, r.gNative = nil, nil, nil -- native: N.PhysStream at the true distance
 		return
 	end
 	-- each voice keeps its own losses (walls, doors, corners, absorption) but its distance law is the
 	-- channel's (BASS min / d), not the engine's at 75 dB: a long detour of a stream heard from far
 	-- (Set3DFadeDistance) lost tens of dB it never would have (room 14: -47 dB instead of -16)
-	local p, pd = 0, 0
+	-- the native module renders with the full version's distance law (N.PhysStream: 1/r from 1 m), the
+	-- BASS channel (Light) keeps the channel's own law
+	local p, pd, pn = 0, 0, 0
 	local trG, trPos
 	local dS = S:Distance(L)
+	local N0 = A.Native
 	for _, v in ipairs(res.voices) do
 		local len = v.len or dS
-		local gv = v.gain / math.max(AC.EngineGain(len, 75), 1e-6) * bassGain(ch, len)
+		local loss = v.gain / math.max(AC.EngineGain(len, 75), 1e-6)
+		local gv = loss * bassGain(ch, len)
 		p, pd = p + gv * gv, pd + gv * gv * (v.diffuse or 0)
-		if v.kind == "transmission" then trG, trPos = gv, v.pos end
+		if N0 and N0.PhysStream then
+			local gn = loss * N0.PhysStream(len)
+			pn = pn + gn * gn
+			if v.kind == "transmission" then trG, trPos = gn, v.pos end
+		end
 	end
+	r.gNative = math.sqrt(pn)
 	r.transG, r.transPos = trG, trPos -- what comes through walls (the listener's room resonates with it)
 	-- energy-weighted diffuse share (diffuse model): rendered by the native module only (BASS has no DSP)
 	r.diffuse = pd / math.max(p, 1e-12)

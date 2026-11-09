@@ -188,17 +188,20 @@ local function emitVoice(data, v, L, src, copies, slot, play)
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
 	-- (a sentence is a sequence of words played by the engine: never by the module)
 	if A.Native and A.Native.render and not A.IsSentence(data.SoundName) then
-		local g = (data.Volume or 1) * v.gain * A.Native.Directivity(src, L)
+		-- the full version's distance law (N.PhysPath): real spreading instead of the engine's law
+		local g = (data.Volume or 1) * A.Native.PhysPath(v.gain, v.len, data.SoundLevel or 75) * A.Native.Directivity(src, L)
 		if g < 0.001 then return false end
 		local delay = voiceDelay(v, L)
 		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 		-- the dominant voice carries the source's air-borne reverb (its slot); a transmission voice feeds
 		-- the listener's room; the other voices no reverb of their own (no double count)
 		local S = data.Pos
-		local dominant = slot == 1 and S
-		local srcLevel = dominant and (data.Volume or 1) * AC.EngineGain(math.max(S:Distance(L), 1), data.SoundLevel or 75) * A.Native.Directivity(src, L)
+		-- a loud sound already echoed by the echo slots (not "all native") takes no source slot too
+		local echoed = (A.cfg.native_all or 0) < 0.5 and (data.SoundLevel or 75) >= (A.cfg.native_echo_lvl or 95)
+		local dominant = slot == 1 and not echoed and S
+		local srcSend = dominant and (data.Volume or 1) * A.Native.PhysSrcSend(data.SoundLevel or 75, S:Distance(L)) * A.Native.Directivity(src, L)
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk,
-			diffuse = v.diffuse, srcPos = dominant or nil, srcLevel = srcLevel, trans = v.kind == "transmission", noRoom = true })
+			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, trans = v.kind == "transmission", noRoom = true })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
 			if copies then copies.native[#copies.native + 1] = { id, data.SoundName } end
@@ -314,7 +317,7 @@ local function targetValues(rec, fv, t, L)
 		local el, em, eh = N.VoiceEQ(t.lp, t.len)
 		-- Doppler of a moving source or listener, as loops and clear voices (N.UpdateFollowers) have it
 		local k = N.Doppler and N.Doppler(rec.S, N.VelocityOf(rec.ent), L, N.ListenerVelocity()) or 1
-		return rec.vol * t.gain * N.Directivity(rec.dirEnt, L) * A.cfg.native_gain, el, em, eh, t.pos, rec.pitch * k
+		return rec.vol * N.PhysPath(t.gain, t.len, rec.lvl) * N.Directivity(rec.dirEnt, L) * A.cfg.native_gain, el, em, eh, t.pos, rec.pitch * k
 	end
 	local pos = A.DistVariantPos(rec.name, t.pos, L, rec.S)
 	local d = pos:Distance(L)
@@ -499,12 +502,14 @@ function A.Process(data, relayed)
 		-- "everything native": a clear sound is played by the module at its real position
 		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 and not A.IsSentence(data.SoundName) then
 			local d = S:Distance(L)
-			local g = (data.Volume or 1) * AC.EngineGain(math.max(d, 1), lvl) * A.Native.Directivity(IsValid(src) and src or nil, L)
+			local dir = A.Native.Directivity(IsValid(src) and src or nil, L)
+			local g = (data.Volume or 1) * A.Native.PhysClear(lvl, d) * dir
 			-- PlayVoice only (no engine fallback here: the caller plays the original if this fails)
 			local follow = IsValid(src) and not src:IsWorld() and { ent = src, vol = data.Volume or 1, lvl = lvl } or nil
 			local delay = voiceDelay({ len = d, pos = S }, L)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
-			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S, srcLevel = g })
+			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
+				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
 				-- followed while it plays: walking behind a wall must muffle it too

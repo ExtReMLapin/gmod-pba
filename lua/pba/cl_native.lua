@@ -443,8 +443,41 @@ N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 -- from one trace upwards: under an overhang, one metre from the open sky, the output jumped 17 dB.)
 N.REF_UNITS = 52.49 -- 1 m
 local function distK(d) return math.Clamp((d or 0) / N.REF_UNITS, 1, 100) end
---- Send into a source slot: the game's level of the source at distance d WITHOUT the path's losses.
-function N.SrcSend(gameLevel, d) return gameLevel * distK(d) end
+
+-- Distance law of the full version (user's decision, 2026-11-09): a natively rendered voice falls like a
+-- real sound, 1/r from 1 m (-6 dB per doubling), not by the engine's much gentler law (a sound of level 75
+-- loses ~3 dB from 1 m to 5.5 m in the engine, 15 dB in reality; a stream is flat up to its fade distance).
+-- With the engine's law the reverb could not be both physical and sensible (kept at a real balance, a
+-- radio got LOUDER walking away). Scale: the game's own gain at 1 m. Loud sources keep their headroom: a
+-- level above the engine's full scale (pba_fullscale_db) stays at full scale until spreading brings it down
+-- (a level 140 gunshot is full scale up to ~300 m). Light (engine rendering) keeps the engine's law.
+local function spread(lvl, d)
+	local AC = A.AC
+	lvl = lvl or 75
+	local fs = A.cfg.fullscale_db or 90
+	return AC.EngineGain(N.REF_UNITS, lvl) * 10 ^ (math.max(lvl - fs, 0) / 20) * N.REF_UNITS / math.max(d or 0, N.REF_UNITS)
+end
+--- Direct gain (before volume and native_gain) of a source of level lvl at distance d in clear sight.
+function N.PhysClear(lvl, d) return math.min(spread(lvl, d), 1) end
+--- Direct gain of a path voice: gEng = its engine-law gain (path losses included) at path length len.
+-- Its losses are taken back out (the headroom the path model gave a loud source included) and the real
+-- spreading applied instead.
+function N.PhysPath(gEng, len, lvl)
+	local AC = A.AC
+	local d = math.max(len or 0, N.REF_UNITS)
+	local eng = math.max(AC.EngineGain(d, lvl or 75), 1e-6)
+	local ratio = math.min(gEng / eng, 1)
+	local loss = ratio >= 0.999 and 1 or ratio * 10 ^ (-AC.Headroom(lvl or 75, d, A.cfg.fullscale_db or 90) / 20)
+	return math.min(spread(lvl, d) * loss, 1)
+end
+--- Source slot send (before volume and native_gain) of a source of level lvl at distance d: its power, the
+-- 1 m level (a real balance against a 1/r direct); while the direct is clipped at full scale (a loud source
+-- near) no more than the clipped direct times d / 1 m, so the reverb never outgrows what is heard.
+function N.PhysSrcSend(lvl, d)
+	return math.min(spread(lvl, d), 1) * math.max(d or 0, N.REF_UNITS) / N.REF_UNITS
+end
+--- Streams (BASS): no sound level; full scale at 1 m, then 1/r.
+function N.PhysStream(d) return N.REF_UNITS / math.max(d or 0, N.REF_UNITS) end
 --- Send into the listener's room for a transmission voice of gain g coming out of a wall at wallPos.
 function N.RoomSend(g, wallPos, L) return g * distK(wallPos:Distance(L)) end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
@@ -457,8 +490,8 @@ end
 timer.Remove("pba_native_enclosure") -- the former one-trace enclosure guess (autorefresh of a running game)
 
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
--- srcPos, srcLevel = the source's true position and the game's level there without the path's losses
--- (before native_gain): the voice takes a source reverb slot (one voice per sound: the dominant one);
+-- srcPos, srcSend = the source's true position and its slot send (N.PhysSrcSend x volume, before
+-- native_gain): the voice takes a source reverb slot (one voice per sound: the dominant one);
 -- trans = true for a transmission voice (through walls: the listener's room resonates);
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds, diffuse = share
 -- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction) }.
@@ -481,8 +514,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	elseif opt.srcPos or opt.noRoom then roomSend = 0 end
 	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
 	if id and id > 0 and opt.srcPos and L then
-		local srcLevel = (opt.srcLevel or gain) * A.cfg.native_gain
-		if not N.BindSource(id, opt.srcPos, N.SrcSend(srcLevel, opt.srcPos:Distance(L))) and not opt.trans then
+		if not N.BindSource(id, opt.srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.trans then
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g) -- no slot: the room bus at its gain
 		end
 	end
@@ -540,7 +572,7 @@ function N.UpdateFollowers(L)
 		else
 			local S = A.SoundPos({ Entity = e })
 			local d = S:Distance(L)
-			local g = f.vol * A.AC.EngineGain(math.max(d, 1), f.lvl) * N.Directivity(e, L) * A.cfg.native_gain
+			local g = f.vol * N.PhysClear(f.lvl, d) * N.Directivity(e, L) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)
 			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
 			-- clear line: the reverb is the source slot's (bound at Play), kept alive while the voice lives
@@ -555,6 +587,9 @@ local function skip(why) N.echoSkip[why] = (N.echoSkip[why] or 0) + 1 end
 
 function N.Echo(data, pos)
 	if not N.render or (A.cfg.native_echo or 0) <= 0 or not pba_native.Echo then return skip("off") end
+	-- every sound played by the module ("all native"): its reflections come from its source reverb slot;
+	-- echoes too would simulate the same reflections twice (audit)
+	if (A.cfg.native_all or 0) >= 0.5 and pba_native.SourceReflect then return skip("slot") end
 	local lvl = data.SoundLevel or 75
 	if lvl < A.cfg.native_echo_lvl then return skip("level") end
 	local ok, n = N.EnsureSound(data.SoundName)

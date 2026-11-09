@@ -109,28 +109,30 @@ local function applyNative(m, S, L)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	local pos, gain, lp, trans
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
+	-- the full version's distance law (N.PhysClear / N.PhysPath): real spreading
 	if m.clearPath then
-		pos, gain, lp = S, AC.EngineGain(S:Distance(L), m.lvl), 0
+		pos, gain, lp = S, N.PhysClear(m.lvl, S:Distance(L)), 0
 		m.diffuse = 0
 	else
 		local p, dp, pt = 0, 0, 0
 		for _, v in ipairs(r.voices) do
-			p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain
+			local g = N.PhysPath(v.gain, v.len, m.lvl)
+			p, dp = p + g * g, dp + (v.diffuse or 0) * g * g
 			-- what comes through walls: the listener's room resonates with it (N.RoomSend)
-			if v.kind == "transmission" then local s = N.RoomSend(v.gain, v.pos, L) pt = pt + s * s end
+			if v.kind == "transmission" then local s = N.RoomSend(g, v.pos, L) pt = pt + s * s end
 		end
 		pos, gain, lp, trans = r.voices[1].pos, math.sqrt(p), r.voices[1].lp, math.sqrt(pt)
 		m.diffuse = dp / math.max(p, 1e-12) -- diffuse share (long winding path): the module blurs and reverbs it
 	end
-	-- same meters as the patch path (gain relative to the engine's direct law, DSP equivalent)
-	m.g = math.min(gain / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6), 1)
+	-- same meters as the patch path (gain relative to the direct law in use, DSP equivalent)
+	m.g = math.min(gain / math.max(N.PhysClear(m.lvl, S:Distance(L)), 1e-6), 1)
 	m.curDsp = AC.DSPForVoice(lp or 0, m.diffuse)
 	-- reverb (cl_native, "Reverb of natively rendered sounds"): the air-borne part from a source slot at
 	-- the loop's position; the listener's room only gets what comes through walls. No slot: the room bus
 	-- at the voice's gain
 	local now = RealTime()
 	local d = S:Distance(L)
-	m.srcSend = N.SrcSend(AC.EngineGain(math.max(d, 1), m.lvl) * m.vol * A.cfg.native_gain, d)
+	m.srcSend = N.PhysSrcSend(m.lvl, d) * m.vol * A.cfg.native_gain
 	if m.nativeId and (not m.srcNext or now >= m.srcNext) then
 		m.srcNext = now + 0.3
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
@@ -363,7 +365,7 @@ function LP.FollowNative(L)
 				local d = S:Distance(L)
 				local el, em, eh = N.VoiceEQ(0, d)
 				if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
-				local g, pitch = AC.EngineGain(d, m.lvl) * m.vol * A.cfg.native_gain, m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL)
+				local g, pitch = N.PhysClear(m.lvl, d) * m.vol * A.cfg.native_gain, m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL)
 				if ramp then
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
