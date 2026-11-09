@@ -2178,5 +2178,349 @@ return {
 			-- the corners alone are capped at diff_max_total, as a probe polyline's
 			expect(p.diffDb <= CFG.diff_max_total + 1e-9).to.beTrue()
 		end },
+		{ name = "Probe placement: one probe per storey, 48 u above each floor (under a mezzanine and on it), none in the air; no link through the slab between them", func = function()
+			-- room A: a mezzanine slab z 96..112 over x < 256. Before: a z grid of cells (probes at 64 and 180 u, in
+			-- the air), none 48 u above the mezzanine's floor
+			withProbeRooms({ { 64, 112, 112 } }, { { Vector(-8, -8, 96), Vector(256, 520, 112) } }, { native_traces = 0 }, function()
+				local PR = A.Probes
+				local g = PR.BuildCo({ Vector(320, 256, 49), Vector(64, 256, 161) }, 128)
+				local under, over = 0, 0
+				for _, n in ipairs(g.nodes) do
+					local z = n.pos.z
+					expect(z == 48 or z == 160).to.beTrue()
+					if n.pos.x < 256 then
+						if z == 48 then under = under + 1 else over = over + 1 end
+					else
+						expect(z).to.equal(48)
+					end
+					for id in pairs(n.nb) do
+						local m = g.nodes[id]
+						expect(m.i == n.i and m.j == n.j).to.equal(false) -- the slab is no opening
+					end
+				end
+				expect(under).to.equal(8)
+				expect(over).to.equal(8)
+			end)
+		end },
+		{ name = "Probe placement: probes keep 12 u of free space on every axis (moved off a pillar 4 u from the column centre, none in a 20 u slot)", func = function()
+			local pillar = { Vector(196, 150, -8), Vector(260, 240, 200) } -- 4 u from column (1, 1)'s centre (192, 192)
+			local slotA, slotB = { Vector(428, 200, -8), Vector(468, 310, 200) }, { Vector(428, 330, -8), Vector(468, 400, 200) }
+			withProbeRooms({ { 64, 112, 112 } }, { pillar, slotA, slotB }, { native_traces = 0 }, function(g)
+				local PR = A.Probes
+				local moved
+				for _, n in ipairs(g.nodes) do
+					local p = n.pos
+					for _, ax in ipairs({ Vector(1, 0, 0), Vector(0, 1, 0), Vector(0, 0, 1) }) do
+						expect(PR.ClearSeg(p, p + ax * 11.5) and PR.ClearSeg(p, p - ax * 11.5)).to.beTrue()
+					end
+					expect(p.x > 428 and p.x < 468 and p.y > 310 and p.y < 330).to.equal(false)
+					if n.i == 1 and n.j == 1 then moved = p end
+				end
+				expect(moved ~= nil and moved.x <= 184 and math.abs(moved.y - 192) < 1e-6).to.beTrue()
+			end)
+		end },
+		{ name = "Probe placement: under a low ceiling the probe is lowered to 12 u under it; none where floor and ceiling are under 24 u apart", func = function()
+			local low, crawl = { Vector(528, -8, 40), Vector(784, 520, 200) }, { Vector(784, -8, 20), Vector(1048, 520, 200) }
+			withProbeRooms({ { 64, 112, 112 } }, { low, crawl }, { native_traces = 0 }, function(g)
+				local inB = 0
+				for _, n in ipairs(g.nodes) do
+					if n.pos.x > 528 then
+						inB = inB + 1
+						expect(n.pos.z).to.equal(28)
+						expect(n.pos.x < 784).to.beTrue()
+					end
+				end
+				expect(inB > 0).to.beTrue()
+			end)
+		end },
+		{ name = "Probe build: the graph depends on the map only: seeds given in any order build the same graph", func = function()
+			-- before: the flood fill started from the first seed and the player's eye was one of them, so the cached
+			-- graph depended on where the player stood at the first build
+			withProbeRooms({ { 64, 112, 112 } }, nil, { native_traces = 0 }, function()
+				local PR = A.Probes
+				local savedTo = util.TableToJSON
+				util.TableToJSON = function() return "H" end
+				local a, b, c = Vector(256, 256, 49), Vector(900, 400, 49), Vector(100, 60, 49)
+				local ok, err = pcall(function()
+					local t1 = PR.Serialize(PR.BuildCo({ a, b, c }, 128), "h")
+					local t2 = PR.Serialize(PR.BuildCo({ c, b, a }, 128), "h")
+					expect(#t1 > 100).to.beTrue()
+					expect(t1 == t2).to.beTrue()
+				end)
+				util.TableToJSON = savedTo
+				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "Probe field: usable while the listener walks within its region (1.5 spacings from where it was built), routes joined to where it is now, never through a wall", func = function()
+			-- before: a field was usable within one spacing of where it was built only (stale on arrival while running)
+			withProbeRooms({ { 64, 112, 112 } }, nil, { native_traces = 0, probe_field = 1, probe_inline_ms = 0 }, function(g)
+				local PR = A.Probes
+				local L0, L1, S = Vector(256, 256, 64), Vector(448, 216, 64), Vector(900, 300, 40)
+				PR.field = PR.BuildField(g, L0)
+				expect(L0:Distance(L1) > g.spacing and not PR.ClearSeg(S, L1)).to.beTrue()
+				for _, blend in ipairs({ 0, 1 }) do
+					local cfg = setmetatable({ probe_field = 1, probe_inline_ms = 0, probe_bridge_max = 0, probe_field_blend = blend },
+						{ __index = A.cfg })
+					local ps = PR.Paths(S, L1, 3, cfg)
+					expect(#ps > 0).to.beTrue()
+					for _, p in ipairs(ps) do
+						local pts = { S }
+						for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+						pts[#pts + 1] = L1
+						expect(routeClear(pts)).to.beTrue()
+					end
+				end
+				-- a route's cost is its seed's part replaced by that seed's distance to the listener now
+				local f = PR.field
+				local id = PR.Visible(g, S, 1)[1].id
+				local r = f.root[id]
+				expect(PR.ClearSeg(g.nodes[r].pos, L1)).to.beTrue()
+				expect(math.abs(PR.FieldCost(f, id, L1) - (f.cost[id] - f.base[r] + g.nodes[r].pos:Distance(L1))) < 1e-6).to.beTrue()
+			end)
+		end },
+		{ name = "Probe pair hysteresis: the probe a route is keyed on is kept while seen and at most half a spacing farther than the nearest; per graph", func = function()
+			local PR = A.Probes
+			local saved = PR.sticky
+			local g, g2 = { spacing = 128 }, { spacing = 128 }
+			local a, b = { id = 1, pos = Vector(0, 0, 0) }, { id = 2, pos = Vector(128, 0, 0) }
+			local ok, err = pcall(function()
+				PR.sticky = nil
+				expect(PR.StickyPick(g, { a, b }, Vector(40, 0, 0), 1)).to.equal(a)
+				expect(PR.StickyPick(g, { b, a }, Vector(80, 0, 0), 1)).to.equal(a) -- b nearer by 32 u: a kept
+				expect(PR.StickyPick(g2, { b, a }, Vector(80, 0, 0), 1)).to.equal(b) -- another graph: no memory
+				expect(PR.StickyPick(g, { b, a }, Vector(110, 0, 0), 1)).to.equal(b) -- b nearer by 92 u: b
+				expect(PR.StickyPick(g, { b }, Vector(110, 0, 0), 2)).to.equal(b) -- the listener's side is apart
+			end)
+			PR.sticky = saved
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Probe blend visibility: a probe fades out continuously as the source goes behind a jamb, down to 0 before the ray to the probe is cut", func = function()
+			local PR = A.Probes
+			local wall = { Vector(100, -1000, -1000), Vector(116, 0, 1000) }
+			local saved, savedNT = { util.TraceLine, util.TraceHull }, A.cfg.native_traces
+			util.TraceLine = function(t)
+				local out = t.output or {}
+				local t0, t1 = segBox(t.start, t.endpos, wall[1], wall[2])
+				out.Hit = t0 ~= nil and t1 - t0 > 1e-6
+				out.Fraction, out.StartSolid = out.Hit and t0 or 1, false
+				out.HitPos = t.start + (t.endpos - t.start) * out.Fraction
+				return out
+			end
+			util.TraceHull = util.TraceLine
+			A.cfg.native_traces = 0
+			local ok, err = pcall(function()
+				local P0 = Vector(200, -60, 0)
+				local prev, mid, lastSeen = 1, 0, nil
+				for y = 200, -100, -1 do
+					local S = Vector(0, y, 0)
+					local v = PR.VisFactor(S, P0)
+					expect(v <= prev + 1e-9).to.beTrue()
+					if v > 0 and v < 1 then mid = mid + 1 end
+					if PR.ClearSeg(S, P0) then lastSeen = v end
+					prev = v
+				end
+				expect(mid >= 2).to.beTrue() -- steps in between, not 1 -> 0
+				expect(lastSeen ~= nil and lastSeen <= 1 / 3 + 1e-9).to.beTrue()
+			end)
+			util.TraceLine, util.TraceHull, A.cfg.native_traces = saved[1], saved[2], savedNT
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Probe bridge: compared with the graph's route when both exist (through a window slot: one bend, beside the detour by the door)", func = function()
+			-- a 20 u slot (sill 60, lintel 112) in the wall: too narrow for a gap point (24 u), so the graph goes by the
+			-- door at y 16..64. Before: the bridge was tried only when the graph found nothing
+			local sill = { Vector(512, 426, -8), Vector(528, 462, 60) }
+			withProbeRooms({ { 16, 64, 112 }, { 434, 454, 112 } }, { sill }, { native_traces = 0 }, function()
+				local PR = A.Probes
+				local S, L = Vector(800, 440, 150), Vector(250, 300, 40)
+				expect(not PR.ClearSeg(S, L)).to.beTrue()
+				local cfg = setmetatable({ probe_field = 0, probe_field_blend = 0, probe_bridge_max = 48, probe_inline_ms = 1e6,
+					probe_inline_frame_ms = 1e9 }, { __index = A.cfg })
+				local br, graph
+				for _, p in ipairs(PR.Paths(S, L, 3, cfg)) do
+					local pts = { S }
+					for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+					pts[#pts + 1] = L
+					expect(routeClear(pts)).to.beTrue()
+					if p.bridge then br = p else graph = graph or p end
+				end
+				expect(br ~= nil and graph ~= nil).to.beTrue()
+				expect(br.length < graph.length).to.beTrue()
+				expect(#br.points).to.equal(1)
+			end)
+		end },
+		{ name = "SameRoute: a thin pillar between two long routes keeps them apart (fan rays at most 16 u apart on any edge; 32 rays at most left 36 u gaps)", func = function()
+			local saved, savedNT = { util.TraceLine, util.TraceHull }, A.cfg.native_traces
+			local pillar
+			util.TraceLine = function(t)
+				local out = t.output or {}
+				local t0, t1 = segBox(t.start, t.endpos, pillar[1], pillar[2])
+				out.Hit = t0 ~= nil and t1 - t0 > 1e-6
+				out.Fraction, out.StartSolid = out.Hit and t0 or 1, false
+				out.HitPos = t.start + (t.endpos - t.start) * out.Fraction
+				return out
+			end
+			util.TraceHull = util.TraceLine
+			A.cfg.native_traces = 0
+			local ok, err = pcall(function()
+				local S, Aa, L, B = Vector(0, 0, 0), Vector(1000, -600, 0), Vector(2000, 0, 0), Vector(1000, 600, 0)
+				for _, c in ipairs({ { 600, -350 }, { 300, -170 }, { 800, -470 } }) do
+					pillar = { Vector(c[1] - 3, c[2] - 3, -1000), Vector(c[1] + 3, c[2] + 3, 1000) }
+					expect(routeClear({ S, Aa, L }) and routeClear({ S, B, L })).to.beTrue()
+					expect(A.Probes.SameRoute({ S, Aa, L }, { S, B, L })).to.equal(false)
+				end
+				pillar = { Vector(0, 0, 5000), Vector(1, 1, 5001) } -- out of the way: one route
+				expect(A.Probes.SameRoute({ S, Aa, L }, { S, B, L })).to.beTrue()
+			end)
+			util.TraceLine, util.TraceHull, A.cfg.native_traces = saved[1], saved[2], savedNT
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Probe tighten: iterated until moves are under 1 u: over a wall end, within 1 u of the best single bend from any start (3 passes of 6 halvings: up to 1.7 u off)", func = function()
+			local wall = { Vector(0, -1000, -1000), Vector(16, 0, 1000) }
+			local saved, savedNT = { util.TraceLine, util.TraceHull }, A.cfg.native_traces
+			local function tr(t, pad)
+				local out = t.output or {}
+				local d = Vector(pad, pad, pad)
+				local t0, t1 = segBox(t.start, t.endpos, wall[1] - d, wall[2] + d)
+				out.Hit = t0 ~= nil and t1 - t0 > 1e-6
+				out.Fraction, out.StartSolid = out.Hit and t0 or 1, false
+				out.HitPos = t.start + (t.endpos - t.start) * out.Fraction
+				return out
+			end
+			util.TraceLine = function(t) return tr(t, 0) end
+			util.TraceHull = function(t) return tr(t, t.maxs and t.maxs.x or 0) end
+			A.cfg.native_traces = 0
+			local ok, err = pcall(function()
+				local S, L = Vector(-200, -100, 48), Vector(200, -100, 48)
+				-- best single bend: where S's line past the hull corner (-4, 4) meets L's past (20, 4)
+				local t = 400 / 376
+				local opt = t * (Vector(196, 104, 0):Length() + Vector(-180, 104, 0):Length())
+				for _, start in ipairs({ { Vector(-64, 64, 48), Vector(64, 64, 48) }, { Vector(-128, 192, 48), Vector(128, 192, 48) },
+					{ Vector(-64, 320, 48), Vector(0, 320, 48), Vector(128, 64, 48) } }) do
+					local pts = { S }
+					for _, v in ipairs(start) do pts[#pts + 1] = v end
+					pts[#pts + 1] = L
+					local r = A.Probes.Tighten(pts)
+					local len = 0
+					for i = 1, #r - 1 do len = len + r[i]:Distance(r[i + 1]) end
+					expect(#r).to.equal(3)
+					expect(routeClear(r)).to.beTrue()
+					expect(len - opt < 1).to.beTrue()
+				end
+			end)
+			util.TraceLine, util.TraceHull, A.cfg.native_traces = saved[1], saved[2], savedNT
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Native trace check: on the graph's own links, comparing hit texture, nodraw and FractionLeftSolid too", func = function()
+			withProbeScene(function(g)
+				local PR = A.Probes
+				local segs = PR.LinkSegs(g)
+				expect(#segs > 8).to.beTrue()
+				local a, b = segs[1][1], segs[1][2]
+				local linked = false
+				for _, n in ipairs(g.nodes) do
+					if n.pos == a then
+						for id in pairs(n.nb) do if g.nodes[id].pos == b then linked = true end end
+					end
+				end
+				expect(linked).to.beTrue()
+				local savedTL, savedTH = util.TraceLine, util.TraceHull
+				local ss, uFls = false, nil
+				local function u(t)
+					return { Hit = true, Fraction = 0.5, StartSolid = ss, AllSolid = false, FractionLeftSolid = uFls,
+						HitTexture = "CONCRETE/WALL", HitNoDraw = false, HitPos = t.start }
+				end
+				util.TraceLine, util.TraceHull = u, u
+				local surf, fls, flags = "concrete/wall", nil, 0
+				local T = { Trace = function(p) return 0.5, ss, false, p, 1, fls, surf, flags end }
+				local ok, err = pcall(function()
+					expect(PR.NativeCheck(T, segs)).to.equal(0)
+					surf = "TOOLS/TOOLSBLOCKBULLETS"
+					expect(PR.NativeCheck(T, segs)).to.equal(#segs)
+					surf, flags = "concrete/wall", 0x80
+					expect(PR.NativeCheck(T, segs)).to.equal(#segs)
+					ss, uFls, fls, flags = true, 0.3, 0.3, 0
+					expect(PR.NativeCheck(T, segs)).to.equal(0)
+					fls = 0.6
+					expect(PR.NativeCheck(T, segs)).to.equal(#segs)
+				end)
+				util.TraceLine, util.TraceHull = savedTL, savedTH
+				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "Probe routes at a door left ajar: one step past the jamb's shadow boundary the route bends round the edge that cut the line, not through the leaf (level step < 3 dB per 4 u)", func = function()
+			-- rp_downtown (native_output_walk): clear line 0 dB, 7 u further a probe route through the door leaf
+			-- (traced world only) -29.9 dB, one more step -16.2 dB. Here: the doorway y 64..112 of the two rooms, a
+			-- leaf (a door entity) hinged at its jamb y = 112 and open into room A along the wall's shadow line
+			-- (x 400..512, y 112..116); the source in room B, the listener walking in room A across the shadow
+			-- boundary of the jamb. Clear lines pass under the leaf; the jamb's corner bend (world only) crossed it
+			local PR = A.Probes
+			local door = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9996 end,
+				IsWorld = function() return false end }
+			local leaf = { Vector(400, 112, 0), Vector(512, 116, 108) }
+			withProbeRooms({ { 64, 112, 112 } }, nil, { native_traces = 0 }, function()
+				local baseL, baseH = util.TraceLine, util.TraceHull
+				local savedList, savedEpoch = PR.doorList, PR.doorEpoch
+				local function wrap(base)
+					return function(t)
+						local isDoor = type(t.filter) == "function" and select(2, pcall(t.filter, door)) == true
+						if not isDoor then return base(t) end
+						local out
+						if t.ignoreworld then
+							out = t.output or {}
+							out.Hit, out.Fraction, out.StartSolid, out.Entity, out.HitPos = false, 1, false, nil, t.endpos
+						else
+							out = base(t)
+						end
+						local pad = t.maxs and t.maxs.x or 0
+						local d = Vector(pad, pad, pad)
+						local t0, t1 = segBox(t.start, t.endpos, leaf[1] - d, leaf[2] + d)
+						if t0 and t1 - t0 > 1e-6 and (not out.Hit or t0 < out.Fraction) then
+							out.Hit, out.Fraction, out.Entity, out.HitPos = true, t0, door, t.start + (t.endpos - t.start) * t0
+						end
+						return out
+					end
+				end
+				util.TraceLine, util.TraceHull = wrap(baseL), wrap(baseH)
+				PR.doorList, PR.doorEpoch = { fixed = true, list = { leaf } }, (PR.doorEpoch or 0) + 1
+				local ok, err = pcall(function()
+					local cfg = setmetatable({ probe_field = 0, probe_field_blend = 0, probe_inline_ms = 1e6, probe_inline_frame_ms = 1e9,
+						diffuse = 0 }, { __index = A.cfg })
+					local S = Vector(1000, 100, 64)
+					local prev, clear, blocked, worst = nil, 0, 0, 0
+					for y = 100, 140, 4 do
+						local L = Vector(300, y, 64)
+						local lvl
+						if PR.ClearSeg(S, L) then
+							clear = clear + 1
+							lvl = P.PathLevel(S:Distance(L), 0, 75)
+						else
+							blocked = blocked + 1
+							local best
+							for _, p in ipairs(PR.Paths(S, L, 3, cfg)) do
+								local pts = { S }
+								for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+								pts[#pts + 1] = L
+								expect(routeClear(pts)).to.beTrue()
+								local l = P.PathLevel(p.length, p.lossDb, 75)
+								if not lvl or l > lvl then lvl, best = l, p end
+							end
+							-- the loudest route goes round the leaf: no door loss on it
+							if DEBUGDOOR and best then print("  door", best.doorDb, best.length, best.diffDb) end
+							expect(best ~= nil and best.doorDb < 0.5).to.beTrue()
+						end
+						if DEBUGDOOR then print(y, lvl) end
+						expect(lvl ~= nil).to.beTrue()
+						if prev then worst = math.max(worst, math.abs(lvl - prev)) end
+						prev = lvl
+					end
+					if DEBUGDOOR then print("worst", worst) end
+					expect(clear >= 3 and blocked >= 3).to.beTrue()
+					expect(worst < 3).to.beTrue()
+				end)
+				util.TraceLine, util.TraceHull = baseL, baseH
+				PR.doorList, PR.doorEpoch = savedList, savedEpoch
+				if not ok then error(err, 0) end
+			end)
+		end },
 	},
 }
