@@ -1,4 +1,4 @@
--- Two cases reported on rp_downtown_v4c_v2 (a radio in the brick building's upper room), client lua_job:
+-- Cases reported on rp_downtown_v4c_v2 (a radio in the brick building's upper room), client lua_job:
 --  * ceiling: the radio on the floor above the listener. The ceiling (25 dB) brings 20 dB more than the
 --    stairwell route; a sound played on one channel (a stream, a loop mirror) takes voices[1], which was
 --    the stairwell because the transmission voice was always appended last. Expect the transmission first.
@@ -6,7 +6,8 @@
 --    for 325 straight, 265 degrees of bends, 14 dB, lp 3): probes 4 u above the floor made every fat trace
 --    start in solid, and a doubled last vertex blocked the tightening. Expect a route hugging the pillar's
 --    corner: close to the straight line, a few dB, lp <= 1.
--- Returns { pass, ceiling = {...}, pillar = {...} }.
+--  * doorway: the radio just inside the room, the listener in the open doorway (see below).
+-- Returns { pass, ceiling = {...}, pillar = {...}, doorway = {...} }.
 if game.GetMap() ~= "rp_downtown_v4c_v2" then return { pass = false, err = "needs rp_downtown_v4c_v2" } end
 local A = pba
 -- the probe graph (built in the background on a first visit)
@@ -43,4 +44,14 @@ local pillar = path and {
 local pillarOk = path ~= nil and path.length <= radio:Distance(Lp) * 1.15 and (path.bendDeg or 0) <= 60
 	and (path.diffDb or 99) <= 6 and (path.lp or 4) <= 1
 
-return { pass = ceilingOk and pillarOk, ceiling = { ok = ceilingOk, voices = cv }, pillar = { ok = pillarOk, path = pillar } }
+-- doorway: the radio 11 u behind the wall, 25 u from the open doorway's jamb, the listener in the doorway.
+-- The vertex stayed on the probe 30 u inside the room (10.5 dB, lp 2): the straight line runs through the
+-- wall and the corner is not on the way to it; it now turns round the jamb, at mid height
+local Sd, Ld = Vector(-2149.338, -6898.178, -59.647), Vector(-2196.6, -6960.969, -3.969)
+local d = compute(Sd, Ld)
+local dp = d.paths and d.paths[1]
+local doorway = dp and { length = math.Round(dp.length), diffDb = math.Round(dp.diffDb or 0, 1), lp = dp.lp, voices = voices(d) } or { none = true }
+local doorwayOk = dp ~= nil and (dp.diffDb or 99) <= 7 and (dp.lp or 4) <= 1 and dp.length <= Sd:Distance(Ld) * 1.25
+
+return { pass = ceilingOk and pillarOk and doorwayOk, ceiling = { ok = ceilingOk, voices = cv }, pillar = { ok = pillarOk, path = pillar },
+	doorway = { ok = doorwayOk, path = doorway } }

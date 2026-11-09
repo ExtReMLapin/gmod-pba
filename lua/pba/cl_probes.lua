@@ -718,6 +718,33 @@ end)
 -- angles, the length and the loss far too large. Each inner vertex slides towards the straight line
 -- between its neighbours as far as both segments stay clear (bisection), and is dropped when the
 -- neighbours see each other. A few passes converge to the taut string around the edges.
+--- Moves q along q -> toward (seen from q) as far as `other` still sees it (6 halvings).
+local function slideTo(q, toward, other)
+	local lo, hi = 0, 1
+	for _ = 1, 6 do
+		local mid = (lo + hi) / 2
+		if clearFat(q + (toward - q) * mid, other) then lo = mid else hi = mid end
+	end
+	return q + (toward - q) * lo
+end
+
+--- Moves q vertically towards the height of the a-b line above q, as far as both ends still see it.
+local function alongEdgeZ(q, a, b)
+	local ha, hb = Vector(a.x, a.y, 0), Vector(b.x, b.y, 0)
+	local hq = Vector(q.x, q.y, 0)
+	local da, db = ha:Distance(hq), hq:Distance(hb)
+	if da + db < 1 then return q end
+	local zt = a.z + (b.z - a.z) * da / (da + db)
+	local goal = Vector(q.x, q.y, zt)
+	local lo, hi = 0, 1
+	for _ = 1, 6 do
+		local mid = (lo + hi) / 2
+		local p = q + (goal - q) * mid
+		if clearFat(a, p) and clearFat(p, b) then lo = mid else hi = mid end
+	end
+	return q + (goal - q) * lo
+end
+
 local function tighten(pts)
 	for _ = 1, 3 do
 		local moved = false
@@ -739,6 +766,19 @@ local function tighten(pts)
 					if clearFat(a, q) and clearFat(q, b) then lo = mid else hi = mid end
 				end
 				local nv = v + (target - v) * lo
+				-- the corner is not always on the way to the straight line: a probe inside a room seeing
+				-- the listener through a doorway diagonally stayed 30 u from the jamb (straight line
+				-- through the wall; rp_downtown: 10.5 dB, lp 2 for a radio 40 u from the jamb). Slide
+				-- the vertex towards one end while the other still sees it, then the other way: it
+				-- turns round the edge (5.3 dB, lp 1). Kept only when the route gets shorter.
+				-- only when the usual step is stuck (36 more fat traces)
+				if nv:DistToSqr(v) < 16 then
+					local q = slideTo(slideTo(nv, a, b), b, a)
+					-- along a vertical edge (a door jamb) any height is a corner: the best one is where the
+					-- route is straight seen from the side (height of the a-b line at q's horizontal place)
+					q = alongEdgeZ(q, a, b)
+					if a:Distance(q) + q:Distance(b) < a:Distance(nv) + nv:Distance(b) - 0.5 then nv = q end
+				end
 				if nv:DistToSqr(v) > 1 then moved = true end
 				pts[i] = nv
 				i = i + 1
