@@ -161,7 +161,11 @@ end
 PR.ClearSeg = clearSeg
 -- a join of a route checked (thin: the standard of the graph links and of PR.Visible); two copies of one
 -- point (a route that starts on the probe S stands on) need no trace
-local function sees(a, b) return a:DistToSqr(b) <= 0.01 or clearSeg(a, b) end
+-- The query side (joins, PR.Visible, route homotopy) keeps its thin answers (A.Paths.WorldSegMemo: world only,
+-- tagged with the trace backend); the graph build traces each segment once and uses clearSeg as is.
+local clearSegMemo = A.Paths.WorldSegMemo(clearSeg, 16384)
+local function clearSegKept(a, b) return clearSegMemo(a, b, nativeTraces() or false) end
+local function sees(a, b) return a:DistToSqr(b) <= 0.01 or clearSegKept(a, b) end
 
 -- shortcuts must keep a margin: a hull trace, so a path never grazes a door frame
 local HULL_MIN, HULL_MAX = Vector(-4, -4, -4), Vector(4, 4, 4)
@@ -216,7 +220,11 @@ local function doorLeaves()
 	return list
 end
 PR.DoorLeaves = doorLeaves
-local clearFat = clearFatWorld
+-- The routes' tightening keeps its answers (A.Paths.WorldSegMemo: world only, tagged with the trace backend):
+-- the k + 2 candidate routes of an evaluation repeat two thirds of their hull traces (offline bench), and
+-- the two fields' routes from one probe are pulled over the same chains (PR.Pull).
+local clearFatMemo = A.Paths.WorldSegMemo(clearFatWorld, 16384)
+local function clearFat(a, b) return clearFatMemo(a, b, nativeTraces() or false) end
 
 local function key(i, j, k) return i .. "," .. j .. "," .. k end
 -- a column of the grid as one number (no string per lookup): i and j stay within +-32768 on any map
@@ -861,7 +869,7 @@ function PR.Visible(g, p, maxn, reach)
 	end)
 	local out = {}
 	for _, n in ipairs(cands) do
-		if clearSeg(p, n.pos) then
+		if clearSegKept(p, n.pos) then
 			out[#out + 1] = n
 			if #out >= (maxn or 3) then break end
 		end
@@ -961,7 +969,7 @@ function PR.Pull(pts)
 	local i = 1
 	while i < #pts do
 		local j = #pts
-		while j > i + 1 and not clearFatWorld(pts[i], pts[j]) do j = j - 1 end
+		while j > i + 1 and not clearFat(pts[i], pts[j]) do j = j - 1 end
 		out[#out + 1] = pts[j]
 		i = j
 	end
@@ -1778,13 +1786,16 @@ end
 -- S and L attached to a pulled polyline (skipping the vertices they already see), then tightened. World
 -- geometry only, which does not change: the result for the same polyline, S and L (a loop and a listener
 -- that did not move, re-evaluated 4 times a second) is kept on the polyline and given again instead of
--- redoing its ~30 hull traces. Last 8 (S, L) per polyline.
+-- redoing its ~30 hull traces. Last ATTACH_KEEP (S, L) per polyline: a field route is shared by every
+-- source near its probe, and with 8 kept, 20 still loops round one listener pushed each other out and
+-- re-tightened at every evaluation.
 -- The joins not traced by the skipping loops are checked: S to the first vertex kept and that vertex to
 -- L when none was skipped. A field route ends at a probe the listener saw where the field was built,
 -- up to a few spacings from the listener now: round a door jamb, the listener no longer sees it and L
 -- was appended through the jamb. `via` (the field's listener position, which that probe sees and from
 -- which the listener walked) is then put before L; nil (no route for this S and L, caller skips it)
 -- when a join stays blocked.
+local ATTACH_KEEP = 32
 local function attach(inner, S, L, via)
 	local sx, sy, sz = S:Unpack()
 	local lx, ly, lz = L:Unpack()
@@ -1802,7 +1813,7 @@ local function attach(inner, S, L, via)
 		if via and sees(inner[j], via) and sees(via, L) then tail = via else okJoins = false end
 	end
 	if not okJoins then
-		if #memo >= 8 then table.remove(memo, 1) end
+		if #memo >= ATTACH_KEEP then table.remove(memo, 1) end
 		memo[#memo + 1] = { sx, sy, sz, lx, ly, lz, false }
 		return nil
 	end
@@ -1817,7 +1828,7 @@ local function attach(inner, S, L, via)
 	if tail and tail:DistToSqr(pulled[#pulled]) > 0.01 then pulled[#pulled + 1] = tail end
 	if L:DistToSqr(pulled[#pulled]) > 0.01 then pulled[#pulled + 1] = L end
 	pulled = tighten(pulled)
-	if #memo >= 8 then table.remove(memo, 1) end
+	if #memo >= ATTACH_KEEP then table.remove(memo, 1) end
 	memo[#memo + 1] = { sx, sy, sz, lx, ly, lz, pulled }
 	return pulled
 end
@@ -2034,7 +2045,8 @@ end
 --- Whether two routes from S to L (polylines a, b) are one physical route: P.SameRoute (one rule for the
 -- probes' copies of a route and for the way over an edge beside the routes), with the graph's own thin
 -- trace (clearSeg: native traces when checked, tool brushes passed, displacements both ways).
-function PR.SameRoute(a, b) return A.Paths.SameRoute(a, b, clearSeg) end
+-- (the trace backend as the tag of P.SameRoute's kept answers: native and util traces may differ)
+function PR.SameRoute(a, b) return A.Paths.SameRoute(a, b, clearSegKept, nativeTraces() or false) end
 
 --- Evaluated probe paths from S to L, one per physical route: the copies of a route (PR.SameRoute) are
 -- dropped, the best of them (highest level) kept. Copies of one route through one opening each carried
@@ -2064,6 +2076,26 @@ function PR.DistinctRoutes(S, L, paths)
 		end
 	end
 	return out
+end
+
+-- exact equality of two coordinates, the sign of a zero included
+local function sameNum(p, q) return p == q and (p ~= 0 or 1 / p == 1 / q) end
+-- Whether `done` (the polylines seen, as flat coordinate lists) holds one equal to pts; else pts is added.
+local function seenRoute(done, pts)
+	local n = #pts
+	local c = {}
+	for i = 1, n do c[3 * i - 2], c[3 * i - 1], c[3 * i] = pts[i]:Unpack() end
+	for _, d in ipairs(done) do
+		if #d == 3 * n then
+			local eq = true
+			for i = 1, 3 * n do
+				if not sameNum(d[i], c[i]) then eq = false break end
+			end
+			if eq then return true end
+		end
+	end
+	done[#done + 1] = c
+	return false
 end
 
 --- paths_model 1: the routes of S to L read from the listener field, one per physical route, best first:
@@ -2098,6 +2130,11 @@ function PR.FieldRoutes(S, L, k, cfg)
 	-- off the line, as a portal chain's). Dropped, the leaf went back to the line one step and to the route
 	-- the next: the voice changed kind at the leaf's edge, and both paid it where a bent copy survived.
 	local straight = false
+	-- Routes already evaluated, by their exact coordinates: two thirds of the candidates (neighbouring probes,
+	-- both fields) tighten to the very same polyline (offline bench). A copy would be evaluated to the same
+	-- numbers (doors traced again) and dropped by PR.DistinctRoutes after the first (same level, later index:
+	-- P.SameRoute of equal vertices), and a dropped route never decides another's fate: skipped before.
+	local done = {}
 	-- the shortest ways (f) and the ways round the doors' costs (f.doors, PR.BuildFields), ranked together
 	for _, fx in ipairs({ f, f.doors or false }) do
 		if fx then
@@ -2106,7 +2143,7 @@ function PR.FieldRoutes(S, L, k, cfg)
 			for _, inner in ipairs(inners) do
 				-- (no join through a field position: every route ends at a seed, which L sees)
 				local pulled = attach(inner, S, L, nil)
-				if pulled and (#pulled >= 3 or (#pulled == 2 and not straight)) then
+				if pulled and (#pulled >= 3 or (#pulled == 2 and not straight)) and not seenRoute(done, pulled) then
 					straight = straight or #pulled == 2
 					local p = A.Paths.EvalRoute(pulled, cfg)
 					p.probe = true

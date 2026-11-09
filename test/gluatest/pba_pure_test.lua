@@ -2723,10 +2723,12 @@ local SUITE = {
 				local S, Aa, L, B = Vector(0, 0, 0), Vector(1000, -600, 0), Vector(2000, 0, 0), Vector(1000, 600, 0)
 				for _, c in ipairs({ { 600, -350 }, { 300, -170 }, { 800, -470 } }) do
 					pillar = { Vector(c[1] - 3, c[2] - 3, -1000), Vector(c[1] + 3, c[2] + 3, 1000) }
+					P.ForgetWorld() -- the stubbed world moved (P.SameRoute keeps its answers for a static world)
 					expect(routeClear({ S, Aa, L }) and routeClear({ S, B, L })).to.beTrue()
 					expect(A.Probes.SameRoute({ S, Aa, L }, { S, B, L })).to.equal(false)
 				end
 				pillar = { Vector(0, 0, 5000), Vector(1, 1, 5001) } -- out of the way: one route
+				P.ForgetWorld()
 				expect(A.Probes.SameRoute({ S, Aa, L }, { S, B, L })).to.beTrue()
 			end)
 			util.TraceLine, util.TraceHull, A.cfg.native_traces = saved[1], saved[2], savedNT
