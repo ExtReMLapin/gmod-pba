@@ -25,7 +25,7 @@
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend]) -> slot | -1, SetSourceReverbScale(k),
-//     SetSourceSlots(n) -> n
+//     SetSourceSlots(n) -> n, SetSourceAccum(radius, passes) -> radius, passes, SrcSlotStats() -> table
 //     SourceReflect: binds a voice to a source reverb slot (reflections simulated at pos, Vector,
 //     Source units) that the voice feeds at srcSend (linear, absent = keep; 0 at bind) on top of its
 //     room send. Slots are shared by position: a slot within 1.5 m of pos is reused (its response
@@ -169,6 +169,59 @@ std::atomic<float> g_reflMs{0}, g_reflMaxMs{0};
 // echoes refused because every echo slot still rang with another place's voices (Stats().echoBusy);
 // extra passes simulating only new echo / source slots (Stats().slotPasses)
 std::atomic<int> g_echoBusy{0}, g_slotPasses{0};
+
+// ---- source reverb slots: their own simulator, simulated from a listener ANCHOR, two banks
+// Measured (test/native_output_walk.py, rp_downtown_v4c_v2, a stationary loop in a room, the listener
+// walking outside it in 16 u steps, 1 s settle): the slot's reverb jumped 10-20 dB between
+// neighbouring steps with the direct nearly unchanged (step 54->55: 5.7 -> 25.8 dB, direct 15.2 ->
+// 13.6) and sometimes read nothing (60->61: 11.0 -> none). gm_melancholia (melancholia_small_room):
+// no ray at all in a small room downstairs, 10 dB more one metre ahead. Steam Audio traces the
+// reflection rays from the LISTENER: in a corridor or outside, few of them find the source's room
+// through its openings, so one pass is a very noisy estimate. Steam Audio does average successive
+// passes of a source (SimulationManager::accumulateEnergyFields), but restarts the average whenever
+// the listener moves by more than 0.1 mm (hasListenerChanged), the scene is committed or the source
+// moves: every step started again from the ~4 passes of its settle time.
+//  - The slots run in their own simulator (its listener history is not the room reverb's), whose
+//    listener is an anchor moved only when the real listener is more than g_srcAccumR away from it
+//    (or the scene changed): Steam Audio keeps averaging every pass made while the listener walks
+//    around the anchor (dozens instead of a few), and the level no longer changes with each step.
+//  - Each slot has two reflection sources (banks, render::kSrcBankB): when the anchor moves, the
+//    bank holding the previous anchor's average stays and is crossfaded into the new one by pass
+//    count (the new average takes over within g_srcAccumK passes): a re-anchor is a glide between
+//    two averages, not a jump to a single pass. The bank to reuse is first faded out (<= 0.2 s).
+// Cost: one more listener ray trace per pass while slots are active (the slot simulator's), a second
+// convolution per slot while its banks crossfade. The response is the anchor's (<= g_srcAccumR off),
+// never invented: where no ray reaches the source room the average stays 0.
+IPLSimulator g_slotSim = nullptr;
+IPLSource g_srcSlotB[render::kSrcBankB] = {}; // bank 1 (bank 0 is g_srcSlot[k].src)
+std::atomic<float> g_srcAccumR{1.5f}; // m; <= 0: off (simulated at the listener, every move restarts)
+std::atomic<int> g_srcAccumK{8};      // passes for a new anchor's average to take over
+// reflection thread only (reset with the simulator)
+struct SrcAccum {
+	IPLCoordinateSpace3 anchor{};
+	bool anchored = false;
+	int cur = 0;           // bank simulated now (slots >= kSrcBankB: always 0)
+	int anchorScene = -1;  // scene version when the anchor was set
+	bool retiring = false; // the anchor must move; waiting for the other bank to fade out
+	IPLVector3 lastRunLis{};
+	int lastRunScene = -1;
+	bool lastRunValid = false;
+	// per bank, per slot: passes in the current average (0: none), where / in which scene it was
+	// simulated, the dipole power of its last run (0 = never run: 1), a fresh average wanted next run
+	int n[2][render::kSrcSlotsMax] = {};
+	bool has[2][render::kSrcSlotsMax] = {};
+	IPLVector3 pos[2][render::kSrcSlotsMax] = {};
+	int scene[2][render::kSrcSlotsMax] = {};
+	float pow[2][render::kSrcSlotsMax] = {};
+	bool reset[2][render::kSrcSlotsMax] = {};
+};
+SrcAccum g_acc;
+// Stats: anchor moves, distance listener - anchor, bank simulated now, waiting for a fade, slot
+// simulator ms (smoothed), passes in each bank's average per slot
+std::atomic<int> g_srcSwaps{0}, g_srcCur{0};
+std::atomic<bool> g_srcRetiring{false};
+std::atomic<float> g_srcAnchorDist{0}, g_srcMs{0};
+std::atomic<int> g_srcStatN[render::kSrcSlotsMax][2] = {};
 float g_rt[3] = {0, 0, 0}; // smoothed room reverb times (under g_stageMtx)
 
 double Now() {
@@ -177,7 +230,11 @@ double Now() {
 
 // Reflection inputs of one source of the main simulator (g_simMtx held); on = simulated by the next
 // run (off: skipped, its last outputs stay readable)
-void SetReflInputs(IPLSource s, IPLVector3 p, bool on, IPLVector3 a = {0, 0, -1}, float dipole = 0) {
+// dipolePower: 1, or 1.001 to make Steam Audio restart a source's average (see RunSrcSlots): with
+// dipoleWeight 0 the directivity is |1 + 0 x cos|^power = 1 whatever the power, but a power change is a
+// "source changed" for SimulationData::hasSourceChanged
+void SetReflInputs(IPLSource s, IPLVector3 p, bool on, IPLVector3 a = {0, 0, -1}, float dipole = 0,
+                   float dipolePower = 1.0f) {
 	IPLSimulationInputs in{};
 	in.flags = on ? IPL_SIMULATIONFLAGS_REFLECTIONS : (IPLSimulationFlags)0;
 	// orthonormal frame around the facing (ahead = -z: Steam Audio's dipole points there)
@@ -192,15 +249,15 @@ void SetReflInputs(IPLSource s, IPLVector3 p, bool on, IPLVector3 a = {0, 0, -1}
 	in.source.right = {a.y * up.z - a.z * up.y, a.z * up.x - a.x * up.z, a.x * up.y - a.y * up.x};
 	in.source.origin = p;
 	in.directivity.dipoleWeight = dipole; // weapons: louder where the shooter aims
-	in.directivity.dipolePower = 1.0f;
+	in.directivity.dipolePower = dipolePower;
 	in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
 	in.hybridReverbTransitionTime = render::kIRSeconds;
 	in.hybridReverbOverlapPercent = 0.25f;
 	iplSourceSetInputs(s, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
 }
 
-// shared inputs of the main simulator's reflection runs (g_simMtx held)
-void SetSharedReflInputs(const IPLCoordinateSpace3& lis) {
+// shared inputs of a reflection run of the main or the slot simulator (g_simMtx held)
+void SetSharedReflInputs(const IPLCoordinateSpace3& lis, IPLSimulator sim = nullptr) {
 	IPLSimulationSharedInputs sh{};
 	sh.listener = lis;
 	sh.numRays = std::min(g_reflRays.load(), g_simMaxRays.load());
@@ -213,7 +270,7 @@ void SetSharedReflInputs(const IPLCoordinateSpace3& lis) {
 	// this to the source; the reverb source sits on the listener, so 1 m removed corridor
 	// walls and the floor of a crouching player (reflection_simulator.cpp, v4.8.1)
 	sh.irradianceMinDistance = 0.25f;
-	iplSimulatorSetSharedInputs(g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
+	iplSimulatorSetSharedInputs(sim ? sim : g_sim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
 }
 
 // an echo or source slot waits for its first simulation at its generation (g_stageMtx held). A
@@ -227,74 +284,258 @@ bool SlotPending(double now) {
 	return false;
 }
 
+inline float Dist2(IPLVector3 a, IPLVector3 b) {
+	return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
+}
+
+// Simulates the source reverb slots in the slot simulator (reflection thread), see g_slotSim.
+// pendingOnly: only the slots waiting for a new generation (served at once, e.g. a new sound's
+// place); otherwise every active slot (one more pass in each average). Pushes the banks' blend to
+// the renderer in any case. true when a run happened.
+bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
+	if (!g_slotSim || !g_srcSlot[0].src) return false;
+	int sLive[render::kSrcSlotsMax];
+	render::SrcSlotLive(sLive); // before g_stageMtx (lock order, see SourceReflect)
+	const int sceneVer = g_sceneVersion.load();
+	EchoSlot sl[render::kSrcSlotsMax];
+	bool act[render::kSrcSlotsMax] = {}, pend[render::kSrcSlotsMax] = {};
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		const double now = Now();
+		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+			sl[k] = g_srcSlot[k];
+			act[k] = SrcActive(k, sLive, now) && sl[k].src;
+			pend[k] = act[k] && sl[k].gen > g_srcSimulatedGen[k];
+		}
+	}
+	SrcAccum& A = g_acc;
+	const float R = g_srcAccumR.load();
+	const bool accum = R > 0;
+	auto bankOf = [&](int k) { return k < render::kSrcBankB ? A.cur : 0; };
+	auto srcOf = [&](int b, int k) -> IPLSource {
+		return b == 0 ? g_srcSlot[k].src : (k < render::kSrcBankB ? g_srcSlotB[k] : nullptr);
+	};
+	auto powOf = [&](int b, int k) { return A.pow[b][k] == 0 ? 1.0f : A.pow[b][k]; };
+	// slots are simulated at genPos, not pos: a source drifting within kSrcNear keeps its average
+	// (pos follows the binder at every refresh; a moved source restarts Steam Audio's average)
+	auto samePlace = [&](int b, int k) { return A.has[b][k] && Dist2(A.pos[b][k], sl[k].genPos) < 1e-6f; };
+
+	// --- anchor
+	if (!accum || !A.anchored) {
+		// off: the listener itself, every move restarts the averages (the behaviour before the anchor)
+		A.anchor = lis;
+		A.anchored = true;
+		A.anchorScene = sceneVer;
+		A.retiring = false;
+		g_srcAnchorDist = 0;
+	} else {
+		const float d = std::sqrt(Dist2(lis.origin, A.anchor.origin));
+		g_srcAnchorDist = d;
+		if (d > R || sceneVer != A.anchorScene) {
+			const int o = 1 - A.cur;
+			if (render::SrcBankSilent(o)) {
+				// the other bank is silent: it starts a fresh average at the new anchor, the current one
+				// becomes the partner it crossfades from. Slots beyond kSrcBankB restart in place.
+				A.cur = o;
+				A.anchor = lis;
+				A.anchorScene = sceneVer;
+				A.retiring = false;
+				for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+					const int b = bankOf(k);
+					A.n[b][k] = 0;
+					A.reset[b][k] = true;
+					if (k < render::kSrcBankB) A.has[b][k] = false;
+				}
+				g_srcSwaps++;
+			} else {
+				A.retiring = true; // the blend below fades the other bank out
+			}
+		}
+	}
+
+	// --- which slots run
+	bool on[render::kSrcSlotsMax] = {}, fresh[render::kSrcSlotsMax] = {}, newPlace[render::kSrcSlotsMax] = {};
+	bool any = false, held = false;
+	for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+		if (!act[k]) continue;
+		const int b = bankOf(k);
+		newPlace[k] = !samePlace(b, k);
+		bool want = pendingOnly ? pend[k] : true;
+		if (A.retiring && !newPlace[k]) {
+			// waiting to move the anchor: a run now would restart this average in place (scene changed)
+			// or add a pass at an anchor about to be left. A generation bumped by a scene change at the
+			// same place is marked served (no busy loop on SlotPending): the next anchor's bank simulates
+			// the new scene within a pass and crossfades in.
+			if (pend[k]) held = true;
+			want = false;
+		}
+		on[k] = want && srcOf(b, k) != nullptr;
+		any = any || on[k];
+	}
+	if (held) {
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		for (int k = 0; k < render::kSrcSlotsMax; ++k)
+			if (pend[k] && !newPlace[k]) {
+				g_srcSimulatedGen[k] = std::max(g_srcSimulatedGen[k], sl[k].gen);
+				g_srcSimulatedPos[k] = sl[k].genPos;
+				g_srcSimulatedVer[k] = sceneVer;
+				render::PublishSimulated(render::kEchoSlots + k, sl[k].gen);
+			}
+	}
+
+	bool ran = false;
+	if (any) {
+		// Steam Audio restarts the average of every simulated source when the listener or the scene
+		// changed since the simulator's previous run, and of one source when it moved or its
+		// directivity changed. A fresh average is forced (dipole power) for a new place, a bank
+		// restarted by a swap, and a response of another scene: a slot idle through a door's move would
+		// otherwise go on averaging the old scene (the change was consumed by the run that saw it).
+		const bool globalReset = !A.lastRunValid || Dist2(A.anchor.origin, A.lastRunLis) > 1e-8f || sceneVer != A.lastRunScene;
+		float pw[render::kSrcSlotsMax];
+		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+			const int b = bankOf(k);
+			pw[k] = powOf(b, k);
+			if (on[k] && (newPlace[k] || A.reset[b][k] || A.scene[b][k] != sceneVer)) {
+				fresh[k] = true;
+				pw[k] = pw[k] == 1.0f ? 1.001f : 1.0f;
+			}
+		}
+		const auto t0 = std::chrono::steady_clock::now();
+		bool failed = false;
+		{
+			std::lock_guard<std::mutex> lk(g_simMtx);
+			SetSharedReflInputs(A.anchor, g_slotSim);
+			for (int k = 0; k < render::kSrcSlotsMax; ++k)
+				for (int b = 0; b < 2; ++b) {
+					IPLSource src = srcOf(b, k);
+					if (!src) continue;
+					const bool run = on[k] && b == bankOf(k);
+					SetReflInputs(src, sl[k].genPos, run, {0, 0, -1}, 0, run ? pw[k] : powOf(b, k));
+				}
+			try {
+				iplSimulatorRunReflections(g_slotSim);
+			} catch (...) {
+				failed = true;
+			}
+		}
+		if (failed) g_reflErrors++;
+		else {
+			for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+				if (!on[k]) continue;
+				const int b = bankOf(k);
+				A.n[b][k] = fresh[k] || globalReset ? 1 : A.n[b][k] + 1;
+				A.has[b][k] = true;
+				A.pos[b][k] = sl[k].genPos;
+				A.scene[b][k] = sceneVer;
+				A.pow[b][k] = pw[k];
+				A.reset[b][k] = false;
+				render::PublishSrcBank(k, b);
+				render::PublishSimulated(render::kEchoSlots + k, sl[k].gen);
+			}
+			A.lastRunLis = A.anchor.origin;
+			A.lastRunScene = sceneVer;
+			A.lastRunValid = true;
+		}
+		{
+			// failed: marked simulated anyway, so that a failing slot does not spin the loop
+			std::lock_guard<std::mutex> lk(g_stageMtx);
+			for (int k = 0; k < render::kSrcSlotsMax; ++k)
+				if (on[k]) {
+					g_srcSimulatedGen[k] = std::max(g_srcSimulatedGen[k], sl[k].gen);
+					g_srcSimulatedPos[k] = sl[k].genPos;
+					g_srcSimulatedVer[k] = failed ? -1 : sceneVer;
+				}
+		}
+		const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+		g_srcMs = g_srcMs * 0.9f + ms * 0.1f;
+		g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
+		ran = true;
+	}
+
+	// --- blend of the two banks per slot. The new average's weight is n / (n + m), m = the previous
+	// anchor's passes (at most K) fading linearly to 0 as the new one reaches K passes: one pass of the
+	// new anchor weighs 1/8 against a converged partner, K passes weigh all (the partner is the
+	// response of another point, up to R away: it only bridges the new average's first noisy passes).
+	const int K = std::max(1, g_srcAccumK.load());
+	for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+		const int c = bankOf(k), o = 1 - c;
+		if (A.retiring && k < render::kSrcBankB) {
+			// fade the bank to reuse out; the current one alone meanwhile, if it holds this place's
+			// response (else silent until its run: it may still hold an older anchor's or place's)
+			const float wc = samePlace(c, k) ? 1.0f : 0.0f;
+			render::SetSrcBlend(k, c == 0 ? wc : 0.0f, c == 1 ? wc : 0.0f, false);
+			continue;
+		}
+		const bool hasO = accum && k < render::kSrcBankB && samePlace(o, k) && A.n[o][k] > 0;
+		const int nc = samePlace(c, k) ? A.n[c][k] : 0;
+		if (nc == 0 && !hasO) continue; // nothing simulated here yet: unchanged
+		const float m = hasO ? (float)std::min(A.n[o][k], K) * std::max(0.0f, 1.0f - (float)nc / K) : 0.0f;
+		const float wc = nc > 0 ? (float)nc / ((float)nc + m) : 0.0f;
+		// a new place's first response has nothing to crossfade from (its voices waited for it); a bank
+		// restarted by a swap is not a new place: it crossfades from its partner
+		const bool snap = on[k] && newPlace[k] && !hasO;
+		render::SetSrcBlend(k, c == 0 ? wc : 1 - wc, c == 1 ? wc : 1 - wc, snap);
+	}
+	g_srcCur = A.cur;
+	g_srcRetiring = A.retiring;
+	for (int k = 0; k < render::kSrcSlotsMax; ++k)
+		for (int b = 0; b < 2; ++b) g_srcStatN[k][b] = A.n[b][k];
+	return ran;
+}
+
 // Simulates only the echo and source slots waiting for a new generation (reflection thread): the
 // room source and every settled slot are left out of the run, so it costs about one source's rays
 // instead of the whole pool's. The response depends on the listener too (Steam Audio traces from
 // the listener), so it uses the latest staged one. false when nothing was pending or runnable.
 bool RunSlotPass() {
 	if (!g_sim || !g_reverbSource) return false;
-	int sLive[render::kSrcSlotsMax];
-	render::SrcSlotLive(sLive); // before g_stageMtx (lock order, see SourceReflect)
-	const int sceneVer = g_sceneVersion.load();
 	IPLCoordinateSpace3 lis{};
-	bool pend[render::kEchoSlots] = {}, sPend[render::kSrcSlotsMax] = {}, any = false;
-	EchoSlot e[render::kEchoSlots], sl[render::kSrcSlotsMax];
+	bool pend[render::kEchoSlots] = {}, any = false;
+	EchoSlot e[render::kEchoSlots];
 	{
 		std::lock_guard<std::mutex> lk(g_stageMtx);
 		if (!g_stageLisOk || !g_reflWanted.load() || !render::Running()) return false;
 		lis = g_stageLis;
-		const double now = Now();
 		for (int k = 0; k < render::kEchoSlots; ++k) {
 			e[k] = g_echo[k];
 			pend[k] = e[k].gen > 0 && e[k].gen > g_simulatedGen[k];
 			any = any || pend[k];
 		}
-		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
-			sl[k] = g_srcSlot[k];
-			sPend[k] = SrcActive(k, sLive, now) && sl[k].gen > g_srcSimulatedGen[k];
-			any = any || sPend[k];
-		}
 	}
-	if (!any) return false;
-	const auto t0 = std::chrono::steady_clock::now();
-	bool failed = false;
-	{
-		std::lock_guard<std::mutex> lk(g_simMtx);
-		SetSharedReflInputs(lis);
-		SetReflInputs(g_reverbSource, lis.origin, false);
-		for (int k = 0; k < render::kEchoSlots; ++k)
-			if (g_echo[k].src) SetReflInputs(g_echo[k].src, e[k].pos, pend[k], e[k].ahead, e[k].dipole);
-		for (int k = 0; k < render::kSrcSlotsMax; ++k)
-			if (g_srcSlot[k].src) SetReflInputs(g_srcSlot[k].src, sl[k].pos, sPend[k]);
-		try {
-			iplSimulatorRunReflections(g_sim);
-		} catch (...) {
-			failed = true;
-		}
-	}
-	if (failed) g_reflErrors++;
-	else {
-		for (int k = 0; k < render::kEchoSlots; ++k)
-			if (pend[k]) render::PublishSimulated(k, e[k].gen);
-		for (int k = 0; k < render::kSrcSlotsMax; ++k)
-			if (sPend[k]) render::PublishSimulated(render::kEchoSlots + k, sl[k].gen);
-	}
-	{
-		// failed: marked simulated anyway, so that a failing slot does not spin the loop
-		std::lock_guard<std::mutex> lk(g_stageMtx);
-		for (int k = 0; k < render::kEchoSlots; ++k)
-			if (pend[k]) g_simulatedGen[k] = std::max(g_simulatedGen[k], e[k].gen);
-		for (int k = 0; k < render::kSrcSlotsMax; ++k)
-			if (sPend[k]) {
-				g_srcSimulatedGen[k] = std::max(g_srcSimulatedGen[k], sl[k].gen);
-				g_srcSimulatedPos[k] = sl[k].pos;
-				g_srcSimulatedVer[k] = failed ? -1 : sceneVer;
+	bool ran = false;
+	if (any) {
+		const auto t0 = std::chrono::steady_clock::now();
+		bool failed = false;
+		{
+			std::lock_guard<std::mutex> lk(g_simMtx);
+			SetSharedReflInputs(lis);
+			SetReflInputs(g_reverbSource, lis.origin, false);
+			for (int k = 0; k < render::kEchoSlots; ++k)
+				if (g_echo[k].src) SetReflInputs(g_echo[k].src, e[k].pos, pend[k], e[k].ahead, e[k].dipole);
+			try {
+				iplSimulatorRunReflections(g_sim);
+			} catch (...) {
+				failed = true;
 			}
+		}
+		if (failed) g_reflErrors++;
+		else
+			for (int k = 0; k < render::kEchoSlots; ++k)
+				if (pend[k]) render::PublishSimulated(k, e[k].gen);
+		{
+			// failed: marked simulated anyway, so that a failing slot does not spin the loop
+			std::lock_guard<std::mutex> lk(g_stageMtx);
+			for (int k = 0; k < render::kEchoSlots; ++k)
+				if (pend[k]) g_simulatedGen[k] = std::max(g_simulatedGen[k], e[k].gen);
+		}
+		const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+		g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
+		ran = true;
 	}
-	g_slotPasses++;
-	const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
-	g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
-	return true;
+	// source slots waiting for their first response (their own simulator, see g_slotSim)
+	if (RunSrcSlots(lis, true)) ran = true;
+	if (ran) g_slotPasses++;
+	return ran;
 }
 
 // Runs when an echo slot waits for its first simulation (woken at once by Echo), otherwise every
@@ -307,15 +548,7 @@ void ReflectionLoop() {
 		float dipole[render::kEchoSlots];
 		int gen[render::kEchoSlots];
 		bool active[render::kEchoSlots];
-		IPLVector3 sPos[render::kSrcSlotsMax];
-		int sGen[render::kSrcSlotsMax];
-		bool sActive[render::kSrcSlotsMax];
 		bool ok, anyEcho = false;
-		// voices bound per source slot, read before g_stageMtx (see SourceReflect)
-		int sLive[render::kSrcSlotsMax];
-		render::SrcSlotLive(sLive);
-		// scene simulated by this run (read before it: a change during the run makes it stale)
-		const int sceneVer = g_sceneVersion.load();
 		{
 			std::lock_guard<std::mutex> lk(g_stageMtx);
 			ok = g_stageLisOk && g_reflWanted.load() && render::Running();
@@ -329,12 +562,6 @@ void ReflectionLoop() {
 				active[k] = gen[k] > 0 && now - g_echo[k].last < 3.0;
 				anyEcho = anyEcho || active[k];
 			}
-			// not counted in anyEcho: a still source converges like the still listener
-			for (int k = 0; k < render::kSrcSlotsMax; ++k) {
-				sPos[k] = g_srcSlot[k].pos;
-				sGen[k] = g_srcSlot[k].gen;
-				sActive[k] = SrcActive(k, sLive, now);
-			}
 		}
 		if (ok && g_sim && g_reverbSource) {
 			bool failed = false;
@@ -344,8 +571,6 @@ void ReflectionLoop() {
 				SetReflInputs(g_reverbSource, {lis.origin.x, lis.origin.y + 0.1f, lis.origin.z}, true);
 				for (int k = 0; k < render::kEchoSlots; ++k)
 					if (g_echo[k].src) SetReflInputs(g_echo[k].src, pos[k], active[k], ahead[k], dipole[k]);
-				for (int k = 0; k < render::kSrcSlotsMax; ++k)
-					if (g_srcSlot[k].src) SetReflInputs(g_srcSlot[k].src, sPos[k], sActive[k]);
 				try {
 					iplSimulatorRunReflections(g_sim);
 				} catch (...) {
@@ -357,11 +582,6 @@ void ReflectionLoop() {
 				std::lock_guard<std::mutex> lk(g_stageMtx); // do not spin on a failing slot
 				for (int k = 0; k < render::kEchoSlots; ++k)
 					if (active[k]) g_simulatedGen[k] = gen[k];
-				for (int k = 0; k < render::kSrcSlotsMax; ++k)
-					if (sActive[k]) {
-						g_srcSimulatedGen[k] = sGen[k];
-						g_srcSimulatedVer[k] = -1;
-					}
 			} else {
 				render::PublishSimulated(-1, 1);
 				for (int k = 0; k < render::kEchoSlots; ++k)
@@ -369,17 +589,9 @@ void ReflectionLoop() {
 						render::PublishSimulated(k, gen[k]);
 						g_simulatedGen[k] = gen[k];
 					}
-				for (int k = 0; k < render::kSrcSlotsMax; ++k)
-					if (sActive[k]) render::PublishSimulated(render::kEchoSlots + k, sGen[k]);
 				float now[3];
 				render::RoomReverbTimes(now);
 				std::lock_guard<std::mutex> lk(g_stageMtx);
-				for (int k = 0; k < render::kSrcSlotsMax; ++k)
-					if (sActive[k]) {
-						g_srcSimulatedGen[k] = sGen[k];
-						g_srcSimulatedPos[k] = sPos[k];
-						g_srcSimulatedVer[k] = sceneVer;
-					}
 				for (int b = 0; b < 3; ++b) {
 					const float v = now[b];
 					g_rt[b] = g_rt[b] <= 0 ? v : g_rt[b] * 0.7f + v * 0.3f;
@@ -390,6 +602,9 @@ void ReflectionLoop() {
 			g_reflMs = g_reflMs * 0.9f + ms * 0.1f;
 			g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
 		}
+		// source reverb slots: one more pass in each average, from the anchor (see g_slotSim). Not
+		// counted in anyEcho: a still source converges like the still listener
+		if (ok) RunSrcSlots(lis, false);
 		// an echo fired during the main pass would otherwise wait for the long-window pass, the 80 ms
 		// floor and a whole main pass (more than kEchoWaitBlocks, ~250 ms, on a large map: dropped):
 		// the slots alone are simulated now, a fraction of a main pass's cost
@@ -592,17 +807,26 @@ void ReleaseWorld() {
 			}
 			e = EchoSlot{};
 		}
-		for (auto& e : g_srcSlot) {
-			if (e.src) {
-				iplSourceRemove(e.src, g_sim);
-				iplSourceRelease(&e.src);
-			}
-			e = EchoSlot{};
-		}
 		if (g_probes) iplSimulatorRemoveProbeBatch(g_sim, g_probes);
 		iplSimulatorCommit(g_sim);
 		iplSimulatorRelease(&g_sim);
 	}
+	if (g_slotSim) {
+		for (auto& e : g_srcSlot)
+			if (e.src) {
+				iplSourceRemove(e.src, g_slotSim);
+				iplSourceRelease(&e.src);
+			}
+		for (auto& s : g_srcSlotB)
+			if (s) {
+				iplSourceRemove(s, g_slotSim);
+				iplSourceRelease(&s);
+			}
+		iplSimulatorCommit(g_slotSim);
+		iplSimulatorRelease(&g_slotSim);
+	}
+	for (auto& e : g_srcSlot) e = EchoSlot{};
+	for (auto& s : g_srcSlotB) s = nullptr;
 	if (g_probes) iplProbeBatchRelease(&g_probes);
 	g_pathsReady = false;
 	for (auto& kv : g_dyn) {
@@ -663,7 +887,7 @@ bool EnsureSimulator() {
 	sim.maxNumRays = g_simMaxRays.load(); // see g_simMaxRays
 	sim.numDiffuseSamples = 1024; // as Unity: diffuse bounces pick among this many fixed directions
 	sim.maxDuration = render::kIRSeconds;
-	sim.maxNumSources = kMaxSources + 1 + render::kEchoSlots + render::kSrcSlotsMax;
+	sim.maxNumSources = kMaxSources + 1 + render::kEchoSlots;
 	{
 		const int hc = (int)std::thread::hardware_concurrency();
 		const int opt = g_optThreads.load();
@@ -695,7 +919,17 @@ bool EnsureSimulator() {
 			if (iplSourceCreate(g_sim, &rs, &g_echo[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_echo[k].src, g_sim);
 			es[k] = g_echo[k].src;
 		}
+		// source reverb slots: their own simulator (listener anchor, see g_slotSim), same settings
 		IPLSource ss[render::kSrcSlotsMax] = {};
+		IPLSource sb[render::kSrcBankB] = {};
+		g_acc = SrcAccum{};
+		{
+			IPLSimulationSettings ssim = sim;
+			ssim.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+			ssim.maxNumSources = render::kSrcSlotsMax + render::kSrcBankB;
+			if (iplSimulatorCreate(g_ctx, &ssim, &g_slotSim) == IPL_STATUS_SUCCESS) iplSimulatorSetScene(g_slotSim, g_scene);
+			else g_slotSim = nullptr;
+		}
 		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 			g_srcSlot[k] = EchoSlot{};
 			{
@@ -704,10 +938,16 @@ bool EnsureSimulator() {
 				g_srcSimulatedGen[k] = 0;
 				g_srcSimulatedVer[k] = -1;
 			}
-			if (iplSourceCreate(g_sim, &rs, &g_srcSlot[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlot[k].src, g_sim);
+			if (!g_slotSim) continue;
+			if (iplSourceCreate(g_slotSim, &rs, &g_srcSlot[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlot[k].src, g_slotSim);
 			ss[k] = g_srcSlot[k].src;
+			if (k < render::kSrcBankB) {
+				if (iplSourceCreate(g_slotSim, &rs, &g_srcSlotB[k]) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlotB[k], g_slotSim);
+				sb[k] = g_srcSlotB[k];
+			}
 		}
-		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots, ss, render::kSrcSlotsMax);
+		if (g_slotSim) iplSimulatorCommit(g_slotSim);
+		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots, ss, render::kSrcSlotsMax, sb, render::kSrcBankB);
 	}
 	iplSimulatorCommit(g_sim);
 	// long-window parametric simulator for the room reverb time (see g_revSim)
@@ -1944,7 +2184,92 @@ LUA_FUNCTION(Stats) {
 		LUA->PushNumber(g_slotPasses.load());
 		LUA->SetField(-2, "slotPasses");
 	}
+	{
+		// source slot averaging (see g_slotSim): anchor radius (m, 0 = off), anchor moves since the
+		// world load, listener - anchor distance (m), bank simulated now, waiting for the other bank
+		// to fade out, slot simulator ms per run (smoothed). Per slot: SrcSlotStats()
+		LUA->PushNumber(g_srcAccumR.load());
+		LUA->SetField(-2, "srcAccumRadius");
+		LUA->PushNumber(g_srcAccumK.load());
+		LUA->SetField(-2, "srcAccumPasses");
+		LUA->PushNumber(g_srcSwaps.load());
+		LUA->SetField(-2, "srcAnchorMoves");
+		LUA->PushNumber(g_srcAnchorDist.load());
+		LUA->SetField(-2, "srcAnchorDist");
+		LUA->PushNumber(g_srcCur.load());
+		LUA->SetField(-2, "srcBank");
+		LUA->PushBool(g_srcRetiring.load());
+		LUA->SetField(-2, "srcRetiring");
+		LUA->PushNumber(g_srcMs.load());
+		LUA->SetField(-2, "srcMs");
+	}
 	return 1;
+}
+
+// SrcSlotStats() -> { [k + 1] = { slot, gen, live, active, bank, n, nOld, w, wOld, target, targetOld,
+//   energy, seconds } } for every slot of the pool with a generation: n / nOld = passes averaged in
+// the current / the other bank's response (Steam Audio's average, restarted by a move of the
+// anchor, the scene or the source), w / wOld = the renderer's weights of the two banks now (target*:
+// where they ramp to), energy = energy of the slot's wet output (W channel, after the wet level)
+// rendered since the previous call, over `seconds` (energy / seconds compares across windows: a
+// per-slot reverb level, without the direct sound and the room bus)
+LUA_FUNCTION(SrcSlotStats) {
+	render::SrcSlotState st[render::kSrcSlotsMax];
+	double sec = 0;
+	render::SrcSlotStates(st, &sec);
+	int live[render::kSrcSlotsMax];
+	render::SrcSlotLive(live);
+	int gen[render::kSrcSlotsMax];
+	bool act[render::kSrcSlotsMax];
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		const double now = Now();
+		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+			gen[k] = g_srcSlot[k].gen;
+			act[k] = SrcActive(k, live, now);
+		}
+	}
+	const int cur = g_srcCur.load();
+	LUA->CreateTable();
+	int row = 0;
+	for (int k = 0; k < std::min(g_srcPool.load(), render::kSrcSlotsMax); ++k) {
+		if (gen[k] == 0) continue;
+		const int c = k < render::kSrcBankB ? cur : 0, o = 1 - c;
+		LUA->PushNumber(++row);
+		LUA->CreateTable();
+		auto num = [&](const char* f, double v) {
+			LUA->PushNumber(v);
+			LUA->SetField(-2, f);
+		};
+		num("slot", k);
+		num("gen", gen[k]);
+		num("live", live[k]);
+		LUA->PushBool(act[k]);
+		LUA->SetField(-2, "active");
+		num("bank", c);
+		num("n", g_srcStatN[k][c].load());
+		num("nOld", k < render::kSrcBankB ? g_srcStatN[k][o].load() : 0);
+		num("w", st[k].w[c]);
+		num("wOld", st[k].w[o]);
+		num("target", st[k].target[c]);
+		num("targetOld", st[k].target[o]);
+		num("energy", st[k].energy);
+		num("seconds", sec);
+		LUA->SetTable(-3);
+	}
+	return 1;
+}
+
+// SetSourceAccum(radius, passes) -> radius, passes : averaging of the source reverb slots (see
+// g_slotSim). radius (m, default 1.5): the slots are simulated from an anchor moved only when the
+// listener is farther than this from it (0 = off: from the listener, every move restarts the
+// average); passes (default 8): passes for a new anchor's average to replace the previous one's
+LUA_FUNCTION(SetSourceAccum) {
+	if (LUA->IsType(1, Type::Number)) g_srcAccumR = std::clamp((float)LUA->GetNumber(1), 0.0f, 20.0f);
+	if (LUA->IsType(2, Type::Number)) g_srcAccumK = std::clamp((int)LUA->GetNumber(2), 1, 256);
+	LUA->PushNumber(g_srcAccumR.load());
+	LUA->PushNumber(g_srcAccumK.load());
+	return 2;
 }
 
 // Update(id, pos, gain, eqL, eqM, eqH [, pitch [, diffuse [, send [, sh]]]]) -> alive, pathFallback
@@ -2136,6 +2461,10 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetSourceSlots");
 	LUA->PushCFunction(SetSourceReverbScale);
 	LUA->SetField(-2, "SetSourceReverbScale");
+	LUA->PushCFunction(SrcSlotStats);
+	LUA->SetField(-2, "SrcSlotStats");
+	LUA->PushCFunction(SetSourceAccum);
+	LUA->SetField(-2, "SetSourceAccum");
 	LUA->PushCFunction(SetOutputMode);
 	LUA->SetField(-2, "SetOutputMode");
 	LUA->PushCFunction(SetReflections);
@@ -2178,6 +2507,7 @@ GMOD_MODULE_OPEN() {
 	LUA->PushBool(true); LUA->SetField(-2, "updatePathField");  // Update arg 10: sh / false
 	LUA->PushBool(true); LUA->SetField(-2, "sourcePool");       // SourceReflect / SetSourceSlots
 	LUA->PushBool(true); LUA->SetField(-2, "staticPropTraces"); // trace.* hit static props (trace.Init's 2nd value)
+	LUA->PushBool(true); LUA->SetField(-2, "sourceAccum");      // SetSourceAccum, SrcSlotStats
 	LUA->SetField(-2, "caps");
 	LUA->SetField(-2, "pba_native");
 	LUA->Pop();

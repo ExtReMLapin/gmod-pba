@@ -146,6 +146,9 @@ struct Reflection {
 	// in a cathedral rings longer than the listener's small room (it was cut at the room's length)
 	int tailBlocks = kTailMinBlocks;
 	bool silent = true; // the effect was reset after its tail faded out (nothing stale left inside)
+	// fed but not convolved (a source slot bank weighted out): its input history is missing, so it
+	// restarts from silence when weighted in again instead of replaying input from long ago
+	bool stale = false;
 };
 
 IPLContext g_ctx = nullptr;
@@ -180,7 +183,26 @@ Reflection g_room;                 // reverb at the listener, fed by every voice
 // (direct + reverb) about constant in a typical room (measured on pba_demo: direct x 0.11 at share 0.85)
 float g_diffuseSend = 1.5f;
 Reflection g_echo[kEchoSlots];     // per-source reflections
-Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax)
+Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax), bank 0
+Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same input as g_src[k])
+// Blend of each slot's two banks: the slots are simulated from a listener ANCHOR that moves only when
+// the listener walks away from it, and the previous anchor's response is kept in the other bank and
+// crossfaded into the new one (pba_native.cpp, RunSrcSlots). Convolution is linear in the impulse
+// response, so the weighted sum of the two banks' outputs is the output of the weighted average
+// response. Current weights (audio thread) ramp towards the targets at kSrcBlendStep per block.
+float g_srcW[kSrcSlotsMax][2], g_srcT[kSrcSlotsMax][2];
+constexpr float kSrcBlendStep = (float)kBlock / (0.2f * kRate); // full swing in 0.2 s
+double g_srcE[kSrcSlotsMax] = {}; // W-channel energy of each slot's wet output (SrcSlotStates)
+double g_srcESec = 0;
+std::vector<float> g_slotW(kBlock); // one slot's W-channel output this block (both banks summed)
+void ResetSrcBlend() {
+	for (int k = 0; k < kSrcSlotsMax; ++k) {
+		g_srcW[k][0] = g_srcT[k][0] = 1; // one bank, as before the banks existed
+		g_srcW[k][1] = g_srcT[k][1] = 0;
+		g_srcE[k] = 0;
+	}
+	g_srcESec = 0;
+}
 float g_wetRoom = 0, g_wetEcho = 0;
 float g_srcScale = 1; // source reverb level, relative to the room reverb's wet
 bool g_paused = false;
@@ -223,7 +245,10 @@ void ReleaseVoice(Voice& v) {
 // comes from the 0.5 s main simulation window, which underestimates long reverbs; the room's has
 // the long-window estimate). The tail fades out over kTailFadeBlocks, then the effect is reset so
 // that a later sound does not restart the frozen remains of the old tail.
-void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTail = 0) {
+// w0 / w1: extra weight at the start / end of the block (source slot banks; both 0: not convolved).
+// wOut: the W (omni) channel of what was added, accumulated there (per-slot level meter).
+void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTail = 0, float w0 = 1, float w1 = 1,
+                     float* wOut = nullptr) {
 	if (r.fed) r.idle = 0;
 	else if (r.idle < (1 << 20)) r.idle++;
 	r.fed = false;
@@ -245,7 +270,15 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	if (rtOut)
 		for (int b = 0; b < 3; ++b) rtOut[b] = rt[b];
 	if (wet <= 0 || over) return;
+	if (w0 <= 0 && w1 <= 0) {
+		if (!r.silent) r.stale = true;
+		return;
+	}
 	if (!out.reflections.ir) return;
+	if (r.stale) {
+		iplReflectionEffectReset(r.fx);
+		r.stale = false;
+	}
 	r.silent = false;
 	// fade over the last kTailFadeBlocks of the tail (per-sample ramp across the block)
 	const float a0 = std::clamp(1.0f - (float)(r.idle - 1 - tail) / kTailFadeBlocks, 0.0f, 1.0f);
@@ -262,13 +295,18 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	rp.numChannels = kAmbi;
 	rp.irSize = kIR;
 	iplReflectionEffectApply(r.fx, &rp, &r.in, &g_ambTmp, nullptr);
+	const float g0 = wet * a0 * w0, g1 = wet * a1 * w1;
 	for (int c = 0; c < kAmbi; ++c) {
 		float* d = g_amb.data[c];
 		const float* s = g_ambTmp.data[c];
-		if (a0 >= 1 && a1 >= 1)
-			for (int i = 0; i < kBlock; ++i) d[i] += s[i] * wet;
+		if (g0 == g1)
+			for (int i = 0; i < kBlock; ++i) d[i] += s[i] * g0;
 		else
-			for (int i = 0; i < kBlock; ++i) d[i] += s[i] * wet * (a0 + (a1 - a0) * (float)i / kBlock);
+			for (int i = 0; i < kBlock; ++i) d[i] += s[i] * (g0 + (g1 - g0) * (float)i / kBlock);
+	}
+	if (wOut) {
+		const float* s = g_ambTmp.data[0];
+		for (int i = 0; i < kBlock; ++i) wOut[i] += s[i] * (g0 + (g1 - g0) * (float)i / kBlock);
 	}
 }
 
@@ -537,7 +575,28 @@ void RenderBlock() {
 	ApplyReflection(g_room, g_wetRoom, g_roomRt);
 	// echo and source slots: their own tail, never shorter than the room's (see ApplyReflection)
 	for (auto& e : g_echo) ApplyReflection(e, g_wetEcho, nullptr, g_room.tailBlocks);
-	for (auto& e : g_src) ApplyReflection(e, g_wetRoom * g_srcScale, nullptr, g_room.tailBlocks);
+	{
+		// source slots: both banks fed the slot's input, weighted by the blend (ramped per block)
+		const float wet = g_wetRoom * g_srcScale;
+		for (int k = 0; k < kSrcSlotsMax; ++k) {
+			float* w = g_srcW[k];
+			const float* t = g_srcT[k];
+			const float p0 = w[0], p1 = w[1];
+			for (int b = 0; b < 2; ++b)
+				w[b] = t[b] > w[b] ? std::min(t[b], w[b] + kSrcBlendStep) : std::max(t[b], w[b] - kSrcBlendStep);
+			if (k < kSrcBankB) {
+				std::memcpy(g_srcB[k].in.data[0], g_src[k].in.data[0], kBlock * sizeof(float));
+				g_srcB[k].fed = g_src[k].fed; // before ApplyReflection clears it
+			}
+			std::fill(g_slotW.begin(), g_slotW.end(), 0.0f);
+			ApplyReflection(g_src[k], wet, nullptr, g_room.tailBlocks, p0, w[0], g_slotW.data());
+			if (k < kSrcBankB) ApplyReflection(g_srcB[k], wet, nullptr, g_room.tailBlocks, p1, w[1], g_slotW.data());
+			double e = 0;
+			for (int i = 0; i < kBlock; ++i) e += (double)g_slotW[i] * g_slotW[i];
+			g_srcE[k] += e;
+		}
+		g_srcESec += (double)kBlock / kRate;
+	}
 	if (g_decode) {
 		IPLAmbisonicsDecodeEffectParams dp{};
 		dp.order = 1;
@@ -712,6 +771,9 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 		if (!CreateReflection(e, as)) return "reflection effect creation failed";
 	for (auto& e : g_src)
 		if (!CreateReflection(e, as)) return "reflection effect creation failed";
+	for (auto& e : g_srcB)
+		if (!CreateReflection(e, as)) return "reflection effect creation failed";
+	ResetSrcBlend();
 	{
 		IPLAmbisonicsDecodeEffectSettings ds{};
 		ds.speakerLayout = Stereo();
@@ -786,6 +848,7 @@ void Stop() {
 	ReleaseReflection(g_room);
 	for (auto& e : g_echo) ReleaseReflection(e);
 	for (auto& e : g_src) ReleaseReflection(e);
+	for (auto& e : g_srcB) ReleaseReflection(e);
 	if (g_decode) iplAmbisonicsDecodeEffectRelease(&g_decode);
 	if (g_hrtf) {
 		for (IPLAudioBuffer* b : {&g_mono, &g_mono2, &g_stereo, &g_amb, &g_ambTmp, &g_ambOut, &g_monoP, &g_stereoP})
@@ -825,7 +888,8 @@ void SetDiffuseSend(float k) {
 	g_diffuseSend = std::clamp(k, 0.0f, 8.0f);
 }
 
-void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IPLSource* srcs, int nSrc) {
+void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IPLSource* srcs, int nSrc,
+                          const IPLSource* srcsB, int nSrcB) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	g_room.src = room;
 	g_room.simGen = 0;
@@ -839,7 +903,49 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IP
 		g_src[k].src = (srcs && k < nSrc) ? srcs[k] : nullptr;
 		g_src[k].simGen = 0;
 	}
+	for (int k = 0; k < kSrcBankB; ++k) {
+		g_srcB[k].src = (srcsB && k < nSrcB) ? srcsB[k] : nullptr;
+		g_srcB[k].simGen = 0;
+	}
+	ResetSrcBlend();
 	for (auto& v : g_voices) v->srcSlot = -1;
+}
+
+void PublishSrcBank(int k, int bank) {
+	// bank 0's g_src[k].simGen is the slot's generation (PublishSimulated); bank 1 only needs "simulated"
+	if (bank == 1 && k >= 0 && k < kSrcBankB) g_srcB[k].simGen = 1;
+}
+
+void SetSrcBlend(int k, float w0, float w1, bool snap) {
+	if (k < 0 || k >= kSrcSlotsMax) return;
+	std::lock_guard<std::mutex> lk(g_mtx);
+	const float t[2] = {std::clamp(w0, 0.0f, 1.0f), k < kSrcBankB ? std::clamp(w1, 0.0f, 1.0f) : 0.0f};
+	for (int b = 0; b < 2; ++b) {
+		g_srcT[k][b] = t[b];
+		if (snap && t[b] > g_srcW[k][b]) g_srcW[k][b] = t[b];
+	}
+}
+
+bool SrcBankSilent(int bank) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	// slots beyond kSrcBankB have bank 0 only and never take part in a swap
+	for (int k = 0; k < kSrcBankB; ++k)
+		if (g_srcW[k][bank] > 0 || g_srcT[k][bank] > 0) return false;
+	return true;
+}
+
+void SrcSlotStates(SrcSlotState* out, double* seconds) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	for (int k = 0; k < kSrcSlotsMax; ++k) {
+		for (int b = 0; b < 2; ++b) {
+			out[k].w[b] = g_srcW[k][b];
+			out[k].target[b] = g_srcT[k][b];
+		}
+		out[k].energy = g_srcE[k];
+		g_srcE[k] = 0;
+	}
+	if (seconds) *seconds = g_srcESec;
+	g_srcESec = 0;
 }
 
 void SetSourceReverbScale(float k) {
