@@ -6,14 +6,18 @@
 -- the estimators of ONE physical thing agree:
 --   * edge: at a step whose straight line the world cuts, when P.WorldEdge finds the edge and a kept route
 --     is the same physical route (homotopic, P.SameRoute: it bends round that very edge), the route's corner
---     loss is within EDGE_TOL of the corner law on the edge's own path difference (AC.Corner). Measured
+--     loss is within EDGE_TOL of the corner law on the edge's own path difference (AC.Corner). Routes paying
+--     a door are left out: a portal chain through a shut door puts its corner in the door (the open share
+--     pays the corner, a leaf radiates from the opening itself: P.EvalChain), a probe polyline adds both;
+--     that difference is the door model's, not the corner geometry's. Measured
 --     before the fix (rp_downtown, 2026-11-09): the probe route's vertex sat 8 u off the edge (the hull and
 --     the clearance of the tightening), 5.1 dB against 2.0; 55-74 u off with the door closed, 10-14 against
 --     2-14;
 --   * leaf: at a step whose straight line crosses the closed leaf, the leaf's own share of the transmission
 --     (w.lossDb in r.trans.walls) is within LEAF_TOL of AC.LeafDb(closedDb), the one loss of a closed leaf
---     (sh_doors D.LeafLoss: measured thickness, face material). Measured before: the leaf cut along its
---     chord, 86.8 u of "metal", 50 dB against 14 (the 18.6 dB jump of door_sweep_real);
+--     (sh_doors D.LeafLoss: measured thickness, face material), unless a portal path through its doorway
+--     models it (r.leafByPortal, door_leaf_portal: then it is not a wall at all). Measured before: the leaf
+--     cut along its chord, 86.8 u of "metal", 50 dB against 14 (the 18.6 dB jump of door_sweep_real);
 --   * enough steps of each kind (MIN_EDGE, MIN_LEAF), or nothing was tested (inconclusive = fail).
 -- The level's continuity itself is door_sweep_real's business; its worst 2 u step is only reported here.
 -- Maps: rp_downtown_v4c_v2 (the doorway of downtown_cases) and pba_twodoors (door_s), as door_sweep_real.
@@ -155,7 +159,7 @@ local function slide(tag)
 						local law = AC.Corner(we.delta, cfg.diff_freq, cfg.diff_max_edge, cfg.portal_diffuse_db or 60)
 						local edgeRoute = { S, we.apex, L }
 						for _, p in ipairs(r.paths or {}) do
-							if p.points and #p.points > 0 then
+							if p.points and #p.points > 0 and (p.doorDb or 0) <= 0.1 then
 								local pts = { S }
 								for _, v in ipairs(p.points) do pts[#pts + 1] = v end
 								pts[#pts + 1] = L
@@ -181,11 +185,13 @@ local function slide(tag)
 					end
 				end
 				-- leaf: the closed leaf's share of the transmission against the one leaf loss
-				if cls == "leaf" and r.trans and (frac() or 1) <= 0.01 then
+				if cls == "leaf" and (frac() or 1) <= 0.01 then
 					local st = A.Doors.byEnt[idx]
 					local want = AC.LeafDb(st and st.closedDb or cfg.door_closed_db, cfg)
-					for _, w in ipairs(r.trans.walls or {}) do
+					local seen = false
+					for _, w in ipairs(r.trans and r.trans.walls or {}) do -- (no transmission at all when the leaf was its only wall)
 						if w.ent == door and w.lossDb then
+							seen = true
 							out.leaf.steps = out.leaf.steps + 1
 							local d = math.abs(w.lossDb - want)
 							if d > out.leaf.worst then
@@ -197,6 +203,10 @@ local function slide(tag)
 									tag, s, w.lossDb, w.thickness or -1, tostring(w.surf), tostring(st and st.closedDb), want))
 							end
 						end
+					end
+					if not seen then
+						if r.leafByPortal then out.leaf.steps = out.leaf.steps + 1 out.leaf.byPortal = (out.leaf.byPortal or 0) + 1
+						else fail(string.format("%s s=%d leaf: crossed by the line but neither a wall of the transmission nor modelled by a portal path", tag, s)) end
 					end
 				end
 			end

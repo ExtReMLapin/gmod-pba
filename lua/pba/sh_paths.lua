@@ -2341,8 +2341,13 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				r.paths = P.KeepLoudest(r.paths, cfg.max_paths, sndlvl)
 			end
 		end
-		-- a leaf whose doorway a portal path goes through is modelled by that portal (state, gap,
-		-- closed loss): not a second time as a wall (closed) or as an object (open)
+		-- a leaf whose doorway a portal path goes through is modelled by that portal (state, gap, closed
+		-- loss, position in the doorway): not a second time as a wall (closed) or as an object (open). One
+		-- model whether the line crosses the leaf or the wall beside it (door_sweep_real: the voice keeps its
+		-- kind at the leaf's edge); the line's own model (P.EvalWalls, leafLoss) stands where no portal
+		-- path exists (maps without areaportals: the probes' routes). Known limit: the portal's aperture
+		-- is the leaf's projection on the doorway's plane; a leaf swung into the room still shadows the
+		-- plane where the ray passes its free edge in 3-D (pba_twodoors: 9.5 dB to 0 at that edge).
 		local tw = walls
 		if leafBlocked and #r.paths > 0 then
 			tw = {}
