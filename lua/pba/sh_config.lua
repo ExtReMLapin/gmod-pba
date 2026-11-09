@@ -126,7 +126,7 @@ A.CONFIG = {
 	water           = { 1, 0, 1, "sv", "Water surfaces between source and listener muffle sound heavily (air / water interface)." },
 	water_db        = { 24, 0, 60, "sv", "Loss of the air / water interface (dB)." },
 	-- safety limits ("just in case"): what happens beyond each is a graceful fallback to the engine
-	relay_rate      = { 80, 5, 1000, "sv", "Max relayed sounds per second to one player (token bucket, burst 1 s). Beyond it the player gets the original sound (vanilla) instead of a relay." },
+	relay_rate      = { 80, 5, 1000, "sv", "Max relayed sounds per second to one player (token bucket, burst 1 s). Beyond it the engine re-emits the sound to that player muffled (low-pass preset from the wall, at most 24 dB down), never louder instead of a relay." },
 	loops_max       = { 64, 4, 512, "sv", "Max loops / long sounds followed by the server at once. Beyond it new ones are left to the engine." },
 	soundscape_engine = { 1, 0, 1, "cl", "Soundscape ambience played around the ear (random positions within 64 u) is left to the engine: not muffled nor echoed." },
 	keep_dsp        = { 1, 0, 1, "cl", "A sound with its own DSP preset (radio, loudspeaker effect) keeps it when muffled (then muffled by volume only); 0 = pba's muffling preset replaces it." },

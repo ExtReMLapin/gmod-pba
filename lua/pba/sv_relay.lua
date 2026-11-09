@@ -120,21 +120,71 @@ function A.RelayStop(e, name)
 end
 
 -- (fallback: a partial autorefresh may reload this file before sh_core)
---- Relay budget of one player (token bucket: pba_relay_rate per second, burst one second).
--- Out of tokens: the player gets the original sound (vanilla) instead of a relay, so a huge
--- firefight cannot flood the network.
-local function relayToken(ply)
-	local rate = A.cfg.relay_rate or 80
+--- Token bucket of one player: `rate` per second, burst one second. `key`: the player field holding
+-- the bucket, so relays and echo-only relays have separate budgets (a battle's loud gunfire must not
+-- eat the budget that keeps the gunfire behind a wall muffled). `stat`: counter of the misses.
+local function takeToken(ply, key, rate, stat)
 	local now = CurTime()
-	local t = math.min(rate, (ply.pba_tok or rate) + (now - (ply.pba_tokT or now)) * rate)
-	ply.pba_tokT = now
+	local b = ply[key]
+	if not b then
+		b = { tok = rate, t = now }
+		ply[key] = b
+	end
+	local t = math.min(rate, b.tok + (now - b.t) * rate)
+	b.t = now
 	if t < 1 then
-		ply.pba_tok = t
-		A.stats.relayCapped = (A.stats.relayCapped or 0) + 1
+		b.tok = t
+		A.stats[stat] = (A.stats[stat] or 0) + 1
 		return false
 	end
-	ply.pba_tok = t - 1
+	b.tok = t - 1
 	return true
+end
+
+--- Relay budget of one player (pba_relay_rate per second), so a huge firefight cannot flood the
+-- network. Out of tokens, a player behind a wall is NOT given the original (it would play at full
+-- volume through the wall: near the cap, gunfire behind a wall flipped between muffled and 20-30 dB
+-- louder shot to shot); he gets it re-emitted by the engine, muffled (see muffleFor).
+local function relayToken(ply)
+	return takeToken(ply, "pba_relayBucket", A.cfg.relay_rate or 80, "relayCapped")
+end
+
+--- Echo-only relay budget: its own bucket (same rate). Out of tokens the player only misses the
+-- client-side echo tail, he still hears the direct sound: never louder, just drier.
+local function echoToken(ply)
+	return takeToken(ply, "pba_echoBucket", A.cfg.relay_rate or 80, "echoCapped")
+end
+
+-- Most a budget-miss fallback lowers a sound (dB). The walls found by the server trace give the loss
+-- straight through them, which is the quietest the client could render: its paths may go round
+-- (gunfire in the next room heard through an open door ~15 dB down, while the concrete between is
+-- 46 dB). Taking the full wall loss would make that gunfire vanish on a budget miss; 24 dB keeps it
+-- audible while removing most of the jump towards the relayed render.
+local FALLBACK_MAX_DB = 24
+-- Without a usable transmission estimate (no wall entry): a documented conservative cut.
+local FALLBACK_DEFAULT_DB = 12
+
+--- Engine muffling for a blocked player over budget: DSP preset and volume factor from the walls the
+-- server's own trace found (A.Paths.EvalWalls: low-frequency transmission loss and the material's
+-- low-pass level). Example: a pistol behind 16 u of concrete -> lp 4 (preset dsp_lp4) and -24 dB.
+local function muffleFor(walls)
+	local ok, loss, lp = pcall(A.Paths.EvalWalls, walls)
+	if not ok or not loss then loss, lp = FALLBACK_DEFAULT_DB, 4 end
+	-- the strongest preset when the model gives none (a grate is lp 0: its loss is ~0 dB too)
+	local dsp = A.AC.DSPForLevel(lp or 4)
+	return dsp, A.AC.DbToGain(-math.min(loss, FALLBACK_MAX_DB))
+end
+
+--- Re-emits the original sound, through the engine, to `plys` only (A.Emit: our hook lets it pass).
+local function reemit(data, pos, lvl, plys, name, vol, dsp)
+	local f = RecipientFilter()
+	f:AddPlayers(plys)
+	local e = data.Entity
+	if IsValid(e) and not e:IsWorld() then
+		A.Emit(A.orig.EntEmitSound, e, name, lvl, data.Pitch, vol, data.Channel, data.Flags, dsp, f)
+	else
+		A.Emit(A.orig.EmitSound, name, pos, 0, data.Channel, vol, lvl, data.Flags, data.Pitch, dsp, f)
+	end
 end
 
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
@@ -154,9 +204,15 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if not pos then return end
 
 	local lvl = data.SoundLevel or 75
-	local radius = math.min(audibleRadius(lvl), A.cfg.lod_dist)
+	-- the whole audible radius, not just lod_dist: once the original is suppressed for someone, every
+	-- player the engine would have sent it to must get it back. A 140 dB explosion is heard to 9000 u;
+	-- a player at 7000 u (beyond lod_dist 6000) lost it as soon as one player near it was behind a wall.
+	local radius = audibleRadius(lvl)
+	local lod = A.cfg.lod_dist
 	local predicted = GetPredictionPlayer()
-	local clear, blocked = {}, {}
+	-- clear: original re-emitted unchanged; blocked: relayed; muffled: blocked but over the relay
+	-- budget, re-emitted muffled by the engine; far: beyond lod_dist, too far to process (unchanged)
+	local clear, blocked, muffled, far = {}, {}, {}, {}
 	-- audience by distance, not PAS: a sealed room is outside the PAS (the engine would not
 	-- send the sound at all) but its sound still transmits through the walls
 	-- clients rendering every sound natively (userinfo pba_native_all_want) get the relay
@@ -164,14 +220,27 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	for _, ply in ipairs(player.GetHumans()) do
 		if ply ~= predicted then
 			local eye = A.PlayerEar(ply)
-			if eye:DistToSqr(pos) <= radius * radius then
-				local relay
-				if A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1 then
-					relay = true
+			local d2 = eye:DistToSqr(pos)
+			if d2 <= radius * radius then
+				if d2 > lod * lod then
+					far[#far + 1] = ply
 				else
-					relay = #A.Paths.Walls(pos, eye, 1, data.Entity) > 0
+					local all = A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1
+					local walls = not all and A.Paths.Walls(pos, eye, 1, data.Entity) or nil
+					if (all or #walls > 0) and relayToken(ply) then
+						blocked[#blocked + 1] = ply
+					else
+						-- over budget (or a clear line): the wall test decides, a native-all player
+						-- over budget included (his relay was not conditioned on a wall)
+						walls = walls or A.Paths.Walls(pos, eye, 1, data.Entity)
+						if #walls > 0 then
+							local dsp, gain = muffleFor(walls)
+							muffled[#muffled + 1] = { ply = ply, dsp = dsp, gain = gain }
+						else
+							clear[#clear + 1] = ply
+						end
+					end
 				end
-				if relay and relayToken(ply) then blocked[#blocked + 1] = ply else clear[#clear + 1] = ply end
 			end
 		end
 	end
@@ -179,7 +248,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if A.cfg.echo_relay >= 0.5 and A.cfg.allow_native >= 0.5 and lvl >= A.cfg.echo_min_level and #clear > 0 then
 		local want = {}
 		for _, ply in ipairs(clear) do
-			if ply:GetInfoNum("pba_echo_want", 0) >= 1 and relayToken(ply) then want[#want + 1] = ply end
+			if ply:GetInfoNum("pba_echo_want", 0) >= 1 and echoToken(ply) then want[#want + 1] = ply end
 		end
 		if #want > 0 then
 			local id = nameId(data.SoundName)
@@ -193,28 +262,55 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 			net.Send(want)
 		end
 	end
-	if #blocked == 0 then
+	-- players beyond lod_dist hear the original as clear players do (vanilla when nobody is blocked)
+	for _, p in ipairs(far) do clear[#clear + 1] = p end
+	-- a sentence cannot be re-emitted to some players only (EmitSentence takes no filter): players
+	-- over budget get the relay anyway (sentences are rare, a few per minute)
+	if sentence then
+		for _, m in ipairs(muffled) do blocked[#blocked + 1] = m.ply end
+		muffled = {}
+	end
+	if #blocked == 0 and #muffled == 0 then
 		A.stats.untouched = A.stats.untouched + 1
 		return
 	end
-	-- a sentence cannot be re-emitted to some players only (EmitSentence takes no filter): the clear
-	-- listeners get the relay too, and their client plays it unchanged
+	-- a sentence: the clear listeners get the relay too, and their client plays it unchanged
 	if sentence and #clear > 0 then
 		for _, p in ipairs(clear) do blocked[#blocked + 1] = p end
 		clear = {}
 	end
 
-	-- suppress, then re-emit unchanged for clear listeners and relay for the others
-	if #clear > 0 then
-		local f = RecipientFilter()
-		f:AddPlayers(clear)
-		local e = data.Entity
-		if IsValid(e) and not e:IsWorld() then
-			A.Emit(A.orig.EntEmitSound, e, data.SoundName, lvl, data.Pitch, data.Volume, data.Channel, data.Flags, data.DSP, f)
-		else
-			A.Emit(A.orig.EmitSound, data.SoundName, pos, 0, data.Channel, data.Volume, lvl, data.Flags, data.Pitch, data.DSP, f)
+	-- suppress, then re-emit unchanged for clear listeners, muffled for those over budget, and relay
+	-- for the others
+	if #clear > 0 then reemit(data, pos, lvl, clear, data.SoundName, data.Volume, data.DSP) end
+	if #muffled > 0 then
+		-- one engine emission per (preset, level): players behind the same kind of wall share it
+		local groups, order = {}, {}
+		for _, m in ipairs(muffled) do
+			local k = m.dsp .. ":" .. math.Round(m.gain * 1000)
+			local g = groups[k]
+			if not g then
+				g = { dsp = m.dsp, gain = m.gain, plys = {} }
+				groups[k] = g
+				order[#order + 1] = g
+			end
+			g.plys[#g.plys + 1] = m.ply
 		end
+		-- a "#" (dry mix) sound gets no DSP from the engine: the same file without it, or the preset
+		-- would be ignored and the sound only quieter
+		local name = A.WithoutDryMix(data.SoundName)
+		for _, g in ipairs(order) do
+			-- the sound's own preset (a scripted DSP) is kept when we have none to apply
+			reemit(data, pos, lvl, g.plys, name, (data.Volume or 1) * g.gain, g.dsp > 0 and g.dsp or data.DSP)
+		end
+		A.stats.relayMuffled = (A.stats.relayMuffled or 0) + #muffled
 	end
+	local told = {}
+	for _, p in ipairs(blocked) do told[#told + 1] = p end
+	for _, p in ipairs(clear) do told[#told + 1] = p end
+	for _, m in ipairs(muffled) do told[#told + 1] = m.ply end
+	sendCaption(data, told)
+	if #blocked == 0 then return false end
 	local id = nameId(data.SoundName)
 	local full = false
 	for _, ply in ipairs(blocked) do
@@ -227,10 +323,6 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 		local now = CurTime()
 		for _, p in ipairs(blocked) do r[p] = now end
 	end
-	local told = {}
-	for _, p in ipairs(blocked) do told[#told + 1] = p end
-	for _, p in ipairs(clear) do told[#told + 1] = p end
-	sendCaption(data, told)
 	net.Start(NET, true) -- unreliable: a lost sound is better than a late one
 	writeSound(data, pos, id, full)
 	A.stats.bytes = (A.stats.bytes or 0) + net.BytesWritten() * #blocked
