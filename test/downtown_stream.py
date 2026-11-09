@@ -8,6 +8,8 @@ the brick building's upper room, heard in that room then from the street outside
     (what leaks out is reverberant by nature, so the reverb/direct ratio is not the criterion). The send grew with the distance everywhere (x24 there: +28 dB, an ambience with no
     direction), and the gliding updates never passed the send (the voice kept the one of its start).
 Energies are the module's own mix (RenderDebug, pba.Native.energyL/R): total - direct = reverb.
+The signal is a stationary machine loop: music changes its energy from one measurement to the next
+(9 dB seen between two measures at the same spot).
 Usage: python -I downtown_stream.py <mcp.py>   (loads the map if needed; restores pba_* settings)
 """
 import json
@@ -77,7 +79,7 @@ time.sleep(1)
 # other natively rendered streams count in the energies: paused during the test
 lua("client", """PBA_T_PAUSED = {}
 for ch in pairs(pba.Streams.chans) do if IsValid(ch) and ch:GetState() == GMOD_CHANNEL_PLAYING then ch:Pause() PBA_T_PAUSED[#PBA_T_PAUSED + 1] = ch end end
-sound.PlayFile("sound/music/hl2_song26_trainstation1.mp3", "3d noplay noblock", function(ch)
+sound.PlayFile("sound/ambient/machines/spin_loop.wav", "3d noplay noblock", function(ch)
 	if not IsValid(ch) then return end
 	ch:SetPos(Vector(%f, %f, %f)) ch:Set3DFadeDistance(250, 10000) ch:EnableLooping(true) ch:SetVolume(1) ch:Play()
 	PBA_T_CH = ch
