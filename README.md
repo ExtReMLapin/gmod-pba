@@ -1,5 +1,9 @@
 # Physically Based Audio (PBA)
 
+[Video demo](https://www.youtube.com/watch?v=dOlQGudU47M)
+
+(small subset of features showcased here)
+
 Sound in Garry's Mod goes straight through walls. PBA makes it travel the way it would in
 a building: through doors, corridors and windows. If a gunshot happens in the next room and the
 door is on your right, you hear it on your right, muffled; the wall in front of you only lets a
