@@ -1596,5 +1596,377 @@ return {
 				expect(#A.Probes.DistinctRoutes(S, L, { P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG) })).to.equal(2)
 			end)
 		end },
+		{ name = "Probe search: a route longer than the old 2500-probe cap is found and cached, never cached as 'no route'", func = function()
+			-- a U: an 80 x 80 grid of probes cut by a wall between columns 39 and 40 except on the last row. S and L
+			-- are neighbours through the wall; A* floods most of the left half (> 2500 probes) before going round.
+			-- Before: the capped search returned nil, solve() {} and that {} was cached for the session.
+			local PR = A.Probes
+			local keys = { "current", "field", "fieldJob", "fieldHold", "pathCache", "pathCacheN", "queue", "queueN", "inlineFrame", "inlineUsed" }
+			local savedPR, savedTL, savedTH, savedNT = {}, util.TraceLine, util.TraceHull, A.cfg.native_traces
+			for _, k in ipairs(keys) do savedPR[k] = PR[k] end
+			local function clear(t) local o = t.output or {} o.Hit, o.Fraction, o.StartSolid, o.HitPos = false, 1, false, t.endpos return o end
+			util.TraceLine, util.TraceHull, A.cfg.native_traces = clear, clear, 0
+			local ok, err = pcall(function()
+				local s, W = 16, 80
+				local g = { spacing = s, nodes = {}, index = {} }
+				for i = 0, W - 1 do for j = 0, W - 1 do
+					local n = { i = i, j = j, k = 0, o = 1, pos = Vector((i + 0.5) * s, (j + 0.5) * s, 8), nb = {} }
+					g.nodes[#g.nodes + 1] = n
+					n.id = #g.nodes
+					g.index[i .. "," .. j .. ",0"] = n.id
+				end end
+				for _, n in ipairs(g.nodes) do
+					for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+						local m = g.index[(n.i + d[1]) .. "," .. (n.j + d[2]) .. ",0"]
+						local wall = math.min(n.i, n.i + d[1]) == 39 and d[2] == 0 and n.j < W - 1
+						if m and not wall then n.nb[m] = true end
+					end
+				end
+				PR.Prepare(g)
+				local s0, g0 = g.nodes[g.index["39,0,0"]], g.nodes[g.index["40,0,0"]]
+				-- the scene really needs more than the old cap
+				local capped, why = PR.FindPath(g, s0.pos, g0.pos, nil, 2500, { s0 }, { g0 })
+				expect(capped).to.beNil()
+				expect(why).to.equal("capped")
+				PR.current, PR.field, PR.fieldJob, PR.pathCache, PR.pathCacheN, PR.queue, PR.queueN, PR.inlineFrame = g, nil, nil, {}, 0, {}, 0, nil
+				local cfg = setmetatable({ probe_field = 0, probe_field_blend = 0, probe_bridge_max = 0, probe_inline_ms = 1e6,
+					probe_inline_frame_ms = 1e9 }, { __index = A.cfg })
+				PR.Paths(s0.pos, g0.pos, 1, cfg)
+				local n, entry = 0
+				for _, v in pairs(PR.pathCache) do n, entry = n + 1, v end
+				expect(n).to.equal(1)
+				expect(#entry).to.equal(1) -- the route round the wall, not {}
+				expect(next(PR.queue)).to.beNil()
+			end)
+			util.TraceLine, util.TraceHull, A.cfg.native_traces = savedTL, savedTH, savedNT
+			for _, k in ipairs(keys) do PR[k] = savedPR[k] end
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Probe tighten: a vertex not traced clear on both sides is left where it is (it was slid round a pillar it is joined through)", func = function()
+			withProbeRooms({ { 64, 112, 112 } }, { { Vector(640, 200, -8), Vector(680, 300, 200) } }, { native_traces = 0 }, function()
+				-- a - v crosses the pillar, v - b is clear, a - b crosses it too. Before: v was slid towards a while it
+				-- saw b, to (687, 250), kept as shorter: a - (687, 250) still crosses the pillar
+				local a, v, b = Vector(600, 250, 64), Vector(720, 250, 64), Vector(720, 160, 64)
+				expect(not A.Probes.ClearSeg(a, v) and A.Probes.ClearSeg(v, b) and not A.Probes.ClearSeg(a, b)).to.beTrue()
+				local r = A.Probes.Tighten({ a, v, b })
+				expect(#r).to.equal(3)
+				expect(r[2]:Distance(v) < 1e-6).to.beTrue()
+				-- a valid vertex still tightens: b's side moved clear of the pillar, the corner goes to the pillar's edge
+				local r2 = A.Probes.Tighten({ Vector(600, 320, 64), Vector(720, 320, 64), Vector(720, 160, 64) })
+				expect(routeClear(r2) and r2[2]:Distance(Vector(720, 320, 64)) > 8).to.beTrue()
+			end)
+		end },
+		{ name = "Probe joins: S joined to a bend it does not see, or the last bend to a listener that stepped round a corner, goes by the probe / the field's listener position, never through the wall", func = function()
+			-- room B: probe P sees the doorway's bend B1 round a pillar that hides B1 from S. Room A: a second pillar
+			-- hides the last bend B2 from the listener L2, one step (112 u) from where the field was built (fL)
+			local pillars = { { Vector(566, 240, -8), Vector(590, 260, 200) }, { Vector(466, 62, -8), Vector(490, 84, 200) } }
+			withProbeRooms({ { 64, 112, 112 } }, pillars, { native_traces = 0 }, function(g)
+				local PR = A.Probes
+				local S, P0 = Vector(600, 330, 64), Vector(704, 320, 64)
+				local B1, B2 = Vector(534, 106, 64), Vector(506, 106, 64)
+				local fL, L2 = Vector(400, 140, 64), Vector(450, 40, 64)
+				expect(PR.ClearSeg(S, P0) and PR.ClearSeg(P0, B1) and PR.ClearSeg(B1, B2) and not PR.ClearSeg(S, B1)).to.beTrue()
+				expect(PR.ClearSeg(B2, fL) and PR.ClearSeg(fL, L2) and not PR.ClearSeg(B2, L2)).to.beTrue()
+				local n = { id = 1, pos = P0 }
+				local function field(L)
+					return { g = g, L = L, cost = { [1] = 500 }, nxt = {}, pulled = {}, arr = { [1] = { bends = { B1, B2 }, probe = P0, joins = {} } } }
+				end
+				local function route(p, L)
+					local pts = { S }
+					for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+					pts[#pts + 1] = L
+					return pts
+				end
+				-- blend, head: before, { S, B1, B2, fL } through the pillar
+				local p = PR.FieldBlend(field(fL), S, fL, { n }, A.cfg)
+				expect(p ~= nil and routeClear(route(p, fL)) and #p.points == 3).to.beTrue()
+				-- blend, head and tail
+				p = PR.FieldBlend(field(fL), S, L2, { n }, A.cfg)
+				expect(p ~= nil and routeClear(route(p, L2)) and #p.points == 4).to.beTrue()
+				-- the tail with nothing that sees both sides: no route rather than one through the pillar
+				expect(PR.FieldBlend(field(Vector(450, 140, 64)), S, Vector(478, 40, 64), { n }, A.cfg)).to.beNil()
+				-- per-sound attach: the field route { P0, B1, B2 } ended at a probe seen from fL only
+				local r = PR.Attach({ P0, B1, B2 }, Vector(700, 330, 64), L2, fL)
+				expect(r ~= nil and routeClear(r)).to.beTrue()
+				expect(PR.Attach({ P0, B1, B2 }, Vector(700, 330, 64), L2)).to.beNil()
+			end)
+		end },
+		{ name = "Probe cache: a cache of another spacing is refused; a reloaded graph searches exactly as the built one (links in id order)", func = function()
+			-- before: pba_probe_spacing ignored until the cache file was deleted; links in the cache's string order
+			-- ("10" before "9") after a reload, so equal-cost routes broke the other way
+			local savedTo, savedFrom = util.TableToJSON, util.JSONToTable
+			local heads = {}
+			util.TableToJSON = function(t) heads[#heads + 1] = t return "H" .. #heads end
+			util.JSONToTable = function(s) return heads[tonumber(string.sub(s, 2))] end
+			local ok, err = pcall(withProbeRooms, { { 64, 112, 112 } }, nil, { native_traces = 0 }, function(g)
+				local PR = A.Probes
+				local text = PR.Serialize(g, "h")
+				expect(PR.Deserialize(text, "h", 64)).to.beNil()
+				local g2 = PR.Deserialize(text, "h", 128)
+				expect(g2 ~= nil and #g2.nodes == #g.nodes and #g.nodes > 20).to.beTrue()
+				local a1, a2 = g.adj, PR.Prepare(g2)
+				expect(#a2.nid).to.equal(#a1.nid)
+				local same = true
+				for k = 1, #a1.nid do
+					if a1.nid[k] ~= a2.nid[k] or math.abs(a1.len[k] - a2.len[k]) > 0.5 then same = false end
+				end
+				for id = 1, #g.nodes do
+					for k = a1.first[id] + 1, a1.first[id + 1] - 1 do
+						if a1.nid[k - 1] >= a1.nid[k] then same = false end
+					end
+				end
+				expect(same).to.beTrue()
+				local S, L = Vector(900, 400, 64), Vector(100, 400, 64)
+				local _, ids1 = PR.FindPath(g, S, L)
+				local _, ids2 = PR.FindPath(g2, S, L)
+				expect(ids1 ~= nil and table.concat(ids1, ",") == table.concat(ids2, ",")).to.beTrue()
+			end)
+			util.TableToJSON, util.JSONToTable = savedTo, savedFrom
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Doors: closed end by geometry then start-open flag, brush doors keep their thickness, double doors add in power", func = function()
+			local D = pba.Doors
+			if not D.CombineLeaves then return end -- sh_doors.lua is loaded in game only, not by the offline runner
+			-- the end whose brush sits in the doorway is closed, whatever the flag (Spawn swaps the ends)
+			expect(D.SwapEnds(10, 50, true)).to.equal(false)
+			expect(D.SwapEnds(50, 10, false)).to.equal(true)
+			-- no doorway, or both ends as near (a lift): the start-open flag decides
+			expect(D.SwapEnds(nil, nil, true)).to.equal(true)
+			expect(D.SwapEnds(30, 31, false)).to.equal(false)
+			-- a 16 u blast door stays 16 u; a padded prop leaf is held to 4 u
+			expect(D.LeafThickness("func_door", 16)).to.equal(16)
+			expect(D.LeafThickness("prop_door_rotating", 16)).to.equal(4)
+			-- wood 28 dB beside glass 40 dB, equal halves: ~30.7 dB, low-pass of the wooden leaf
+			local db, lp = D.CombineLeaves({ { share = 1, db = 28, lp = 3 }, { share = 1, db = 40, lp = 1 } })
+			expect(math.abs(db - 30.74) < 0.05 and lp == 3).to.beTrue()
+			expect(math.abs(D.CombineLeaves({ { share = 2, db = 28, lp = 3 }, { share = 2, db = 28, lp = 3 } }) - 28) < 1e-9).to.beTrue()
+			expect(D.CombineLeaves({})).to.beNil()
+		end },
+		-- audit (continuity): each object's own share capped, a door just ajar blended, one spectrum rule for
+		-- a door, soft voice merging, the tunnel preset held, routes ranked by level
+		{ name = "EvalWalls: each object's own loss is capped at prop_max_db, whatever else is on the line (a vending machine and a curb: 18 dB + the curb, not 68 + the curb)", func = function()
+			local cfg = setmetatable({ prop_max_db = 18, trans_max = 500 }, { __index = pba.cfg })
+			local fakeProp = { GetClass = function() return "prop_physics" end }
+			local function machine() return { mat = MAT_CONCRETE, surf = "concrete", thickness = 60, ent = fakeProp, detour = math.huge } end
+			local function curb() return { mat = MAT_CONCRETE, surf = "concrete", thickness = 10 } end
+			local m = P.EvalWalls({ machine() }, cfg)
+			local c = P.EvalWalls({ curb() }, cfg)
+			local both = P.EvalWalls({ machine(), curb() }, cfg)
+			if not (near(m, 18, 1e-6) and near(both, 18 + c, 1e-6)) then
+				error(string.format("machine %.1f dB, curb %.1f dB, both %.1f dB (want %.1f)", m, c, both, 18 + c))
+			end
+			-- two objects in a row: each capped
+			expect(near(P.EvalWalls({ machine(), machine() }, cfg), 36, 1e-6)).to.beTrue()
+			-- noCap (reflections modelled elsewhere): the material
+			expect(P.EvalWalls({ machine() }, cfg, true) > 40).to.beTrue()
+		end },
+		{ name = "EvalWalls: a door leaf opening goes from closure to object over its first % (former switch at 2 %: 37 dB in one step)", func = function()
+			local cfg = setmetatable({ prop_max_db = 18, trans_max = 500 }, { __index = pba.cfg })
+			local fakeDoor = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
+			local D = pba.Doors
+			local states = CLIENT and D.byEnt or D.entState
+			local saved = states[9999]
+			local function at(frac)
+				states[9999] = { frac = frac }
+				return P.EvalWalls({ { mat = MAT_CONCRETE, surf = "concrete", thickness = 60, ent = fakeDoor, detour = 30 } }, cfg)
+			end
+			local ok, err = pcall(function()
+				local closed, open = at(0), at(0.1)
+				local _, lpClosed = P.EvalWalls({ { mat = MAT_CONCRETE, surf = "concrete", thickness = 60 } }, cfg)
+				local prev, prevLp, step, lpStep = nil, nil, 0, 0
+				for k = 0, 100 do
+					states[9999] = { frac = k * 0.001 }
+					local l, lp = P.EvalWalls({ { mat = MAT_CONCRETE, surf = "concrete", thickness = 60, ent = fakeDoor, detour = 30 } }, cfg)
+					if prev then step, lpStep = math.max(step, math.abs(l - prev)), math.max(lpStep, math.abs(lp - prevLp)) end
+					prev, prevLp = l, lp
+				end
+				if not (closed > 40 and open <= 18 + 1e-6 and step < 3 and lpStep <= 1) then
+					error(string.format("closed %.1f dB (wall lp %d), 10 %% open %.1f dB; largest step %.2f dB, %d levels per 0.1 %%",
+						closed, lpClosed, open, step, lpStep))
+				end
+			end)
+			states[9999] = saved
+			if not ok then error(err, 0) end
+		end },
+		{ name = "DoorTilt: one spectrum rule for a door (portal chain and probe segment): gap and leaf of equal energy -> level 1, not the louder part's", func = function()
+			expect(AC.LowpassLevel(P.DoorTilt(1, 0, 0, 3, 0, 0, CFG), CFG)).to.equal(0)
+			expect(AC.LowpassLevel(P.DoorTilt(0, 0, 1, 3, 0, 0, CFG), CFG)).to.equal(3)
+			expect(AC.LowpassLevel(P.DoorTilt(0.3, 0, 0.3, 3, 0, 0, CFG), CFG)).to.equal(1)
+			for k = 0, 4 do expect(AC.LowpassLevel(AC.LevelDb(k, CFG), CFG)).to.equal(k) end
+			-- the probe model: the gap and the leaf carry the same energy -> level 1 (was the leaf's 3 below half open)
+			local fakeDoor = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
+			local D = pba.Doors
+			D.byEnt = D.byEnt or {}
+			local saved, savedTr = D.byEnt[9999], util.TraceLine
+			util.TraceLine = function(t) local o = t.output or {} o.Hit, o.Entity = true, fakeDoor return o end
+			local ok, err = pcall(function()
+				local gc = 10 ^ (-AC.LeafDb(30, CFG) / 20)
+				local function lpAt(frac)
+					D.byEnt[9999] = { frac = frac, closedDb = 30, closedLp = 3 }
+					local _, lp = P.SegmentDoorLoss(Vector(0, 0, 0), Vector(100, 0, 0), CFG)
+					return lp
+				end
+				expect(lpAt(0)).to.equal(3)
+				expect(lpAt((gc / (1 - gc)) ^ 2)).to.equal(1)
+				-- 10 % more opening at a time from 0.001 %: the gap's amplitude grows as sqrt(frac), steep near shut
+				local prev, f = lpAt(0), 1e-5
+				while f < 1 do
+					local lp = lpAt(f)
+					if lp > prev or prev - lp > 1 then error(string.format("probe door: level %d -> %d at %.5f open", prev, lp, f)) end
+					prev, f = lp, f * 1.1
+				end
+			end)
+			util.TraceLine, D.byEnt[9999] = savedTr, saved
+			if not ok then error(err, 0) end
+		end },
+		{ name = "EvalChain: a door opening from shut: muffling falls a level at a time, level steps < 1.5 dB per 10 % more opening (no 'open <= 1 % is shut' step: 4 dB)", func = function()
+			local g = G.Build(synthBsp())
+			local p1 = g.byKey[1]
+			p1.closedDb, p1.closedLp = 30, 3
+			local cfg = table.Copy(CFG)
+			cfg.door_aperture = 0 -- the opening fraction as the gap (no game traces)
+			local S, L = Vector(50, 25, 50), Vector(150, 25, 50)
+			local prev
+			local f = 1e-5
+			while f < 1 do
+				p1.open = f
+				f = f * 1.1
+				local r = P.EvalChain(S, L, { p1 }, cfg)
+				if prev then
+					if r.lp > prev.lp or prev.lp - r.lp > 1 or math.abs(r.lossDb - prev.lossDb) > 1.5 then
+						error(string.format("open %.3f: %.2f dB lp%d -> %.2f dB lp%d", p1.open, prev.lossDb, prev.lp, r.lossDb, r.lp))
+					end
+				end
+				prev = r
+			end
+			p1.open = 0
+			expect(P.EvalChain(S, L, { p1 }, cfg).lp).to.equal(3)
+		end },
+		{ name = "SelectVoices: soft merging, a path swept across split_angle or split_db moves the loudest voice smoothly (power kept)", func = function()
+			local L = Vector(0, 0, 0)
+			local function mk(deg, loss, lp, lpDb)
+				local a = math.rad(deg)
+				return { pos = Vector(100 * math.cos(a), 100 * math.sin(a), 0), length = 500, lossDb = loss, lp = lp or 0, lpDb = lpDb }
+			end
+			local function power(vs) local p = 0 for _, v in ipairs(vs) do p = p + v.gain * v.gain end return p end
+			local function az(v) return math.deg(math.atan2(v.pos.y, v.pos.x)) end
+			local ref = power(P.SelectVoices(L, { mk(0, 5), mk(0, 5) }, nil, 75, CFG))
+			local bad = {}
+			local prev
+			for deg = 40, 80 do
+				local vs = P.SelectVoices(L, { mk(0, 5), mk(deg, 5) }, nil, 75, CFG)
+				if not near(power(vs), ref, ref * 1e-9) then bad[#bad + 1] = "power at " .. deg end
+				local cur = { az(vs[1]), vs[1].level }
+				if prev and (math.abs(cur[1] - prev[1]) > 6 or math.abs(cur[2] - prev[2]) > 0.5) then
+					bad[#bad + 1] = string.format("%d deg: voice 1 at %.1f deg %.2f dB -> %.1f deg %.2f dB", deg, prev[1], prev[2], cur[1], cur[2])
+				end
+				prev = cur
+			end
+			prev = nil
+			for k = 0, 80 do
+				local loss = 8 + k * 0.1
+				local vs = P.SelectVoices(L, { mk(0, 5), mk(90, loss) }, nil, 75, CFG)
+				local cur = { az(vs[1]), vs[1].level }
+				if prev and (math.abs(cur[1] - prev[1]) > 3 or math.abs(cur[2] - prev[2]) > 0.5) then
+					bad[#bad + 1] = string.format("%.1f dB: voice 1 at %.1f deg %.2f dB -> %.1f deg %.2f dB", loss, prev[1], prev[2], cur[1], cur[2])
+				end
+				prev = cur
+			end
+			if #bad > 0 then error(table.concat(bad, "; "), 0) end
+		end },
+		{ name = "SelectVoices: a merged voice's low-pass from band energies (clear + muffled of equal power: level 1, not 2); a third path 150 deg away adds power, not a turn", func = function()
+			local L = Vector(0, 0, 0)
+			local function mk(deg, loss, lp, lpDb)
+				local a = math.rad(deg)
+				return { pos = Vector(100 * math.cos(a), 100 * math.sin(a), 0), length = 500, lossDb = loss, lp = lp, lpDb = lpDb }
+			end
+			local m = P.SelectVoices(L, { mk(0, 5, 0, 0), mk(10, 5, 4, 20) }, nil, 75, CFG)
+			expect(#m).to.equal(1)
+			expect(m[1].lp).to.equal(1)
+			local two = P.SelectVoices(L, { mk(0, 5, 0, 0), mk(90, 5, 0, 0) }, nil, 75, CFG)
+			local three = P.SelectVoices(L, { mk(0, 5, 0, 0), mk(90, 5, 0, 0), mk(-150, 5, 0, 0) }, nil, 75, CFG)
+			expect(#two).to.equal(2)
+			expect(#three).to.equal(2)
+			local function az(v) return math.deg(math.atan2(v.pos.y, v.pos.x)) end
+			local p2, p3 = 0, 0
+			-- voices matched by direction (the one receiving the third path's power may become the loudest)
+			for i = 1, 2 do
+				local best = math.huge
+				for j = 1, 2 do best = math.min(best, math.abs(az(two[i]) - az(three[j]))) end
+				if best > 0.5 then error(string.format("voice at %.1f deg turned by %.1f deg", az(two[i]), best), 0) end
+				p2, p3 = p2 + two[i].gain ^ 2, p3 + three[i].gain ^ 2
+			end
+			expect(near(p3, p2 * 1.5, p2 * 1e-6)).to.beTrue()
+		end },
+		{ name = "SelectVoices: each voice carries its loss before the headroom (level 140 at 10 m behind 49.5 dB: lossDb 0, rawLossDb 49.5)", func = function()
+			local L = Vector(0, 0, 0)
+			local len = 1 / 0.01905 * 10
+			expect(AC.Headroom(140, len, CFG.fullscale_db) >= 49.5).to.beTrue()
+			local p = { pos = Vector(100, 0, 0), length = len, lossDb = 49.5, lp = 4 }
+			local v = P.SelectVoices(L, { p }, nil, 140, CFG)
+			expect(p.lossDb).to.equal(0)
+			expect(near(v[1].rawLossDb, 49.5, 1e-6)).to.beTrue()
+			local t = { walls = { {} }, lossDb = 49.5, lp = 4, length = len, pos = Vector(50, 0, 0) }
+			local w = P.SelectVoices(L, {}, t, 140, CFG)
+			expect(near(w[1].rawLossDb, 49.5, 1e-6)).to.beTrue()
+			-- two members: energy-weighted
+			local a = { pos = Vector(100, 0, 0), length = 500, lossDb = 10, lp = 0 }
+			local b = { pos = Vector(100, 5, 0), length = 500, lossDb = 20, lp = 0 }
+			local m = P.SelectVoices(L, { a, b }, nil, 75, CFG)
+			expect(#m).to.equal(1)
+			expect(near(m[1].rawLossDb, (10 * 1 + 20 * 0.1) / 1.1, 1e-6)).to.beTrue()
+		end },
+		{ name = "Stable: the tunnel preset of a continuous sound holds near diffuse_dsp_at (share 0.38 <-> 0.42 never flips it), cached voices untouched", func = function()
+			local cfg = setmetatable({ diffuse = 1, diffuse_dsp_at = 0.4, diffuse_dsp_hyst = 0.05, lp_hyst_db = 0, path_hyst_db = 0 }, { __index = CFG })
+			local L = Vector(0, 0, 0)
+			local function result(share)
+				return { L = L, voices = { { pos = Vector(100, 0, 0), gain = 0.5, level = -6, lp = 1, diffuse = share } } }
+			end
+			local st = {}
+			local function dsp(share)
+				local r = result(share)
+				local out = P.Stable(st, r, cfg)
+				expect(r.voices[1].diffuse).to.equal(share)
+				return AC.DSPForVoice(out.voices[1].lp, out.voices[1].diffuse, cfg)
+			end
+			local tunnel, plain = AC.DSPForVoice(1, 1, cfg), AC.DSPForLevel(1, cfg)
+			expect(tunnel ~= plain).to.beTrue()
+			expect(dsp(0.42)).to.equal(tunnel)
+			for _, s in ipairs({ 0.38, 0.41, 0.36, 0.43 }) do expect(dsp(s)).to.equal(tunnel) end
+			expect(dsp(0.3)).to.equal(plain)
+			for _, s in ipairs({ 0.42, 0.39, 0.44 }) do expect(dsp(s)).to.equal(plain) end
+			expect(dsp(0.46)).to.equal(tunnel)
+			expect(AC.DiffuseHold(0.41, nil, 0.05, cfg)).to.beTrue()
+			expect(AC.DiffuseHold(0.39, nil, 0.05, cfg)).to.equal(false)
+		end },
+		{ name = "FindChains: routes ranked by predicted level, not 40 units per dB (three short closed doors no longer push out the open doorway of a loud source)", func = function()
+			local areas, ents = { [0] = {}, [1] = {}, [2] = {} }, {}
+			for k, iv in ipairs({ { 0, 48 }, { 52, 100 }, { 104, 152 }, { 600, 648 } }) do
+				local poly = rect(100, iv[1], iv[2], 0, 100)
+				table.insert(areas[1], { key = k, other = 2, poly = poly })
+				table.insert(areas[2], { key = k, other = 1, poly = poly })
+				ents[k] = { classname = "func_areaportal", portalnumber = tostring(k), startopen = "1" }
+			end
+			local g = G.Build({ map = "synthetic", numAreas = 3, areas = areas, entities = ents })
+			for k = 1, 3 do g.byKey[k].open, g.byKey[k].closedDb = 0, 28 end
+			g.byKey[4].open = 1
+			local cfg = table.Copy(CFG)
+			cfg.max_paths, cfg.portal_diffuse_db = 3, 8
+			local S, L = Vector(0, 76, 50), Vector(200, 76, 50)
+			local function hasOpen(chains) for _, c in ipairs(chains) do if c[#c] == g.byKey[4] then return true end end return false end
+			local chains = P.FindChains(g, S, 1, L, 2, cfg, nil, 120)
+			expect(#chains).to.equal(3)
+			expect(chains[1][1] == g.byKey[4]).to.beTrue()
+			expect(hasOpen(P.FindChainsRef(g, S, 1, L, 2, cfg, nil, 120))).to.beTrue()
+			-- the premise: evaluated, the open route is the loudest
+			local all = {}
+			for _, c in ipairs(P.FindChains(g, S, 1, L, 2, cfg, 8, 120)) do all[#all + 1] = P.EvalChain(S, L, c, cfg) end
+			expect(#all).to.equal(4)
+			local kept = P.KeepLoudest(all, 3, 120)
+			local found = false
+			for _, p in ipairs(kept) do if p.chain[1] == g.byKey[4] then found = true end end
+			expect(found).to.beTrue()
+			expect(kept[1].chain[1] == g.byKey[4]).to.beTrue()
+		end },
 	},
 }

@@ -10,6 +10,14 @@ A.Paths = P
 local AC = A.AC
 local Vector, math = Vector, math
 
+-- 0 below x0, 1 from x1, smoothstep in between (continuous level and slope: no pop)
+local function ramp(x, x0, x1)
+	if x <= x0 then return 0 end
+	if x >= x1 then return 1 end
+	local t = (x - x0) / (x1 - x0)
+	return t * t * (3 - 2 * t)
+end
+
 -- ------------------------------------------------------------------ geometry
 
 local function planeHit(a, b, c, n)
@@ -219,6 +227,17 @@ local function intersectAperture(leaf, mask)
 	return ap
 end
 
+--- Spectral tilt (dB) of what passes one doorway (pure): its open part (amplitude gOpen, tilt tOpen dB),
+-- its leaf (amplitude gLeaf, lowpass level leafLp) and the objects masking it (gMask, maskLp), summed by
+-- band energy (AC.MixTilt). The one rule of a door's spectrum for both models, the portal chain
+-- (P.EvalChain) and the probe polyline (P.SegmentDoorLoss): they had two (the louder part's level; open
+-- under half way the leaf's level, else none), and a door closing to where the gap and the leaf carry
+-- the same energy jumped from level 0-1 to 3 while the gap still let half the sound through clear.
+function P.DoorTilt(gOpen, tOpen, gLeaf, leafLp, gMask, maskLp, cfg)
+	return AC.MixTilt(gOpen * gOpen, tOpen, gLeaf * gLeaf, AC.LevelDb(leafLp, cfg),
+		(gMask or 0) ^ 2, AC.LevelDb(maskLp or 0, cfg))
+end
+
 --- Evaluates a portal chain: length, diffraction, door losses, apparent position.
 -- Pure for fully open / closed portals; a partly open door reads its measured aperture.
 -- masks[i] (optional): objects masking part of the i-th opening ({ ap = aperture they leave,
@@ -230,8 +249,7 @@ function P.EvalChain(S, L, chain, cfg, masks)
 	local pts = P.RelaxPoints(S, L, chain)
 	local len, diff, loss = 0, 0, 0
 	local allOpen = true
-	local openDiff, leafLp, tiltLp = 0, 0, 0 -- what muffles: diffraction, door leaves, a narrow gap
-	local tiltDb = 0 -- the gap's tilt (dB) that set tiltLp
+	local tilt = 0 -- what muffles (dB, AC.MixTilt): the openings in series add their tilts
 	local fd = cfg.portal_diffuse_db or 60
 	local prev = S
 	for i, p in ipairs(chain) do
@@ -248,7 +266,9 @@ function P.EvalChain(S, L, chain, cfg, masks)
 		-- leaf (and masking object): transmits over the area it covers, like the straight trace through it
 		local area, leafArea, s = 1, 1, 1 -- s: share of a gap that was not measured (amplitude)
 		local ap
-		if open <= 0.01 then
+		-- only a shut door has no gap: the former 'open <= 0.01 is shut' made the gap's sqrt(0.01) = -20 dB
+		-- appear at once beside the leaf's 18 dB (+2 dB in one step)
+		if open <= 0 then
 			area, leafArea, s = 0, 0, 0
 		else
 			if open < 0.99 then
@@ -292,36 +312,31 @@ function P.EvalChain(S, L, chain, cfg, masks)
 		-- diffDb = the doorway itself wide open (edge diffraction + diffuse leak); doorDb = loss - diffDb is
 		-- what the door's state adds (gap, leaf), as before the aperture model
 		diff = diff - AC.GainToDb(gFree)
-		if gc > math.max(go, gm) then
-			leafLp = math.max(leafLp, p.closedLp or 3)
-		else
-			-- spectrum of the open part: the doorway's diffraction (with the diffuse leak), and the
-			-- gap's own tilt when it passes the lows better than the highs, or the masking objects'
-			openDiff = openDiff - AC.GainToDb(gFree)
-			if gm > go then
-				leafLp = math.max(leafLp, m.lp)
-			elseif rHigh > 0 and rLow > rHigh then
-				local tilt = AC.GainToDb(rLow / rHigh)
-				tiltLp = math.max(tiltLp, AC.LowpassLevel(tilt, cfg))
-				tiltDb = math.max(tiltDb, tilt)
-			end
-		end
+		-- spectrum: each part keeps its own (P.DoorTilt). The open part: the doorway's diffraction (with
+		-- the diffuse leak), plus the gap's own tilt when it passes the lows better than the highs (at
+		-- most 40 dB: a crack passing no highs at all); the leaf: its material's lowpass; the masking
+		-- objects: theirs
+		local tOpen = -AC.GainToDb(gFree)
+		if rLow > rHigh then tOpen = tOpen + AC.GainToDb(rLow / math.max(rHigh, rLow * 0.01)) end
+		tilt = tilt + P.DoorTilt(go, tOpen, gc, p.closedLp or 3, gm, m and m.lp or 0, cfg)
 		loss = loss - AC.GainToDb(math.max(g, 1e-6))
 		prev = pt
 	end
 	len = len + prev:Distance(L)
 	diff = math.min(diff, cfg.diff_max_total + 40)
 	loss = math.min(loss, cfg.diff_max_total + cfg.door_closed_db * #chain)
-	local lp = math.max(AC.LowpassLevel(openDiff, cfg), leafLp, tiltLp)
+	local lp = AC.LowpassLevel(tilt, cfg)
 	-- every opening wide open: the diffuse part carries the treble through
 	if allOpen then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
 	local direct, bend = P.PathShape(S, pts, L)
-	-- lpDb: the continuous loss behind the level (AC.LowpassHold); a leaf or the cap may set lp instead
+	-- lpDb: the continuous loss behind the level (AC.LowpassHold); the cap may set lp instead
 	return { chain = chain, points = pts, length = len, diffDb = diff, doorDb = loss - diff, lossDb = loss,
-		pos = pts[#pts], lp = lp, lpDb = math.max(openDiff, tiltDb), direct = direct, bendDeg = bend }
+		pos = pts[#pts], lp = lp, lpDb = tilt, direct = direct, bendDeg = bend }
 end
 
---- Door loss (dB) of the door entities crossed by segment a -> b (game state).
+--- Door loss (dB), lowpass level and spectral tilt (dB) of the door entities crossed by segment a -> b
+-- (game state). Level as AC.DoorGain (gap amplitude (1 - gc) sqrt(frac) beside the leaf's gc); spectrum
+-- as a portal's (P.DoorTilt): the gap clear, the leaf its material's lowpass.
 local DOORS_ONLY = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
 local doorOut = {}
 local doorTr = { mask = MASK_SOLID, filter = function(e) return DOORS_ONLY[e:GetClass()] or false end, output = doorOut }
@@ -333,19 +348,22 @@ function P.SegmentDoorLoss(a, b, cfg)
 	if not tr.Hit or not IsValid(tr.Entity) then return 0 end
 	local st = A.Doors.byEnt and A.Doors.byEnt[tr.Entity:EntIndex()]
 	local frac, closedDb = st and st.frac or 0, st and st.closedDb or cfg.door_closed_db
-	return -AC.GainToDb(AC.DoorGain(frac, AC.LeafDb(closedDb, cfg))), frac < 0.5 and (st and st.closedLp or 3) or 0
+	local gc = 10 ^ (-AC.LeafDb(closedDb, cfg) / 20)
+	local gOpen = (1 - gc) * math.sqrt(math.Clamp(frac, 0, 1))
+	local t = P.DoorTilt(gOpen, 0, gc, st and st.closedLp or 3, 0, 0, cfg)
+	return -AC.GainToDb(gc + gOpen), AC.LowpassLevel(t, cfg), t
 end
 
 --- Evaluates a polyline S, v1 .. vn, L (probe paths): diffraction at each inner vertex,
 -- door entities crossed by the segments; apparent position = vn.
 function P.EvalPolyline(pts, cfg)
 	cfg = cfg or A.cfg
-	local len, diff, door, doorLp = 0, 0, 0, 0
+	local len, diff, door, doorTilt = 0, 0, 0, 0
 	for i = 1, #pts - 1 do
 		len = len + pts[i]:Distance(pts[i + 1])
-		local dl, dlp = P.SegmentDoorLoss(pts[i], pts[i + 1], cfg)
+		local dl, dlp, dt = P.SegmentDoorLoss(pts[i], pts[i + 1], cfg)
 		door = door + dl
-		doorLp = math.max(doorLp, dlp or 0)
+		doorTilt = doorTilt + (dt or AC.LevelDb(dlp or 0, cfg)) -- doors in series, like a chain's openings
 	end
 	for i = 2, #pts - 1 do
 		local delta = pts[i - 1]:Distance(pts[i]) + pts[i]:Distance(pts[i + 1]) - pts[i - 1]:Distance(pts[i + 1])
@@ -356,22 +374,38 @@ function P.EvalPolyline(pts, cfg)
 	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
 	local direct, bend = P.PathShape(pts[1], inner, pts[#pts])
 	return { chain = {}, points = inner, length = len, diffDb = diff, doorDb = door, lossDb = diff + door,
-		pos = pts[#pts - 1], lp = math.max(AC.LowpassLevel(diff, cfg), doorLp), lpDb = diff, direct = direct, bendDeg = bend }
+		pos = pts[#pts - 1], lp = AC.LowpassLevel(diff + doorTilt, cfg), lpDb = diff + doorTilt, direct = direct, bendDeg = bend }
 end
 
 -- ------------------------------------------------------------------ portal search
 
 --- k best portal chains from area aS to area aL, with distinct last portals (one Dijkstra
 -- over portal nodes; cost = length + door penalty). Pure given the graph.
-function P.FindChains(g, S, aS, L, aL, cfg)
+-- The Dijkstra picks the route INTO each last portal with a fixed exchange rate (40 units per dB of
+-- door); the routes are then RANKED by their predicted level, the engine's distance law over their
+-- length minus their doors (rankChains): at a fixed rate, three short routes through closed doors (18
+-- dB each = 720 units) ranked ahead of an open doorway 900 units longer, and the cut to max_paths
+-- dropped the open route of a loud source, whose level barely falls over those 900 units, 10 dB louder.
+-- limit: chains returned (default max_paths); sndlvl: the source's level for the distance law (75).
+local DOOR_UNITS_PER_DB = 40
+local function rankChains(cands, limit, sndlvl)
+	for _, c in ipairs(cands) do c.lvl = AC.GainToDb(AC.EngineGain(c.len, sndlvl or 75)) - c.doorDb end
+	table.sort(cands, function(x, y)
+		if x.lvl ~= y.lvl then return x.lvl > y.lvl end
+		return x.cost < y.cost
+	end)
+	local out = {}
+	for i = 1, math.min(#cands, limit) do out[i] = cands[i].chain end
+	return out
+end
+function P.FindChains(g, S, aS, L, aL, cfg, limit, sndlvl)
 	cfg = cfg or A.cfg
-	local DOOR_UNITS_PER_DB = 40
 	local closedDef = cfg.door_closed_db
 	local penalty = {} -- per call: the door state may change between calls
-	local function pcost(p) -- penalty of crossing p
+	local function pdb(p) -- dB lost crossing p
 		local c = penalty[p]
 		if not c then
-			c = -AC.GainToDb(AC.DoorGain(p.open or 1, AC.LeafDb(p.closedDb or closedDef, cfg))) * DOOR_UNITS_PER_DB
+			c = -AC.GainToDb(AC.DoorGain(p.open or 1, AC.LeafDb(p.closedDb or closedDef, cfg)))
 			penalty[p] = c
 		end
 		return c
@@ -379,12 +413,14 @@ function P.FindChains(g, S, aS, L, aL, cfg)
 	local sqrt = math.sqrt
 	local function dist3(k, x, y, z) return sqrt((k.cx - x) ^ 2 + (k.cy - y) ^ 2 + (k.cz - z) ^ 2) end
 	local dist, prev, depth, done, num = {}, {}, {}, {}, {}
+	local geo, ddb = {}, {} -- along the best route into each portal: length and dB of doors
 	local open = {}
 	local sx, sy, sz = S.x, S.y, S.z
 	for _, p in ipairs(g.areaPortals[aS] or {}) do
 		local k = portalNum(p)
 		num[p] = k
-		dist[p] = dist3(k, sx, sy, sz) + pcost(p)
+		geo[p], ddb[p] = dist3(k, sx, sy, sz), pdb(p)
+		dist[p] = geo[p] + ddb[p] * DOOR_UNITS_PER_DB
 		depth[p] = 1
 		open[#open + 1] = p
 	end
@@ -409,9 +445,11 @@ function P.FindChains(g, S, aS, L, aL, cfg)
 					if not done[q] and q ~= best then
 						local kq = num[q]
 						if not kq then kq = portalNum(q) num[q] = kq end
-						local c = bd + dist3(kq, kb.cx, kb.cy, kb.cz) + pcost(q)
+						local step, db = dist3(kq, kb.cx, kb.cy, kb.cz), pdb(q)
+						local c = bd + step + db * DOOR_UNITS_PER_DB
 						if not dist[q] or c < dist[q] then
 							dist[q], prev[q], depth[q], fromArea[q] = c, best, depth[best] + 1, nextArea
+							geo[q], ddb[q] = geo[best] + step, ddb[best] + db
 							open[#open + 1] = q
 						end
 					end
@@ -428,28 +466,27 @@ function P.FindChains(g, S, aS, L, aL, cfg)
 			if entered == aL then
 				local chain, c = {}, q
 				while c do table.insert(chain, 1, c) c = prev[c] end
-				cands[#cands + 1] = { chain = chain, cost = dist[q] + dist3(num[q], lx, ly, lz) }
+				local last = dist3(num[q], lx, ly, lz)
+				cands[#cands + 1] = { chain = chain, cost = dist[q] + last, len = geo[q] + last, doorDb = ddb[q] }
 			end
 		end
 	end
-	table.sort(cands, function(x, y) return x.cost < y.cost end)
-	local out = {}
-	for i = 1, math.min(#cands, cfg.max_paths) do out[i] = cands[i].chain end
-	return out
+	return rankChains(cands, limit or cfg.max_paths, sndlvl)
 end
 
 --- Reference (Vector) version, kept for the equivalence test.
-function P.FindChainsRef(g, S, aS, L, aL, cfg)
+function P.FindChainsRef(g, S, aS, L, aL, cfg, limit, sndlvl)
 	cfg = cfg or A.cfg
-	local DOOR_UNITS_PER_DB = 40
-	local function pcost(p) -- penalty of crossing p
+	local function pdb(p) -- dB lost crossing p
 		local gdoor = AC.DoorGain(p.open or 1, AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg))
-		return -AC.GainToDb(gdoor) * DOOR_UNITS_PER_DB
+		return -AC.GainToDb(gdoor)
 	end
 	local dist, prev, depth, done = {}, {}, {}, {}
+	local geo, ddb = {}, {}
 	local open = {}
 	for _, p in ipairs(g.areaPortals[aS] or {}) do
-		dist[p] = S:Distance(p.center) + pcost(p)
+		geo[p], ddb[p] = S:Distance(p.center), pdb(p)
+		dist[p] = geo[p] + ddb[p] * DOOR_UNITS_PER_DB
 		depth[p] = 1
 		open[#open + 1] = p
 	end
@@ -466,9 +503,11 @@ function P.FindChainsRef(g, S, aS, L, aL, cfg)
 			if nextArea ~= aL and depth[best] < cfg.max_depth then
 				for _, q in ipairs(g.areaPortals[nextArea] or {}) do
 					if not done[q] and q ~= best then
-						local c = dist[best] + best.center:Distance(q.center) + pcost(q)
+						local step, db = best.center:Distance(q.center), pdb(q)
+						local c = dist[best] + step + db * DOOR_UNITS_PER_DB
 						if not dist[q] or c < dist[q] then
 							dist[q], prev[q], depth[q], fromArea[q] = c, best, depth[best] + 1, nextArea
+							geo[q], ddb[q] = geo[best] + step, ddb[best] + db
 							open[#open + 1] = q
 						end
 					end
@@ -484,14 +523,12 @@ function P.FindChainsRef(g, S, aS, L, aL, cfg)
 			if entered == aL then
 				local chain, c = {}, q
 				while c do table.insert(chain, 1, c) c = prev[c] end
-				cands[#cands + 1] = { chain = chain, cost = dist[q] + q.center:Distance(L) }
+				local last = q.center:Distance(L)
+				cands[#cands + 1] = { chain = chain, cost = dist[q] + last, len = geo[q] + last, doorDb = ddb[q] }
 			end
 		end
 	end
-	table.sort(cands, function(x, y) return x.cost < y.cost end)
-	local out = {}
-	for i = 1, math.min(#cands, cfg.max_paths) do out[i] = cands[i].chain end
-	return out
+	return rankChains(cands, limit or cfg.max_paths, sndlvl)
 end
 
 -- ------------------------------------------------------------------ transmission
@@ -504,20 +541,27 @@ local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, pro
 -- A door entity closes an opening only while it is CLOSED. Open or ajar, its leaf is a panel standing
 -- in the room: sound goes round it and the room's reflections reach behind it, like any object.
 -- (Treating every door as a wall made a listener hiding behind an open leaf hear a muffled sound.)
+-- Between the two, the leaf passes from one to the other over its first few % of opening
+-- (CLOSURE_FRAC0 .. CLOSURE_FRAC1, P.EvalWalls blends them): the former switch at 2 % went in one step
+-- from the closed door's full loss to an object with a way round it and capped at prop_max_db.
 local OPENABLE = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
-local function isClosure(ent)
+local CLOSURE_FRAC0, CLOSURE_FRAC1 = 0.005, 0.05
+--- 1: the entity closes an opening (wall), 0: an object in the room, in between: a door just ajar.
+local function closureWeight(ent)
 	local cls = ent:GetClass()
-	if not DOOR_CLASSES[cls] then return false end
-	if not OPENABLE[cls] then return true end -- func_brush, func_wall...: part of the structure
+	if not DOOR_CLASSES[cls] then return 0 end
+	if not OPENABLE[cls] then return 1 end -- func_brush, func_wall...: part of the structure
 	local D = A.Doors
 	local st
 	if D then
 		if CLIENT then st = D.byEnt and D.byEnt[ent:EntIndex()] else st = D.entState and D.entState[ent:EntIndex()] end
 	end
-	if not st then return true end -- state unknown: as before
-	return (st.frac or 0) < 0.02
+	if not st then return 1 end -- state unknown: as before
+	return 1 - ramp(st.frac or 0, CLOSURE_FRAC0, CLOSURE_FRAC1)
 end
+local function isClosure(ent) return closureWeight(ent) >= 1 end
 P.IsClosure = isClosure
+P.ClosureWeight = closureWeight
 
 --- True when one of the portal paths goes through the doorway that door entity `ent` fills
 -- (portal linked to a door, leaf touching its opening: hinge side when open, in it when closed).
@@ -624,7 +668,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt)
 			w.minExtent = math.min(ext.x, ext.y, ext.z) -- panel or closed volume (P.EvalWalls)
 			w.fromInside = tr.StartSolid or nil -- the ray starts inside it: one sheet crossed
 		end
-		if hitEnt and not isClosure(hitEnt) then
+		if hitEnt and closureWeight(hitEnt) < 1 then
 			-- detour round the object's ORIENTED box, in its local frame (a tilted slab keeps
 			-- the size of a slab; its world AABB would be huge and could even contain S)
 			local mn, mx = hitEnt:OBBMins() - Vector(2, 2, 2), hitEnt:OBBMaxs() + Vector(2, 2, 2)
@@ -735,34 +779,39 @@ end
 
 --- Transmission summary of a wall list (pure). noCap: no prop_max_db cap (reflections round the
 -- objects); noDetour: through the objects only, not round them.
+-- Each object's own share is capped at prop_max_db: the room / ground reflections reach the listener
+-- round IT, whatever else stands on the line. The cap used to apply only when every wall was an object
+-- (and then to their sum): a vending machine alone lost 18 dB, the same machine and a 10 u curb behind
+-- it lost the machine's full 68 dB plus the curb's. A door just ajar is part closure, part object
+-- (closureWeight): the two are blended in dB.
 -- units (30 cm): a prop whose thinnest box side is larger is a closed volume, not a panel (a door model
 -- is ~12 u thick with its handles)
 local HOLLOW_MIN = 16
 function P.EvalWalls(walls, cfg, noCap, noDetour)
 	cfg = cfg or A.cfg
 	local loss, mid, lp = 0, 0, 0
-	-- only movable objects between S and L (no map wall, door or water): they share the same
-	-- space, and the room / ground reflections reach the listener round them
-	local propsOnly = #walls > 0
-	for _, w in ipairs(walls) do
-		if not w.ent or w.water or isClosure(w.ent) then propsOnly = false break end
-	end
+	local cap = cfg.prop_max_db or 18
 	for _, w in ipairs(walls) do
 		local db, l = AC.WallLoss(w.mat, w.surf, w.thickness)
+		-- as a closure: the material, no way round it, never capped
+		local through = math.max(db * cfg.trans_scale - cfg.trans_lf_bonus, 0)
+		local midDb = db * cfg.trans_scale
+		local c = (w.ent and not w.water) and closureWeight(w.ent) or 1
 		local dd
-		if w.ent and not isClosure(w.ent) then
+		if c < 1 then
 			-- props: hollow models (sheet metal, panels...) follow the mass law on the
 			-- surfaceprop's own thickness when it declares one. A closed hollow volume (vending
 			-- machine, car, container: every side of its box thicker than a panel) is crossed through
 			-- two of its sheets, whatever the chord: a double wall over the depth crossed. A panel
 			-- (thin box) is one sheet.
+			local pdb = db
 			local data = w.surfIdx and util.GetSurfaceData(w.surfIdx)
 			if data and (data.thickness or 0) > 0 then
 				-- both sheets crossed: the ray enters and leaves the volume (not from or to inside it)
 				if (w.minExtent or 0) > HOLLOW_MIN and not w.fromInside and w.thickness > 2 * data.thickness / 0.75 then
-					db = math.min(db, AC.DoubleWall(data.density, data.thickness, w.thickness, 500))
+					pdb = math.min(pdb, AC.DoubleWall(data.density, data.thickness, w.thickness, 500))
 				else
-					db = math.min(db, AC.MassLaw(data.density, data.thickness, 500))
+					pdb = math.min(pdb, AC.MassLaw(data.density, data.thickness, 500))
 				end
 			end
 			-- a prop is finite: sound also bends around it. Combine (power sum) the
@@ -772,27 +821,37 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 				dd = AC.Diffraction(w.detour, cfg.diff_freq, cfg.diff_max_edge)
 				w.diffDb = dd
 			end
-		end
-		-- the transmitted part is rendered low-passed: low-frequency loss (table - bonus);
-		-- the diffracted part (round a prop) keeps its own loss
-		local through = math.max(db * cfg.trans_scale - cfg.trans_lf_bonus, 0)
-		local transDb = through -- through the object only, before combining with the detour
-		local midDb = db * cfg.trans_scale
-		if dd then
-			through = math.min(through, AC.PowerSumDb({ through, dd }))
-			midDb = math.min(midDb, AC.PowerSumDb({ midDb, dd }))
+			-- the transmitted part is rendered low-passed: low-frequency loss (table - bonus);
+			-- the diffracted part (round a prop) keeps its own loss
+			local pThrough = math.max(pdb * cfg.trans_scale - cfg.trans_lf_bonus, 0)
+			local transDb = pThrough -- through the object only, before combining with the detour
+			local pMid = pdb * cfg.trans_scale
+			if dd then
+				pThrough = math.min(pThrough, AC.PowerSumDb({ pThrough, dd }))
+				pMid = math.min(pMid, AC.PowerSumDb({ pMid, dd }))
+			end
+			-- mostly diffracted round the object: muffled like the diffraction, not like the material
+			local pl = (dd and dd < transDb) and math.min(l, AC.LowpassLevel(dd, cfg)) or l
+			if not noCap and pThrough > cap then
+				-- the reflected sound dominates: capped loss, muffled like that level of loss
+				pThrough, pMid = cap, math.min(pMid, cap + cfg.trans_lf_bonus)
+				pl = math.min(pl, AC.LowpassLevel(cap, cfg))
+			end
+			if c <= 0 then
+				through, midDb, l = pThrough, pMid, pl
+			else
+				-- a door just ajar: in dB between the closure (c = 1) and the object (c = 0), its loss and its
+				-- muffling alike (a sum in amplitude put most of a 45 dB change in the first tenth of the
+				-- blend: 4 dB per 0.1 % of opening)
+				through = c * through + (1 - c) * pThrough
+				midDb = c * midDb + (1 - c) * pMid
+				l = AC.LowpassLevel(c * AC.LevelDb(l, cfg) + (1 - c) * AC.LevelDb(pl, cfg), cfg)
+			end
 		end
 		w.lossDb = through
 		loss = loss + through
 		mid = mid + midDb
-		-- mostly diffracted round the object: muffled like the diffraction, not like the material
-		lp = math.max(lp, (dd and dd < transDb) and math.min(l, AC.LowpassLevel(dd, cfg)) or l)
-	end
-	local cap = cfg.prop_max_db or 18
-	if propsOnly and not noCap and loss > cap then
-		-- the reflected sound dominates: capped loss, muffled like that level of loss
-		loss, mid = cap, math.min(mid, cap + cfg.trans_lf_bonus)
-		lp = math.min(lp, AC.LowpassLevel(cap, cfg))
+		lp = math.max(lp, l)
 	end
 	return math.min(loss, cfg.trans_max), lp, math.min(mid, cfg.trans_max)
 end
@@ -804,6 +863,21 @@ local function pathLevel(len, lossDb, sndlvl)
 	return AC.GainToDb(AC.EngineGain(len, sndlvl)) - lossDb
 end
 P.PathLevel = pathLevel
+
+--- The n loudest of evaluated paths (pure; their order kept on equal levels): the cut to max_paths is
+-- made on the levels computed (diffraction, gaps, leaves), not on the search's estimate.
+function P.KeepLoudest(paths, n, sndlvl)
+	if #paths <= n then return paths end
+	local idx = {}
+	for i, p in ipairs(paths) do idx[i] = { p = p, i = i, lvl = pathLevel(p.length, p.lossDb, sndlvl) } end
+	table.sort(idx, function(a, b)
+		if a.lvl ~= b.lvl then return a.lvl > b.lvl end
+		return a.i < b.i
+	end)
+	local out = {}
+	for i = 1, n do out[i] = idx[i].p end
+	return out
+end
 
 --- Shape of a path S, pts[1] .. pts[n], L (pure): straight-line length |S - L| and total bend in
 -- degrees (sum of the turns at the inner vertices, 0 = straight). A vertex on top of the previous one
@@ -826,14 +900,6 @@ function P.PathShape(S, pts, L)
 		end
 	end
 	return S:Distance(L), bend
-end
-
--- 0 below x0, 1 from x1, smoothstep in between (continuous level and slope: no pop)
-local function ramp(x, x0, x1)
-	if x <= x0 then return 0 end
-	local t = (x - x0) / (x1 - x0)
-	if t >= 1 then return 1 end
-	return t * t * (3 - 2 * t)
 end
 
 --- Diffuse model (pure). A path much longer than the straight line, or winding round many corners (a
@@ -894,6 +960,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		share, p.absorbDb = P.PathDiffuse(p, cfg)
 		local loss
 		loss, p.diffuse = P.DiffuseMix(p, share, p.absorbDb, cfg)
+		p.mixLossDb = loss -- before the headroom (the voices' rawLossDb)
 		p.lossDb = math.max(loss - AC.Headroom(sndlvl, p.length, cfg.fullscale_db), 0)
 	end
 	if trans then
@@ -912,57 +979,117 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		if p.level >= best - cfg.reject_db then kept[#kept + 1] = p end
 	end
 
+	-- Merging is soft, so that a small change of angle or level gives a small change of what is heard:
+	-- the former thresholds (59 / 61 degrees, 5.9 / 6.1 dB) moved a path's whole energy from one voice to
+	-- another, and with two voices made any further path join the nearest one, even 150 degrees away,
+	-- dragging its position. Each path keeps a share s of its energy as a voice of its own (s: how far it
+	-- is from the voices already made, over split_angle +- SPLIT_SOFT_DEG, times how loud it is, over
+	-- split_db +- SPLIT_SOFT_DB) and gives the rest to the voices near it. The energy a voice receives pulls
+	-- its position only as much as it comes from near its direction: a path with no voice left near it
+	-- adds its power without turning the voice round. The low-pass of a voice comes from its members'
+	-- band energies (AC.MixTilt): a clear and a muffled path of equal power are heard with the treble of
+	-- the clear one (level 1), not the mean of their levels (2).
+	local SPLIT_SOFT_DEG, SPLIT_SOFT_DB = 10, 2
 	local voices = {}
 	local function dirOf(p) return (p.pos - L):GetNormalized() end
+	local function energyOf(p)
+		local g = AC.EngineGain(p.length, sndlvl) * 10 ^ (-p.lossDb / 20)
+		return g * g
+	end
+	-- a path's tilt (dB): the loss behind its level when that loss gives it, else its level's equivalent
+	local function tiltOf(p)
+		if p.lpDb and AC.LowpassLevel(p.lpDb, cfg) == (p.lp or 0) then return p.lpDb, true end
+		return AC.LevelDb(p.lp or 0, cfg), false
+	end
+	local function newVoice(p, d)
+		local v = { kind = "portal", dir = d, s = 1, dom = p, members = {}, e = 0, hi = 0, df = 0, raw = 0, dist = 0, len = 0,
+			sum = Vector(0, 0, 0), cont = true }
+		voices[#voices + 1] = v
+		return v
+	end
+	-- e: energy given to v; pull: 0..1, how much it turns v toward d
+	local function give(v, p, d, e, pull)
+		if e <= 0 then return end
+		local t, cont = tiltOf(p)
+		v.e = v.e + e
+		v.hi = v.hi + e * 10 ^ (-t / 10)
+		v.df = v.df + (p.diffuse or 0) * e
+		v.raw = v.raw + (p.mixLossDb or p.rawLossDb or p.lossDb) * e
+		v.dist = v.dist + p.pos:Distance(L) * e
+		v.len = v.len + p.length * e
+		v.sum:Add(d * (e * pull))
+		v.cont = v.cont and cont
+		v.members[#v.members + 1] = p
+	end
 	if cfg.merge >= 0.5 then
+		local A0, D0 = cfg.split_angle or 60, cfg.split_db or 6
+		local function apart(ang) -- 0: in a voice's direction .. 1: far enough for a voice of its own
+			if A0 <= 0 then return 1 end
+			return ramp(ang, math.max(A0 - SPLIT_SOFT_DEG, 0), A0 + SPLIT_SOFT_DEG)
+		end
+		local function loud(dl) -- 1: loud enough for a voice of its own .. 0
+			return 1 - ramp(dl, math.max(D0 - SPLIT_SOFT_DB, 0), D0 + SPLIT_SOFT_DB)
+		end
+		-- portal voices: one slot is left for the transmission
+		local slots = math.max((cfg.max_voices or 3) - 1, 1)
 		for _, p in ipairs(kept) do
-			local d = dirOf(p)
-			local target
-			for _, v in ipairs(voices) do
-				local ang = math.deg(math.acos(math.Clamp(d:Dot(v.dir), -1, 1)))
-				if ang < cfg.split_angle or p.level < voices[1].level - cfg.split_db or #voices >= 2 then
-					if not target or d:Dot(v.dir) > d:Dot(target.dir) then target = v end
-				end
-			end
-			if target then
-				target.members[#target.members + 1] = p
+			local d, e = dirOf(p), energyOf(p)
+			if #voices == 0 then
+				give(newVoice(p, d), p, d, e, 1)
 			else
-				voices[#voices + 1] = { kind = "portal", dir = d, level = p.level, members = { p } }
+				local ap, nearest = {}, 0
+				for j, v in ipairs(voices) do
+					ap[j] = apart(math.deg(math.acos(math.Clamp(d:Dot(v.dir), -1, 1))))
+					nearest = math.max(nearest, v.s * (1 - ap[j])) -- how much a voice already speaks for it
+				end
+				local s = #voices < slots and loud(best - p.level) * (1 - nearest) or 0
+				if s < 1 then
+					-- the rest goes to the voices near it (a tiny weight on the closest direction when none is
+					-- near: its power is kept), each weighted by how much it is a voice of its own
+					local w, W = {}, 0
+					for j, v in ipairs(voices) do
+						w[j] = v.s * ((1 - ap[j]) + 1e-6 * ((1 + d:Dot(v.dir)) / 2) ^ 8) + 1e-12
+						W = W + w[j]
+					end
+					for j, v in ipairs(voices) do give(v, p, d, e * (1 - s) * w[j] / W, 1 - ap[j]) end
+				end
+				if s > 0 then
+					local v = newVoice(p, d)
+					v.s = s
+					give(v, p, d, e * s, 1)
+				end
 			end
 		end
 	else
 		for i, p in ipairs(kept) do
 			if i > cfg.max_voices then break end
-			voices[#voices + 1] = { kind = "portal", dir = dirOf(p), level = p.level, members = { p } }
+			local d = dirOf(p)
+			give(newVoice(p, d), p, d, energyOf(p), 1)
 		end
 	end
 
 	-- position / gain / low-pass of each portal voice (energy-weighted)
 	for _, v in ipairs(voices) do
-		local sum, pw, lpw, dbw, dfw = Vector(0, 0, 0), 0, 0, 0, 0
-		local dom = v.members[1]
-		for _, p in ipairs(v.members) do
-			local g = AC.EngineGain(p.length, sndlvl) * 10 ^ (-p.lossDb / 20)
-			local w = g * g
-			sum:Add(dirOf(p) * w)
-			pw = pw + w
-			lpw = lpw + p.lp * w
-			dfw = dfw + (p.diffuse or 0) * w
-			dbw = dbw and p.lpDb and dbw + p.lpDb * w or nil
-		end
-		v.gain = math.sqrt(pw)
-		local dist = dom.pos:Distance(L)
-		if #v.members > 1 and sum:Length() > 1e-6 then
-			v.pos = L + sum:GetNormalized() * dist
+		local pw = math.max(v.e, 1e-30)
+		v.gain = math.sqrt(v.e)
+		if #v.members > 1 and v.sum:Length() > 1e-6 then
+			v.pos = L + v.sum:GetNormalized() * (v.dist / pw)
 		else
-			v.pos = dom.pos
+			v.pos = v.dom.pos
 		end
-		v.lp = math.Round(lpw / math.max(pw, 1e-12))
-		v.diffuse = dfw / math.max(pw, 1e-12) -- energy-weighted diffuse share of the voice
-		v.lpDb = dbw and dbw / math.max(pw, 1e-12) -- loss behind the level, when every member has one
+		local tilt = 10 * math.log10(pw / math.max(v.hi, 1e-30))
+		if #v.members == 1 then tilt = tiltOf(v.members[1]) end -- exactly its own (no rounding at a threshold)
+		v.lp = AC.LowpassLevel(tilt, cfg)
+		v.diffuse = v.df / pw -- energy-weighted diffuse share of the voice
+		-- loss (dB) before the headroom, energy-weighted over the members: the native full version applies
+		-- its own distance law and needs the real loss, which v.gain loses once the headroom absorbed it
+		-- (a level 140 gunshot behind a 49.5 dB wall: headroom 49.6 dB, lossDb 0)
+		v.rawLossDb = v.raw / pw
+		v.lpDb = v.cont and tilt or nil -- loss behind the level, when every member has one
 		v.level = AC.GainToDb(v.gain)
-		v.len = dom.length -- path length (propagation delay, air absorption)
-		v.sh = dom.sh       -- Steam Audio baked path field (native rendering)
+		v.len = v.len / pw  -- path length (propagation delay, air absorption)
+		v.sh = v.dom.sh     -- Steam Audio baked path field (native rendering)
+		v.e, v.hi, v.df, v.raw, v.dist, v.sum, v.cont, v.s, v.dom = nil, nil, nil, nil, nil, nil, nil, nil
 	end
 
 	-- transmission voice
@@ -972,7 +1099,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		local dom = voices[1] and voices[1].level or -math.huge
 		if #voices == 0 or lvl >= dom - cfg.trans_window_db then
 			voices[#voices + 1] = { kind = "transmission", pos = trans.pos, gain = g, level = lvl, lp = trans.lp, members = {},
-				len = trans.length }
+				len = trans.length, rawLossDb = trans.rawLossDb }
 		end
 	end
 	-- loudest first: a sound played on one channel (a loop mirror, another addon's radio stream) takes
@@ -1031,7 +1158,10 @@ function P.Stable(state, r, cfg)
 	cfg = cfg or A.cfg
 	local vs = r and r.voices
 	if not vs or #vs == 0 or not r.L then
-		if state then state.lp = r and r.clear and 0 or nil end -- clear sight: heard without low-pass
+		if state then -- clear sight: heard without low-pass nor tunnel preset
+			state.lp = r and r.clear and 0 or nil
+			state.tunnel = r and r.clear and false or nil
+		end
 		return r
 	end
 	local L = r.L
@@ -1061,6 +1191,33 @@ function P.Stable(state, r, cfg)
 		r = setmetatable({ voices = nv }, { __index = r })
 	end
 	state.lp = lp
+	-- the engine's tunnel preset (AC.DSPForVoice) holds the same way near diffuse_dsp_at (AC.DiffuseHold,
+	-- diffuse_dsp_hyst, 0.05 by default): the renderers read it from the voices' diffuse shares, so when
+	-- the choice held differs from the share's, every voice's share is scaled to just the held side of
+	-- the threshold (by at most the margin: the native blur barely moves)
+	local margin = cfg.diffuse_dsp_hyst or 0.05
+	if (cfg.diffuse or 0) >= 0.5 and margin > 0 then
+		local at = cfg.diffuse_dsp_at or 0.4
+		local pw, dw = 0, 0
+		for _, v in ipairs(r.voices) do
+			local e = (v.gain or 0) ^ 2
+			pw, dw = pw + e, dw + (v.diffuse or 0) * e
+		end
+		local share = dw / math.max(pw, 1e-12)
+		local on = AC.DiffuseHold(share, state.tunnel, margin, cfg)
+		if on ~= (share >= at) and share > 1e-6 then
+			local k = (on and at * (1 + 1e-6) or at * (1 - 1e-6)) / share
+			local nv = {}
+			for i, v in ipairs(r.voices) do
+				local held = {}
+				for key, x in pairs(v) do held[key] = x end
+				held.diffuse = math.min((v.diffuse or 0) * k, 1)
+				nv[i] = held
+			end
+			r = setmetatable({ voices = nv }, { __index = r })
+		end
+		state.tunnel = on
+	end
 	return r
 end
 
@@ -1646,9 +1803,11 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if g and (worldBlocked or leafBlocked) then
 			r.aS, r.aL = A.Graph.Area(g, S), A.Graph.Area(g, L)
 			if r.aS ~= 0 and r.aL ~= 0 and r.aS ~= r.aL then
-				for _, chain in ipairs(P.FindChains(g, S, r.aS, L, r.aL, cfg)) do
+				-- twice max_paths candidates, cut once their levels are computed (P.KeepLoudest)
+				for _, chain in ipairs(P.FindChains(g, S, r.aS, L, r.aL, cfg, cfg.max_paths * 2, sndlvl)) do
 					r.paths[#r.paths + 1] = P.EvalChain(S, L, chain, cfg)
 				end
+				r.paths = P.KeepLoudest(r.paths, cfg.max_paths, sndlvl)
 			end
 		end
 		-- a leaf whose doorway a portal path goes through is modelled by that portal (state, gap,

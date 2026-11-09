@@ -145,6 +145,37 @@ function AC.LowpassLevel(db, cfg)
 	return 0
 end
 
+--- Loss-equivalent (dB) of a low-pass level: the middle of the range of losses that give it, so that
+-- AC.LowpassLevel(AC.LevelDb(k)) == k. Some causes only know a level (a closed leaf's material, a
+-- masking object, a path whose level a discrete cause set): this lets them be mixed by band energy
+-- with continuous losses (AC.MixTilt) instead of the loudest cause taking the whole level.
+function AC.LevelDb(level, cfg)
+	cfg = cfg or A.cfg
+	level = floor((level or 0) + 0.5)
+	if level <= 0 then return 0 end
+	if level >= 4 then return cfg.lp4_db + max(cfg.lp4_db - cfg.lp3_db, 0) * 0.5 end
+	return (cfg["lp" .. level .. "_db"] + cfg["lp" .. (level + 1) .. "_db"]) * 0.5
+end
+
+--- Spectral tilt (dB: high band below low band, the loss-equivalent that AC.LowpassLevel reads) of
+-- components summed in power. Arguments: energy1, tilt1, energy2, tilt2, ... (energies on any common
+-- scale). The low band gets sum(e), the high band sum(e 10^(-t / 10)). A clear part and a muffled part
+-- of equal power give ~3 dB (level 1): the clear part carries the treble. The former rule (the louder
+-- part sets the level) jumped from 0 to the leaf's 3 at the crossover of an ajar door, while the gap
+-- still carried half the energy. 0 without energy.
+function AC.MixTilt(...)
+	local lo, hi = 0, 0
+	for i = 1, select("#", ...), 2 do
+		local e, t = select(i, ...)
+		if e and e > 0 then
+			lo = lo + e
+			hi = hi + e * 10 ^ (-(t or 0) / 10)
+		end
+	end
+	if lo <= 0 or hi <= 0 then return 0 end
+	return max(10 * log10(lo / hi), 0)
+end
+
 function AC.DSPForLevel(level, cfg)
 	cfg = cfg or A.cfg
 	if level <= 0 then return 0 end
@@ -153,7 +184,8 @@ end
 
 --- Engine preset of a voice (one preset per sound): from diffuse_dsp_at, a diffuse voice (long winding
 -- path) gets the engine's own "tunnel, diffuse" reverb (117 HUGE DULL when muffled, 116 SMALL BRIGHT
--- otherwise) instead of the plain low-pass: heard as a smeared, reverberant sound.
+-- otherwise) instead of the plain low-pass: heard as a smeared, reverberant sound. A continuous sound
+-- holds this choice near the threshold (AC.DiffuseHold, applied by P.Stable to the voices it returns).
 function AC.DSPForVoice(level, diffuse, cfg)
 	cfg = cfg or A.cfg
 	if (cfg.diffuse or 0) >= 0.5 and (diffuse or 0) >= (cfg.diffuse_dsp_at or 0.4) then
@@ -181,6 +213,20 @@ function AC.LowpassHold(level, db, prev, margin, cfg)
 		return prev
 	end
 	return level
+end
+
+--- Same hysteresis for the switch to the diffuse "tunnel" preset (AC.DSPForVoice, diffuse_dsp_at): a
+-- loop heard down a corridor whose diffuse share moves 0.39 <-> 0.41 as the listener steps flipped
+-- between the plain low-pass and the reverberant preset at every update. `share`: the diffuse share
+-- just computed; `prev`: true / false, the choice heard so far (nil: none yet). The choice heard is kept
+-- while the share is within `margin` of the threshold. Returns true when the tunnel preset applies.
+function AC.DiffuseHold(share, prev, margin, cfg)
+	cfg = cfg or A.cfg
+	local at = cfg.diffuse_dsp_at or 0.4
+	share = share or 0
+	if prev == nil or not margin or margin <= 0 then return share >= at end
+	if prev then return share >= at - margin end
+	return share >= at + margin
 end
 
 -- Transmission table: { t_ref (units), R_ref (dB), slope (dB per thickness doubling), min, max, lowpass }
