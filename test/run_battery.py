@@ -135,10 +135,12 @@ def door(action):
     time.sleep(3)
 
 def echo_on():
-    """Native echoes rendered by the client, and the server told so (pba_echo_want, set on the client's Think)."""
+    """Native echoes rendered by the client, and the server told so (pba_echo_want, set on the client's Think).
+    pba_native_all 0: a native-all client gets every sound fully relayed (sv_relay 'all'), never echo-only."""
     native_on(True)
+    call("console_exec", {"realm": "client", "cmd": "pba_native_all 0"})
     call("console_exec", {"realm": "client", "cmd": "pba_native_echo 1"})
-    wait_lua("server", "local p = player.GetHumans()[1] return IsValid(p) and p:GetInfoNum('pba_echo_want', 0) >= 1", 10)
+    wait_lua("server", "local p = player.GetHumans()[1] return IsValid(p) and p:GetInfoNum('pba_echo_want', 0) >= 1 and p:GetInfoNum('pba_native_all_want', 1) == 0", 10)
 
 # ------------------------------------------------------------------ test runners
 
@@ -336,6 +338,9 @@ steps = [
     # cases reported on rp_downtown: a radio upstairs heard through the ceiling (loudest voice first), and
     # behind a pillar of the same room (probes off the floor, no doubled vertex: the route hugs the corner)
     ("downtown_cases rp_downtown", lambda: seq(lambda: load("rp_downtown_v4c_v2"), lambda: job("client", "downtown_cases.lua", 400))),
+    # cost of one uncached probe route (a far radio, the listener walking a corridor): was 50-125 ms per
+    # stream update, a freeze every 0.25 s (207 door leaves tested one by one, LuaJIT aborting traces)
+    ("downtown_route_cost rp_downtown", lambda: seq(lambda: load("rp_downtown_v4c_v2"), lambda: job("client", "downtown_route_cost.lua", 330))),
     # end to end, native: a radio stream in the upper room is reverberant there, and from the street the
     # reverb does not swamp it (send capped by the listener's enclosure, passed on gliding updates too)
     ("downtown_stream rp_downtown", lambda: py("downtown_stream.py")),

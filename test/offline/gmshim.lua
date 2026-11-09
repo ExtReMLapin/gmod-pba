@@ -67,7 +67,8 @@ util = { GetSurfaceData = function() return nil end, TableToJSON = function(t)
 	end
 	return ser(t)
 end }
-function IsValid(e) return e ~= nil end
+-- as GMod: a value is valid only if it has an IsValid method saying so (a plain table is not)
+function IsValid(e) if not e then return false end local f = e.IsValid if not f then return false end return f(e) and true or false end
 function string.StartWith(s, p) return s:sub(1, #p) == p end
 pba = { Doors = { byEnt = {}, entState = {} } }
 -- for cl_probes.lua (probe graph): traces see nothing unless a test stubs them

@@ -45,6 +45,7 @@ EmitSound = function(name, pos, idx, chan, vol, lvl, flags, pitch, dsp)
 end
 ClientsideModel = function()
 	local a = { pos = Vector(0, 0, 0) }
+	function a:IsValid() return not self.removed end -- as an entity: invalid once removed
 	function a:SetNoDraw() end
 	function a:SetPos(p) self.pos = Vector(p) end
 	function a:GetPos() return self.pos end

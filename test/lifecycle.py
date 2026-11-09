@@ -38,7 +38,7 @@ results = []
 
 
 def check(name, ok, info):
-    results.append(ok)
+    results.append(bool(ok))
     print(("PASS " if ok else "FAIL ") + name + " :: " + json.dumps(info, default=str)[:400], flush=True)
 
 
@@ -73,9 +73,8 @@ for render in ("0", "1"):
         e:GetPhysicsObject():EnableMotion(false) _G.pba_t = e return e:EntIndex()""")
     time.sleep(0.5)
     idx = lua("server", "return _G.pba_t:EntIndex()")
-    count = f"""local n, names = 0, {{}} for _, c in pairs(pba.copies) do if c.idx == {idx} then
-        for _, a in pairs(c.anchors) do if IsValid(a) and a.pbaName then n = n + 1 names[#names + 1] = a.pbaName end end
-        n = n + #c.native for _, x in ipairs(c.native) do names[#names + 1] = x[2] end end end return {{ n = n, names = names }}"""
+    count = f"""local n, names, now = 0, {{}}, RealTime() for _, h in ipairs(pba.emitted[{idx}] or {{}}) do
+        if not h.cancelled and now <= h.tEnd then n = n + 1 names[#names + 1] = h.name end end return {{ n = n, names = names }}"""
     lua("server", "_G.pba_t:EmitSound('vo/npc/male01/question06.wav', 75, 100, 1, CHAN_VOICE) return true")
     time.sleep(0.4)
     one = lua("client", count)

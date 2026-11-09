@@ -33,16 +33,20 @@ local function measure(share)
 	job:sleep(0.8) -- the reverb tail of this voice dies before the next one
 	return { share = share, total = math.Round(total), direct = math.Round(direct), id = id }
 end
-local a, b = measure(0), measure(0.85)
+-- share 1: no direct, so no direct x reverb cross term (a tonal loop like spin_loop correlates with its
+-- own early reflections: 2<d,r> was 0.44 D here, more than the reverb itself, and it does not follow
+-- the send). The pure room reverb at share 0 is R = total(1) / (1 + k)^2.
+local a, b, c = measure(0), measure(0.85), measure(1)
 local db = function(x, y) return 10 * math.log10(math.max(x, 1e-9) / math.max(y, 1e-9)) end
 local drop, tot = db(a.direct, b.direct), db(b.total, a.total)
 local cv = GetConVar("pba_native_diffuse_send")
 local k = cv and cv:GetFloat() or 1.5
-local rev = math.max(a.total - a.direct, 0)
+local rev = c.total / (1 + k) ^ 2
 local pred = db(b.direct + rev * (1 + k * b.share) ^ 2, a.total)
 -- the total depends on the room where it is measured (reverb over direct at share 0: 0.2 in pba_demo, 1.95
 -- under gm_melancholia's overhang: +5.4 dB predicted, +5.5 measured): what must hold is the energy law
 -- itself, the measured total within 1.5 dB of the one predicted from the share-0 measure
-return { pass = a.id > 0 and b.id > 0 and drop > 6 and math.abs(tot - pred) <= 1.5, directDropDb = math.Round(drop, 2),
+return { pass = a.id > 0 and b.id > 0 and c.id > 0 and drop > 6 and math.abs(tot - pred) <= 1.5, directDropDb = math.Round(drop, 2),
 	totalDb = math.Round(tot, 2), predictedTotalDb = math.Round(pred, 2), k = k,
-	reverbOverDirect = math.Round(rev / math.max(a.direct, 1e-9), 3), rows = { a, b } }
+	reverbOverDirect = math.Round(rev / math.max(a.direct, 1e-9), 3),
+	crossOverDirect = math.Round((a.total - a.direct - rev) / math.max(a.direct, 1e-9), 3), rows = { a, b, c } }

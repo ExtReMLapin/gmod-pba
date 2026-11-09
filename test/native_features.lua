@@ -1,8 +1,10 @@
 -- Native feature checks (client lua_job, native rendering on, pba_tworooms):
 -- echoes, output modes, start delay, path-effect field, bake disk cache, reflection thread load.
 -- Pass (res.checks, res.fails name what failed):
---   headphones: a voice 200 u to the right is louder in the right ear (R > 2 L) and reaches it first
---     (ITD lag <= -3 samples; + = left ear first);
+--   headphones: a voice 200 u to the right is louder in the right ear (R > 1.5 L: a male voice's
+--     energy lies below 1 kHz, where the head shadow is small: 1.8-1.9 measured with Steam Audio's
+--     default HRTF, white noise gives 50; a lost HRTF gives 1.0) and reaches it first (ITD lag <= -3
+--     samples; + = left ear first);
 --   speakers: no ITD (|lag| <= 1 sample);
 --   delay: nothing during the first 0.5 s of a voice started 0.8 s late (first < 0.05 x after);
 --   pathfx: a path field arriving from the right is louder on the right (R > L);
@@ -117,7 +119,7 @@ for n, v in pairs(saved) do if GetConVar("pba_" .. n):GetString() ~= v then RunC
 local h, s, d, pf, b1, b2 = res.headphones, res.speakers, res.delay, res.pathfx, res.bake1, res.bake2
 local function num(x) return tonumber(x) or 0 end
 res.checks = {
-	headphones = num(h.R) > 2 * num(h.L) and h.lag ~= nil and h.lag <= -3,
+	headphones = num(h.R) > 1.5 * num(h.L) and h.lag ~= nil and h.lag <= -3,
 	speakers = s.lag ~= nil and math.abs(s.lag) <= 1,
 	delay = num(d.after) > 0 and num(d.first) < 0.05 * num(d.after),
 	pathfx = num(pf.R) > num(pf.L),

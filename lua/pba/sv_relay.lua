@@ -196,9 +196,15 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 		A.RelayStop(data.Entity, data.SoundName)
 		return
 	end
-	-- a sentence: carried by its name (returning nil below leaves the engine's own table untouched)
+	-- a sentence: carried by its name, on a copy of the table (the engine's own is passed on to every
+	-- later EntityEmitSound hook, and played as they leave it: they must still see "invalid.wav")
 	local sentence = data.SoundName == "invalid.wav" and (A.cfg.sentences or 0) >= 0.5 and (data.OriginalSoundName or "") ~= ""
-	if sentence then data.SoundName = "!" .. data.OriginalSoundName end
+	if sentence then
+		local d = {}
+		for k, v in pairs(data) do d[k] = v end
+		d.SoundName = "!" .. data.OriginalSoundName
+		data = d
+	end
 	if not A.Eligible(data) then return end
 	local pos = A.SoundPos(data)
 	if not pos then return end

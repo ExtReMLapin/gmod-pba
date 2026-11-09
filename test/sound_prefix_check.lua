@@ -5,7 +5,7 @@
 -- Run it in the server realm too (A.SoundDuration is shared; sv_loops uses it for long sounds).
 -- Returns { pass, rawFails, bad, lines }: pass = that verdict (no wrong pba duration, and the long
 -- music file really is long: the sounds exist on this install).
-local names = { "music/hl2_song12_long.wav", "ambient/alarms/klaxon1.wav" }
+local names = { "music/hl2_song12_long.mp3", "ambient/alarms/klaxon1.wav" }
 local prefixes = { "", "*", "^", ")", "#", "^)", "*#" }
 local out, bad, rawFails = {}, 0, 0
 for _, n in ipairs(names) do

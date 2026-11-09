@@ -249,7 +249,12 @@ end
 local function filter(ch, r)
 	local N = A.Native
 	if not (N and N.ready and pba_native and pba_native.StreamFilter) then return end
-	if (A.cfg.streams_filter or 0) < 0.5 then return end
+	-- switched off (pba_streams_filter 0): the EQ already on the channel goes flat, or the stream stayed
+	-- muffled with the setting off until it was released
+	if (A.cfg.streams_filter or 0) < 0.5 then
+		if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) r.filtered = nil end
+		return
+	end
 	if r.filterFailed then return end
 	local e = r.hEq or r.eq
 	local ok, done, why = pcall(pba_native.StreamFilter, ch, e[1], e[2], e[3])

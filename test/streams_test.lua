@@ -22,7 +22,12 @@ do
 	end
 end
 local ch
-sound.PlayFile("sound/music/hl2_song20_submix0.mp3", "3d noblock", function(c, err) ch = c res.err = err end)
+-- a stationary broadband loop (running water): music changed its own level and spectrum by +-30 %
+-- between sections, more than the filter it was measuring
+sound.PlayFile("sound/ambient/water/water_flow_loop1.wav", "3d noblock", function(c, err)
+	ch, res.err = c, err
+	if IsValid(c) then c:EnableLooping(true) end
+end)
 job:wait(function() return ch ~= nil or res.err ~= nil end, 10)
 if not IsValid(ch) then return { pass = false, fail = "no channel", err = res.err } end
 local src = Vector(784, 256, 40)
@@ -59,8 +64,8 @@ local function level(secs)
 	return s / math.max(n, 1)
 end
 -- spectrum shape (FFT is taken after the DSP): the muffling EQ keeps the bass and cuts the mids
--- (0.8 / 0.18 / 0.03); a broken filter (wrong sample format) gives noise: more mids, not less.
--- Mids rather than treble: this music has almost nothing above 3 kHz (noise floor).
+-- (res.eq); a broken filter (wrong sample format) gives noise: more mids, not less.
+-- Mids against bass, as the EQ's bands.
 local function hiLoRatio(secs)
 	local lo, hi = 0, 0
 	local t = SysTime()
@@ -76,14 +81,27 @@ local function hiLoRatio(secs)
 	return hi / math.max(lo, 1e-9)
 end
 res.info = pba_native and pba_native.StreamInfo and pba_native.StreamInfo(ch)
-res.ratioFiltered = hiLoRatio(2)
-res.levelFiltered = level(2)
-RunConsoleCommand("pba_streams_filter", "0")
-job:sleep(0.4)
-if r and r.filtered then pba_native.StreamFilter(ch, 1, 1, 1) end
-res.levelFlat = level(2)
-res.ratioFlat = hiLoRatio(2)
-RunConsoleCommand("pba_streams_filter", "1")
+-- filtered and flat windows alternate (A/B/A/B): what drifts in the signal or the room falls on both
+-- pba applies the setting itself (the EQ goes flat when it is switched off): the test waits until the
+-- setting is read (client convars are polled) and the channel's filter state follows it
+local function setFilter(on)
+	RunConsoleCommand("pba_streams_filter", on and "1" or "0")
+	job:wait(function() return ((pba.cfg.streams_filter or 0) >= 0.5) == on and (r and r.filtered == true) == on end, 5)
+	job:sleep(0.6) -- BASS playback buffer: GetLevel / FFT see the change after it
+end
+local acc = { [true] = { lv = 0, q = 0 }, [false] = { lv = 0, q = 0 } }
+for i = 1, 4 do
+	local on = i % 2 == 1
+	setFilter(on)
+	local q, lv = hiLoRatio(0.7), level(0.7)
+	acc[on].q, acc[on].lv = acc[on].q + q / 2, acc[on].lv + lv / 2
+	local info = pba_native and pba_native.StreamInfo and pba_native.StreamInfo(ch) or ""
+	res.windows = res.windows or {}
+	res.windows[i] = { on = on, ratio = q, level = lv, gains = string.match(info, "gains=[^ ]*") }
+end
+setFilter(true)
+res.ratioFiltered, res.levelFiltered = acc[true].q, acc[true].lv
+res.ratioFlat, res.levelFlat = acc[false].q, acc[false].lv
 -- native rendering of the stream (N2): BASS muted, the module plays the captured audio
 if pba.Native.ready and pba_native.PlayStream then
 	RunConsoleCommand("pba_native_render", "1")
@@ -114,7 +132,9 @@ for n, v in pairs(saved) do if GetConVar("pba_" .. n):GetString() ~= v then RunC
 ch:Stop()
 res.pass = res.tracked and res.getPos == tostring(src) and math.abs(res.getVolume - 0.8) < 1e-3 and res.apparent ~= nil
 	and res.g < 0.9 and (not pba.Native.ready or (res.filtered and res.levelFiltered < res.levelFlat * 0.9
-		and res.ratioFiltered < res.ratioFlat * 0.5)) -- mids really cut, not replaced by noise
+		-- mids really cut, not replaced by noise: at least half-way to the EQ's mid/bass gain (FFT bins are
+		-- magnitudes; the 400-2000 Hz band lies partly in the 500 Hz shelf's transition: 0.58 measured for 0.45)
+		and res.ratioFiltered < res.ratioFlat * (1 + res.eq[2] / res.eq[1]) / 2))
 	and res.offG == 1 and res.offApparent == false
 	and (not res.native or (res.native.voice and res.native.bassVolume == 0 and math.abs(res.native.ownerVolume - 0.8) < 1e-3
 		and res.native.energy > 0 and res.native.levelForVisualisers > 0.01 and not res.native.afterOff.voice

@@ -3,6 +3,13 @@
 local A = pba
 local AC, G, P = A.AC, A.Graph, A.Paths
 
+-- a stub's result: the caller's output table emptied first (a real trace writes every field)
+local function traceOut(t)
+	local o = t.output
+	if not o then return {} end
+	for k in pairs(o) do o[k] = nil end
+	return o
+end
 local function near(a, b, tol) return math.abs(a - b) <= (tol or 1e-3) end
 
 -- A synthetic scene of boxes for P.PortalMasked: the world (list of { mins, maxs }) and one prop box
@@ -36,7 +43,7 @@ local function withScene(world, prop, through, fn)
 	local saved, savedWalls = util.TraceLine, P.Walls
 	AC.SURF_TABLE.pba_test_prop = { 1, through + 10, 0, through + 10, through + 10, 3, fixed = true }
 	util.TraceLine = function(t)
-		local out = t.output or {}
+		local out = traceOut(t)
 		local f
 		if t.ignoreworld then f = segBox(t.start, t.endpos, prop[1], prop[2]) else f = worldHit(t.start, t.endpos) end
 		out.Hit, out.Fraction = f ~= nil, f or 1
@@ -100,7 +107,7 @@ local function withProbeRooms(holes, extra, over, fn)
 		return false
 	end
 	local function trace(t, pad)
-		local out = t.output or {}
+		local out = traceOut(t)
 		local best
 		if not t.ignoreworld then
 			local d = Vector(pad, pad, pad)
@@ -118,7 +125,11 @@ local function withProbeRooms(holes, extra, over, fn)
 	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold" }
 	local savedPR, savedCfg = {}, {}
 	for _, k in ipairs(state) do savedPR[k] = PR[k] end
-	for k, v in pairs(over or {}) do savedCfg[k] = A.cfg[k] A.cfg[k] = v end
+	-- native_traces 0 always: the scene replaces util.Trace*, the engine's own traces would bypass it
+	local o = { native_traces = 0 }
+	for k, v in pairs(over or {}) do o[k] = v end
+	over = o
+	for k, v in pairs(over) do savedCfg[k] = A.cfg[k] A.cfg[k] = v end
 	util.TraceLine = function(t) return trace(t, 0) end
 	util.TraceHull = function(t) return trace(t, t.maxs and t.maxs.x or 0) end
 	util.PointContents = function(p) return inside(p) and CONTENTS_SOLID or 0 end
@@ -186,7 +197,7 @@ local function withProbeScene(fn)
 	for _, k in ipairs({ "probe_field", "probe_inline_ms", "probe_field_blend", "native_traces" }) do savedCfg[k] = A.cfg[k] end
 	A.cfg.native_traces = 0
 	local function tr(t, pad)
-		local out = t.output or {}
+		local out = traceOut(t)
 		-- probe traces: brush-only, with or without grates (links cross grates)
 		local brushOnly = t.mask == MASK_SOLID_BRUSHONLY or t.mask == bit.band(MASK_SOLID_BRUSHONLY, bit.bnot(CONTENTS_GRATE))
 		out.Hit = brushOnly and probeHit(t.start, t.endpos, pad) or false
@@ -657,7 +668,7 @@ return {
 			local loss = P.EvalWalls(walls, cfg)
 			expect(loss <= 18 + 1e-6).to.beTrue()
 			-- a CLOSED door (or one whose state is unknown) closes an opening: not capped
-			local fakeDoor = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
+			local fakeDoor = { IsValid = function() return true end, GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
 			local D = pba.Doors
 			local states = CLIENT and D.byEnt or D.entState
 			local saved = states[9999]
@@ -1419,7 +1430,7 @@ return {
 				return { { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" } }
 			end
 			util.TraceLine = function(t)
-				local out = t.output or {}
+				local out = traceOut(t)
 				local f = segBox(t.start, t.endpos, mn, mx)
 				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
 				return out
@@ -1444,7 +1455,7 @@ return {
 			if not ok then error(err, 0) end
 		end },
 		{ name = "Compute cache: keyed on the emitter (a crate's own sound ignores the crate, another sound from there not)", func = function()
-			local crate = { GetClass = function() return "prop_physics" end, EntIndex = function() return 9997 end,
+			local crate = { IsValid = function() return true end, GetClass = function() return "prop_physics" end, EntIndex = function() return 9997 end,
 				IsWorld = function() return false end }
 			local savedWalls, savedGet = P.Walls, A.Graph.Get
 			P.Walls = function(a, b, _, srcEnt)
@@ -1604,7 +1615,7 @@ return {
 			local keys = { "current", "field", "fieldJob", "fieldHold", "pathCache", "pathCacheN", "queue", "queueN", "inlineFrame", "inlineUsed" }
 			local savedPR, savedTL, savedTH, savedNT = {}, util.TraceLine, util.TraceHull, A.cfg.native_traces
 			for _, k in ipairs(keys) do savedPR[k] = PR[k] end
-			local function clear(t) local o = t.output or {} o.Hit, o.Fraction, o.StartSolid, o.HitPos = false, 1, false, t.endpos return o end
+			local function clear(t) local o = traceOut(t) o.Hit, o.Fraction, o.StartSolid, o.HitPos = false, 1, false, t.endpos return o end
 			util.TraceLine, util.TraceHull, A.cfg.native_traces = clear, clear, 0
 			local ok, err = pcall(function()
 				local s, W = 16, 80
@@ -1762,7 +1773,7 @@ return {
 		end },
 		{ name = "EvalWalls: a door leaf opening goes from closure to object over its first % (former switch at 2 %: 37 dB in one step)", func = function()
 			local cfg = setmetatable({ prop_max_db = 18, trans_max = 500 }, { __index = pba.cfg })
-			local fakeDoor = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
+			local fakeDoor = { IsValid = function() return true end, GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
 			local D = pba.Doors
 			local states = CLIENT and D.byEnt or D.entState
 			local saved = states[9999]
@@ -1794,11 +1805,11 @@ return {
 			expect(AC.LowpassLevel(P.DoorTilt(0.3, 0, 0.3, 3, 0, 0, CFG), CFG)).to.equal(1)
 			for k = 0, 4 do expect(AC.LowpassLevel(AC.LevelDb(k, CFG), CFG)).to.equal(k) end
 			-- the probe model: the gap and the leaf carry the same energy -> level 1 (was the leaf's 3 below half open)
-			local fakeDoor = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
+			local fakeDoor = { IsValid = function() return true end, GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end }
 			local D = pba.Doors
 			D.byEnt = D.byEnt or {}
 			local saved, savedTr = D.byEnt[9999], util.TraceLine
-			util.TraceLine = function(t) local o = t.output or {} o.Hit, o.Entity = true, fakeDoor return o end
+			util.TraceLine = function(t) local o = traceOut(t) o.Hit, o.Entity = true, fakeDoor return o end
 			local ok, err = pcall(function()
 				local gc = 10 ^ (-AC.LeafDb(30, CFG) / 20)
 				local function lpAt(frac)
@@ -1965,7 +1976,7 @@ return {
 			end
 			local saved = { util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area }
 			util.TraceLine = function(t)
-				local out = t.output or {}
+				local out = traceOut(t)
 				local f = not t.ignoreworld and hit(t.start, t.endpos) or nil
 				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
 				out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
@@ -2024,7 +2035,7 @@ return {
 			local PR = A.Probes
 			local saved = { util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area, PR.Paths }
 			util.TraceLine = function(t)
-				local out = t.output or {}
+				local out = traceOut(t)
 				local f = not t.ignoreworld and hit(t.start, t.endpos) or nil
 				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
 				out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
@@ -2087,7 +2098,7 @@ return {
 			end
 			local saved = { util.TraceLine, P.Walls, A.Graph.Get }
 			util.TraceLine = function(t)
-				local out = t.output or {}
+				local out = traceOut(t)
 				local f = not t.ignoreworld and hit(t.start, t.endpos) or nil
 				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
 				out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
@@ -2106,6 +2117,8 @@ return {
 			end
 			A.Graph.Get = function() return nil end
 			local cfg = setmetatable({ probes = 0, path_props = 0, water = 0 }, { __index = CFG })
+			local savedNative = A.Native
+			A.Native = nil -- the real map's Steam Audio scene would occlude this synthetic line
 			local ok, err = pcall(function()
 				local function lossAt(z)
 					local S, L = Vector(0, 0, z), Vector(300, 0, z)
@@ -2129,7 +2142,7 @@ return {
 				cfg.world_edge = 0
 				expect(lossAt(0) > 40).to.beTrue()
 			end)
-			util.TraceLine, P.Walls, A.Graph.Get = saved[1], saved[2], saved[3]
+			util.TraceLine, P.Walls, A.Graph.Get, A.Native = saved[1], saved[2], saved[3], savedNative
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
 		end },
@@ -2299,7 +2312,7 @@ return {
 			local wall = { Vector(100, -1000, -1000), Vector(116, 0, 1000) }
 			local saved, savedNT = { util.TraceLine, util.TraceHull }, A.cfg.native_traces
 			util.TraceLine = function(t)
-				local out = t.output or {}
+				local out = traceOut(t)
 				local t0, t1 = segBox(t.start, t.endpos, wall[1], wall[2])
 				out.Hit = t0 ~= nil and t1 - t0 > 1e-6
 				out.Fraction, out.StartSolid = out.Hit and t0 or 1, false
@@ -2352,7 +2365,7 @@ return {
 			local saved, savedNT = { util.TraceLine, util.TraceHull }, A.cfg.native_traces
 			local pillar
 			util.TraceLine = function(t)
-				local out = t.output or {}
+				local out = traceOut(t)
 				local t0, t1 = segBox(t.start, t.endpos, pillar[1], pillar[2])
 				out.Hit = t0 ~= nil and t1 - t0 > 1e-6
 				out.Fraction, out.StartSolid = out.Hit and t0 or 1, false
@@ -2378,7 +2391,7 @@ return {
 			local wall = { Vector(0, -1000, -1000), Vector(16, 0, 1000) }
 			local saved, savedNT = { util.TraceLine, util.TraceHull }, A.cfg.native_traces
 			local function tr(t, pad)
-				local out = t.output or {}
+				local out = traceOut(t)
 				local d = Vector(pad, pad, pad)
 				local t0, t1 = segBox(t.start, t.endpos, wall[1] - d, wall[2] + d)
 				out.Hit = t0 ~= nil and t1 - t0 > 1e-6
@@ -2466,7 +2479,7 @@ return {
 						if not isDoor then return base(t) end
 						local out
 						if t.ignoreworld then
-							out = t.output or {}
+							out = traceOut(t)
 							out.Hit, out.Fraction, out.StartSolid, out.Entity, out.HitPos = false, 1, false, nil, t.endpos
 						else
 							out = base(t)

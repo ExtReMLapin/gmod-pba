@@ -30,3 +30,4 @@ test/phase0/
 # Release builds (tools/make_release.py)
 dist/
 scenario_results.json
+test/battery_last.log

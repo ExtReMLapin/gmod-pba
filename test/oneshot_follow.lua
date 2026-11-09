@@ -113,9 +113,9 @@ end
 out.reach = reach and math.Round(reach, 3)
 local last = samples[#samples]
 out.endAway = last and last.pos and math.Round(last.pos:Distance(S))
--- direct level at L2: native gain (engine law x native_gain), or engine volume 1 (the engine applies
--- its own distance law at the source position)
-local want = native and A.AC.EngineGain(S:Distance(L2), 75) * A.cfg.native_gain or 1
+-- direct level at L2: native rendering follows the physical law (1/r from 1 m, N.PhysClear) x native_gain;
+-- engine rendering: volume 1 (the engine applies its own distance law at the source position)
+local want = native and A.Native.PhysClear(75, S:Distance(L2)) * A.cfg.native_gain or 1
 out.endDb = last and last.g and math.Round(db(last.g, want), 2)
 local why = {}
 if not emitPos or emitPos:Distance(S) < MIN_AWAY then why[#why + 1] = "emitted at the source, not beside the container (inconclusive)" end

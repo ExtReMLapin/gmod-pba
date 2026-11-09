@@ -36,13 +36,15 @@ local ok, res = pcall(function()
 		if mirrored(e) then taken[#taken + 1] = e else capped = e break end
 	end
 	if not capped then return { err = "the cap never applied", taken = #taken } end
-	-- room again: one followed loop stops
-	taken[1]:StopSound(NAME)
-	job:sleep(0.2)
+	-- engine stops of the capped loop are recorded from the moment a slot frees: the pba_loops timer
+	-- (0.5 s) may adopt it (stop the engine copy, start the mirror) at any point after that
 	pba.orig.EntStopSound = function(ent, name)
 		if ent == capped then stops[#stops + 1] = name end
 		return origStop(ent, name)
 	end
+	-- room again: one followed loop stops
+	taken[1]:StopSound(NAME)
+	job:sleep(0.2)
 	capped:EmitSound(NAME, 75, 100, 0.5, CHAN_STATIC, SND_CHANGE_VOL)
 	job:sleep(0.3)
 	pba.orig.EntStopSound = origStop
