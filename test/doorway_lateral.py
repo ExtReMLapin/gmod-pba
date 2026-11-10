@@ -30,7 +30,13 @@ Pass, per 4 u step (a slow step is ~ 8-16 u per frame: 4 u is finer than any wal
     behind-the-wall control;
   * steps where the eye is in a solid or the move crosses one: left out (reported);
   * a stable reading (the start point read twice within NOISE_DB = 1 dB), the stream rendered natively.
-Usage: python -I doorway_lateral.py <mcp.py> [--settle=1] [--window=0.5] [--laws=flat,250] [--walks=eye,far]
+--case=stairs (gm_melancholia, reported 2026-11-10): on the stairs below the upper room's radio (feet
+(58.5, -119.8, 87.5), facing yaw 162.5), one step to the right "the audio changes completely": the radio's
+room had no probe (its column neighbours' probes stood on the other side of a wall, pba_probe_skip_links),
+no route, only the walls (70 dB) until the line slipped past a floor edge (22 dB): 48 dB in 4 u. Walks
+across the stairs at the reported height ("eye") and 16 u above and below ("up", "down"), 4 u steps, the
+radio at (-255.3, 2.1, 168.5); no door to open.
+Usage: python -I doorway_lateral.py <mcp.py> [--case=downtown|stairs] [--settle=1] [--window=0.5] [--laws=flat,250] [--walks=eye,far]
        (loads the map if needed; restores pba_* settings, the player's position, move type and streams)
 """
 import json
@@ -46,8 +52,10 @@ SETTLE = float(OPT.get("settle", 1.0))
 WINDOW = float(OPT.get("window", 0.5))
 STEP, MAX_DB, REV_DB, EDGE_DB, FLOOR_DB, NOISE_DB, MASK_DB = 4.0, 2.0, 3.0, 4.0, 40.0, 1.0, 20.0
 TEST = os.path.dirname(os.path.abspath(__file__))
+CASE = OPT.get("case", "downtown")
 MAP = "rp_downtown_v4c_v2"
 RADIO = (-2046.7, -6755.6, -59.5)
+YAW = 85
 LAWS = {"flat": (1e6, 1e9), "250": (250, 10000)}
 WALKS = {
     "eye": [(-2234.0, -6957.0, -68.0), (-2154.0, -6957.0, -68.0)],
@@ -55,6 +63,11 @@ WALKS = {
     "near": [(-2234.0, -6932.0, -68.0), (-2154.0, -6932.0, -68.0)],
     "high": [(-2234.0, -6957.0, -44.0), (-2154.0, -6957.0, -44.0)],
 }
+if CASE == "stairs":
+    MAP, RADIO, YAW = "gm_melancholia", (-255.3, 2.1, 168.5), 162.5
+    _r = (math.sin(math.radians(YAW)), -math.cos(math.radians(YAW)))  # the player's right
+    WALKS = {w: [(58.5 + _r[0] * o, -119.8 + _r[1] * o, 87.5 + dz) for o in (-32.0, 32.0)]
+             for w, dz in (("eye", 0.0), ("up", 16.0), ("down", -16.0))}
 laws = OPT.get("laws", "flat,250").split(",")
 walks = OPT.get("walks", ",".join(WALKS)).split(",")
 
@@ -89,7 +102,7 @@ p:SetMoveType(MOVETYPE_NOCLIP)
 local feet, S = Vector(%f, %f, %f), Vector(%f, %f, %f)
 local prev = p:EyePos()
 p:SetPos(feet) p:SetVelocity(-p:GetVelocity())
-p:SetEyeAngles(Angle(0, 85, 0))
+p:SetEyeAngles(Angle(0, %f, 0))
 local eye = feet + p:GetViewOffset()
 return { solid = bit.band(util.PointContents(eye), CONTENTS_SOLID) ~= 0,
   cross = util.TraceLine({ start = prev, endpos = eye, mask = MASK_SOLID_BRUSHONLY }).Hit,
@@ -178,9 +191,9 @@ p:SetMoveType(MOVETYPE_NOCLIP) p:SetPos(Vector(-2198, %s, -68)) p:SetName("pba_d
 for _, e in ipairs(ents.FindInSphere(Vector(-2221, -6912, -14), 48)) do
   if e:GetClass() == "prop_door_rotating" then e:Fire("Unlock") e:Fire("Close") e:Fire("OpenAwayFrom", "pba_dl_listener", 1.5) end end
 return true""" % ("-6957" if DOOR_SIDE == "in" else "-6860")
-lua("server", OPEN_DOOR)
-time.sleep(4.5)
-time.sleep(2.5)
+if CASE != "stairs":
+    lua("server", OPEN_DOOR)
+    time.sleep(7)
 home = lua("server", "local p = player.GetHumans()[1] if not IsValid(p) then return false end "
                      "local a, e = p:GetPos(), p:EyeAngles() return { a.x, a.y, a.z, e.p, e.y, p:GetMoveType() }")
 results = {}
@@ -192,7 +205,7 @@ return true""")
         lo, hi = LAWS[law]
         for wname in walks:
             pts = line(WALKS[wname][0], WALKS[wname][1], STEP)
-            lua("server", TELEPORT % (*pts[0], *RADIO))
+            lua("server", TELEPORT % (*pts[0], *RADIO, YAW))
             time.sleep(0.5)
             lua("client", """if IsValid(PBA_DL_CH) then PBA_DL_CH:Stop() end PBA_DL_CH = nil
 sound.PlayFile("sound/ambient/machines/spin_loop.wav", "3d noplay noblock", function(ch)
@@ -206,7 +219,7 @@ return true""" % (*RADIO, lo, hi))
             again = measure()
             samples = []
             for i, p in enumerate(pts):
-                f = lua("server", TELEPORT % (*p, *RADIO)) or {}
+                f = lua("server", TELEPORT % (*p, *RADIO, YAW)) or {}
                 time.sleep(SETTLE)
                 m = measure() or {}
                 m.update({"i": i, "pos": [round(c, 1) for c in p], "solid": bool(f.get("solid")),

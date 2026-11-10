@@ -26,7 +26,7 @@ A.Probes = PR
 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways; 9: probes kept off
 -- floors; 10: probes follow the floors (one per storey and column, explicit positions), map seeds only;
 -- 12: a displacement's underside adds no empty segments (floors below it no longer hidden)
-local CACHE_VERSION = 12
+local CACHE_VERSION = 13 -- 13: links over a column whose probe left its centre (pba_probe_skip_links)
 local MAX_PROBES = 30000
 -- a build that reaches MAX_PROBES is redone at a wider spacing, up to this one, instead of keeping the
 -- part of the map flood-filled first (the far side of a big map had no probe at all)
@@ -487,6 +487,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		end
 		return c, colIds[ck]
 	end
+	local skipLinks = (A.cfg.probe_skip_links or 0) >= 0.5
 	local queue, qh, truncated = {}, 1, false
 	local function node(i, j, k)
 		local c, ids = column(i, j)
@@ -559,9 +560,30 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 				else tryLink(n, i, j, k, q, false, true) end
 			end
 		end
+		-- a neighbour column whose probe was moved off its centre (the centre in a wall: a grid-aligned map)
+		-- stands on one side of that wall only; the other side of its cell has no probe, and a room behind
+		-- it reached by a doorway in that wall was never linked (gm_melancholia's upper room: the radio saw
+		-- no probe, 70 dB through the walls, 48 dB lower 4 u aside). Link over that column to the next one,
+		-- by a gap point through the doorway (pba_probe_skip_links).
+		if skipLinks then
+			for _, d in ipairs(DIRS) do
+				local i1, j1 = n.i + d[1], n.j + d[2]
+				local cx, cy = (i1 + 0.5) * s, (j1 + 0.5) * s
+				local moved = false
+				for _, q in ipairs((column(i1, j1))) do
+					if abs(q.z - n.pos.z) < s and (abs(q.x - cx) > 1 or abs(q.y - cy) > 1) then moved = true break end
+				end
+				if moved then
+					local i2, j2 = i1 + d[1], j1 + d[2]
+					for k, q in ipairs((column(i2, j2))) do
+						if abs(q.z - n.pos.z) < s then tryLink(n, i2, j2, k, q, true, false) end
+					end
+				end
+			end
+		end
 		if budgetFn then budgetFn(#nodes, qh) end
 	end
-	return { spacing = s, nodes = nodes, index = index, truncated = truncated }
+	return { spacing = s, nodes = nodes, index = index, truncated = truncated, skip = skipLinks }
 end
 
 -- Cache format (text; util.JSONToTable silently truncates arrays at 15000 elements):
@@ -571,7 +593,7 @@ end
 --   spacing asked for (pba_probe_spacing), `spacing` the one built (wider when MAX_PROBES was reached).
 local function num(v) return string.format("%.10g", v) end
 function PR.Serialize(g, hash)
-	local out = { util.TableToJSON({ v = CACHE_VERSION, hash = hash, spacing = g.spacing, want = g.want or g.spacing,
+	local out = { util.TableToJSON({ v = CACHE_VERSION + ((g.skip and 0.5) or 0), hash = hash, spacing = g.spacing, want = g.want or g.spacing,
 		truncated = g.truncated, count = #g.nodes }) }
 	for _, n in ipairs(g.nodes) do
 		local ids = {}
@@ -597,7 +619,7 @@ function PR.Deserialize(text, hash, spacing)
 	if not text then return nil end
 	local nl = string.find(text, "\n", 1, true)
 	local head = util.JSONToTable(nl and string.sub(text, 1, nl - 1) or text)
-	if not head or head.v ~= CACHE_VERSION or (hash and head.hash ~= hash) then return nil end
+	if not head or head.v ~= CACHE_VERSION + (((A.cfg.probe_skip_links or 0) >= 0.5) and 0.5 or 0) or (hash and head.hash ~= hash) then return nil end
 	local want = tonumber(head.want) or tonumber(head.spacing)
 	if spacing and not (want and abs(want - spacing) < 1e-3) then return nil end
 	local s = tonumber(head.spacing)

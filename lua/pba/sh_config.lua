@@ -40,6 +40,7 @@ A.CONFIG = {
 	native_diffuse_send = { 1.5, 0, 8, "cl", "Diffuse model, native rendering: extra room-reverb send of a diffuse voice (send x (1 + this x share)); 1.5 keeps the total level about constant in a typical room." },
 	diffuse_dsp_at  = { 0.4, 0, 1, "cl", "Diffuse model, engine rendering: from this diffuse share a sound gets a reverberant tunnel preset instead of the plain low-pass." },
 	probe_spacing   = { 128, 32, 512, "sv", "Probe grid spacing (units) of the fallback graph." },
+	probe_skip_links = { 1, 0, 1, "cl", "Probe graph: where a neighbour column's probe was moved off its centre (the centre in a wall), also link to the column beyond it through a doorway in that wall; without it a room behind such a wall can be left out of the graph (no route, only the walls). Rebuilds the graph." },
 	probes          = { 1, 0, 1, "sv", "Use the probe graph when no areaportal path exists." },
 	paths_model     = { 1, 0, 1, "sv", "1 = the routes of every sound are read from one search done from the listener over the probe graph (doors and closed areaportals are costs of its links), beside the way over the obstacle's edge and the transmission; no portal chains, no search per sound, no provisional answer (the result no longer depends on the frame budget or on the order of the sounds). 0 = portal chains first, probe search per sound when they fail (former behaviour, to be removed)." },
 
