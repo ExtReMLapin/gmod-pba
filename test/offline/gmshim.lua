@@ -91,3 +91,5 @@ concommand = { Add = function() end }
 file = { Open = function() return nil end, Exists = function() return false end }
 game = { GetMap = function() return "" end }
 function SoundDuration() return 0 end
+function ErrorNoHaltWithStack(m) print(m) end
+function ErrorNoHalt(m) print(m) end

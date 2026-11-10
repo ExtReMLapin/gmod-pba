@@ -1,5 +1,5 @@
 -- Synthetic scene and evaluation schedule of eval_bench.py (offline). Args: mode, pairs, seed.
-local mode, NPAIRS, SEED = ...
+local mode, NPAIRS, SEED, BUDGET = ...
 if mode == "profwalk" then PROFWALK = true mode = "prof" end
 local A, P, PR = pba, pba.Paths, pba.Probes
 
@@ -154,6 +154,7 @@ local function setDoor(k)
 	door.mn, door.mx = st.mn, st.mx
 	A.Doors = { byEnt = { [9990] = { frac = st.frac, closedDb = 28, closedLp = 3 } } }
 	PR.doorList = nil -- listed again at the next evaluation (the real list is redone every 0.5 s)
+	P.InvalidateCache() -- as the game's door updates do (pba.Doors.Apply)
 end
 
 for k, v in pairs({ native_traces = 0, paths_model = 1, probes = 1, probe_dist = 1e6, probe_field = 1, water = 1, path_props = 1 }) do A.cfg[k] = v end
@@ -261,6 +262,144 @@ if mode == "prof" then
 		return orig(a, v, b)
 	end
 end
+-- Far sounds in slices (cl_slicer.lua): the same schedule requested through A.Slicer, one sound per frame
+-- (slicebench: every SLICE_GAP frames), the jobs interleaved (EDF, BUDGET per frame), the results kept by
+-- schedule index and dumped in order.
+-- dumpsliced: a counting clock (SysTime() + 1 at each call: one slice check, one tick), BUDGET ticks per
+-- frame: deterministic, compared with `dump` by eval_bench.py compare_sliced. slicebench: the real clock
+-- (PYCLOCK), BUDGET ms per frame (0: the slicer off): frame costs, slices, waits against the deadlines. BUDGET -1: deadlines out of
+-- reach and a budget of almost nothing (each slice ends at its first check): the longest slice is the
+-- largest atomic step. dumpsliced with BUDGET -n: the waiting jobs' deadlines are drawn again at every frame
+-- out of reach (none is ever due), n ticks per frame: a job taken at random each frame, a few checks at a
+-- time, so that jobs pause and resume inside each other's work as often as possible.
+if mode == "dumpsliced" or mode == "slicebench" then
+	local SL = A.Slicer
+	local bench = mode == "slicebench"
+	local atomic = bench and (BUDGET or 0) < 0
+	local shuffle = not bench and (BUDGET or 0) < 0
+	if shuffle then BUDGET = -BUDGET end
+	local clock = PYCLOCK or os.clock
+	local tick, frame, rt = 0, 0, 1000
+	if bench then SysTime = clock else SysTime = function() tick = tick + 1 return tick end end
+	FrameNumber = function() return frame end
+	RealTime = function() return rt end
+	A.cfg.far_sliced, A.cfg.cache_ttl = 1, 0 -- (no cached answer across schedule entries: as `dump`, which empties P.cache)
+	if bench and BUDGET == 0 then A.cfg.far_sliced = 0 end -- (slicebench budget 0: the slicer off, the frames as today)
+	A.cfg.far_sliced_ms = atomic and 1e-9 or bench and (BUDGET or 1.5) or (BUDGET or 3) * 1000
+	SL.MARGIN_FRAMES = atomic and -1e6 or bench and 2 or 0 -- (dumpsliced: more far sounds, d > 300 u sliced)
+	-- slicebench: the scene's distances (up to ~1000 u) taken SLICE_DSCALE times longer (rp_downtown's far
+	-- sounds: 1000-5000 u): the speed of sound divided by it
+	if bench then SL.SPEED = SL.SPEED / (SLICE_DSCALE or 1) end
+	SL.ResetStats()
+	SL.jobs = {}
+	local gap = bench and math.max(SLICE_GAP or 1, 1) or 1
+	local out, pending = {}, 0
+	local frameMs, segMax, segTr, waits = {}, 0, 0, {}
+	local resume = coroutine.resume
+	LASTWHERE = setmetatable({}, { __mode = "k" })
+	if bench then
+		coroutine.resume = function(co, ...)
+			local t0, n0 = clock(), TRACES.line + TRACES.hull
+			local a, b = resume(co, ...)
+			local ms = (clock() - t0) * 1000
+			if ms > segMax then segMax = ms end
+			local n = TRACES.line + TRACES.hull - n0
+			if atomic and SLICE_WHERE then
+				-- where the largest atomic steps start and end (debug: the callers of the two checks)
+				local here = "(end)"
+				if coroutine.status(co) ~= "dead" then
+					local parts = {}
+					for lv = 2, 5 do
+						local i = debug.getinfo(co, lv, "nl")
+						if not i then break end
+						parts[#parts + 1] = (i.name or "?") .. ":" .. (i.currentline or 0)
+					end
+					here = table.concat(parts, "<")
+				end
+				local k = (LASTWHERE[co] or "(start)") .. "  ->  " .. here
+				WHERE = WHERE or {}
+				WHERE[k] = math.max(WHERE[k] or 0, n)
+				LASTWHERE[co] = here
+			end
+			segTr = math.max(segTr, n)
+			return a, b
+		end
+	end
+	local function step()
+		if shuffle then
+			for _, j in ipairs(SL.jobs) do j.deadline = rt + 1e6 * (1 + rnd(0, 1)) end
+		end
+		local t0 = clock()
+		SL.Run()
+		return (clock() - t0) * 1000
+	end
+	local function nextFrame() frame, rt = frame + 1, rt + 1 / 60 end
+	local function drain()
+		while pending > 0 do nextFrame() frameMs[#frameMs + 1] = step() end
+	end
+	local curDoor
+	local syncMs = {}
+	for idx, e in ipairs(sched) do
+		if e.door ~= curDoor then drain() setDoor(e.door) curDoor = e.door end
+		for _ = 2, gap do nextFrame() frameMs[#frameMs + 1] = step() end
+		nextFrame()
+		P.cache = {}
+		local near0 = SL.stats.near
+		local t0 = clock()
+		local tReq = rt
+		local r, job = SL.Compute(e.S, e.L, 75)
+		local ms = (clock() - t0) * 1000
+		if r then
+			out[idx] = r
+			if SL.stats.near > near0 then syncMs[#syncMs + 1] = ms end
+		else
+			pending = pending + 1
+			job.onDone = function(res, j)
+				out[idx] = res
+				pending = pending - 1
+				waits[#waits + 1] = { (rt - tReq) * 1000, (j.deadline - tReq) * 1000 }
+			end
+		end
+		frameMs[#frameMs + 1] = ms + step()
+	end
+	drain()
+	coroutine.resume = resume
+	local st = SL.stats
+	if bench then
+		table.sort(frameMs)
+		table.sort(syncMs)
+		local late, share = 0, {}
+		for _, w in ipairs(waits) do
+			if w[1] > w[2] + 1e-9 then late = late + 1 end
+			share[#share + 1] = w[1] / math.max(w[2], 1e-9)
+		end
+		table.sort(share)
+		local function q(t, f) return #t > 0 and t[math.max(math.ceil(#t * f), 1)] or 0 end
+		if atomic then
+			return string.format("atomic steps: %d slices, the largest %.3f ms / %d traces (stub traces: ~%.1f us each here)",
+				st.segs, segMax, segTr, 1000 * segMax / math.max(segTr, 1))
+				.. (function()
+					if not WHERE then return "" end
+					local ks = {}
+					for k in pairs(WHERE) do ks[#ks + 1] = k end
+					table.sort(ks, function(a, b) return WHERE[a] > WHERE[b] end)
+					local o = {}
+					for i = 1, math.min(#ks, 12) do o[#o + 1] = WHERE[ks[i]] .. "  " .. ks[i] end
+					return string.char(10) .. table.concat(o, string.char(10))
+				end)()
+		end
+		return string.format("budget %.2f ms, a request every %d frames: frames %d, slicer + requests per frame median %.3f ms, p99 %.3f ms, max %.3f ms "
+			.. "(near sounds, synchronous: max %.3f ms); requests %d, near %d, first slice %d, held %d (in time %d, at deadline %d); "
+			.. "slices %d, longest %.3f ms / %d traces; held, wait / time to deadline: median %.2f, p90 %.2f, max %.2f, %d late",
+			BUDGET or 1.5, gap, #frameMs, q(frameMs, 0.5), q(frameMs, 0.99), q(frameMs, 1), q(syncMs, 1),
+			st.requests, st.near, st.first, st.held, st.done, st.forced, st.segs, segMax, segTr, q(share, 0.5), q(share, 0.9), q(share, 1), late)
+	end
+	local lines = {}
+	for idx, e in ipairs(sched) do lines[#lines + 1] = e.tag .. "#" .. e.rep .. " " .. dumpStr(out[idx]) end
+	return string.format("sliced: requests %d, near %d, first slice %d, held %d (in time %d, at deadline %d), slices %d, restarts %d",
+		st.requests, st.near, st.first, st.held, st.done, st.forced, st.segs, st.restarts) .. string.char(10) .. table.concat(lines, string.char(10))
+end
+
 local outLines = {}
 local agg = {} -- per class (cold / still / crowd): sums
 local function addAgg(cls, k, v) agg[cls] = agg[cls] or { n = 0 } agg[cls][k] = (agg[cls][k] or 0) + v end
