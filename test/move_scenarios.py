@@ -25,6 +25,7 @@ import time
 
 MCP = sys.argv[1]
 ONLY = [a for a in sys.argv[2:] if not a.startswith("--")]
+STAGES = "--stages" in sys.argv[2:]
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _cvsnap  # noqa: E402  restores every pba_* setting at exit
@@ -161,6 +162,75 @@ end)
 return true
 """
 
+# --stages: where the PBA time of each frame goes, per function (exclusive time: the wrapped callees taken
+# out), over all frames and over the heavy frames (stage sum > 5 ms). The wrappers keep one stack, which a
+# coroutine yielding inside a wrapped function would break: the run forces pba_far_sliced 0 (the slicer
+# changes when the work runs, not what it is). The field upkeep (PR.BuildField...) is counted here even
+# when it runs from its own Think hook, which the pbaCost above leaves out.
+STAGES_START = r"""
+local P, PR, N = pba.Paths, pba.Probes, pba.Native
+local list = {
+  { P, "P", { "Compute", "Walls", "EvalWalls", "WorldEdge", "AddEdge", "SameRoute", "EvalRoute", "RefineCorners", "CornerPoint",
+    "EvalPolyline", "SelectVoices", "KeepLoudest", "LineLeaves", "LineState", "FreeSource", "SegmentDoorLoss", "DetourDelta" } },
+  { PR or {}, "PR", { "Paths", "FieldRoutes", "FieldFor", "Visible", "DistinctRoutes", "BuildField", "BuildFields", "LinkCosts",
+    "AdvanceDoorFields", "Attach" } },
+  { N or {}, "N", { "Direct" } },
+}
+local st = { all = {}, heavy = {}, frame = {}, frames = 0, heavyFrames = 0, saved = {} }
+PBA_MV_ST = st
+local stack, clock = {}, SysTime
+for _, t in ipairs(list) do
+  for _, name in ipairs(t[3]) do
+    local f = t[1][name]
+    if type(f) == "function" then
+      local key = t[2] .. "." .. name
+      st.saved[#st.saved + 1] = { t[1], name, f }
+      t[1][name] = function(...)
+
+        stack[#stack + 1] = 0
+        local t0 = clock()
+        local a, b, c, d = f(...)
+        local dt = clock() - t0
+        local child = stack[#stack]
+        stack[#stack] = nil
+        st.frame[key] = (st.frame[key] or 0) + dt - child
+        if #stack > 0 then stack[#stack] = stack[#stack] + dt end
+        return a, b, c, d
+      end
+    end
+  end
+end
+hook.Add("Think", "pba_mv_stages", function()
+  local sum = 0
+  for _, v in pairs(st.frame) do sum = sum + v end
+  st.frames = st.frames + 1
+  local heavy = sum > 0.005
+  if heavy then st.heavyFrames = st.heavyFrames + 1 end
+  for k, v in pairs(st.frame) do
+    st.all[k] = (st.all[k] or 0) + v
+    if heavy then st.heavy[k] = (st.heavy[k] or 0) + v end
+  end
+  st.frame = {}
+end)
+return true
+"""
+
+STAGES_STOP = r"""
+hook.Remove("Think", "pba_mv_stages")
+local st = PBA_MV_ST
+if not st then return nil end
+for i = #st.saved, 1, -1 do local s = st.saved[i] s[1][s[2]] = s[3] end
+local function rows(t, n)
+  local out, tot = {}, 0
+  for k, v in pairs(t) do tot = tot + v end
+  for k, v in pairs(t) do out[#out + 1] = { k, math.Round(v * 1000 / math.max(n, 1), 3), math.Round(100 * v / math.max(tot, 1e-12), 1) } end
+  table.sort(out, function(a, b) return a[2] > b[2] end)
+  return { msPerFrame = math.Round(tot * 1000 / math.max(n, 1), 3), rows = out }
+end
+PBA_MV_ST = nil
+return { frames = st.frames, heavyFrames = st.heavyFrames, all = rows(st.all, st.frames), heavy = rows(st.heavy, st.heavyFrames) }
+"""
+
 CLIENT_STOP = r"""
 hook.Remove("Think", "pba_mv_frame")
 if PBA_MV_UNWRAP then PBA_MV_UNWRAP() end
@@ -266,6 +336,10 @@ for sc in SCENARIOS:
         call("lua_job", {"realm": "server", "code": crowd_code, "args": {"n": sc["crowd"]}, "timeout_s": 120})
     lua("server", server_setup(sc))
     time.sleep(2.5)  # sounds start, first evaluations, fields of the start point
+    if STAGES:
+        call("console_exec", {"realm": "client", "cmd": "pba_far_sliced 0"})
+        time.sleep(0.5)
+        lua("client", STAGES_START)
     lua("client", CLIENT_START)
     lua("server", server_walk(sc))
     t0 = time.time()
@@ -279,6 +353,8 @@ for sc in SCENARIOS:
         time.sleep(0.1)
     time.sleep(0.5)
     out = lua("client", CLIENT_STOP)
+    if STAGES:
+        out["stages"] = lua("client", STAGES_STOP)
     lua("server", SERVER_CLEAN)
     if sc.get("crowd"):
         call("lua_job", {"realm": "server", "code": crowd_code, "args": {"stop": True}, "timeout_s": 30})

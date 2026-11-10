@@ -1578,8 +1578,9 @@ local function fieldPaths(f, starts, S, L)
 		return a[3] < b[3]
 	end)
 	-- via: these routes end at a seed seen from f.L, not always from the listener now (attach)
-	local out = { via = f.L }
-	for _, e in ipairs(list) do out[#out + 1] = fieldPathFrom(f, e[1]) end
+	-- nodes: the probe each route starts from (pba_group shares that probe's arrival, PR.FieldRoutes)
+	local out = { via = f.L, nodes = {} }
+	for i, e in ipairs(list) do out[i], out.nodes[i] = fieldPathFrom(f, e[1]), e[1] end
 	return out
 end
 
@@ -2071,6 +2072,112 @@ local function joinRoute(f, a, S, L)
 end
 PR.JoinRoute = joinRoute
 
+-- ------------------------------------------------------------------ shared arrivals (pba_group)
+-- A far sound's routes, read from the field, were each attached and tightened for that sound and that
+-- listener position (attach: up to 16 fat traces plus the tightening), again whenever either moved: in a
+-- crowd while walking, the routes were 84 % of the PBA time per frame (move_scenarios crowd_walk --stages).
+-- With pba_group, the part of a route that does not depend on the source is shared: probe n's route tightened
+-- once per field from n itself (its arrival, the bends after n) serves every source that sees n, and every
+-- evaluation of one source while the field stands. Per sound stay its straight line, its join to the
+-- arrival (the bends it sees past are skipped, as attach does), its first leg and first corner (the corners
+-- are put on their real edges with the true source by P.EvalRoute) and its length, so the delay, the
+-- distance law and the objects on its first leg (pathProps) are its own. What is approximated: the bends
+-- after the first are those tightened from the probe, not from the source.
+-- Guards, per probe n (the "group" is the sources that see n; no representative, no exact set):
+--  - the source is far: S - L >= group_min_dist (an activation threshold, not a key: the spaces are told
+--    apart by the geometry below, never by distance);
+--  - S and n see each other with the walls' own trace (P.LineState: world, glass brushes, glass entities,
+--    doors, props): a radio behind a window does not share the probes outside it, though the probes'
+--    world-only traces see through an entity pane;
+--  - n's straight line to L is in the same state as S's (world-cut, or an entity first);
+--  - the angle between S and n seen from L is at most group_angle (degrees), with a hysteresis per emitter:
+--    entered at 0.75 x the angle, left above it.
+-- Any guard failed, or the join failing (S does not see the first bend kept, nor L the last one nor the
+-- seed it ended at), gives the sound's own attach for that probe, as without pba_group.
+PR.groupStats = PR.groupStats or { shared = 0, own = 0 }
+PR.groupState = PR.groupState or setmetatable({}, { __mode = "k" })
+local GROUP_ENTER = 0.75
+local function sharedJoin(f, n, S, L)
+	local a = arrival(f, n)
+	if not a then return nil end
+	local bends = a.bends
+	local i, j = 1, #bends
+	while i < j and i < 4 and clearFat(S, bends[i + 1]) do i = i + 1 sliceCheck() end
+	if i == 1 and not sees(S, bends[1]) then return nil end
+	while j > i and #bends - j < 3 and clearFat(L, bends[j - 1]) do j = j - 1 sliceCheck() end
+	local pts = { S }
+	for x = i, j do
+		local v = bends[x]
+		if v:DistToSqr(pts[#pts]) > 0.01 then pts[#pts + 1] = v end
+	end
+	local bk = pts[#pts]
+	if not sees(bk, L) then
+		-- the arrival was tightened towards the field's first listener position; this listener sees the
+		-- seed the probe's route ends at (fieldCost), or f.L
+		local tail
+		local inner = f.pulled[n.id]
+		local seed = inner and inner[#inner]
+		for _, q in ipairs({ seed or false, f.L }) do
+			if q and q:DistToSqr(bk) > 0.01 and sees(bk, q) and sees(q, L) then tail = q break end
+		end
+		if not tail then return nil end
+		pts[#pts + 1] = tail
+	end
+	if L:DistToSqr(pts[#pts]) > 0.01 then pts[#pts + 1] = L end
+	if #pts < 3 then return nil end -- (a straight route: the sound's own, it models a leaf)
+	return pts
+end
+PR.SharedJoin = sharedJoin
+
+-- Whether polyline pts has the vertex count of one of `list` and every vertex within NEAR_ROUTE units of
+-- it: two neighbouring probes' arrivals, joined to one source, are one route tightened twice (a few units
+-- apart), which the per-sound tightening made exactly equal (seenRoute) and evaluated once.
+local NEAR_ROUTE = 8
+local function nearRoute(list, pts)
+	local n = #pts
+	for _, q in ipairs(list) do
+		if #q == n then
+			local same = true
+			for i = 2, n - 1 do
+				if q[i]:DistToSqr(pts[i]) > NEAR_ROUTE * NEAR_ROUTE then same = false break end
+			end
+			if same then return true end
+		end
+	end
+	return false
+end
+
+--- The group guard of a sound for this evaluation (nil: pba_group off or the sound is not far), a function of
+-- a start probe: whether its arrival may be shared.
+local function groupGuard(S, L, cfg, srcEnt)
+	if (cfg.group or 0) < 0.5 then return nil end
+	local d = S:Distance(L)
+	if d < (cfg.group_min_dist or 1000) then return nil end
+	local P = A.Paths
+	local lineS = string.sub(P.LineState(S, L, srcEnt), 1, 1)
+	if lineS == "c" then return nil end
+	local st = IsValid(srcEnt) and PR.groupState[srcEnt] or nil
+	local deg = cfg.group_angle or 2
+	local cosMax = math.cos(math.rad(st and st.shared and deg or deg * GROUP_ENTER))
+	local u = (S - L) / d
+	local any = false
+	local guard = function(n)
+		local w = n.pos - L
+		local wl = w:Length()
+		if wl < 1e-3 or u:Dot(w) / wl < cosMax then return false end
+		if string.sub(P.LineState(S, n.pos, srcEnt), 1, 1) ~= "c" then return false end
+		if string.sub(P.LineState(n.pos, L, srcEnt), 1, 1) ~= lineS then return false end
+		any = true
+		return true
+	end
+	return guard, function()
+		if IsValid(srcEnt) then
+			if not st then st = {} PR.groupState[srcEnt] = st end
+			st.shared = any
+		end
+	end
+end
+
 PR.BLEND_LAMBDA = 1 -- length scale of the weights, in probe spacings (routes longer by more fade out)
 PR.BLEND_REACH = 1.5 -- the kernel reaches at least this many times the nearest probe's distance
 PR.BLEND_N = 5 -- probes asked of PR.Visible for a blend (the last one only bounds the others' weights)
@@ -2266,7 +2373,7 @@ end
 -- is built at once (15-27 ms once); otherwise the background upkeep keeps it within half a spacing. Empty
 -- when the listener sees no seed of the field (a wall between it and where the field was built) or S
 -- sees no probe: the sound keeps its transmission and the way over the edge (P.Compute).
-function PR.FieldRoutes(S, L, k, cfg)
+function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	cfg = cfg or A.cfg
 	local g = PR.current
 	-- the graph is the one topology here: started if pba was off when the map loaded (pba_demo holds it
@@ -2295,16 +2402,30 @@ function PR.FieldRoutes(S, L, k, cfg)
 	-- numbers (doors traced again) and dropped by PR.DistinctRoutes after the first (same level, later index:
 	-- P.SameRoute of equal vertices), and a dropped route never decides another's fate: skipped before.
 	local done = {}
+	local guard, guardDone = groupGuard(S, L, cfg, srcEnt)
+	local evaluated = {}
+	local gs = PR.groupStats
 	-- the shortest ways (f) and the ways round the doors' costs (f.doors, PR.BuildFields), ranked together
 	for _, fx in ipairs({ f, f.doors or false }) do
 		if fx then
 			fieldSeen(fx, L)
 			local inners = fieldPaths(fx, starts, S, L)
-			for _, inner in ipairs(inners) do
+			for x, inner in ipairs(inners) do
 				sliceCheck()
-				-- (no join through a field position: every route ends at a seed, which L sees)
-				local pulled = attach(inner, S, L, nil)
-				if pulled and (#pulled >= 3 or (#pulled == 2 and not straight)) and not seenRoute(done, pulled) then
+				-- pba_group: the probe's arrival shared, joined to this source (sharedJoin above)
+				local pulled, shared
+				if guard and guard(inners.nodes[x]) then pulled = sharedJoin(fx, inners.nodes[x], S, L) end
+				shared = pulled ~= nil
+				if pulled then
+					gs.shared = gs.shared + 1
+				else
+					if guard then gs.own = gs.own + 1 end
+					-- (no join through a field position: every route ends at a seed, which L sees)
+					pulled = attach(inner, S, L, nil)
+				end
+				if pulled and (#pulled >= 3 or (#pulled == 2 and not straight)) and not seenRoute(done, pulled)
+					and not (shared and nearRoute(evaluated, pulled)) then
+					evaluated[#evaluated + 1] = pulled
 					straight = straight or #pulled == 2
 					local p = A.Paths.EvalRoute(pulled, cfg)
 					p.probe = true
@@ -2328,12 +2449,13 @@ function PR.FieldRoutes(S, L, k, cfg)
 			end
 		end
 	end
+	if guardDone then guardDone() end
 	return PR.DistinctRoutes(S, L, out)
 end
 
-function PR.Paths(S, L, k, cfg)
+function PR.Paths(S, L, k, cfg, srcEnt)
 	cfg = cfg or A.cfg
-	if (cfg.paths_model or 0) >= 0.5 then return PR.FieldRoutes(S, L, k, cfg) end
+	if (cfg.paths_model or 0) >= 0.5 then return PR.FieldRoutes(S, L, k, cfg, srcEnt) end
 	local g = PR.current
 	if not g then return {} end
 	doorLeaves() -- the door epoch (routes kept per S and L are redone when a leaf moved)

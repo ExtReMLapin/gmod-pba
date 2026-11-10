@@ -2835,6 +2835,122 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
+		{ name = "Group: off, or every source nearer than group_min_dist, gives the per-sound routes bit for bit", func = function()
+			withSlicedRooms(function(cfg, list)
+				local PR = A.Probes
+				cfg.far_sliced = 0
+				for _, pr in ipairs(list) do
+					cfg.group = 0
+					P.InvalidateCache()
+					local ref = dumpResult(P.Compute(pr[1], pr[2], 75, cfg))
+					cfg.group, cfg.group_min_dist, cfg.group_angle = 1, 1e6, 180
+					local s0 = PR.groupStats.shared
+					P.InvalidateCache()
+					expect(dumpResult(P.Compute(pr[1], pr[2], 75, cfg))).to.equal(ref)
+					expect(PR.groupStats.shared).to.equal(s0)
+				end
+			end)
+		end },
+		{ name = "Group: a far source shares the probes' arrivals; every shared route's legs are clear and its first leg starts at the source", func = function()
+			withSlicedRooms(function(cfg, list)
+				local PR = A.Probes
+				cfg.far_sliced, cfg.group, cfg.group_min_dist, cfg.group_angle = 0, 1, 0, 180
+				local s0 = PR.groupStats.shared
+				for _, pr in ipairs(list) do
+					P.InvalidateCache()
+					local r = P.Compute(pr[1], pr[2], 75, cfg)
+					for _, p in ipairs(r.paths or {}) do
+						local pts = { pr[1] }
+						for _, v in ipairs(p.points or {}) do pts[#pts + 1] = v end
+						pts[#pts + 1] = pr[2]
+						for i = 1, #pts - 1 do expect(not util.TraceLine({ start = pts[i], endpos = pts[i + 1], mask = MASK_SOLID_BRUSHONLY }).Hit).to.beTrue() end
+					end
+				end
+				expect(PR.groupStats.shared > s0).to.beTrue()
+			end)
+		end },
+		{ name = "Group: a radio behind a window (glass brush or glass entity between the source and the probes) never shares, and gets the per-sound routes bit for bit", func = function()
+			withSlicedRooms(function(cfg, list)
+				local PR = A.Probes
+				cfg.far_sliced, cfg.group_min_dist, cfg.group_angle = 0, 0, 180
+				local LS = P.LineState
+				for _, pane in ipairs({ "w", "e7" }) do
+					-- the pane stands round each source: its line to any probe is cut by it (world brush or entity),
+					-- its line to the listener as the room's walls make it
+					P.LineState = function(a, b, e)
+						for _, pr in ipairs(list) do
+							if a == pr[1] and b ~= pr[2] then return pane .. "00" end
+						end
+						return LS(a, b, e)
+					end
+					local ok, err = pcall(function()
+						for _, pr in ipairs(list) do
+							cfg.group = 0
+							P.InvalidateCache()
+							local ref = dumpResult(P.Compute(pr[1], pr[2], 75, cfg))
+							cfg.group = 1
+							local s0 = PR.groupStats.shared
+							P.InvalidateCache()
+							expect(dumpResult(P.Compute(pr[1], pr[2], 75, cfg))).to.equal(ref)
+							expect(PR.groupStats.shared).to.equal(s0)
+						end
+					end)
+					P.LineState = LS
+					if not ok then error(err, 0) end
+				end
+			end)
+		end },
+		{ name = "Group: the angle guard (a probe farther than group_angle from the source, seen from the listener, is not shared)", func = function()
+			withSlicedRooms(function(cfg, list)
+				local PR = A.Probes
+				cfg.far_sliced, cfg.group, cfg.group_min_dist, cfg.group_angle = 0, 1, 0, 0.5
+				-- the probes the sources see within the guard's entry angle (0.75 x 0.5 deg): none in this scene
+				local within = 0
+				for _, pr in ipairs(list) do
+					local S, L = pr[1], pr[2]
+					local u = (S - L):GetNormalized()
+					for _, n in ipairs(PR.Visible(PR.current, S, 5)) do
+						if math.deg(math.acos(math.Clamp(u:Dot((n.pos - L):GetNormalized()), -1, 1))) <= 0.375 then within = within + 1 end
+					end
+				end
+				expect(within).to.equal(0)
+				local s0 = PR.groupStats.shared
+				for _, pr in ipairs(list) do
+					P.InvalidateCache()
+					P.Compute(pr[1], pr[2], 75, cfg)
+				end
+				expect(PR.groupStats.shared).to.equal(s0)
+				-- and the same sources share once the angle allows it
+				cfg.group_angle = 180
+				for _, pr in ipairs(list) do
+					P.InvalidateCache()
+					P.Compute(pr[1], pr[2], 75, cfg)
+				end
+				expect(PR.groupStats.shared > s0).to.beTrue()
+			end)
+		end },
+		{ name = "Group time: an emitter's last result is reused while it and the listener moved at most reeval_move, not past it nor after a world change", func = function()
+			withSlicedRooms(function(cfg, list)
+				cfg.far_sliced, cfg.group, cfg.group_time, cfg.reeval_move, cfg.reeval_max_s = 0, 0, 1, 8, 1e9
+				local ent = { IsValid = function() return true end }
+				local S, L = list[1][1], list[1][2]
+				P.InvalidateCache()
+				local r1 = P.Compute(S, L, 75, cfg, ent)
+				expect(P.Compute(S + Vector(4, 0, 0), L + Vector(0, 3, 0), 75, cfg, ent) == r1).to.beTrue()
+				expect(P.Compute(S + Vector(20, 0, 0), L, 75, cfg, ent) ~= r1).to.beTrue()
+				expect(P.Compute(S, L, 80, cfg, ent) ~= r1).to.beTrue() -- (another level)
+				local r2 = P.Compute(S, L, 75, cfg, ent)
+				P.InvalidateCache()
+				expect(P.Compute(S, L, 75, cfg, ent) ~= r2).to.beTrue()
+				-- no entity (a far emitter the client does not have): keyed by its position alone, never another emitter's
+				local r4 = P.Compute(S, L, 75, cfg, nil)
+				expect(r4 ~= r2).to.beTrue()
+				expect(P.Compute(S + Vector(0, 5, 0), L, 75, cfg, nil) == r4).to.beTrue()
+				cfg.group_time = 0
+				local r3 = P.Compute(S, L, 75, cfg, ent)
+				expect(P.Compute(S, L, 75, cfg, ent) ~= r3).to.beTrue() -- (off: cache_ttl 0 in this scene)
+			end)
+		end },
 		{ name = "Far sliced: an evaluation run in slices gives the synchronous result bit for bit, whatever the slice size and the evaluations run between its slices", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes

@@ -2608,8 +2608,14 @@ end
 P.cache = P.cache or {}
 P.cacheGen = P.cacheGen or 0
 
+-- pba_group_time: the last TIME_KEEP results (newest last), and how often one served again
+local TIME_KEEP = 64
+P.timeMemo = P.timeMemo or {}
+P.timeStats = P.timeStats or { reused = 0, computed = 0 }
+
 function P.InvalidateCache()
 	P.cache = {}
+	P.timeMemo = {}
 	P.cacheGen = P.cacheGen + 1
 end
 
@@ -2688,7 +2694,8 @@ function P.LineState(S, L, srcEnt)
 	return st
 end
 function P.CacheKey(S, L, sndlvl, srcEnt)
-	return q(S) .. "|" .. q(L) .. "|" .. sndlvl .. "|" .. entKey(srcEnt) .. "|" .. P.LineState(S, L, srcEnt)
+	local st = P.LineState(S, L, srcEnt)
+	return q(S) .. "|" .. q(L) .. "|" .. sndlvl .. "|" .. entKey(srcEnt) .. "|" .. st, st
 end
 
 -- Surfaces pba's traces hit but Steam Audio's scene does not hold (cl_native N.BuildWorld): static
@@ -3148,12 +3155,33 @@ end
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
 	S = P.FreeSource(S)
-	local key = P.CacheKey(S, L, sndlvl, srcEnt)
+	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt)
 	local now = RealTime()
 	local c = P.cache[key]
 	-- a provisional result is not served again: the search behind it may be solved by now (its answer is
 	-- then in the probe cache, cheap), and P.Stable holds the last final result meanwhile
 	if c and now - c.t < cfg.cache_ttl and not c.r.provisional then return c.r end
+	-- pba_group_time: the same emitter's last result, while neither it nor the listener moved more than
+	-- reeval_move, the world model did not change (P.cacheGen), its straight line is in the same state and
+	-- it is at most reeval_max_s old: the rule a loop's adaptive re-evaluation already follows (P.ReevalDue),
+	-- for the repeated one-shots of one emitter (a gun's shots 0.1-1 s apart missed the 0.25 s cache).
+	-- The emitter is the entity when the client has it, else the position alone: a far emitter is often out of
+	-- the client's view (no entity: the sound comes with its position only), and its shots are just as alike.
+	local timeOn = (cfg.group_time or 0) >= 0.5
+	local emitter = IsValid(srcEnt) and srcEnt or false
+	if timeOn then
+		local mv2 = (cfg.reeval_move or 8) ^ 2
+		local maxAge = cfg.reeval_max_s or 1
+		local list = P.timeMemo
+		for i = #list, 1, -1 do
+			local m = list[i]
+			if m.ent == emitter and m.gen == P.cacheGen and m.lvl == sndlvl and m.state == lineState and now - m.t <= maxAge
+				and m.S:DistToSqr(S) <= mv2 and m.L:DistToSqr(L) <= mv2 then
+				P.timeStats.reused = P.timeStats.reused + 1
+				return m.r
+			end
+		end
+	end
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)
@@ -3184,7 +3212,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		local fieldOnly = (cfg.paths_model or 0) >= 0.5 and CLIENT and A.Probes and A.Probes.FieldRoutes and true or false
 		if fieldOnly then
 			if (worldBlocked or leafBlocked) and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
-				r.paths = P.KeepLoudest(A.Probes.Paths(S, L, cfg.max_paths, cfg), cfg.max_paths, sndlvl)
+				r.paths = P.KeepLoudest(A.Probes.Paths(S, L, cfg.max_paths, cfg, srcEnt), cfg.max_paths, sndlvl)
 				r.viaProbes = #r.paths > 0
 			end
 		elseif g and (worldBlocked or leafBlocked) then
@@ -3354,5 +3382,11 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
 	end
 	P.cache[key] = { t = now, r = r }
+	if timeOn and not r.provisional then
+		P.timeStats.computed = P.timeStats.computed + 1
+		local list = P.timeMemo
+		if #list >= TIME_KEEP then table.remove(list, 1) end
+		list[#list + 1] = { t = now, r = r, gen = P.cacheGen, lvl = sndlvl, state = lineState, S = Vector(S), L = Vector(L), ent = emitter }
+	end
 	return r
 end
