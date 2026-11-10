@@ -207,14 +207,19 @@ return {
 			local v = { len = 600, pos = Vector(100, 0, 0), rawLossDb = 6 }
 			local inv = function(d) return math.min(REF / math.max(d, REF), 1) end
 			local flat = function() return 1 end
-			withCfg({ native_room_shadow = 0 }, function() -- (the energy at the entry alone)
+			withCfg({ native_room_shadow = 0, native_room_open_area = 0 }, function() -- (the energy at the entry alone)
 				expect(near(N.EntrySend(inv, v, L, N.LossLin(v, 75)), REF / 500 * 10 ^ (-6 / 20), 1e-9)).to.beTrue()
 				expect(near(N.EntrySend(flat, v, L, 0.5), 0.5, 1e-9)).to.beTrue()
 				-- the entry never closer than 1 m
 				expect(near(N.EntrySend(inv, { len = 120, pos = Vector(100, 0, 0) }, L, 1), 1, 1e-9)).to.beTrue()
 			end)
+			withCfg({ native_room_shadow = 0, native_room_open_area = 48 * 96 }, function() -- a doorway: the power through it, -8.8 dB
+				local full = N.EntrySend(flat, v, L, 0.5)
+				expect(near(20 * math.log10(full / 0.5), 10 * math.log10(48 * 96 / (4 * math.pi * REF * REF)), 1e-6)).to.beTrue()
+				expect(near(N.EntrySend(flat, { len = 600, pos = Vector(100, 0, 0), kind = "transmission" }, L, 0.5), 0.5, 1e-9)).to.beTrue() -- (through a wall: the whole wall)
+			end)
 			-- pba_native_room_shadow (default): times the square root of the share (the arrival's loss / 20 dB)
-			withCfg({ native_room_shadow = 1, native_room_shadow_db = 20 }, function()
+			withCfg({ native_room_shadow = 1, native_room_shadow_db = 20, native_room_open_area = 0 }, function()
 				local l6 = 10 ^ (-6 / 20)
 				expect(near(N.EntrySend(inv, v, L, l6), REF / 500 * l6 * math.sqrt(6 / 20), 1e-9)).to.beTrue()
 				expect(near(N.EntrySend(flat, v, L, 0.5), 0.5 * math.sqrt(20 * math.log10(2) / 20), 1e-9)).to.beTrue()
@@ -229,7 +234,7 @@ return {
 			end
 		end },
 		{ name = "Room send into the shadow (pba_native_room_shadow): none in clear sight, all of it from 20 dB of loss (behind a wall), linear in dB in between (no switch at a door jamb)", func = function()
-			withCfg({ native_room_shadow = 1, native_room_shadow_db = 20 }, function()
+			withCfg({ native_room_shadow = 1, native_room_shadow_db = 20, native_room_open_area = 0 }, function()
 				expect(N.ShadowShare(0)).to.equal(0)
 				expect(near(N.ShadowShare(10), 0.5, 1e-12)).to.beTrue()
 				expect(N.ShadowShare(20)).to.equal(1)

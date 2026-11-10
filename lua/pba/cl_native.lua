@@ -617,13 +617,28 @@ function N.ShadowShare(lossDb)
 	local full = math.max(A.cfg.native_room_shadow_db or 20, 1e-3)
 	return math.Clamp((lossDb or 0) / full, 0, 1)
 end
+--- Share (energy, 0..1) of the entering flux the listener's room bus renders for an arrival through an opening
+-- (pba_native_room_open_area): the power that enters is the flux at the entry times the opening's area, and
+-- the room bus takes its input as a source's level at 1 m, i.e. that power over 4 pi (1 m)^2. A doorway
+-- (48 x 96 u) gives 0.13 (-8.8 dB). Before, the full flux at the entry: the listener's room reverb came out
+-- 16-20 dB above the source slot's reverb at the same spot (rp_downtown, outside the radio room). An arrival
+-- through a wall (transmission) enters over the whole wall: 1. 0 = off (1 for every arrival).
+function N.OpeningShare(v)
+	local a = A.cfg.native_room_open_area or 0
+	if a <= 0 or not v then return 1 end
+	local o = math.min(a / (4 * math.pi * N.REF_UNITS * N.REF_UNITS), 1)
+	-- a transmission enters over its wall (1), but the part of it that went over the wall's edge (P.AddEdge:
+	-- edgeShare) through the opening beside it, like a route
+	if v.kind == "transmission" then return 1 - (v.edgeShare or 0) * (1 - o) end
+	return o
+end
 function N.EntrySend(law, v, L, lossLin)
 	local entry = math.max((v.len or 0) - (v.pos and v.pos:Distance(L) or 0), N.REF_UNITS)
 	-- the loss of the whole set of arrivals (v.shadowDb, P.ShadowOf) when the voice comes from a result, else
 	-- this arrival's own
 	local l = math.Clamp(lossLin or 1, 0, 1)
 	local sh = N.ShadowShare(v.shadowDb or (l > 0 and -20 * math.log10(l) or 300))
-	return law(entry) * l * math.sqrt(sh)
+	return law(entry) * l * math.sqrt(sh * N.OpeningShare(v))
 end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
 -- the voice has a slot (then the room bus must only get the transmission part).

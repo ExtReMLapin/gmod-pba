@@ -1675,6 +1675,7 @@ function P.AddEdge(t, e, L, cfg)
 	if t.midDb then t.midDb = math.max(-10 * math.log10(10 ^ (-t.midDb / 10) + eD), 0) end
 	t.lp = math.min(t.lp or 0, AC.LowpassLevel(tilt, cfg))
 	t.edgeDb, t.edgeApex, t.tilt = e.db, e.apex, tilt
+	t.edgeShare = eD / (eT + eD) -- (the share of its energy that goes over the edge: an opening, N.OpeningShare)
 	if t.pos and L then
 		local a, b = t.pos - L, e.apex - L
 		local la, lb = a:Length(), b:Length()
@@ -1695,10 +1696,14 @@ end
 -- Stored on each voice (v.shadowDb) for the listener-room send (cl_native N.EntrySend, pba_native_room_
 -- shadow): one value for the whole set, so a voice appearing beside another (the transmission through a jamb
 -- once the route round it has lost a tenth of a dB) does not switch the room send on by itself. Pure.
-function P.ShadowOf(voices)
+-- floorDb: how deep the line sits behind the crest of what blocks it (the way over the edge's own diffraction,
+-- P.WorldEdge, doors excluded): the shadow is never less. The set's energy alone dropped to 0 dB where a route
+-- and the edge, both near grazing, were bounded together by the clear line (gm_melancholia's stairs: the room
+-- reverb from -7 dB under the direct to none in one 4 u step); the edge's depth grows from 0 at grazing.
+function P.ShadowOf(voices, floorDb)
 	local e = 0
 	for _, v in ipairs(voices or {}) do e = e + 10 ^ (-math.max(v.rawLossDb or v.lossDb or 0, 0) / 10) end
-	local db = e > 1e-30 and math.max(-10 * math.log10(e), 0) or 300
+	local db = e > 1e-30 and math.max(-10 * math.log10(e), floorDb or 0) or 300
 	for _, v in ipairs(voices or {}) do v.shadowDb = db end
 	return db
 end
@@ -2379,7 +2384,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		local dom = voices[1] and voices[1].level or -math.huge
 		if #voices == 0 or lvl >= dom - cfg.trans_window_db then
 			voices[#voices + 1] = { kind = "transmission", pos = trans.pos, gain = g, level = lvl, lp = trans.lp, members = {},
-				len = trans.length, rawLossDb = trans.rawLossDb }
+				len = trans.length, rawLossDb = trans.rawLossDb, edgeShare = trans.edgeShare }
 		end
 	end
 	-- loudest first: a sound played on one channel (a loop mirror, another addon's radio stream) takes
@@ -3394,6 +3399,15 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 							if P.SameRoute(way, pts) then dup = p break end
 						end
 					end
+					-- pba_edge_dup_best: a route of the same way (homotopic) that its own corners cost more than
+					-- the way over the edge is not the tightest way of that class (it bends at a farther corner):
+					-- the edge stands for it. Else the route kept alone and the edge, once the zipper finds the two
+					-- distinct, added in full beside it: gm_melancholia's stairs, 3.7 dB (route) then route 3.6 +
+					-- edge 1.6 one 4 u step on, 6.7 dB louder.
+					if dup and (cfg.edge_dup_best or 1) >= 0.5 and e.db < (dup.lossDb or math.huge) then
+						for x = #r.paths, 1, -1 do if r.paths[x] == dup then table.remove(r.paths, x) end end
+						dup = false
+					end
 					r.edge, r.edgeDup, r.edgePath = e, dup and true or nil, dup or nil
 					if not dup then P.AddEdge(r.trans, e, L, cfg) end
 				end
@@ -3425,8 +3439,17 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- (Steam Audio still seeing most of the source) 2 dB: summed, 2.2 dB LOUDER than in clear sight one
 		-- step before, the low-pass jumping with it (rp_downtown, outside the radio room's doorway).
 		if r.edgePath and r.trans and (cfg.edge_bound or 1) >= 0.5 then P.BoundBeside(r.trans, r.edgePath, cfg) end
+		-- the way over the edge found distinct from the routes (added to the transmission) and the loudest
+		-- route are still ways round the obstacle the line goes through: bounded together by the clear line too.
+		-- gm_melancholia's stairs: the edge 1.9 dB alone, one step on the edge 1.6 dB beside a 3.6 dB route
+		-- once a fixed ajar door slab separates them, -0.5 dB (louder than clear sight).
+		if r.edge and not r.edgePath and r.trans and r.trans.edgeDb and (cfg.edge_bound or 1) >= 0.5 then
+			local best
+			for _, p in ipairs(r.paths) do if p.lossDb and (not best or p.lossDb < best.lossDb) then best = p end end
+			if best then P.BoundBeside(r.trans, best, cfg) end
+		end
 		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
-		r.shadowDb = P.ShadowOf(r.voices)
+		r.shadowDb = P.ShadowOf(r.voices, r.edge and math.max(r.edge.db - (r.edge.doorDb or 0), 0) or nil)
 	end
 	P.cache[key] = { t = now, r = r }
 	if timeOn and not r.provisional then
