@@ -357,6 +357,11 @@ steps = [
     ("native_send_continuity rp_downtown", lambda: py("native_send_continuity.py")),
     # the module's output along walks (rp_downtown, gm_melancholia): <= 2 dB per 16 u step
     ("native_output_walk", lambda: py("native_output_walk.py")),
+    # the module's output while stepping SIDEWAYS across the radio room's doorway (rp_downtown, reported: half a
+    # metre changed the reverb completely): total, direct, reverb per 4 u step, two distance laws, four lines
+    ("doorway_lateral rp_downtown", lambda: py("doorway_lateral.py")),
+    # the voices' sends across that doorway (loop, stream, one-shot), 4 u steps
+    ("native_send_continuity lateral", lambda: py("native_send_continuity.py", "--walk=lateral", "--step=4")),
     # a real map's door and a func_door_rotating swinging: no level jump, same voice kind across the leaf / wall
     ("door_sweep_real rp_downtown", lambda: seq(lambda: load("rp_downtown_v4c_v2"), lambda: native_on(True),
         lambda: [job("server", "door_sweep_real.lua", 30), job("client", "door_sweep_real.lua", 400)])),

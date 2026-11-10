@@ -530,7 +530,8 @@ N.SPEAKER_EQ = { 0.25, 1, 0.35 }
 --    source clipped at full scale does not get a reverb louder than what is heard);
 --  * the listener's room (listener-centric reverb, the module's room bus) = what ENTERS the listener's space
 --    by an opening or a wall: the energy at that entry point = power x law(source -> entry) x the losses on
---    the way (N.EntrySend). In clear sight there is one space: the slot only. Without a slot (pool full, an
+--    the way (N.EntrySend), times a share growing with how much of the clear line's energy the arrivals lost (N.ShadowShare: the
+--    slot alone in clear sight, the room bus growing into the shadow, never a switch). Without a slot (pool full, an
 --    older module) a voice falls back to the room bus at its gain (the 1.0 behaviour).
 -- History of the shortcuts this replaces (each one gave cliffs): the send following the direct gain (dry
 -- far sources), a one-trace enclosure guess (17 dB under an overhang), the room fed only through walls (a
@@ -600,10 +601,29 @@ function N.LossLin(v, lvl)
 	return math.min((v.gain or 0) / math.max(A.AC.EngineGain(len, lvl or 75), 1e-6), 1)
 end
 --- Listener-room send of a path voice: the energy where it enters the listener's space (its apparent
--- position: the last opening, or the wall it comes through) = law(source -> entry) x the path's losses.
+-- position: the last opening, or the wall it comes through) = law(source -> entry) x the path's losses,
+-- times the square root of N.ShadowShare (pba_native_room_shadow).
+--- Share (energy, 0..1) of an arrival's entering energy the listener's room bus renders, from how much of
+-- the clear line's energy the arrivals lost (dB: the set's, P.ShadowOf, or one arrival's own): growing
+-- linearly in dB from none in clear sight to all of it at pba_native_room_shadow_db (20 dB: behind a wall,
+-- round a sharp corner). The source's reverb slot renders what the source's own reflections bring wherever
+-- the listener stands, in clear sight and round a jamb alike; the room bus is there for what they miss (the
+-- far side of walls, small rooms reached by openings where the slot's rays find nothing: gm_melancholia),
+-- and that grows with the shadow. Before, the room bus went from nothing (clear line) to the full entering
+-- energy (a route bending 0 degrees round a door jamb, 0 dB): rp_downtown's radio, heard outside its room's
+-- doorway, switched its reverb up by 16 dB in one 4 u step (doorway_lateral, native_send_continuity).
+function N.ShadowShare(lossDb)
+	if (A.cfg.native_room_shadow or 1) < 0.5 then return 1 end
+	local full = math.max(A.cfg.native_room_shadow_db or 20, 1e-3)
+	return math.Clamp((lossDb or 0) / full, 0, 1)
+end
 function N.EntrySend(law, v, L, lossLin)
 	local entry = math.max((v.len or 0) - (v.pos and v.pos:Distance(L) or 0), N.REF_UNITS)
-	return law(entry) * (lossLin or 1)
+	-- the loss of the whole set of arrivals (v.shadowDb, P.ShadowOf) when the voice comes from a result, else
+	-- this arrival's own
+	local l = math.Clamp(lossLin or 1, 0, 1)
+	local sh = N.ShadowShare(v.shadowDb or (l > 0 and -20 * math.log10(l) or 300))
+	return law(entry) * l * math.sqrt(sh)
 end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
 -- the voice has a slot (then the room bus must only get the transmission part).

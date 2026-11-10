@@ -21,6 +21,13 @@
 --     its start (the bug downtown_stream describes: gliding updates never passed the send);
 --   * the loop's and the stream's send is refreshed (a call carrying a send) at least every MAX_SEND_GAP s
 --     while the listener moves: a kept send must not go stale;
+--   * the room send of a sound that also feeds a source slot is judged against the larger of its two reverb
+--     feeds (room and slot sends, both steps): 20 log10(1 + |change| / larger) <= MAX_DB. The listener's room
+--     grows into the shadow from nothing in clear sight (pba_native_room_shadow): its first step past a jamb
+--     is an onset from zero, an infinite change in dB on its own, small beside the slot feed it adds to (the
+--     module's output, doorway_lateral: +2.7 dB of reverb at that step). The former switch (0 -> 0.72 of a
+--     slot feed of 1, +16 dB of reverb in one step) gives 4.7 dB here and still fails. Without a slot the room
+--     send is the only reverb feed: judged on its own as below;
 --   * between two adjacent steps (8 u apart, a slow walk) gain, room send and slot send change by at most
 --     MAX_DB (1.5 dB: about the level JND; a larger change in 8 u is a click or a pump) and the diffuse
 --     share by at most MAX_DIFFUSE (0.05). Values under FLOOR (-80 dB re full scale) are compared as FLOOR
@@ -35,7 +42,7 @@
 local A = pba
 local N = A.Native
 local args = job.args or {}
-local RADIO = Vector(-2120.3, -6872.2, -50)
+local RADIO = args.radio and Vector(args.radio[1], args.radio[2], args.radio[3]) or Vector(-2120.3, -6872.2, -50) -- (args.radio: the lateral walk's)
 local LOOP_NAME, STREAM_FILE, SHOT_NAME = "ambient/machines/spin_loop.wav", "sound/ambient/machines/spin_loop.wav", "vo/npc/male01/hi01.wav"
 local MAX_DB, MAX_DIFFUSE, MAX_SEND_GAP, MIN_PAIRS = 1.5, 0.05, 2, 20
 local FLOOR = 1e-4 -- -80 dB re full scale
@@ -227,6 +234,13 @@ for _, r in ipairs(S.log) do
 	end
 end
 shotsUpTo(math.huge)
+-- sample and hold: a step without a call keeps what the module was told before (a continuous sound is only
+-- re-evaluated after the listener moved pba_reeval_move: 4 u steps leave every other step without a call)
+for _, role in ipairs({ "loop", "stream" }) do
+	for st = 1, lastStep do
+		if not held[role][st] and held[role][st - 1] then held[role][st] = held[role][st - 1] end
+	end
+end
 
 local out = { pass = false, steps = lastStep, bad = 0, shots = S.shots, calls = #S.log, keptSend = keep, sendGap = {},
 	roles = {}, fails = {} }
@@ -247,6 +261,11 @@ for role, series in pairs({ loop = held.loop, stream = held.stream, shot = shots
 				o.pairs = o.pairs + 1
 				for _, k in ipairs({ "g", "send", "srcSend", "diffuse" }) do
 					local d = k == "diffuse" and math.abs((x[k] or 0) - (y[k] or 0)) or db(x[k], y[k])
+					-- the room send beside a source slot: judged against the sound's larger reverb feed (see the header)
+					if k == "send" and math.max(x.srcSend or 0, y.srcSend or 0) > 0 then
+						local big = math.max(x.send or 0, y.send or 0, x.srcSend or 0, y.srcSend or 0, FLOOR)
+						d = 20 * math.log10(1 + math.abs((y.send or 0) - (x.send or 0)) / big)
+					end
 					if d > o.worst[k].d then
 						o.worst[k] = { d = math.Round(d, 2), step = b, from = math.Round(x[k] or 0, 5), to = math.Round(y[k] or 0, 5) }
 					end

@@ -1689,6 +1689,33 @@ function P.AddEdge(t, e, L, cfg)
 	return t
 end
 
+--- How much of the clear line's energy a set of arrivals (r.voices) lost on the way, together, in dB:
+-- -10 log10 of the sum of their relative energies 10^(-rawLossDb/10) (losses before any headroom). 0 in clear
+-- sight or for a route bending 0 degrees round a jamb; 17 dB behind a plaster jamb; large behind a wall.
+-- Stored on each voice (v.shadowDb) for the listener-room send (cl_native N.EntrySend, pba_native_room_
+-- shadow): one value for the whole set, so a voice appearing beside another (the transmission through a jamb
+-- once the route round it has lost a tenth of a dB) does not switch the room send on by itself. Pure.
+function P.ShadowOf(voices)
+	local e = 0
+	for _, v in ipairs(voices or {}) do e = e + 10 ^ (-math.max(v.rawLossDb or v.lossDb or 0, 0) / 10) end
+	local db = e > 1e-30 and math.max(-10 * math.log10(e), 0) or 300
+	for _, v in ipairs(voices or {}) do v.shadowDb = db end
+	return db
+end
+
+--- The transmission t through an obstacle beside the route p that bends round that obstacle's edge: their
+-- power sum never above the clear line's (pure: t.lossDb, t.midDb raised so that 10^(-t/10) <= 1 -
+-- 10^(-p/10)). Nothing changes once the route has lost a few dB (a 3 dB route leaves room for half the
+-- clear energy: a real wall's transmission is far below). Modifies and returns t.
+function P.BoundBeside(t, p, cfg)
+	local MAX_DB = 200
+	local room = 1 - 10 ^ (-math.max(p.lossDb or 0, 0) / 10)
+	local cap = room > 1e-20 and math.min(-10 * math.log10(room), MAX_DB) or MAX_DB
+	if t.lossDb < cap then t.lossDb, t.bounded = cap, true end
+	if t.midDb and t.midDb < cap then t.midDb = cap end
+	return t
+end
+
 -- ------------------------------------------------------------------ corner geometry
 -- One geometry for the cost of a corner, whatever produced the route (probe search, listener field,
 -- bridge, a portal leg rerouted by the probes). A route's vertices are placed for CLEARANCE: the probes'
@@ -3364,10 +3391,10 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 							local pts = { S }
 							for _, v in ipairs(p.points) do pts[#pts + 1] = v end
 							pts[#pts + 1] = L
-							if P.SameRoute(way, pts) then dup = true break end
+							if P.SameRoute(way, pts) then dup = p break end
 						end
 					end
-					r.edge, r.edgeDup = e, dup or nil
+					r.edge, r.edgeDup, r.edgePath = e, dup and true or nil, dup or nil
 					if not dup then P.AddEdge(r.trans, e, L, cfg) end
 				end
 			end
@@ -3391,7 +3418,15 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				end
 			end
 		end
+		-- pba_edge_bound: the route that bends round the very obstacle the line goes through (r.edgePath: the
+		-- way over its edge, kept alone) and the transmission through that obstacle are two parts of one
+		-- field, bounded together by the clear line, as the way over an edge and the transmission are in
+		-- P.AddEdge. At a door jamb's edge the route is 0 dB and the transmission through the jamb's sliver
+		-- (Steam Audio still seeing most of the source) 2 dB: summed, 2.2 dB LOUDER than in clear sight one
+		-- step before, the low-pass jumping with it (rp_downtown, outside the radio room's doorway).
+		if r.edgePath and r.trans and (cfg.edge_bound or 1) >= 0.5 then P.BoundBeside(r.trans, r.edgePath, cfg) end
 		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
+		r.shadowDb = P.ShadowOf(r.voices)
 	end
 	P.cache[key] = { t = now, r = r }
 	if timeOn and not r.provisional then

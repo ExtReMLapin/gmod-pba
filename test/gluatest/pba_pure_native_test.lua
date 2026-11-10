@@ -207,15 +207,47 @@ return {
 			local v = { len = 600, pos = Vector(100, 0, 0), rawLossDb = 6 }
 			local inv = function(d) return math.min(REF / math.max(d, REF), 1) end
 			local flat = function() return 1 end
-			expect(near(N.EntrySend(inv, v, L, N.LossLin(v, 75)), REF / 500 * 10 ^ (-6 / 20), 1e-9)).to.beTrue()
-			expect(near(N.EntrySend(flat, v, L, 0.5), 0.5, 1e-9)).to.beTrue()
-			-- the entry never closer than 1 m
-			expect(near(N.EntrySend(inv, { len = 120, pos = Vector(100, 0, 0) }, L, 1), 1, 1e-9)).to.beTrue()
+			withCfg({ native_room_shadow = 0 }, function() -- (the energy at the entry alone)
+				expect(near(N.EntrySend(inv, v, L, N.LossLin(v, 75)), REF / 500 * 10 ^ (-6 / 20), 1e-9)).to.beTrue()
+				expect(near(N.EntrySend(flat, v, L, 0.5), 0.5, 1e-9)).to.beTrue()
+				-- the entry never closer than 1 m
+				expect(near(N.EntrySend(inv, { len = 120, pos = Vector(100, 0, 0) }, L, 1), 1, 1e-9)).to.beTrue()
+			end)
+			-- pba_native_room_shadow (default): times the square root of the share (the arrival's loss / 20 dB)
+			withCfg({ native_room_shadow = 1, native_room_shadow_db = 20 }, function()
+				local l6 = 10 ^ (-6 / 20)
+				expect(near(N.EntrySend(inv, v, L, l6), REF / 500 * l6 * math.sqrt(6 / 20), 1e-9)).to.beTrue()
+				expect(near(N.EntrySend(flat, v, L, 0.5), 0.5 * math.sqrt(20 * math.log10(2) / 20), 1e-9)).to.beTrue()
+				expect(N.EntrySend(inv, { len = 120, pos = Vector(100, 0, 0) }, L, 1)).to.equal(0)
+				-- the set's loss (v.shadowDb, P.ShadowOf) when the voice carries it
+				expect(near(N.EntrySend(flat, { len = 600, pos = Vector(100, 0, 0), shadowDb = 25 }, L, 0.5), 0.5, 1e-9)).to.beTrue()
+			end)
 			-- slot: 1 m level under 1/r at any distance; a flat law: its 1 m level, never x distance
 			for _, d in ipairs({ 10, REF, 200, 1000, 5000 }) do
 				expect(near(N.SlotSend(inv, d), 1, 1e-9)).to.beTrue()
 				expect(near(N.SlotSend(flat, d), 1, 1e-9)).to.beTrue()
 			end
+		end },
+		{ name = "Room send into the shadow (pba_native_room_shadow): none in clear sight, all of it from 20 dB of loss (behind a wall), linear in dB in between (no switch at a door jamb)", func = function()
+			withCfg({ native_room_shadow = 1, native_room_shadow_db = 20 }, function()
+				expect(N.ShadowShare(0)).to.equal(0)
+				expect(near(N.ShadowShare(10), 0.5, 1e-12)).to.beTrue()
+				expect(N.ShadowShare(20)).to.equal(1)
+				expect(N.ShadowShare(80)).to.equal(1)
+				-- monotonic, no step above 0.0051 per 0.1 dB
+				local prev = N.ShadowShare(0)
+				for t = 1, 300 do
+					local sh = N.ShadowShare(t / 10)
+					expect(sh >= prev).to.beTrue()
+					expect(sh - prev <= 0.0051).to.beTrue()
+					prev = sh
+				end
+				-- a route at 0 dB (bending 0 degrees round a jamb) sends what the clear line sends: nothing
+				local flat = function() return 1 end
+				expect(N.EntrySend(flat, { len = 268, pos = Vector(40, 0, 0) }, Vector(0, 0, 0), 1)).to.equal(0)
+				expect(N.EntrySend(flat, { len = 268, pos = Vector(40, 0, 0), shadowDb = 0 }, Vector(0, 0, 0), 0.9)).to.equal(0)
+			end)
+			withCfg({ native_room_shadow = 0 }, function() expect(N.ShadowShare(0)).to.equal(1) end)
 		end },
 		{ name = "Directivity: 1 in front, 1 - 2w behind (floor 0.05), 1 - w to the side; props and w = 0 omnidirectional", func = function()
 			local eye = Vector(0, 0, 64)

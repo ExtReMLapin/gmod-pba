@@ -22,6 +22,10 @@ import time
 MCP = sys.argv[1]
 WAIT = next((float(a[7:]) for a in sys.argv[2:] if a.startswith("--wait=")), 0.4)
 STEP = next((float(a[7:]) for a in sys.argv[2:] if a.startswith("--step=")), 8.0)
+# --walk=axial (default): room -> doorway -> street; --walk=lateral: ACROSS the doorway of the radio room, at
+# the spot a player reported (2026-11-10: half a metre sideways changed the reverb completely), the sources at
+# that player's radio (-2046.7, -6755.6, -59.5), feet z -68 then -44, x -2234 -> -2154 (y -6957), 4 u steps
+WALK = next((a[7:] for a in sys.argv[2:] if a.startswith("--walk=")), "axial")
 TEST = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -44,9 +48,14 @@ def lua(realm, code):
     return v[0] if v else None
 
 
+RADIO_LATERAL = [-2046.7, -6755.6, -59.5]
+
+
 def job(phase, extra=None, timeout_s=120):
     code = open(os.path.join(TEST, "native_send_continuity.lua"), encoding="utf-8").read()
     a = {"phase": phase}
+    if WALK == "lateral":
+        a["radio"] = RADIO_LATERAL
     a.update(extra or {})
     r = call("lua_job", {"realm": "client", "code": code, "timeout_s": timeout_s, "args": a}, timeout=timeout_s + 60)
     return (r.get("values") or [r])[0] if isinstance(r, dict) else r
@@ -92,7 +101,11 @@ local cross = %s and util.TraceLine({ start = prev, endpos = eye, mask = MASK_SO
 p:SendLua("if PBA_NSC then PBA_NSC.step = %d PBA_NSC.stepT = RealTime() end")
 return { solid = solid, cross = cross }"""
 
-pts = walk([ROOM, DOOR, STREET], STEP)
+if WALK == "lateral":
+    pts = walk([(-2234.0, -6957.0, -68.0), (-2154.0, -6957.0, -68.0)], STEP) +           walk([(-2154.0, -6957.0, -44.0), (-2234.0, -6957.0, -44.0)], STEP)
+    ROOM = pts[0]
+else:
+    pts = walk([ROOM, DOOR, STREET], STEP)
 bad, res, started = [], None, None
 try:
     lua("server", TELEPORT % (*ROOM, "false", 0))

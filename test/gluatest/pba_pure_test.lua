@@ -2953,6 +2953,40 @@ local SUITE = {
 				end
 			end)
 		end },
+		{ name = "BoundBeside (pba_edge_bound): a route bending round the obstacle the line crosses and the transmission through it never sum above the clear line; a route a few dB down leaves a real wall's transmission alone", func = function()
+			local P = A.Paths
+			local function sum(t, p) return 10 ^ (-t.lossDb / 10) + 10 ^ (-p.lossDb / 10) end
+			-- the jamb's edge: route 0 dB, transmission through the jamb's sliver 1.9 dB (Steam Audio sees most of the source)
+			local t = P.BoundBeside({ lossDb = 1.9, midDb = 1.5 }, { lossDb = 0 })
+			expect(sum(t, { lossDb = 0 }) <= 1 + 1e-9).to.beTrue()
+			expect(t.bounded).to.beTrue()
+			expect(t.midDb >= t.lossDb - 1e-9).to.beTrue()
+			-- continuous in the route's loss: the bound never rises by more than a few dB per 0.01 dB of route
+			for i = 1, 300 do
+				local rl = i / 100
+				local tt = P.BoundBeside({ lossDb = 1.9 }, { lossDb = rl })
+				expect(sum(tt, { lossDb = rl }) <= 1 + 1e-9).to.beTrue()
+			end
+			-- a route 3 dB down and a 16 dB wall: untouched
+			local w = P.BoundBeside({ lossDb = 16, midDb = 14 }, { lossDb = 3 })
+			expect(w.lossDb).to.equal(16)
+			expect(w.midDb).to.equal(14)
+			expect(w.bounded).to.equal(nil)
+		end },
+		{ name = "ShadowOf: how much of the clear line's energy a set of arrivals lost, together, in dB (0 clear or at a jamb's edge, large behind a wall); a weak transmission joining a 0.3 dB route moves it by a hundredth of a dB, not to its own 16.7", func = function()
+			local P = A.Paths
+			expect(P.ShadowOf({})).to.equal(300)
+			expect(P.ShadowOf({ { rawLossDb = 0 } })).to.equal(0)
+			local vs = { { rawLossDb = 0.3 }, { rawLossDb = 16.7 } }
+			local db = P.ShadowOf(vs)
+			expect(math.abs(db - -10 * math.log10(10 ^ -0.03 + 10 ^ -1.67)) < 1e-9).to.beTrue()
+			expect(db < 0.3).to.beTrue()
+			expect(vs[1].shadowDb).to.equal(db)
+			expect(vs[2].shadowDb).to.equal(db)
+			expect(math.abs(P.ShadowOf({ { rawLossDb = 40 } }) - 40) < 1e-9).to.beTrue()
+			-- never negative when the arrivals sum above the clear line
+			expect(P.ShadowOf({ { rawLossDb = 0 }, { rawLossDb = 1 } })).to.equal(0)
+		end },
 		{ name = "Group: the angle guard (a probe farther than group_angle from the source, seen from the listener, is not shared)", func = function()
 			withSlicedRooms(function(cfg, list)
 				local PR = A.Probes
