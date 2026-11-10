@@ -61,10 +61,15 @@ local ply = player.GetAll()[1]
 ply:SetPos(Vector((b[1] + b[4]) / 2, (b[2] + b[5]) / 2, b[3] + 2)) ply:SetEyeAngles(Angle(0, 0, 0))
 timer.Simple(0.5, function() DM.SetMode(3) end) return true""")
 lua("client", "local DM = pba.DemoMap DM.sel.reverb = DM.sel.reverb or {} DM.sel.reverb.mat = 'concrete' return true")
-# the room reverb only runs while a sound feeds it: an impact every 0.4 s, 3 m in front of the listener
+# the room reverb (the listener's room bus) only runs while a sound feeds it: an impact every 0.4 s, BEHIND the
+# room's +x wall (32 u past it, at the listener's eye height). In clear sight a sound feeds its source reverb
+# slot only (the one reverb rule, pba_native_room_shadow: nothing enters the listener's space from outside),
+# so the impact the test used, 3 m in front of the listener, left the room bus silent and the tail EQ unread
+# ("tail EQ not available") since that rule; through the wall it enters the room and feeds it fully
 lua("server", """if IsValid(PBA_TAILSRC) then PBA_TAILSRC:Remove() end
+local DM = pba.DemoMap local b = DM.byId.reverb.boxes[1]
 local ply = player.GetAll()[1] local e = ents.Create('prop_physics') e:SetModel('models/props_junk/PopCan01a.mdl')
-e:SetPos(ply:EyePos() + Vector(150, 0, 0)) e:Spawn() local ph = e:GetPhysicsObject() if IsValid(ph) then ph:EnableMotion(false) end
+e:SetPos(Vector(b[4] + 32, ply:EyePos().y, ply:EyePos().z)) e:Spawn() local ph = e:GetPhysicsObject() if IsValid(ph) then ph:EnableMotion(false) end
 e:SetNoDraw(true) PBA_TAILSRC = e
 timer.Create('pba_tail_src', 0.4, 0, function() if IsValid(e) then e:EmitSound('physics/concrete/concrete_impact_hard1.wav', 85) end end)
 return true""")

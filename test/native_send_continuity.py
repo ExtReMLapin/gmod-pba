@@ -102,6 +102,13 @@ p:SendLua("if PBA_NSC then PBA_NSC.step = %d PBA_NSC.stepT = RealTime() end")
 return { solid = solid, cross = cross }"""
 
 if WALK == "lateral":
+    # the radio room's door open, as reported (a fresh map has it shut)
+    lua("server", """local p = player.GetHumans()[1]
+p:SetMoveType(MOVETYPE_NOCLIP) p:SetPos(Vector(-2198, -6957, -68)) p:SetName("pba_nsc_listener")
+for _, e in ipairs(ents.FindInSphere(Vector(-2221, -6912, -14), 48)) do
+  if e:GetClass() == "prop_door_rotating" then e:Fire("Unlock") e:Fire("Close") e:Fire("OpenAwayFrom", "pba_nsc_listener", 1.5) end end
+return true""")
+    time.sleep(4.5)
     pts = walk([(-2234.0, -6957.0, -68.0), (-2154.0, -6957.0, -68.0)], STEP) +           walk([(-2154.0, -6957.0, -44.0), (-2234.0, -6957.0, -44.0)], STEP)
     ROOM = pts[0]
 else:

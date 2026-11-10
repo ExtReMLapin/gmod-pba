@@ -3,6 +3,8 @@ listener steps SIDEWAYS across a doorway, from clear sight of the source to behi
 player reported (2026-11-10): outside the radio room, door open, the radio in view; half a metre to the
 right "the reverb (and other things) change completely". native_output_walk and native_send_continuity
 walk the same doorway but along it (room -> corridor), never across the shadow boundary of its jamb.
+The radio room's door (prop_door_rotating at (-2221, -6912)) is opened first, into the room as in the report
+(--door=out: into the corridor, its leaf beside the walks' left end).
 Source: a 3D stream (sound.PlayFile of ambient/machines/spin_loop.wav: stationary energy) at the reported
 radio (-2046.7, -6755.6, -59.5), the player's own streams paused. Two distance laws, as other addons'
 radios use them: "flat" (Set3DFadeDistance(1e6, ...): same volume everywhere, the reported radio) and
@@ -167,6 +169,18 @@ for _ in range(60):
     if lua("client", "return pba.Native.ready == true and pba.Native.render == true and not pba.Native.building"):
         break
     time.sleep(2)
+# the radio room's door open, as reported (a fresh map has it shut: the line then crosses its leaf)
+# --door=in (default, the report): the leaf swung into the room, away from the corridor; --door=out: into the
+# corridor (the leaf then stands beside the walk's left end: a second case, the open leaf's edge)
+DOOR_SIDE = OPT.get("door", "in")
+OPEN_DOOR = """local p = player.GetHumans()[1]
+p:SetMoveType(MOVETYPE_NOCLIP) p:SetPos(Vector(-2198, %s, -68)) p:SetName("pba_dl_listener")
+for _, e in ipairs(ents.FindInSphere(Vector(-2221, -6912, -14), 48)) do
+  if e:GetClass() == "prop_door_rotating" then e:Fire("Unlock") e:Fire("Close") e:Fire("OpenAwayFrom", "pba_dl_listener", 1.5) end end
+return true""" % ("-6957" if DOOR_SIDE == "in" else "-6860")
+lua("server", OPEN_DOOR)
+time.sleep(4.5)
+time.sleep(2.5)
 home = lua("server", "local p = player.GetHumans()[1] if not IsValid(p) then return false end "
                      "local a, e = p:GetPos(), p:EyeAngles() return { a.x, a.y, a.z, e.p, e.y, p:GetMoveType() }")
 results = {}
