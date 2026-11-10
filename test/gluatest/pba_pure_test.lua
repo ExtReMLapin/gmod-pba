@@ -453,7 +453,7 @@ local function withSlicedRooms(fn)
 	local surf = util.GetSurfacePropName
 	util.GetSurfacePropName = function(i) if i == nil or not surf then return "concrete" end return surf(i) end -- (offline shim; stubbed traces leave SurfaceProps nil)
 	local ok, err = pcall(withProbeRooms, { { 16, 64, 112 }, { 360, 424, 140 } }, { { Vector(200, 150, -8), Vector(240, 190, 200) } },
-		{ native_traces = 0, paths_model = 1, far_sliced = 1, far_sliced_ms = 4000 }, function()
+		{ native_traces = 0, paths_model = 1, far_sliced = 1, far_sliced_ms = 4000, group_time = 0 }, function()
 			-- what P.Walls reads besides: the material (concrete everywhere) and where a trace started in solid
 			-- leaves it (1 u steps)
 			local tl = util.TraceLine
@@ -473,7 +473,7 @@ local function withSlicedRooms(fn)
 				return o
 			end
 			local cfg = setmetatable({ paths_model = 1, probes = 1, probe_dist = 1e6, path_props = 1, water = 0, probe_field = 1,
-				far_sliced = 1, cache_ttl = 0 }, { __index = CFG })
+				far_sliced = 1, cache_ttl = 0, group_time = 0 }, { __index = CFG })
 			-- deterministic positions: sources in room B, listeners in room A (some behind the pillar)
 			local seed = 12345
 			local function rnd(a, b)
