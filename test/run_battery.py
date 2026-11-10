@@ -187,7 +187,9 @@ def pure(name="pba_pure_test.lua"):
     code = open(os.path.join(TEST, "gluatest", "run_pure.lua"), encoding="utf-8").read()
     src = open(os.path.join(TEST, "gluatest", name), encoding="utf-8").read()
     assert "]=======]" not in src
-    return call("lua_exec", {"realm": "client", "code": "local PBA_PURE_SRC = [=======[" + src + "]=======]" + chr(10) + code}).get("values")
+    # a lua_job: the runner yields between cases (job:step), each case gets the MCP execution budget
+    return call("lua_job", {"realm": "client", "code": "local PBA_PURE_SRC = [=======[" + src + "]=======]" + chr(10) + code,
+                            "timeout_s": 600}, timeout=700).get("values")
 
 def seq(*fns):
     """Runs the setters then the test (last), returns the test's result."""

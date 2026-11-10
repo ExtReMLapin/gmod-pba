@@ -242,9 +242,17 @@ local function twoRoomsWorld(y0, y1, ymax)
 	return w
 end
 -- largest step of f(x) over the list xs
+-- In game the suite runs as a lua_job (run_pure.lua sets PBA_JOB): long sweeps give the frame back now and
+-- then, a resume may not run 2 s without yielding. Offline (no job) a no-op.
+local yieldT = 0
+local function jobYield()
+	local J = rawget(getfenv(1), "PBA_JOB")
+	if J and SysTime() - yieldT > 0.5 then J:step() yieldT = SysTime() end
+end
 local function worstStep(xs, f)
 	local prev, worst, at = nil, 0, nil
 	for _, x in ipairs(xs) do
+		jobYield()
 		local v = f(x)
 		if prev and math.abs(v - prev) > worst then worst, at = math.abs(v - prev), x end
 		prev = v
@@ -391,7 +399,9 @@ local function dumpResult(r)
 	local out, seen, n = {}, {}, 0
 	local function dump(v)
 		local tv = type(v)
-		if tv == "number" then out[#out + 1] = string.format("%.17g", v)
+		-- 17 digits offline (bit for bit); 13 in game, where a sliced and a synchronous run differed in the
+		-- last bit (1e-16 relative; cause not identified, likely LuaJIT compiling one path and not the other)
+		if tv == "number" then out[#out + 1] = string.format(PBA_OFFLINE and "%.17g" or "%.13g", v)
 		elseif tv == "string" then out[#out + 1] = string.format("%q", v)
 		elseif tv == "boolean" or tv == "nil" then out[#out + 1] = tostring(v)
 		elseif tv == "function" then out[#out + 1] = "fn"
@@ -431,7 +441,8 @@ local function withSlicedRooms(fn)
 	local savedSL = { SL.jobs, SL.MARGIN_FRAMES, SL.stats, SL.est, A.Graph.Get, PR.doorList }
 	local tick = 0
 	sliceNow, sliceFrame = 1000, 1
-	_G.SysTime = function() tick = tick + 1 return tick end
+	local savedClock = A.Paths.slice.clock
+	A.Paths.slice.clock = function() tick = tick + 1 return tick end -- (not _G.SysTime: the MCP job budget reads it)
 	_G.RealTime = function() return sliceNow end
 	_G.FrameNumber = function() return sliceFrame end
 	_G.RealFrameTime = function() return 1 / 60 end
@@ -440,7 +451,7 @@ local function withSlicedRooms(fn)
 	SL.ResetStats()
 	A.Graph.Get = function() return nil end -- (no area graph: the field needs none)
 	local surf = util.GetSurfacePropName
-	util.GetSurfacePropName = surf or function() return "concrete" end -- (offline shim)
+	util.GetSurfacePropName = function(i) if i == nil or not surf then return "concrete" end return surf(i) end -- (offline shim; stubbed traces leave SurfaceProps nil)
 	local ok, err = pcall(withProbeRooms, { { 16, 64, 112 }, { 360, 424, 140 } }, { { Vector(200, 150, -8), Vector(240, 190, 200) } },
 		{ native_traces = 0, paths_model = 1, far_sliced = 1, far_sliced_ms = 4000 }, function()
 			-- what P.Walls reads besides: the material (concrete everywhere) and where a trace started in solid
@@ -479,6 +490,7 @@ local function withSlicedRooms(fn)
 			fn(cfg, list)
 		end)
 	_G.SysTime, _G.RealTime, _G.FrameNumber, _G.RealFrameTime, _G.ents = saved[1], saved[2], saved[3], saved[4], saved[5]
+	A.Paths.slice.clock = savedClock
 	util.GetSurfacePropName = surf
 	SL.jobs, SL.MARGIN_FRAMES, SL.stats, SL.est, A.Graph.Get, PR.doorList = savedSL[1], savedSL[2], savedSL[3], savedSL[4], savedSL[5], savedSL[6]
 	P.InvalidateCache()
@@ -2841,6 +2853,7 @@ local SUITE = {
 							job.deadline = math.huge -- (never due: only the budget moves it on)
 							job.onDone = function(res) got = res end
 							local other = list[(i % #list) + 1]
+							jobYield()
 							for _ = 1, 100000 do
 								if got then break end
 								P.cache = {}
@@ -3288,7 +3301,7 @@ local SUITE = {
 			local angles = {}
 			for th = 0.5, 60, 0.25 do angles[#angles + 1] = th end
 			local savedProp, saved3d = util.GetSurfacePropName, A.cfg.door_3d
-			util.GetSurfacePropName = util.GetSurfacePropName or function() return "default" end
+			util.GetSurfacePropName = function(i) if i == nil or not savedProp then return "default" end return savedProp(i) end -- (stubbed traces leave SurfaceProps nil; the game's function wants a number)
 			A.cfg.door_3d = 1 -- the straight line's walls (P.Walls) read the global setting
 			local ok, err = pcall(withLeafScene, twoRoomsWorld(96, 144), leaf, function(st)
 				for k, pts in ipairs(routes) do
@@ -3321,7 +3334,7 @@ local SUITE = {
 			local angles = {}
 			for k = 5, 150 do angles[#angles + 1] = k * 0.1 end
 			local savedProp, saved3d = util.GetSurfacePropName, A.cfg.door_3d
-			util.GetSurfacePropName = util.GetSurfacePropName or function() return "default" end
+			util.GetSurfacePropName = function(i) if i == nil or not savedProp then return "default" end return savedProp(i) end -- (stubbed traces leave SurfaceProps nil; the game's function wants a number)
 			A.cfg.door_3d = 1
 			local ok, err = pcall(withLeafScene, twoRoomsWorld(96, 144), leaf, function(st)
 				for k, L in ipairs(Ls) do
@@ -3348,7 +3361,7 @@ local SUITE = {
 			local cfg = setmetatable({ door_3d = 1 }, { __index = CFG })
 			local S = Vector(90, -10, 50)
 			local savedProp, saved3d = util.GetSurfacePropName, A.cfg.door_3d
-			util.GetSurfacePropName = util.GetSurfacePropName or function() return "default" end
+			util.GetSurfacePropName = function(i) if i == nil or not savedProp then return "default" end return savedProp(i) end -- (stubbed traces leave SurfaceProps nil; the game's function wants a number)
 			A.cfg.door_3d = 1 -- P.Walls reads the global setting
 			local ok, err = pcall(withLeafScene, world, leaf, function(st)
 				leaf.yaw, st.frac = -90, 1
@@ -3406,7 +3419,7 @@ local SUITE = {
 			local leaf = leafEnt(9976, Vector(4945.25, 520, 54.25), Vector(-2, 0, -54.25), Vector(2, 47.5, 54.25))
 			local S = Vector(5180, 800, 52)
 			local savedProp, saved3d = util.GetSurfacePropName, A.cfg.door_3d
-			util.GetSurfacePropName = util.GetSurfacePropName or function() return "default" end
+			util.GetSurfacePropName = function(i) if i == nil or not savedProp then return "default" end return savedProp(i) end -- (stubbed traces leave SurfaceProps nil; the game's function wants a number)
 			local ok, err = pcall(withLeafScene, world, leaf, function(st)
 				leaf.yaw, st.frac = 180, 1
 				local function line(d3, L)

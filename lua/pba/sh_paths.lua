@@ -36,13 +36,15 @@ function P.ForgetWorld() P.worldGen = P.worldGen + 1 end
 -- P.slice.hold: no check yields yet. An evaluation reads and registers its listener field (cl_probes
 -- PR.FieldFor) in the request's own first slice, as a synchronous one does at its request: the first request
 -- of a seed set builds its field (and its position is the field's), in the order of the requests.
-P.slice = { co = false, t = 0, hold = false }
+-- P.slice.clock: the slices' clock (SysTime; the pure tests swap in a counter without touching the global,
+-- which the MCP job budget reads too)
+P.slice = { co = false, t = 0, hold = false, clock = SysTime }
 local SLICE = P.slice
 local coRunning, coYield = coroutine.running, coroutine.yield
 --- Yields the running slice once its time is up; a no-op anywhere else (another coroutine included).
 local function sliceCheck()
 	local co = SLICE.co
-	if co and not SLICE.hold and SysTime() >= SLICE.t and coRunning() == co then coYield() end
+	if co and not SLICE.hold and SLICE.clock() >= SLICE.t and coRunning() == co then coYield() end
 end
 P.SliceCheck = sliceCheck
 

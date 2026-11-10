@@ -111,7 +111,7 @@ local function restart(j)
 	newCo(j)
 end
 
---- Runs job j until it finishes or its slice ends at SysTime() tEnd: "done" (j.r set), "paused", "stale" (it
+--- Runs job j until it finishes or its slice ends at A.Paths.slice.clock() tEnd: "done" (j.r set), "paused", "stale" (it
 -- finished, but its inputs changed during it, see below) or "error". first: a new request's first slice
 -- (counted in its share too).
 local function run(j, tEnd, first)
@@ -120,9 +120,9 @@ local function run(j, tEnd, first)
 	local sl = A.Paths.slice
 	local pco, pt, ph = sl.co, sl.t, sl.hold
 	sl.co, sl.t, sl.hold = j.co, tEnd, j.hold
-	local t0 = SysTime()
+	local t0 = A.Paths.slice.clock()
 	local ok, r = coroutine.resume(j.co)
-	local dt = SysTime() - t0
+	local dt = A.Paths.slice.clock() - t0
 	j.cpu = j.cpu + dt
 	j.hold = sl.hold
 	sl.co, sl.t, sl.hold = pco, pt, ph
@@ -194,7 +194,7 @@ function SL.Compute(S, L, sndlvl, srcEnt, cfg, minReach)
 	local j = { S = Vector(S), L = Vector(L), lvl = sndlvl, ent = srcEnt, cfg = cfg, tReq = now, deadline = now + reach,
 		seq = SL.seq, segs = 0, restarts = 0, cpu = 0 }
 	newCo(j)
-	local res = run(j, SysTime() + budgetLeft(true), true)
+	local res = run(j, A.Paths.slice.clock() + budgetLeft(true), true)
 	if res == "done" then
 		st.first = st.first + 1
 		return j.r
@@ -250,7 +250,7 @@ function SL.Run()
 			if not due and left <= 0 then break end -- (sorted: the next ones are not due either)
 			-- its inputs moved under it: an evaluation from now on (S and L as requested)
 			if j.stale or not unchanged(j) then restart(j) end
-			local res = run(j, due and math.huge or SysTime() + left)
+			local res = run(j, due and math.huge or A.Paths.slice.clock() + left)
 			if res == "stale" then
 				restart(j)
 				if due then res = run(j, math.huge) end -- (a fresh evaluation: its first slice is its start)
