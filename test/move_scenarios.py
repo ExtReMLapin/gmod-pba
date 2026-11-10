@@ -5,9 +5,9 @@ path evaluations, the player must not feel a hitch and no source may go stale or
 
 Per scenario (client side, timed outside the MCP debug hook, from hooks and timers):
   - frames: count, frame time median / p99 / max, hitches (frame time > 2 x median);
-  - pba cost per frame: time inside A.Paths.Compute summed per frame (max, p99, frames over 5 ms), plus
-    the time of A.Paths.SliceStep / A.Probes.AdvanceFar when such a slicer exists (any of the names in
-    SLICERS below, wrapped if present);
+  - pba cost per frame: time of the evaluations that run to the end in the frame (A.Paths.Compute outside
+    the slicer), plus the far-sound slicer's first slices at the request (pba.Slicer.Compute / Held) and its
+    background slices (its Think hook), summed per frame (max, p99, frames over 5 ms);
   - per source (keyed by its rounded position): evaluations, longest wait between two evaluations,
     the physical delay d / c, the largest level step between consecutive evaluations while the listener
     moved <= 32 u (voices' power relative to the free field, as door_sweep_real).
@@ -96,27 +96,36 @@ CLIENT_START = r"""
 local P, PR = pba.Paths, pba.Probes
 PBA_MV = { frames = {}, cost = {}, src = {}, t0 = SysTime(), Lpos = {} }
 local mv = PBA_MV
-local acc = 0
+local acc, depth = 0, 0
 local wrapped = {}
+local function timedFn(f)
+  return function(...)
+    depth = depth + 1
+    local t = SysTime()
+    local a, b, c, d = f(...)
+    acc = acc + (SysTime() - t)
+    depth = depth - 1
+    return a, b, c, d
+  end
+end
 local function wrap(tbl, name)
   if not tbl or not tbl[name] or wrapped[name] then return end
   local f = tbl[name]
   wrapped[name] = { tbl, f }
-  tbl[name] = function(...)
-    local t = SysTime()
-    local a, b, c, d = f(...)
-    acc = acc + (SysTime() - t)
-    return a, b, c, d
-  end
+  tbl[name] = timedFn(f)
 end
 -- P.Compute: the free-field reference and the final answer per source
 do
   local f = P.Compute
   wrapped.Compute = { P, f }
   P.Compute = function(S, L, lvl, cfg, ent)
+    -- timed only when it runs to the end in this frame: not inside a slicer coroutine (its slices are
+    -- timed by the slicer's own entries below) and not under one of them (no double count)
+    local co, main = coroutine.running() -- Lua 5.1 semantics: nil on the main thread
+    local timed = depth == 0 and (co == nil or main == true)
     local t = SysTime()
     local r = f(S, L, lvl, cfg, ent)
-    acc = acc + (SysTime() - t)
+    if timed then acc = acc + (SysTime() - t) end
     if r and not r.provisional then
       local key = string.format("%d,%d,%d", math.Round(S.x / 8), math.Round(S.y / 8), math.Round(S.z / 8))
       local s = mv.src[key]
@@ -135,8 +144,15 @@ do
     return r
   end
 end
-for _, n in ipairs({ "SliceStep", "AdvanceFar" }) do wrap(P, n) wrap(PR, n) end
-PBA_MV_UNWRAP = function() for name, w in pairs(wrapped) do w[1][name] = w[2] end end
+-- the far-sound slicer (pba_far_sliced): first slices at the request (SL.Compute, SL.Held) and the
+-- background slices of its Think hook (the hook holds its own reference: wrapped in the hook table)
+local SL = pba.Slicer
+if SL then wrap(SL, "Compute") wrap(SL, "Held") end
+local ht = hook.GetTable().Think
+local slHook = ht and ht.pba_far_sliced
+if slHook then hook.Add("Think", "pba_far_sliced", timedFn(slHook)) end
+PBA_MV_UNWRAP = function() for name, w in pairs(wrapped) do w[1][name] = w[2] end
+  if slHook then hook.Add("Think", "pba_far_sliced", slHook) end end
 hook.Add("Think", "pba_mv_frame", function()
   mv.frames[#mv.frames + 1] = RealFrameTime()
   mv.cost[#mv.cost + 1] = acc

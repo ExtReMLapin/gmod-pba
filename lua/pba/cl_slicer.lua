@@ -172,13 +172,18 @@ end
 --- Evaluation of a sound at S heard at L (A.Paths.Compute's arguments). Returns its result when it is
 -- ready now (near, cheap, or slicing off), else nil and the job: its answer arrives later through
 -- job.onDone(r, job) (set by the caller right away), from the slicer's Think hook, by its deadline.
-function SL.Compute(S, L, sndlvl, srcEnt, cfg)
+-- minReach (seconds, optional): the longest an update may wait whatever the distance. A continuous sound
+-- already playing (loop, stream, followed one-shot) keeps its values meanwhile and is only re-evaluated
+-- every update_interval anyway: its update may take up to that long without any change to what is heard
+-- today. The physical delay alone left 2-4 frames at 45 fps for a sound 1500-2000 u away, and 133 of 186
+-- held jobs were finished at once at their deadline (rp_downtown walk, crowd): the spike again.
+function SL.Compute(S, L, sndlvl, srcEnt, cfg, minReach)
 	local P = A.Paths
 	if not SL.On(cfg) then return P.Compute(S, L, sndlvl, cfg, srcEnt) end
 	local st = SL.stats
 	st.requests = st.requests + 1
 	local ft = SL.FrameDt()
-	local reach = S:Distance(L) / SL.SPEED - SL.MARGIN_FRAMES * ft
+	local reach = math.max(S:Distance(L) / SL.SPEED - SL.MARGIN_FRAMES * ft, minReach or 0)
 	if reach <= ft then
 		st.near = st.near + 1
 		return P.Compute(S, L, sndlvl, cfg, srcEnt)
@@ -283,7 +288,10 @@ function SL.Held(owner, S, L, sndlvl, srcEnt, onReady)
 		owner.pbaSlice = nil
 		return j.r
 	end
-	local r, job = SL.Compute(S, L, sndlvl, srcEnt)
+	-- after its first answer, an update may wait up to update_interval (see SL.Compute's minReach)
+	local lag = owner.pbaSliceSeen and (A.cfg.update_interval or 0.25) or nil
+	local r, job = SL.Compute(S, L, sndlvl, srcEnt, nil, lag)
+	owner.pbaSliceSeen = true
 	if not job then return r end
 	owner.pbaSlice = job
 	job.onDone = function() if onReady then onReady(owner) end end
