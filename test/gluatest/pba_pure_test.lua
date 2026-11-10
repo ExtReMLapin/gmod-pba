@@ -379,6 +379,112 @@ CFG.lp1_db, CFG.lp2_db, CFG.lp3_db, CFG.lp4_db = 2, 6, 11, 16
 CFG.dsp_lp1, CFG.dsp_lp2, CFG.dsp_lp3, CFG.dsp_lp4 = 30, 30, 31, 31
 CFG.paths_model = 0 -- the tested default, whatever the server's setting (see the end of the suite)
 
+-- Far-sound slicer cases (cl_slicer.lua): the rooms of withProbeRooms (two holes, a pillar in room A), a
+-- counting clock (SysTime() + 1 at each call: one slice check, one tick; far_sliced_ms / 1000 ticks per
+-- frame), frames and real time moved by hand (nextFrame, setNow), no door of the map (ents stubbed);
+-- fn(cfg, list): a paths_model 1 cfg and S / L pairs through the wall and round the pillar.
+local sliceNow, sliceFrame = 1000, 1
+local function nextFrame() sliceFrame, sliceNow = sliceFrame + 1, sliceNow + 1 / 60 end
+local function setNow(t) sliceNow = t end
+-- every number of a result to 17 digits, keys sorted (offline eval_bench's dump)
+local function dumpResult(r)
+	local out, seen, n = {}, {}, 0
+	local function dump(v)
+		local tv = type(v)
+		if tv == "number" then out[#out + 1] = string.format("%.17g", v)
+		elseif tv == "string" then out[#out + 1] = string.format("%q", v)
+		elseif tv == "boolean" or tv == "nil" then out[#out + 1] = tostring(v)
+		elseif tv == "function" then out[#out + 1] = "fn"
+		elseif type(v) == "Vector" or (tv == "table" and v.Dot) then
+			out[#out + 1] = string.format("V(%.17g,%.17g,%.17g)", v.x, v.y, v.z)
+		elseif tv == "table" then
+			if v.GetClass then out[#out + 1] = "E" .. tostring(v.EntIndex and v:EntIndex()) return end
+			if seen[v] then out[#out + 1] = "<" .. seen[v] .. ">" return end
+			n = n + 1
+			seen[v] = n
+			local ks = {}
+			for k in pairs(v) do ks[#ks + 1] = k end
+			table.sort(ks, function(x, y)
+				if type(x) == type(y) and type(x) ~= "table" then return x < y end
+				return tostring(type(x)) < tostring(type(y))
+			end)
+			out[#out + 1] = "{"
+			for _, k in ipairs(ks) do
+				out[#out + 1] = type(k) == "table" and "[key]" or tostring(k)
+				out[#out + 1] = "="
+				dump(v[k])
+				out[#out + 1] = ","
+			end
+			out[#out + 1] = "}"
+		else
+			out[#out + 1] = tostring(v)
+		end
+	end
+	dump(r)
+	return table.concat(out)
+end
+local function withSlicedRooms(fn)
+	local SL, PR = A.Slicer, A.Probes
+	-- (globals set through _G: the suite runs in an environment of its own)
+	local saved = { _G.SysTime, _G.RealTime, _G.FrameNumber, _G.RealFrameTime, _G.ents }
+	-- (PR.doorEpoch not restored: a case moves it on, and kept answers of an epoch must not be taken again)
+	local savedSL = { SL.jobs, SL.MARGIN_FRAMES, SL.stats, SL.est, A.Graph.Get, PR.doorList }
+	local tick = 0
+	sliceNow, sliceFrame = 1000, 1
+	_G.SysTime = function() tick = tick + 1 return tick end
+	_G.RealTime = function() return sliceNow end
+	_G.FrameNumber = function() return sliceFrame end
+	_G.RealFrameTime = function() return 1 / 60 end
+	_G.ents = setmetatable({ FindByClass = function() return {} end }, { __index = saved[5] })
+	SL.jobs, SL.MARGIN_FRAMES, PR.doorList = {}, 0, nil
+	SL.ResetStats()
+	A.Graph.Get = function() return nil end -- (no area graph: the field needs none)
+	local surf = util.GetSurfacePropName
+	util.GetSurfacePropName = surf or function() return "concrete" end -- (offline shim)
+	local ok, err = pcall(withProbeRooms, { { 16, 64, 112 }, { 360, 424, 140 } }, { { Vector(200, 150, -8), Vector(240, 190, 200) } },
+		{ native_traces = 0, paths_model = 1, far_sliced = 1, far_sliced_ms = 4000 }, function()
+			-- what P.Walls reads besides: the material (concrete everywhere) and where a trace started in solid
+			-- leaves it (1 u steps)
+			local tl = util.TraceLine
+			util.TraceLine = function(t)
+				local o = tl(t)
+				o.SurfaceProps, o.MatType, o.HitTexture, o.HitSky, o.HitNoDraw = 0, MAT_CONCRETE, "CONCRETE/WALL", false, false
+				o.FractionLeftSolid, o.AllSolid = 0, false
+				if o.StartSolid then
+					local a, b = t.start, t.endpos
+					local len = math.max(a:Distance(b), 1e-6)
+					local f = 1
+					for d = 1, math.ceil(len) do
+						if util.PointContents(a + (b - a) * (d / len)) == 0 then f = d / len break end
+					end
+					o.FractionLeftSolid, o.AllSolid = math.min(f, 1), f >= 1
+				end
+				return o
+			end
+			local cfg = setmetatable({ paths_model = 1, probes = 1, probe_dist = 1e6, path_props = 1, water = 0, probe_field = 1,
+				far_sliced = 1, cache_ttl = 0 }, { __index = CFG })
+			-- deterministic positions: sources in room B, listeners in room A (some behind the pillar)
+			local seed = 12345
+			local function rnd(a, b)
+				seed = (seed * 1103515245 + 12345) % 2147483648
+				return a + (b - a) * seed / 2147483648
+			end
+			local list = {}
+			for i = 1, 10 do
+				local S = Vector(rnd(560, 1000), rnd(30, 480), rnd(40, 150))
+				local L = i % 3 == 0 and Vector(rnd(150, 290), rnd(200, 300), rnd(40, 150)) or Vector(rnd(40, 470), rnd(30, 480), rnd(40, 150))
+				if L.x > 180 and L.x < 260 and L.y > 130 and L.y < 210 then L.x = 120 end -- (not in the pillar)
+				list[#list + 1] = { S, L }
+			end
+			fn(cfg, list)
+		end)
+	_G.SysTime, _G.RealTime, _G.FrameNumber, _G.RealFrameTime, _G.ents = saved[1], saved[2], saved[3], saved[4], saved[5]
+	util.GetSurfacePropName = surf
+	SL.jobs, SL.MARGIN_FRAMES, SL.stats, SL.est, A.Graph.Get, PR.doorList = savedSL[1], savedSL[2], savedSL[3], savedSL[4], savedSL[5], savedSL[6]
+	P.InvalidateCache()
+	if not ok then error(err, 0) end
+end
+
 local SUITE = {
 	groupName = "pba pure functions",
 	cases = {
@@ -2715,6 +2821,164 @@ local SUITE = {
 				end)
 				_G.ents, A.Doors, PR.doorList = savedEnts, savedDoors, savedList
 				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "Far sliced: an evaluation run in slices gives the synchronous result bit for bit, whatever the slice size and the evaluations run between its slices", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				local paused, n = 0, 0
+				for budget = 1, 3 do
+					for i, pr in ipairs(list) do
+						-- sliced first (cold kept answers: more work, more pauses), another pair's synchronous
+						-- evaluation between its slices; each built its own field (the field of a seed set is built
+						-- by the first evaluation that asks for it, as in a synchronous run)
+						PR.fieldsByKey, P.cache = nil, {}
+						A.cfg.far_sliced_ms = budget * 4 * 1000 -- (ticks of the counting clock per frame)
+						local r, job = SL.Compute(pr[1], pr[2], 75, nil, cfg)
+						local got = r
+						if job then
+							paused = paused + 1
+							job.deadline = math.huge -- (never due: only the budget moves it on)
+							job.onDone = function(res) got = res end
+							local other = list[(i % #list) + 1]
+							for _ = 1, 100000 do
+								if got then break end
+								P.cache = {}
+								P.Compute(other[1], other[2], 75, cfg)
+								nextFrame()
+								SL.Run()
+							end
+						end
+						PR.fieldsByKey, P.cache = nil, {}
+						local ref = P.Compute(pr[1], pr[2], 75, cfg)
+						expect(got ~= nil).to.beTrue()
+						expect(dumpResult(got)).to.equal(dumpResult(ref))
+						n = n + 1
+					end
+				end
+				expect(paused >= n / 2).to.beTrue() -- (most of them really ran in slices)
+			end)
+		end },
+		{ name = "Far sliced: a near sound (its deadline within the next frame) is evaluated at once, outside any slice", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL = A.Slicer
+				local creates, cc = 0, coroutine.create
+				coroutine.create = function(...) creates = creates + 1 return cc(...) end
+				local ok, err = pcall(function()
+					local S, L = Vector(700, 300, 64), Vector(460, 300, 64) -- 240 u through the wall: 13 ms
+					P.cache = {}
+					local near0 = SL.stats.near
+					local r, job = SL.Compute(S, L, 75, nil, cfg)
+					expect(r ~= nil and job == nil).to.beTrue()
+					expect(SL.stats.near).to.equal(near0 + 1)
+					expect(creates).to.equal(0)
+					P.cache = {}
+					expect(dumpResult(r)).to.equal(dumpResult(P.Compute(S, L, 75, cfg)))
+				end)
+				coroutine.create = cc
+				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "Far sliced: a job whose deadline comes before the next frame is finished in that frame whatever the budget, with the synchronous result", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				A.cfg.far_sliced_ms = 0 -- (no budget: only the first slice and the deadline move it)
+				local done = 0
+				for _, pr in ipairs(list) do
+					PR.fieldsByKey, P.cache = nil, {}
+					local r, job = SL.Compute(pr[1], pr[2], 75, nil, cfg)
+					if job then
+						local got
+						job.onDone = function(res) got = res end
+						SL.Run()
+						expect(got).to.beNil() -- not due, no budget: nothing
+						setNow(job.deadline - 0.5 * SL.FrameDt()) -- due before the next frame
+						local f0 = SL.stats.forced
+						SL.Run()
+						expect(got ~= nil).to.beTrue()
+						expect(SL.stats.forced).to.equal(f0 + 1)
+						PR.fieldsByKey, P.cache = nil, {}
+						expect(dumpResult(got)).to.equal(dumpResult(P.Compute(pr[1], pr[2], 75, cfg)))
+						done = done + 1
+					end
+				end
+				expect(done > 0).to.beTrue()
+			end)
+		end },
+		{ name = "Far sliced: a job whose inputs changed while it was paused (door boxes, settings) is not served: restarted, it answers for the new inputs", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				A.cfg.far_sliced_ms = 4000
+				local function sliced(pr, change)
+					PR.fieldsByKey, P.cache = nil, {}
+					local r, job = SL.Compute(pr[1], pr[2], 75, nil, cfg)
+					if not job then return nil end
+					job.deadline = math.huge
+					local got
+					job.onDone = function(res) got = res end
+					change()
+					for _ = 1, 100000 do
+						if got then break end
+						nextFrame()
+						SL.Run()
+					end
+					return got, job
+				end
+				local pr
+				for _, p in ipairs(list) do
+					P.cache = {}
+					local r = P.Compute(p[1], p[2], 75, cfg)
+					if r.trans and r.trans.lossDb > 1 then pr = p break end
+				end
+				expect(pr ~= nil).to.beTrue()
+				-- a door box moved (PR.doorEpoch): restarted once, same answer here (no door in the scene)
+				local got, job = sliced(pr, function() PR.doorEpoch = PR.doorEpoch + 1 end)
+				expect(job ~= nil and job.restarts == 1).to.beTrue()
+				PR.fieldsByKey, P.cache = nil, {}
+				expect(dumpResult(got)).to.equal(dumpResult(P.Compute(pr[1], pr[2], 75, cfg)))
+				-- a setting changed (P.InvalidateCache, as the convars' callback does): the answer is the new one
+				PR.fieldsByKey, P.cache = nil, {}
+				local before = dumpResult(P.Compute(pr[1], pr[2], 75, cfg))
+				local saved = cfg.trans_scale
+				got, job = sliced(pr, function() cfg.trans_scale = 2 P.InvalidateCache() end)
+				local ok, err = pcall(function()
+					expect(job ~= nil and job.restarts == 1).to.beTrue()
+					PR.fieldsByKey, P.cache = nil, {}
+					local after = dumpResult(P.Compute(pr[1], pr[2], 75, cfg))
+					expect(after ~= before).to.beTrue()
+					expect(dumpResult(got)).to.equal(after)
+				end)
+				cfg.trans_scale = saved
+				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "Far sliced: an evaluation registers its listener field in its first slice whatever the budget: the field of a seed set is the first request's (its position is the field's), as in a synchronous run", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				A.cfg.far_sliced_ms = 0 -- (no budget: the job pauses at its first check past the field)
+				-- two sources in room B, two listener positions with the same seeds
+				local L, L2 = Vector(300, 300, 64), Vector(301, 300, 64)
+				local S1, S2 = Vector(900, 120, 64), Vector(940, 380, 90)
+				PR.fieldsByKey, P.cache = nil, {}
+				local key = PR.SeedSet(PR.current, L)
+				expect(PR.SeedSet(PR.current, L2)).to.equal(key)
+				local r1, j1 = SL.Compute(S1, L, 75, nil, cfg)
+				expect(r1 == nil and j1 ~= nil).to.beTrue()
+				local f = PR.fieldsByKey and PR.fieldsByKey[key]
+				expect(f ~= nil and f.L == j1.L).to.beTrue() -- (built, or being built: the job's own L)
+				local r2 = P.Compute(S2, L2, 75, cfg) -- a later synchronous request reads (or finishes) that field
+				expect(PR.fieldsByKey[key].L == j1.L and PR.fieldsByKey[key].building == nil).to.beTrue()
+				local got
+				j1.onDone = function(res) got = res end
+				setNow(j1.deadline)
+				SL.Run()
+				expect(got ~= nil).to.beTrue()
+				-- the synchronous run of the same requests in the same order
+				PR.fieldsByKey, P.cache = nil, {}
+				local ref1 = P.Compute(S1, L, 75, cfg)
+				local ref2 = P.Compute(S2, L2, 75, cfg)
+				expect(dumpResult(got)).to.equal(dumpResult(ref1))
+				expect(dumpResult(r2)).to.equal(dumpResult(ref2))
 			end)
 		end },
 		{ name = "Compute (paths_model 1): the answer is the field's whatever the frame budget, never provisional, and the first field is built at once", func = function()

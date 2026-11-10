@@ -27,6 +27,25 @@ end
 P.worldGen = P.worldGen or 0
 function P.ForgetWorld() P.worldGen = P.worldGen + 1 end
 
+-- ------------------------------------------------------------------ cooperative slices (cl_slicer.lua)
+-- A far sound's evaluation may run in a coroutine, a few ms per frame (pba_far_sliced): its sound needs
+-- d / speed of sound to arrive anyway. P.slice.co is that coroutine while it runs (false otherwise) and
+-- P.slice.t the SysTime() at which it gives the frame back at its next check. Outside it a check is one
+-- table read: a synchronous evaluation runs exactly as before. Checks sit only where no shared scratch
+-- state is live (reused trace tables, ignoreEnt, doorSkip): other evaluations run before it resumes.
+-- P.slice.hold: no check yields yet. An evaluation reads and registers its listener field (cl_probes
+-- PR.FieldFor) in the request's own first slice, as a synchronous one does at its request: the first request
+-- of a seed set builds its field (and its position is the field's), in the order of the requests.
+P.slice = { co = false, t = 0, hold = false }
+local SLICE = P.slice
+local coRunning, coYield = coroutine.running, coroutine.yield
+--- Yields the running slice once its time is up; a no-op anywhere else (another coroutine included).
+local function sliceCheck()
+	local co = SLICE.co
+	if co and not SLICE.hold and SysTime() >= SLICE.t and coRunning() == co then coYield() end
+end
+P.SliceCheck = sliceCheck
+
 -- exact equality of two coordinates, the sign of a zero included (a trace from -0 is not assumed the same)
 local function same(p, q) return p == q and (p ~= 0 or 1 / p == 1 / q) end
 
@@ -784,18 +803,20 @@ local detClear = P.WorldSegMemo(detTrace, 16384)
 -- traces that check the way round see the world only, and a point 2 u past a door leaf's free edge lay
 -- behind the jamb's corner for a route vertex on the jamb (the way round then 60 u over the hinge, 10 dB,
 -- against nothing one frame later).
+-- (slice checks inside: its callers hold no shared trace table across it, P.Walls computing its detours
+-- after its own traces)
 local function objectDetour(ent, S, L)
 	local mn, mx = ent:OBBMins(), ent:OBBMaxs()
 	local lS, lL = ent:WorldToLocal(S), ent:WorldToLocal(L)
 	return P.DetourDelta(lS, lL, mn, mx, function(e)
 		local we = ent:LocalToWorld(e)
 		return detClear(S, we) and detClear(we, L)
-	end)
+	end, true)
 end
 
 --- Walls crossed by the straight line S -> L, traced from S only (see P.Walls).
-local function wallsOneWay(S, L, maxWalls, srcEnt)
-	local walls = {}
+local function wallsOneWay(S, L, maxWalls, srcEnt, lazy)
+	local walls, detours = {}, nil
 	local dir = (L - S):GetNormalized()
 	local start = S
 	ignoreEnt = srcEnt
@@ -850,12 +871,17 @@ local function wallsOneWay(S, L, maxWalls, srcEnt)
 				w.detour, w.gapDb = P.LeafWay(hitEnt, { S, L }, A.cfg, 0, 0, false, P.BlockedChunk(S, entry), P.BlockedChunk(entry, L))
 			end
 		elseif hitEnt and closureWeight(hitEnt) < 1 then
-			w.detour = objectDetour(hitEnt, S, L)
+			-- its way round once the line is traced: it reads the world only (its own traces), and a far
+			-- sound's slice may pause in it while wallOut and ignoreEnt are no longer needed
+			detours = detours or {}
+			detours[#detours + 1] = { w, S, L }
 		end
 		if hitEnt or not P.PassTool(tr) then walls[#walls + 1] = w end
 		if exit == L then break end
 		start = exit + dir * 0.5
 	end
+	walls.detours = detours
+	if not lazy then P.WallDetours(walls) end
 	-- water surface between source and listener: the air / water interface reflects most of the
 	-- sound (one fixed, heavily low-passed "wall"; no detour through the air exists)
 	if A.cfg.water >= 0.5 then
@@ -896,20 +922,30 @@ end
 
 P.HasDisplacements = mapHasDisplacements
 
-function P.Walls(S, L, maxWalls, srcEnt)
-	local w = wallsOneWay(S, L, maxWalls, srcEnt)
+-- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
+-- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
+function P.Walls(S, L, maxWalls, srcEnt, lazy)
+	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy)
 	-- a trace crosses a displacement only going up through it (its face looks up): from below
 	if #w >= (maxWalls or 6) or S.z >= L.z or not mapHasDisplacements() then return w end
-	local r = wallsOneWay(L, S, maxWalls, srcEnt)
+	local r = wallsOneWay(L, S, maxWalls, srcEnt, true)
 	if #r <= #w then return w end
 	-- reversed: ordered from S, entry and exit swapped
-	local out = {}
+	local out = { detours = r.detours }
 	for i = #r, 1, -1 do
 		local x = r[i]
 		x.entry, x.exit = x.exit, x.entry
 		out[#out + 1] = x
 	end
+	if not lazy then P.WallDetours(out) end
 	return out
+end
+--- The ways round the objects of a P.Walls list not computed yet (each from its own pass's S and L).
+function P.WallDetours(walls)
+	local d = walls.detours
+	if not d then return end
+	walls.detours = nil
+	for _, e in ipairs(d) do e[1].detour = objectDetour(e[1].ent, e[2], e[3]) end
 end
 
 --- Door loss (dB), lowpass level, (nil) and the door entity crossed by a route segment a -> b (game
@@ -1438,8 +1474,10 @@ local function enclosed(p, mins, maxs)
 end
 local EDGES = { -- the 12 edges of a box as corner index pairs (bit k of the index: max on axis k)
 	{ 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
-local cand = {}
-function P.DetourDelta(S, L, mins, maxs, valid)
+local candShared = {}
+--- sliced: slice checks between its world tests (objectDetour's calls; its scratch list is then its own).
+function P.DetourDelta(S, L, mins, maxs, valid, sliced)
+	local cand = (sliced and SLICE.co) and {} or candShared
 	-- source or listener enclosed by the obstacle: no way round it
 	if enclosed(S, mins, maxs) or enclosed(L, mins, maxs) then return math.huge end
 	local sx, sy, sz = S.x, S.y, S.z
@@ -1491,6 +1529,7 @@ function P.DetourDelta(S, L, mins, maxs, valid)
 	for i = 1, n do
 		local c = cand[i]
 		if c[1] >= best then break end
+		if sliced then sliceCheck() end
 		if valid(Vector(c[2], c[3], c[4])) then
 			best = c[1]
 			break
@@ -1502,12 +1541,14 @@ function P.DetourDelta(S, L, mins, maxs, valid)
 			local tEnd = side < 0 and 0 or 1
 			local prev = t0
 			for k = 1, EDGE_SAMPLES do
+				if sliced then sliceCheck() end
 				local t = t0 + (tEnd - t0) * k / EDGE_SAMPLES
 				local x, y, z, d = along(c, t)
 				if d >= best then break end
 				if valid(Vector(x, y, z)) then
 					local lo, hi = prev, t -- blocked .. clear
 					for _ = 1, EDGE_CLEAR_HALVINGS do
+						if sliced then sliceCheck() end
 						local m = (lo + hi) * 0.5
 						local mx, my, mz = along(c, m)
 						if valid(Vector(mx, my, mz)) then hi = m else lo = m end
@@ -1581,10 +1622,12 @@ function P.WorldEdge(S, L, walls, cfg, noDoors)
 		local lo = 0
 		for _, h in ipairs(EDGE_STEPS) do
 			if best and h >= best.h * 2 then break end -- twice as far off the line as the best: a longer way
+			sliceCheck()
 			local ok = clearAt(u, h)
 			if ok then
 				local hi = h
 				for _ = 1, EDGE_REFINE do
+					sliceCheck()
 					local mid = (lo + hi) * 0.5
 					if clearAt(u, mid) then hi = mid else lo = mid end
 				end
@@ -1660,7 +1703,9 @@ end
 local CORNER_EPS, CORNER_HALVINGS, CORNER_SWEEPS = 0.125, 8, 3
 local cornerClear = detClear
 --- The point the sound bends round between a and b, starting from clearance vertex v (game state: traces).
-function P.CornerPoint(a, v, b)
+-- y: slice checks between its traces (P.RefineCorners' calls only: P.LeafWay calls it while the door
+-- traces' shared tables are live).
+function P.CornerPoint(a, v, b, y)
 	local ab = b - a
 	local len2 = ab:LengthSqr()
 	local t = len2 > 0 and math.Clamp((v - a):Dot(ab) / len2, 0, 1) or 0
@@ -1671,6 +1716,7 @@ function P.CornerPoint(a, v, b)
 	local lo, hi = 0, 1
 	for _ = 1, CORNER_HALVINGS do
 		if (hi - lo) * len < CORNER_EPS then break end
+		if y then sliceCheck() end
 		local mid = (lo + hi) * 0.5
 		local q = v + (target - v) * mid
 		if cornerClear(a, q) and cornerClear(q, b) then lo = mid else hi = mid end
@@ -1692,6 +1738,7 @@ function P.CornerPoint(a, v, b)
 				local s0, s1 = 0, 1
 				for _ = 1, CORNER_HALVINGS + 4 do
 					if (s1 - s0) * sl < CORNER_EPS then break end
+					if y then sliceCheck() end
 					local mid = (s0 + s1) * 0.5
 					if cornerClear(other, q + seg * mid) then s0 = mid else s1 = mid end
 				end
@@ -1717,7 +1764,7 @@ function cornerKept(a, v, b)
 	local vx, vy, vz = v:Unpack()
 	local bx, by, bz = b:Unpack()
 	local h = ax + ay * 1.7 + az * 2.9 + vx * 4.3 + vy * 6.1 + vz * 8.7 + bx * 10.3 + by * 12.7 + bz * 14.9
-	if h ~= h then return P.CornerPoint(a, v, b) end
+	if h ~= h then return P.CornerPoint(a, v, b, true) end
 	local e = cornerT[h]
 	while e do
 		if same(e[1], ax) and same(e[2], ay) and same(e[3], az) and same(e[4], vx) and same(e[5], vy) and same(e[6], vz)
@@ -1726,7 +1773,7 @@ function cornerKept(a, v, b)
 		end
 		e = e[11]
 	end
-	local q = P.CornerPoint(a, v, b)
+	local q = P.CornerPoint(a, v, b, true)
 	cornerT[h] = { ax, ay, az, vx, vy, vz, bx, by, bz, Vector(q), cornerT[h] }
 	cornerN = cornerN + 1
 	return q
@@ -1779,12 +1826,15 @@ function refineCorners(pts, on)
 		local kept, i = { pts[1] }, 1
 		while i < #pts do
 			local j = #pts
-			while j > i + 1 and not cornerClear(pts[i], pts[j]) do j = j - 1 end
+			while j > i + 1 and not cornerClear(pts[i], pts[j]) do j = j - 1 sliceCheck() end
 			kept[#kept + 1] = pts[j]
 			i = j
 		end
 		pts = kept
-		for x = 2, #pts - 1 do out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1]) end
+		for x = 2, #pts - 1 do
+			sliceCheck()
+			out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1])
+		end
 	else
 		for i = 2, #pts - 1 do out[i] = pts[i] end
 	end
@@ -1827,6 +1877,7 @@ local function triangleFree(u, v, w, clear)
 	local stride = N
 	while stride >= 2 do
 		for k = stride / 2, N - 1, stride do
+			sliceCheck()
 			if not clear(apex, x + d * (k / N)) then return false end
 		end
 		stride = stride / 2
@@ -1920,6 +1971,7 @@ function sameTraced(a, b, clear, na, nb)
 	end
 	push(1, 1)
 	while #stack > 0 do
+		sliceCheck()
 		local m = table.remove(stack)
 		local i, j, ni, nj = m[1], m[2], m[3], m[4]
 		local key = ni * 1024 + nj
@@ -3102,8 +3154,11 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	if c and now - c.t < cfg.cache_ttl and not c.r.provisional then return c.r end
 
 	local r = { S = S, L = L }
-	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt)
-	if (cfg.door_3d or 0) >= 0.5 then P.LineLeaves(S, L, walls, cfg) end
+	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)
+	if (cfg.door_3d or 0) >= 0.5 then
+		P.WallDetours(walls)
+		P.LineLeaves(S, L, walls, cfg)
+	end
 	if #walls == 0 then
 		r.clear = true
 	else
@@ -3142,6 +3197,8 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				r.paths = P.KeepLoudest(r.paths, cfg.max_paths, sndlvl)
 			end
 		end
+		SLICE.hold = false -- (no listener field read from here on: cl_slicer may take the frame back)
+		P.WallDetours(walls)
 		-- a leaf whose doorway a portal path goes through is modelled by that portal (state, gap, closed
 		-- loss, position in the doorway): not a second time as a wall (closed) or as an object (open). One
 		-- model whether the line crosses the leaf or the wall beside it (door_sweep_real: the voice keeps its
@@ -3250,6 +3307,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- route through another opening is not, and the edge is added beside it. Before, any route found
 		-- switched the edge off, so a listener stepping past a jamb heard the route's clearance vertex
 		-- (12 dB) where the edge gave 1, and the edge was heard only where the probes found nothing.
+		sliceCheck()
 		if worldBlocked and r.trans then
 			if not fieldOnly and A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
 				r.provisional = true
@@ -3260,6 +3318,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 					local dup = false
 					for _, p in ipairs(r.paths) do
 						if p.points and #p.points > 0 and not p.native then
+							sliceCheck()
 							local pts = { S }
 							for _, v in ipairs(p.points) do pts[#pts + 1] = v end
 							pts[#pts + 1] = L
@@ -3273,6 +3332,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		end
 		if (cfg.path_props or 1) >= 0.5 then
 			for _, p in ipairs(r.paths) do
+				sliceCheck()
 				if p.points and #p.points > 0 then pathProps(p, S, L, cfg, srcEnt) end
 			end
 		end

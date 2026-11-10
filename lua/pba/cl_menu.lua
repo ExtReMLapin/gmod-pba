@@ -38,6 +38,8 @@ function Build.player(panel)
 	panel.apDeps = { { chk(panel, "Muffle those radios", "streams_filter"), "ready" },
 		{ chk(panel, "Radios in 3D (module)", "streams_native"), "render" }, { sld(panel, "Debug overlay", "debug"), "debug" } }
 	sld(panel, "Path budget (ms/frame)", "frame_budget_ms", 1)
+	chk(panel, "Far sounds' paths over frames", "far_sliced")
+	sld(panel, "Far sounds budget (ms/frame)", "far_sliced_ms", 1)
 	panel:Help("Limits (what goes beyond is left to the engine):")
 	sld(panel, "Re-evaluation interval (s)", "update_interval", 2)
 	chk(panel, "Spread loop updates over frames", "loops_stagger")
