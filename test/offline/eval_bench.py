@@ -18,7 +18,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "pylib"))
 from lupa import luajit21 as lj  # noqa: E402
 
-MODULES = ("sh_config.lua", "sh_bsp.lua", "sh_acoustics.lua", "sh_graph.lua", "sh_paths.lua", "sh_core.lua", "cl_probes.lua")
+MODULES = ("sh_config.lua", "sh_bsp.lua", "sh_acoustics.lua", "sh_graph.lua", "sh_paths.lua", "sh_core.lua",
+           "cl_probes_kernels.lua", "cl_probes.lua")
 
 
 def run(repo, mode, pairs=200, seed=1):
@@ -27,7 +28,9 @@ def run(repo, mode, pairs=200, seed=1):
     L.execute("EVAL_MODE = '%s'" % mode)
     L.execute(open(os.path.join(HERE, "eval_counting.lua"), encoding="utf-8").read())
     for f in MODULES:
-        L.execute(open(os.path.join(repo, "lua", "pba", f), encoding="utf-8").read())
+        p = os.path.join(repo, "lua", "pba", f)
+        if os.path.exists(p):  # (a base older than the kernels has none)
+            L.execute(open(p, encoding="utf-8").read())
     return L.execute(open(os.path.join(HERE, "eval_scene.lua"), encoding="utf-8").read(), mode, pairs, seed)
 
 
