@@ -20,7 +20,7 @@
 --   3. door open: the same slide as 1.
 -- Each sample is classified by what the straight line crosses: leaf (the door), wall (world), clear.
 -- Pass:
---   * neighbour jump <= JUMP_DB (3 dB, as door_sweep) of the level relative to the free field, and of the
+--   * neighbour jump <= JUMP_DB (3 dB, as door_sweep; JUMP_FIRST_DB in the first FIRST_DEG degrees of opening) of the level relative to the free field, and of the
 --     low-pass level <= 1, in the slides AND along the leaf's rotation: a leaf swinging by less than a
 --     degree, or the listener moving 2 u, cannot change what is heard by more;
 --   * one model per object: across the leaf / wall boundary (one neighbour behind the leaf, the other
@@ -34,6 +34,11 @@
 -- are left out and break the neighbour chain.
 local A = pba
 local SPEED, JUMP_DB, FREE_TOL, MIN_ROT_FRAMES = 15, 3, 0.1, 20
+-- In the first FIRST_DEG degrees of opening the gap at the free edge goes from sealed to a few units and the
+-- level climbs fastest (pba_door_3d: up to ~8 dB per degree, halving every degree, smooth and monotonic):
+-- at ~0.45 degree per client frame a neighbour pair may step up to JUMP_FIRST_DB there. User's decision,
+-- 2026-11-10: keep that law (the sound of a door coming unstuck), 3 dB everywhere else.
+local FIRST_DEG, JUMP_FIRST_DB = 10, 4
 local map = game.GetMap()
 local CASES = {
 	rp_downtown_v4c_v2 = { S = Vector(-2149.338, -6898.178, -59.647), L = Vector(-2196.6, -6960.969, -3.969) },
@@ -179,7 +184,8 @@ local function check(series, tag, key)
 			o.pairs = o.pairs + 1
 			local d = dbStep(a, s)
 			if d > o.worst then o.worst, o.worstAt = math.Round(d, 2), string.format("%s->%s %s->%s %.1f->%.1f dB", a.at, s.at, a.cls, s.cls, a.loss, s.loss) end
-			if d > JUMP_DB or math.abs(a.lp - s.lp) > 1 then
+			local lim = (a.open and s.open and math.min(a.open, s.open) <= FIRST_DEG) and JUMP_FIRST_DB or JUMP_DB
+			if d > lim or math.abs(a.lp - s.lp) > 1 then
 				fail(string.format("%s %s=%s->%s %s->%s %.1f->%.1f dB lp%d->lp%d (%s | %s)", tag, key, a.at, s.at, a.cls, s.cls, a.loss, s.loss,
 					a.lp, s.lp, a.voices or a.kind, s.voices or s.kind))
 			end
@@ -215,6 +221,7 @@ local ok, err = pcall(function()
 	local probes = { doorway = L0, beyond = L0 + n * (bt.Hit and 12 * bt.Fraction or 24), left = L0 + t * 24, right = L0 - t * 24 }
 	local series = {}
 	for k in pairs(probes) do series[k] = {} end
+	local yaw0 = door:GetAngles().y -- closed: the opening angle of each rotation sample is measured from it
 	RunConsoleCommand("pba_test_dsr_open")
 	job:wait(function() return (frac() or 0) > 0.005 end, 5)
 	local t0, still = RealTime(), 0
@@ -224,6 +231,7 @@ local ok, err = pcall(function()
 		for k, L in pairs(probes) do
 			local x = sample(L, false)
 			x.at = string.format("%.3f/%.1f", f, yaw)
+			x.open = math.abs(math.AngleDifference(yaw, yaw0))
 			table.insert(series[k], x)
 		end
 		if f >= 0.99 then still = still + 1 else still = 0 end

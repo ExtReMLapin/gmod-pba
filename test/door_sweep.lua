@@ -69,25 +69,10 @@ for _, y in ipairs({ 440, 400, 340 }) do
 			out.fails[#out.fails + 1] = string.format("y=%d x=%d->%d %s->%s voice %s->%s", y, a.x, b.x, a.cls, b.cls, a.kind, b.kind)
 		end
 	end
-	if st.frac >= 0.99 then
-		-- open door: never more muffled behind the leaf than behind the wall next to it
-		for i, s in ipairs(row) do
-			if s.cls == "leaf" then
-				local nearest
-				for d = 1, #row do
-					for _, j in ipairs({ i - d, i + d }) do
-						if row[j] and row[j].cls == "wall" then nearest = nearest or row[j] end
-					end
-					if nearest then break end
-				end
-				-- losses below 0 are not muffling (and fail above, beyond FREE_TOL): clipped at 0
-				if nearest and (math.max(s.loss, 0) > math.max(nearest.loss, 0) + 1 or s.lp > nearest.lp) then
-					out.fails[#out.fails + 1] = string.format("y=%d x=%d leaf %.1f dB lp%d > wall x=%d %.1f dB lp%d", y, s.x,
-						s.loss, s.lp, nearest.x, nearest.loss, nearest.lp)
-				end
-			end
-		end
-	end
+	-- (open door: no comparison with the wall beside the leaf any more. A leaf open at 90 degrees stands
+	-- like a 47 u fin and a listener behind it hears round its free edge, 1.4-3.2 dB here, where the sample
+	-- behind the opposite jamb costs 0; the former pass came from the probe route ignoring the open leaf.
+	-- User's decision, 2026-11-10: an open leaf costs its way round; continuity and the free-field cap stay.)
 end
 out.pass = #out.fails == 0
 -- summary per row (kind and loss range per class), the samples themselves are too verbose
