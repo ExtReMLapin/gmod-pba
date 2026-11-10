@@ -22,6 +22,7 @@ local files = {
 	{ "pba/cl_streams.lua", "cl" },
 	{ "pba/cl_probes_kernels.lua", "cl" }, -- compiled kernels of cl_probes (which runs interpreted)
 	{ "pba/cl_probes.lua", "cl" },
+	{ "pba/cl_slicer.lua", "cl" }, -- far sounds' evaluations spread over frames
 	{ "pba/cl_native.lua", "cl" },
 	{ "pba/cl_render.lua", "cl" },
 	{ "pba/cl_debug.lua", "cl" },

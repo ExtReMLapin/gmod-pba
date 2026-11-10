@@ -43,6 +43,11 @@ local LINK_DZ = 4
 
 local floor, abs, sqrt = math.floor, math.abs, math.sqrt
 
+-- Slice check of a far sound's evaluation (A.Paths.SliceCheck, cl_slicer.lua): a no-op outside its coroutine.
+-- Placed only between traces whose shared tables (segOut...) are no longer read. Looked up at each call: a
+-- refresh of sh_paths.lua makes a new slice state.
+local function sliceCheck() return A.Paths.SliceCheck() end
+
 local function worldOnly() return false end
 -- links cross grates, fences, grilles (CONTENTS_GRATE: "bullets/sight pass through"): sound does too
 local LINK_MASK = bit.band(MASK_SOLID_BRUSHONLY, bit.bnot(CONTENTS_GRATE))
@@ -872,6 +877,7 @@ function PR.Visible(g, p, maxn, reach)
 	end)
 	local out = {}
 	for _, n in ipairs(cands) do
+		sliceCheck()
 		if clearSegKept(p, n.pos) then
 			out[#out + 1] = n
 			if #out >= (maxn or 3) then break end
@@ -972,7 +978,7 @@ function PR.Pull(pts)
 	local i = 1
 	while i < #pts do
 		local j = #pts
-		while j > i + 1 and not clearFat(pts[i], pts[j]) do j = j - 1 end
+		while j > i + 1 and not clearFat(pts[i], pts[j]) do j = j - 1 sliceCheck() end
 		out[#out + 1] = pts[j]
 		i = j
 	end
@@ -1345,6 +1351,32 @@ end
 -- at every seed, each seed's distance to the listener added when read), and the same answer. Kept by key
 -- (sorted seed ids), the last FIELD_KEEP of them; the seed set is looked up once per listener position.
 local FIELD_KEEP = 6
+-- A field built in a far sound's slices (PR.FieldFor): the build's own coroutine gives the frame back when
+-- the slice running it is spent (A.Paths.slice); resumed outside any slice, it runs to its end at once.
+local function buildYield()
+	local sl = A.Paths.slice
+	if sl.co and SysTime() >= sl.t then coroutine.yield() end
+end
+--- The field of a registered build e ({ building = coroutine, key }): resumed until done, the evaluation's
+-- own slice checked between its slices; the field then replaces e in the kept fields (kept).
+local function finishField(e, kept)
+	local co = e.building
+	while coroutine.status(co) ~= "dead" do
+		local ok, res = coroutine.resume(co)
+		if not ok then
+			if kept[e.key] == e then kept[e.key] = nil end
+			error(res, 0)
+		end
+		if coroutine.status(co) == "dead" then
+			res.key = e.key
+			e.field = res
+		else
+			sliceCheck()
+		end
+	end
+	if kept[e.key] == e then kept[e.key] = e.field end
+	return e.field
+end
 local function seedSet(g, L)
 	local m = PR.seedMemo
 	local lx, ly, lz = L:Unpack()
@@ -1361,12 +1393,33 @@ PR.SeedSet = seedSet
 --- The field of the probes L sees (built at once when not kept), or nil when L sees no probe.
 function PR.FieldFor(g, L)
 	local key, seeds = seedSet(g, L)
-	if #seeds == 0 then return nil end
+	local sl = A.Paths.slice
+	if #seeds == 0 then sl.hold = false return nil end
 	local sig = PR.StateSig(g)
 	local kept = PR.fieldsByKey
 	if not kept or kept.g ~= g then kept = { g = g, order = {} } PR.fieldsByKey = kept end
 	local f = kept[key]
-	if f and f.stateSig == sig then return f end
+	if not f then
+		-- the first evaluation that asks for a seed set builds its field (its L is the field's f.L), as the
+		-- order of the requests says: in a far sound's slice the field is registered at once (still in the
+		-- request's own first slice, cl_slicer) and built in slices; any evaluation that needs it meanwhile
+		-- finishes that same build (finishField), synchronously or in its own slices
+		if sl.co and coroutine.running() == sl.co then
+			f = { building = coroutine.create(function() return PR.BuildFields(g, L, buildYield, nil, seeds) end), key = key, L = L }
+		else
+			f = PR.BuildFields(g, L, nil, nil, seeds)
+			f.key, f.seedList = key, seeds
+		end
+		kept.order[#kept.order + 1] = key
+		if #kept.order > FIELD_KEEP then kept[table.remove(kept.order, 1)] = nil end
+		kept[key] = f
+	end
+	sl.hold = false -- (cl_slicer: the evaluation may now give frames back)
+	if f.building then
+		f = finishField(f, kept)
+		f.seedList = f.seedList or seeds
+	end
+	if f.stateSig == sig then return f end
 	if f then
 		-- a door or portal state changed: the field by length stands (it reads no door: they are paid on the
 		-- route, P.EvalPolyline), only the field with the door costs is redone, in background slices, the old
@@ -1376,13 +1429,6 @@ function PR.FieldFor(g, L)
 		PR.QueueDoorField(g, f, sig)
 		return f
 	end
-	f = PR.BuildFields(g, L, nil, nil, seeds)
-	f.key, f.seedList = key, seeds
-	if not kept[key] then
-		kept.order[#kept.order + 1] = key
-		if #kept.order > FIELD_KEEP then kept[table.remove(kept.order, 1)] = nil end
-	end
-	kept[key] = f
 	return f
 end
 
@@ -1441,6 +1487,8 @@ function PR.AdvanceDoorFields()
 		local f = job.f
 		PR.doorFieldSpare = f.doors -- its tables are filled again by the next build (no garbage per build)
 		f.doors, f.stateSig = res.doors, res.sig
+		-- a far sound's evaluation paused in a slice may hold the old one (cl_slicer: restarted)
+		PR.fieldEpoch = (PR.fieldEpoch or 0) + 1
 		PR.doorFieldJob = nil
 	end
 end
@@ -1463,6 +1511,7 @@ local function fieldSeen(f, L)
 	local seen, any = {}, false
 	local nodes = f.g.nodes
 	for _, id in ipairs(f.seeds or {}) do
+		sliceCheck()
 		if sees(nodes[id].pos, L) then seen[id], any = true, true end
 	end
 	local seenL = sees(f.L, L)
@@ -1681,6 +1730,7 @@ local function slideTo(q, toward, other)
 	local lo, hi = 0, 1
 	for _ = 1, MAX_HALVINGS do
 		if (hi - lo) * len < MOVE_EPS then break end
+		sliceCheck()
 		local mid = (lo + hi) / 2
 		if clearFat(q + (toward - q) * mid, other) then lo = mid else hi = mid end
 	end
@@ -1699,6 +1749,7 @@ local function alongEdgeZ(q, a, b)
 	local lo, hi = 0, 1
 	for _ = 1, MAX_HALVINGS do
 		if (hi - lo) * len < MOVE_EPS then break end
+		sliceCheck()
 		local mid = (lo + hi) / 2
 		local p = q + (goal - q) * mid
 		if clearFat(a, p) and clearFat(p, b) then lo = mid else hi = mid end
@@ -1725,6 +1776,7 @@ local function tighten(pts)
 		local moved = false
 		local i = 2
 		while i < #pts do
+			sliceCheck()
 			local a, v, b = pts[i - 1], pts[i], pts[i + 1]
 			local ab = b - a
 			local len2 = ab:LengthSqr()
@@ -1742,6 +1794,7 @@ local function tighten(pts)
 				local lo, hi = 0, 1
 				for _ = 1, MAX_HALVINGS do
 					if (hi - lo) * len < MOVE_EPS then break end
+					sliceCheck()
 					local mid = (lo + hi) / 2
 					local q = v + (target - v) * mid
 					if clearFat(a, q) and clearFat(q, b) then lo = mid else hi = mid end
@@ -1911,8 +1964,8 @@ local function attach(inner, S, L, via)
 		if e[1] == sx and e[2] == sy and e[3] == sz and e[4] == lx and e[5] == ly and e[6] == lz then return e[7] or nil end
 	end
 	local i, j = 1, #inner
-	while i < j and i < 8 and clearFat(S, inner[i + 1]) do i = i + 1 end
-	while j > i and #inner - j < 8 and clearFat(L, inner[j - 1]) do j = j - 1 end
+	while i < j and i < 8 and clearFat(S, inner[i + 1]) do i = i + 1 sliceCheck() end
+	while j > i and #inner - j < 8 and clearFat(L, inner[j - 1]) do j = j - 1 sliceCheck() end
 	local tail
 	local okJoins = i > 1 or sees(S, inner[i])
 	if okJoins and j == #inner and not sees(inner[j], L) then
@@ -2174,6 +2227,7 @@ function PR.DistinctRoutes(S, L, paths)
 	for _, e in ipairs(list) do
 		local dup = false
 		for _, k in ipairs(kept) do
+			sliceCheck()
 			if PR.SameRoute(k.pts, e.pts) then dup = true break end
 		end
 		if not dup then
@@ -2247,6 +2301,7 @@ function PR.FieldRoutes(S, L, k, cfg)
 			fieldSeen(fx, L)
 			local inners = fieldPaths(fx, starts, S, L)
 			for _, inner in ipairs(inners) do
+				sliceCheck()
 				-- (no join through a field position: every route ends at a seed, which L sees)
 				local pulled = attach(inner, S, L, nil)
 				if pulled and (#pulled >= 3 or (#pulled == 2 and not straight)) and not seenRoute(done, pulled) then

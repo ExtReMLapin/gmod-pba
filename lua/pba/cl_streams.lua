@@ -201,7 +201,16 @@ local function evaluate(ch, r, L)
 		r.emitter, r.emitterPos = emitterAt(S) or false, S
 	end
 	r.hyst = r.hyst or {}
-	local res = A.Paths.Stable(r.hyst, A.Paths.Compute(S, L, 75, nil, r.emitter or nil))
+	-- a far sound's evaluation may run in slices (cl_slicer): the stream keeps its values meanwhile, and is
+	-- evaluated again once it is ready (streamReady)
+	local raw
+	if A.Slicer then
+		raw = A.Slicer.Held(r, S, L, 75, r.emitter or nil, function() ST.Ready(ch) end)
+	else
+		raw = A.Paths.Compute(S, L, 75, nil, r.emitter or nil)
+	end
+	if not raw then return "pending" end
+	local res = A.Paths.Stable(r.hyst, raw)
 	if res.provisional and r.reeval then r.reeval.force = true end -- probe search still running
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
@@ -343,6 +352,49 @@ local function release(ch, r)
 	if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) r.filtered = nil end
 end
 
+--- One stream's evaluation and its application (volume, position, filter, native voice, ramp). An evaluation
+-- still running in slices (far sound, cl_slicer) applies nothing: ST.Ready does it once it is ready.
+local function process(ch, r, L)
+	-- clear sight since the last ramp ended: its end follows the owner's position up to now
+	if r.ramp and not r.ramp.pending and not r.apparent then pcall(retarget, ch, r, L) end
+	local ok, err = pcall(evaluate, ch, r, L)
+	if not ok and ST.lastEvalError ~= err then
+		-- never swallow silently: keep it for diagnostics and say it once
+		ST.lastEvalError = err
+		ErrorNoHalt("[PBA] stream evaluation failed: " .. tostring(err) .. "\n")
+	end
+	if ok and err ~= "pending" then
+		local ramp = (A.cfg.continuous_ramp or 0) >= 0.5
+		if nativeMode(r) then
+			if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) end
+			if not r.nativeId then
+				dropRamp(r) -- the voice starts at its target
+				nativeStart(ch, r, L)
+			elseif not ramp then
+				pcall(nativeUpdate, ch, r, L)
+			end
+		elseif r.nativeId then
+			nativeStop(ch, r) -- native rendering switched off: back to BASS
+			dropRamp(r)
+		end
+		if ramp then
+			pcall(rampStep, ch, r, L, RealTime())
+		else
+			dropRamp(r)
+			pcall(applyPos, ch, r)
+			pcall(applyVol, ch, r)
+			if not r.nativeId then filter(ch, r) end
+		end
+	end
+end
+
+--- A stream's far evaluation is ready (cl_slicer): applied at once.
+function ST.Ready(ch)
+	local r = ST.chans[ch]
+	local L = A.ListenerPos()
+	if r and r.pos and L and enabled() then process(ch, r, L) end
+end
+
 timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, A.PerfTimed("streams", function()
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
@@ -354,45 +406,18 @@ timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, A.PerfTimed("strea
 		local okv, valid = pcall(ch.IsValid, ch)
 		if not okv or not valid then
 			if r.nativeId and pba_native then pba_native.StopVoice(r.nativeId) end
+			if A.Slicer then A.Slicer.Drop(r) end
 			ST.chans[ch] = nil
 		elseif not on then
 			-- a native voice must stop too: the owner keeps setting the BASS volume back, both would play
 			if r.apparent or (r.g or 1) ~= 1 or r.filtered or r.nativeId then release(ch, r) end
-		elseif r.pos and not reevalDue(r, L) then
+		elseif r.pos and r.pbaSlice and not r.pbaSlice.finished then
+			n = n + 1 -- its evaluation runs in slices (cl_slicer): values kept, applied once ready (ST.Ready)
+		elseif r.pos and not r.pbaSlice and not reevalDue(r, L) then
 			n = n + 1 -- unchanged: keeps its values (and its ramp, if one is still running)
 		elseif r.pos then
 			n = n + 1
-			-- clear sight since the last ramp ended: its end follows the owner's position up to now
-			if r.ramp and not r.ramp.pending and not r.apparent then pcall(retarget, ch, r, L) end
-			local ok, err = pcall(evaluate, ch, r, L)
-			if not ok and ST.lastEvalError ~= err then
-				-- never swallow silently: keep it for diagnostics and say it once
-				ST.lastEvalError = err
-				ErrorNoHalt("[PBA] stream evaluation failed: " .. tostring(err) .. "\n")
-			end
-			if ok then
-				local ramp = (A.cfg.continuous_ramp or 0) >= 0.5
-				if nativeMode(r) then
-					if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) end
-					if not r.nativeId then
-						dropRamp(r) -- the voice starts at its target
-						nativeStart(ch, r, L)
-					elseif not ramp then
-						pcall(nativeUpdate, ch, r, L)
-					end
-				elseif r.nativeId then
-					nativeStop(ch, r) -- native rendering switched off: back to BASS
-					dropRamp(r)
-				end
-				if ramp then
-					pcall(rampStep, ch, r, L, RealTime())
-				else
-					dropRamp(r)
-					pcall(applyPos, ch, r)
-					pcall(applyVol, ch, r)
-					if not r.nativeId then filter(ch, r) end
-				end
-			end
+			process(ch, r, L)
 		end
 	end
 	ST.count = n

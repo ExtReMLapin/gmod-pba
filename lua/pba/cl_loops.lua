@@ -49,6 +49,7 @@ local function foreignPatch(e, name)
 end
 
 local function stopMirror(m)
+	if A.Slicer then A.Slicer.Drop(m) end -- (its evaluation still running in slices, if any)
 	if m.patch then m.patch:Stop() end
 	m.patch = nil
 	if m.nativeId and pba_native then pba_native.StopVoice(m.nativeId) end
@@ -69,11 +70,19 @@ local function anchorFor(m)
 	return a
 end
 
+local apply
+-- a mirror's far evaluation is ready (cl_slicer): applied at once
+local function sliceReady(m) if not m.done then apply(m) end end
+
 --- Path result of a mirror (direction / low-pass hysteresis). A provisional result (probe search
--- still running) forces the next re-evaluation (reeval_adaptive).
+-- still running) forces the next re-evaluation (reeval_adaptive). nil while a far sound's evaluation runs
+-- in slices (cl_slicer): the mirror keeps its values, and is applied again once it is ready (sliceReady).
 local function pathOf(m, S, L)
 	m.hyst = m.hyst or {}
-	local r = A.Paths.Stable(m.hyst, A.Paths.Compute(S, L, m.lvl, nil, m.ent))
+	local raw
+	if A.Slicer then raw = A.Slicer.Held(m, S, L, m.lvl, m.ent, sliceReady) else raw = A.Paths.Compute(S, L, m.lvl, nil, m.ent) end
+	if not raw then return nil end
+	local r = A.Paths.Stable(m.hyst, raw)
 	if r.provisional and m.reeval then m.reeval.force = true end
 	return r
 end
@@ -102,10 +111,11 @@ local function presetFor(level, tunnel)
 	return AC.DSPForLevel(level)
 end
 
---- Gain multiplier and DSP of a loop at S for the local listener.
+--- Gain multiplier and DSP of a loop at S for the local listener (nil while its evaluation runs, pathOf).
 local function muffle(m, S, L)
 	if not A.Enabled() then m.tunnel = nil return 1, m.dsp end
 	local r = pathOf(m, S, L)
+	if not r then return nil end
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	if r.clear or not r.voices or #r.voices == 0 then m.tunnel = false return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
@@ -123,6 +133,7 @@ end
 local function applyNative(m, S, L)
 	local N = A.Native
 	local r = pathOf(m, S, L)
+	if not r then return nil end -- (its evaluation still running: values kept)
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	local pos, gain, lp, trans, lpDb
 	m.clearPath = r.clear or not r.voices or #r.voices == 0
@@ -201,7 +212,7 @@ local function applyNative(m, S, L)
 	return m.nativeId ~= nil
 end
 
-local function apply(m, fade)
+function apply(m, fade)
 	if m.done then return end
 	local ent = m.ent
 	if IsValid(ent) and ent ~= m.anchor then m.seen = true end
@@ -228,7 +239,11 @@ local function apply(m, fade)
 		m.nativeId = nil
 		if m.once then m.done = true return end -- a long one-shot cannot resume midway
 	end
-	if (m.patch or m.nativeId) and not reevalDue(m, S, L) then
+	-- a far sound's evaluation running in slices (cl_slicer): its values kept until it is ready (sliceReady);
+	-- a finished one is applied whatever reevalDue says (it stamped this request already)
+	local sj = m.pbaSlice
+	if sj and not sj.finished then return end
+	if (m.patch or m.nativeId) and not sj and not reevalDue(m, S, L) then
 		if m.patch and m.once and not m.patch:IsPlaying() then m.done = true end
 		return
 	end
@@ -236,6 +251,7 @@ local function apply(m, fade)
 		if applyNative(m, S, L) ~= false then return end
 	end
 	local g, dsp = muffle(m, S, L)
+	if g == nil then return end
 	if m.patch and m.once and not m.patch:IsPlaying() then m.done = true return end
 	if not m.patch then
 		if m.once and m.started then m.done = true return end

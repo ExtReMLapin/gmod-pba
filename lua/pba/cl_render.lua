@@ -85,6 +85,11 @@ end
 local function stopCopy(h)
 	if h.cancelled then return end
 	h.cancelled = true
+	-- a far one-shot held while its routes are computed (A.Process): never emitted, its evaluation dropped
+	if h.job then
+		if A.Slicer then A.Slicer.Cancel(h.job) end
+		return
+	end
 	if h.id then
 		stopNative(h.id)
 	elseif h.a then
@@ -100,6 +105,14 @@ local function stopCopy(h)
 end
 
 local function expired(h, now) return h.cancelled or now > h.tEnd + EXPIRE_MARGIN end
+
+--- Removes copy h of entity idx from the registry (a held one-shot's placeholder, once emitted).
+local function unregister(idx, h)
+	local list = idx and A.emitted[idx]
+	if not list then return end
+	for i = #list, 1, -1 do if list[i] == h then table.remove(list, i) end end
+	if #list == 0 then A.emitted[idx] = nil end
+end
 
 --- Records a copy of entity idx (nothing for a source without an entity: no StopSound can name it).
 local function register(idx, h)
@@ -360,11 +373,13 @@ end
 
 --- Emits one voice. life: seconds the sound plays (pitch included; UNKNOWN_CAP while its length is
 -- unknown, ukey then the key of its file); follow: it is to be followed; idx: its source entity (the
--- copy is registered for the stop rules). Returns false when nothing was emitted, else a handle:
+-- copy is registered for the stop rules); waited: seconds since the sound was made (a far one-shot held
+-- while its routes were computed: its propagation delay counts from the sound, not from now). Returns
+-- false when nothing was emitted, else a handle:
 -- { id = native voice } or { a = anchor, seq = emission number on it, chan } (both followable), or
 -- { pos } (a copy at a fixed position); each with t0 / tEnd (start, expected end), name (as played),
 -- orig (as asked), srcChan (the sound's own channel).
-local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
+local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited)
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
 	-- (a sentence is a sequence of words played by the engine: never by the module)
@@ -374,7 +389,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
 		local dirK = A.Native.Directivity(src, L, data.Channel)
 		local g = (data.Volume or 1) * A.Native.PhysPath(v.gain, v.len, data.SoundLevel or 75, v.rawLossDb) * dirK
 		if g < 0.001 then return false end
-		local delay = voiceDelay(v, L)
+		local delay = math.max(voiceDelay(v, L) - (waited or 0), 0)
 		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 		-- the dominant voice carries the source's air-borne reverb (its slot); a transmission voice feeds
 		-- the listener's room; the other voices no reverb of their own (no double count)
@@ -409,7 +424,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx)
 	local own = (A.cfg.keep_dsp or 1) >= 0.5 and (data.DSP or 0) ~= 0
 	if dsp == 0 or own then dsp = data.DSP or 0 end
 	local flags = bit.band(data.Flags or 0, bit.bnot(SND_CHANGE_VOL + SND_CHANGE_PITCH + SND_STOP))
-	local delay = voiceDelay(v, L)
+	local delay = math.max(voiceDelay(v, L) - (waited or 0), 0)
 	local name, pos = data.SoundName, v.epos
 	-- a muffled "#" (dry mix) sound: the engine would skip the preset, the sound would stay clear
 	if dsp ~= 0 then name = A.WithoutDryMix(name) end
@@ -490,6 +505,7 @@ end
 
 --- Ends the following of rec: its voices play on as they are, except those fading out (stopped).
 local function dropRec(rec)
+	if A.Slicer then A.Slicer.Drop(rec) end -- (its evaluation still running in slices, if any)
 	for _, fv in ipairs(rec.voices) do
 		if fv.id then
 			OS.native[fv.id] = nil
@@ -596,12 +612,28 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	return true
 end
 
-local function evaluate(rec, now, L)
+local evaluate
+-- a followed one-shot's far evaluation is ready (cl_slicer): applied at once, if it still plays
+local function followReady(rec)
+	local L = A.ListenerPos()
+	for _, x in ipairs(OS.recs) do
+		if x == rec then
+			if L then evaluate(rec, RealTime(), L) end
+			return
+		end
+	end
+end
+
+function evaluate(rec, now, L)
 	local P = A.Paths
 	local ent = IsValid(rec.ent) and rec.ent or nil
 	if ent then rec.S = A.SoundPos({ Entity = ent }) end
 	local S = rec.S
-	local r = P.Stable(rec.hyst, P.Compute(S, L, rec.lvl, nil, ent))
+	-- a far sound's evaluation may run in slices (cl_slicer): its voices keep their course until it is ready
+	local raw
+	if A.Slicer then raw = A.Slicer.Held(rec, S, L, rec.lvl, ent, followReady) else raw = P.Compute(S, L, rec.lvl, nil, ent) end
+	if not raw then return end
+	local r = P.Stable(rec.hyst, raw)
 	A.DebugNote("os:" .. rec.key, S, L, r, rec.name, "oneshot")
 	local vs
 	rec.clearPath = r.clear or not r.voices or #r.voices == 0
@@ -780,6 +812,20 @@ hook.Add("Think", "pba_oneshots", A.PerfTimed("oneshots", function()
 	end
 end))
 
+--- Plays a sound as the engine would have (pba does not take it: relayed and not processed, or a held one
+-- whose evaluation found nothing to play).
+local function vanilla(data)
+	local e = IsValid(data.Entity) and data.Entity or Entity(data.EntIndex or 0)
+	if IsValid(e) and not e:IsWorld() and data.Channel ~= CHAN_AUTO and not A.IsSentence(data.SoundName) then
+		A.Emit(e.EmitSound, e, data.SoundName, data.SoundLevel, data.Pitch, data.Volume, data.Channel, data.Flags, data.DSP)
+	else
+		A.EmitAt(data.SoundName, data.Pos, IsValid(e) and e:EntIndex() or 0, data.Channel, data.Volume,
+			data.SoundLevel, data.Flags, data.Pitch, data.DSP)
+	end
+end
+
+local finish
+
 --- Processes one sound. Returns true when pba took charge of it (the original must
 -- not be played), even if every voice ended up inaudible; false = play it as vanilla.
 function A.Process(data, relayed)
@@ -796,7 +842,36 @@ function A.Process(data, relayed)
 	local t0 = SysTime()
 	local src = data.Entity
 	if not IsValid(src) and data.EntIndex and data.EntIndex > 0 then src = Entity(data.EntIndex) end
-	local r = A.Paths.Compute(S, L, lvl, nil, IsValid(src) and src or nil)
+	local tReq = RealTime()
+	local r, job
+	if A.Slicer then r, job = A.Slicer.Compute(S, L, lvl, IsValid(src) and src or nil)
+	else r = A.Paths.Compute(S, L, lvl, nil, IsValid(src) and src or nil) end
+	if not r and job then
+		-- a far sound whose routes are computed in slices (cl_slicer): taken now (the original is not
+		-- played), emitted once they are ready, by the time the sound would reach the listener at the
+		-- latest, its propagation delay counted from now (emitVoice's `waited`). A placeholder copy stands
+		-- in the registry meanwhile: the stop rules (StopSound, a new sound on its channel, its entity
+		-- removed) cancel it, and a cancelled sound never starts.
+		local d = {}
+		for k, v in pairs(data) do d[k] = v end
+		local h = { job = job, t0 = tReq, tEnd = job.deadline + 1, name = d.SoundName, orig = d.SoundName, srcChan = d.Channel or CHAN_AUTO }
+		register(idx, h)
+		A.stats.held = (A.stats.held or 0) + 1
+		job.onDone = function(res)
+			unregister(idx, h)
+			if h.cancelled then return end
+			h.cancelled = true -- (the placeholder's part is over)
+			if not res or not finish(d, relayed, idx, copies, S, L, ang, src, res, RealTime() - tReq, SysTime()) then vanilla(d) end
+		end
+		return true
+	end
+	return finish(data, relayed, idx, copies, S, L, ang, src, r, 0, t0)
+end
+
+--- The rest of A.Process once the sound's evaluation r is there: its voices emitted (waited: seconds since
+-- the sound was made, see emitVoice), followed, counted. Returns as A.Process.
+function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
+	local lvl = data.SoundLevel or 75
 	A.DebugNote(nil, S, L, r, data.SoundName, A.Native and A.Native.render and "native" or "sound")
 	if r.clear or not r.voices or #r.voices == 0 then
 		-- "everything native": a clear sound is played by the module at its real position
@@ -806,7 +881,7 @@ function A.Process(data, relayed)
 			local g = (data.Volume or 1) * A.Native.PhysClear(lvl, d) * dir
 			-- PlayVoice only (no engine fallback here: the caller plays the original if this fails)
 			local follow = IsValid(src) and not src:IsWorld() and { ent = src, vol = data.Volume or 1, lvl = lvl, chan = data.Channel } or nil
-			local delay = voiceDelay({ len = d, pos = S }, L)
+			local delay = math.max(voiceDelay({ len = d, pos = S }, L) - waited, 0)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
 				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir })
@@ -837,7 +912,7 @@ function A.Process(data, relayed)
 	local follow = OS.Wanted(play) and {} or nil
 	for i, v in ipairs(r.voices) do
 		if i > 1 and emitted >= budget then A.stats.dropped = A.stats.dropped + 1 break end
-		local h = emitVoice(data, v, L, IsValid(src) and src or nil, copies, i, play, ukey, follow ~= nil, idx)
+		local h = emitVoice(data, v, L, IsValid(src) and src or nil, copies, i, play, ukey, follow ~= nil, idx, waited)
 		if h then
 			emitted = emitted + 1
 			A.active[#A.active + 1] = now + busy
@@ -978,13 +1053,7 @@ net.Receive(NET, function()
 	A.stats.relayedIn = A.stats.relayedIn + 1
 	if A.Enabled() and A.Process(data, true) then return end
 	-- not processed (disabled client, clear path...): play it as the engine would have
-	local e = Entity(data.EntIndex)
-	if IsValid(e) and not e:IsWorld() and data.Channel ~= CHAN_AUTO and not A.IsSentence(data.SoundName) then
-		A.Emit(e.EmitSound, e, data.SoundName, data.SoundLevel, data.Pitch, data.Volume, data.Channel, data.Flags, data.DSP)
-	else
-		A.EmitAt(data.SoundName, data.Pos, IsValid(e) and data.EntIndex or 0, data.Channel, data.Volume,
-			data.SoundLevel, data.Flags, data.Pitch, data.DSP)
-	end
+	vanilla(data)
 end)
 
 -- caption of a suppressed server sound (sv_relay sendCaption); nothing shown with closecaption 0
