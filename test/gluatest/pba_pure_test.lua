@@ -122,7 +122,7 @@ local function withProbeRooms(holes, extra, over, fn)
 		return out
 	end
 	local saved = { util.TraceLine, util.TraceHull, util.PointContents }
-	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold", "fieldsByKey", "seedMemo", "fieldAway", "doorFieldQueue", "doorFieldJob", "doorFieldSpare", "prewarm", "prewarmVel" }
+	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold", "fieldsByKey", "seedMemo", "fieldAway", "doorFieldQueue", "doorFieldJob", "doorFieldSpare" }
 	local savedPR, savedCfg = {}, {}
 	for _, k in ipairs(state) do savedPR[k] = PR[k] end
 	-- native_traces 0 always: the scene replaces util.Trace*, the engine's own traces would bypass it
@@ -135,7 +135,7 @@ local function withProbeRooms(holes, extra, over, fn)
 	util.PointContents = function(p) return inside(p) and CONTENTS_SOLID or 0 end
 	local ok, err = pcall(function()
 		PR.queue, PR.pathCache, PR.pathCacheN, PR.inlineFrame, PR.field, PR.fieldHold, PR.fieldsByKey, PR.seedMemo = {}, {}, 0, nil, nil, nil, nil, nil
-		PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare, PR.prewarm, PR.prewarmVel = nil, nil, nil, nil, nil
+		PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare = nil, nil, nil
 		local g = PR.BuildCo({ Vector(256, 256, 49) }, 128)
 		PR.Prepare(g)
 		PR.current = g
@@ -367,74 +367,6 @@ local function probeSweep(blend)
 		prev = { p, az, db }
 	end
 	return dDir, dLen, dDb, sets, blended
-end
-
--- Prewarm cases (paths_model 1): the two rooms with a mock door (prop_door_rotating, state `frac`) in the
--- first hole, the second hole open; fn(g, door state table). Restores ents, A.Doors and the door list.
-local function withLeafRooms(over, fn)
-	withProbeRooms({ { 16, 64, 112 }, { 400, 448, 112 } }, nil, over, function(g)
-		local PR = A.Probes
-		local mn, mx = Vector(510, 14, 0), Vector(530, 66, 112)
-		local door = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9990 end,
-			IsValid = function() return true end, WorldSpaceAABB = function() return mn, mx end,
-			NearestPoint = function(_, p) return Vector(math.Clamp(p.x, mn.x, mx.x), math.Clamp(p.y, mn.y, mx.y), math.Clamp(p.z, mn.z, mx.z)) end,
-			OBBMins = function() return mn end, OBBMaxs = function() return mx end,
-			WorldToLocal = function(_, v) return v end, LocalToWorld = function(_, v) return v end }
-		local savedEnts, savedDoors, savedList = _G.ents, A.Doors, PR.doorList
-		_G.ents = { FindByClass = function(cls) return cls == "prop_door_rotating" and { door } or {} end }
-		local st = { frac = 0, closedDb = 28, closedLp = 3 }
-		A.Doors = { byEnt = { [9990] = st } }
-		PR.doorList = nil
-		local ok, err = pcall(fn, g, st)
-		_G.ents, A.Doors, PR.doorList = savedEnts, savedDoors, savedList
-		if not ok then error(err, 0) end
-	end)
-end
--- Runs the prewarm of the listener at L moving at vel to the end of one plan (no frame budget).
-local function prewarmAll(L, vel)
-	local PR = A.Probes
-	vel = vel or Vector(0, 0, 0)
-	PR.AdvancePrewarm(L, vel, SysTime() + 10)
-	for _ = 1, 1000 do
-		if not (PR.prewarm and PR.prewarm.job) then break end
-		PR.AdvancePrewarm(L, vel, SysTime() + 10)
-	end
-end
--- A field's search as numbers (cost, next hop, root of every probe; seeds and their base), for exact equality.
-local function fieldDump(f)
-	if not f then return "none" end
-	local o = { "seeds", table.concat(f.seeds, ","), "n", #f.g.nodes }
-	for id = 1, #f.g.nodes do
-		o[#o + 1] = string.format("%d:%.17g/%s/%s", id, f.cost[id] or -1, tostring(f.nxt[id]), tostring(f.root[id]))
-	end
-	for _, id in ipairs(f.seeds) do o[#o + 1] = string.format("b%d:%.17g", id, f.base[id]) end
-	return table.concat(o, " ")
-end
-local function ptsDump(pts)
-	local o = {}
-	for i, v in ipairs(pts) do o[i] = string.format("%.17g,%.17g,%.17g", v.x, v.y, v.z) end
-	return table.concat(o, ";")
-end
--- Every number of a list of routes (FieldRoutes), for exact equality.
-local function routesDump(ps)
-	local o = {}
-	for _, p in ipairs(ps) do
-		o[#o + 1] = string.format("%.17g %.17g %.17g %.17g %.17g", p.length, p.lossDb, p.diffDb, p.doorDb, p.lp or -1)
-		o[#o + 1] = ptsDump(p.points) .. "|" .. ptsDump({ p.pos })
-	end
-	return table.concat(o, "\n")
-end
--- PR.BuildField and PR.Pull counted while fn runs.
-local function countSearches(fn)
-	local PR = A.Probes
-	local bf, pl = PR.BuildField, PR.Pull
-	local n = { build = 0, pull = 0 }
-	PR.BuildField = function(...) n.build = n.build + 1 return bf(...) end
-	PR.Pull = function(...) n.pull = n.pull + 1 return pl(...) end
-	local ok, err = pcall(fn)
-	PR.BuildField, PR.Pull = bf, pl
-	if not ok then error(err, 0) end
-	return n
 end
 
 local CFG = table.Copy(A.cfg)
@@ -2783,141 +2715,6 @@ local SUITE = {
 				end)
 				_G.ents, A.Doors, PR.doorList = savedEnts, savedDoors, savedList
 				if not ok then error(err, 0) end
-			end)
-		end },
-		-- Prewarm (paths_model 1, PR.AdvancePrewarm): what it prepares is what FieldFor and fieldPathFrom would
-		-- compute at that moment, taken instead of computed; anything else is computed as before.
-		{ name = "Prewarm: a field searched ahead for the seeds L sees is the field FieldFor searches, taken without a search, its routes pulled ahead the same", func = function()
-			withLeafRooms({ native_traces = 0, paths_model = 1, probe_prewarm = 1 }, function(g)
-				local PR = A.Probes
-				local S, L = Vector(700, 150, 64), Vector(300, 152, 64) -- (L on the prewarm's 4 u lattice)
-				local cfg = setmetatable({ paths_model = 1, probe_field = 1 }, { __index = A.cfg })
-				local starts = PR.Visible(g, S, 5)
-				-- the reference: searched by FieldFor, pulled by fieldPathFrom, without prewarm
-				PR.prewarm, PR.fieldsByKey, PR.seedMemo = nil, nil, nil
-				local f0 = PR.FieldFor(g, L)
-				expect(f0 ~= nil and f0.doors ~= nil).to.beTrue()
-				local ref = { fieldDump(f0), fieldDump(f0.doors) }
-				local refPulled = {}
-				for _, n in ipairs(starts) do
-					refPulled[#refPulled + 1] = f0.cost[n.id] and ptsDump(PR.FieldPathFrom(f0, n)) or "-"
-					refPulled[#refPulled + 1] = f0.doors.cost[n.id] and ptsDump(PR.FieldPathFrom(f0.doors, n)) or "-"
-				end
-				local refRoutes = routesDump(PR.FieldRoutes(S, L, 3, cfg))
-				expect(refRoutes ~= "").to.beTrue()
-				-- prewarmed: S noted as a source, the listener standing at L
-				PR.fieldsByKey, PR.seedMemo = nil, nil
-				prewarmAll(L)
-				PR.NoteSource(S, 3)
-				prewarmAll(L + Vector(4, 0, 0)) -- (a new plan: the listener moved a lattice step)
-				expect(#PR.prewarm.list > 0).to.beTrue()
-				local f1
-				local n = countSearches(function() f1 = PR.FieldFor(g, L) end)
-				expect(n.build).to.equal(0)
-				expect(PR.prewarm.taken).to.equal(1)
-				expect(fieldDump(f1)).to.equal(ref[1])
-				expect(fieldDump(f1.doors)).to.equal(ref[2])
-				expect(f1.L == L and f1.doors.L == L and f1.key == f0.key).to.beTrue()
-				local pulled = {}
-				n = countSearches(function()
-					for _, s in ipairs(starts) do
-						pulled[#pulled + 1] = f1.cost[s.id] and ptsDump(PR.FieldPathFrom(f1, s)) or "-"
-						pulled[#pulled + 1] = f1.doors.cost[s.id] and ptsDump(PR.FieldPathFrom(f1.doors, s)) or "-"
-					end
-				end)
-				expect(n.pull).to.equal(0)
-				expect(table.concat(pulled, "\n")).to.equal(table.concat(refPulled, "\n"))
-				expect(routesDump(PR.FieldRoutes(S, L, 3, cfg))).to.equal(refRoutes)
-			end)
-		end },
-		{ name = "Prewarm: never served stale: another order of the seeds, other door costs, another world are searched or pulled again (same answers as without it)", func = function()
-			withLeafRooms({ native_traces = 0, paths_model = 1, probe_prewarm = 1 }, function(g, door)
-				local PR = A.Probes
-				local S, L = Vector(700, 150, 64), Vector(300, 152, 64)
-				local function reference()
-					PR.prewarm, PR.fieldsByKey, PR.seedMemo = nil, nil, nil
-					local f = PR.FieldFor(g, L)
-					local out = { fieldDump(f), fieldDump(f.doors), ptsDump(PR.FieldPathFrom(f, PR.Visible(g, S, 1)[1])) }
-					PR.fieldsByKey, PR.seedMemo = nil, nil
-					return out
-				end
-				local function prewarmed()
-					PR.prewarm, PR.fieldsByKey, PR.seedMemo = nil, nil, nil
-					prewarmAll(L)
-					PR.NoteSource(S, 3)
-					prewarmAll(L + Vector(4, 0, 0))
-					expect(#PR.prewarm.list > 0).to.beTrue()
-				end
-				-- (a) the seeds in another order: the field's ties may break the other way, searched again
-				local ref = reference()
-				prewarmed()
-				local pw = PR.prewarm
-				for _, e in ipairs(pw.list) do
-					pw.byOrder[e.okey] = nil
-					local ids = {}
-					for id in string.gmatch(e.okey, "%d+") do table.insert(ids, 1, id) end
-					e.okey = table.concat(ids, ",")
-					pw.byOrder[e.okey] = e
-				end
-				local f
-				local n = countSearches(function() f = PR.FieldFor(g, L) end)
-				expect(n.build).to.equal(2)
-				expect(pw.taken == 0 and pw.missed == 1).to.beTrue()
-				expect(fieldDump(f) .. fieldDump(f.doors)).to.equal(ref[1] .. ref[2])
-				-- (b) a door state changed after the prewarm: the field by length taken, the one with the door
-				-- costs searched again on the new costs
-				prewarmed()
-				door.frac = 0.5
-				PR.doorList = nil
-				local pwB = PR.prewarm
-				ref = reference()
-				PR.prewarm = pwB
-				n = countSearches(function() f = PR.FieldFor(g, L) end)
-				expect(n.build).to.equal(1)
-				expect(pwB.taken).to.equal(1)
-				expect(fieldDump(f) .. fieldDump(f.doors)).to.equal(ref[1] .. ref[2])
-				-- (c) the world changed after the prewarm (P.worldGen): its pulled routes are pulled again
-				door.frac = 0
-				PR.doorList = nil
-				ref = reference() -- (the link costs of this state made: the prewarm searches on the graph's costs)
-				prewarmed()
-				P.ForgetWorld()
-				n = countSearches(function()
-					f = PR.FieldFor(g, L)
-					expect(ptsDump(PR.FieldPathFrom(f, PR.Visible(g, S, 1)[1]))).to.equal(ref[3])
-				end)
-				expect(n.build == 0 and n.pull == 1).to.beTrue()
-				-- while the world is the same, a route pulled ahead is the one taken
-				f.pulled = {}
-				f.prePulled = { [PR.Visible(g, S, 1)[1].id] = { c = { S }, gen = P.worldGen, TH = util.TraceHull, tag = false } }
-				expect(#PR.FieldPathFrom(f, PR.Visible(g, S, 1)[1])).to.equal(1)
-			end)
-		end },
-		{ name = "Prewarm: the routes of a walk are the same to the last digit with the prewarm run between steps, and its fields are taken", func = function()
-			withLeafRooms({ native_traces = 0, paths_model = 1, probe_prewarm = 1 }, function(g)
-				local PR = A.Probes
-				local S = Vector(700, 150, 64)
-				local cfg = setmetatable({ paths_model = 1, probe_field = 1 }, { __index = A.cfg })
-				local walk = {}
-				for x = 0, 12 do walk[#walk + 1] = Vector(130 + x * 24, 140 + x * 3, 64) end
-				local function run(pre)
-					PR.prewarm, PR.fieldsByKey, PR.seedMemo = nil, nil, nil
-					local out = {}
-					for i, L in ipairs(walk) do
-						if pre and i > 1 then
-							if not PR.prewarm then
-								prewarmAll(walk[i - 1])
-								PR.NoteSource(S, 3)
-							end
-							prewarmAll(walk[i - 1], (L - walk[i - 1]) * 8)
-						end
-						out[i] = routesDump(PR.FieldRoutes(S, L, 3, cfg))
-					end
-					return out
-				end
-				local a, b = run(false), run(true)
-				for i = 1, #walk do expect(b[i]).to.equal(a[i]) end
-				expect(PR.prewarm.taken > 0).to.beTrue()
 			end)
 		end },
 		{ name = "Compute (paths_model 1): the answer is the field's whatever the frame budget, never provisional, and the first field is built at once", func = function()

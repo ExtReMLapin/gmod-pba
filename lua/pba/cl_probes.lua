@@ -720,7 +720,6 @@ function PR.Start()
 	PR.pathCache, PR.pathCacheN, PR.queue = {}, 0, {}
 	PR.bridgeMemo, PR.sticky, PR.fieldAway, PR.fieldsByKey, PR.seedMemo = nil, nil, nil, nil, nil
 	PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare = nil, nil, nil
-	PR.prewarm = nil
 	local g = A.Graph.Get()
 	if not g then return end
 	local map = g.map
@@ -968,16 +967,12 @@ function PR.FindPath(g, S, L, avoid, maxExpand, starts, goals, yield)
 end
 
 --- String pulling: removes vertices while the (fat) shortcut stays clear of the world (doors: attach).
--- `yield` (optional): called between traces (the prewarm pulls in background slices; same traces, same result)
-function PR.Pull(pts, yield)
+function PR.Pull(pts)
 	local out = { pts[1] }
 	local i = 1
 	while i < #pts do
 		local j = #pts
-		while j > i + 1 and not clearFat(pts[i], pts[j]) do
-			j = j - 1
-			if yield then yield() end
-		end
+		while j > i + 1 and not clearFat(pts[i], pts[j]) do j = j - 1 end
 		out[#out + 1] = pts[j]
 		i = j
 	end
@@ -1330,29 +1325,15 @@ end
 -- exchange rate (40 u per dB) gave one route per probe, and with door_s shut every probe of the room went
 -- round by the other door, 15 dB quieter than through the leaf (pba_twodoors): the routes of both fields
 -- are ranked by their level afterwards (PR.DistinctRoutes), as the portal chains are (rankChains).
--- `pre` (paths_model 1): a prewarmed entry for these very seeds in this order (PR.TakePrewarmed), whose
--- searches are taken instead of being run: the field by length always (it reads no door), the one with the
--- door costs only when it was searched on the very costs table PR.LinkCosts gives now.
-function PR.BuildFields(g, L, yield, reuse, seedList, pre)
+function PR.BuildFields(g, L, yield, reuse, seedList)
 	if (A.cfg.paths_model or 0) < 0.5 then return PR.BuildField(g, L, yield, reuse) end
 	local extra, sig = PR.LinkCosts(g, yield)
-	local f = pre and PR.AdoptField(pre.len, L) or PR.BuildField(g, L, yield, reuse, false, seedList)
+	local f = PR.BuildField(g, L, yield, reuse, false, seedList)
 	f.stateSig = sig
 	if next(extra) then
-		f.doors = pre and pre.doors and pre.extra == extra and PR.AdoptField(pre.doors, L)
-			or PR.BuildField(g, L, yield, reuse and reuse.doors, extra, seedList)
+		f.doors = PR.BuildField(g, L, yield, reuse and reuse.doors, extra, seedList)
 		f.doors.stateSig = sig
 	end
-	return f
-end
-
---- A field searched ahead (PR.AdvancePrewarm) made what PR.BuildField would return now at L: its search
--- (cost, nxt, root, base, seeds) depends only on the graph, the seeds in their order and the link costs;
--- what depends on the listener or the moment is set as BuildField sets it. Its pulled routes stay aside
--- (f.prePulled, checked against the world when read: fieldPathFrom).
-function PR.AdoptField(f, L)
-	f.L, f.pulled, f.arr, f.arrEpoch = L, {}, {}, PR.doorEpoch
-	f.seen, f.seenL, f.seenAt, f.seenAny = nil, nil, nil, nil
 	return f
 end
 
@@ -1369,19 +1350,14 @@ local function seedSet(g, L)
 	local lx, ly, lz = L:Unpack()
 	if m and m.g == g and m[1] == lx and m[2] == ly and m[3] == lz then return m.key, m.seeds end
 	local seeds = PR.Visible(g, L, FIELD_SEEDS, 2)
-	local key = PR.SeedKey(seeds)
+	local ids = {}
+	for i, n in ipairs(seeds) do ids[i] = n.id end
+	table.sort(ids)
+	local key = table.concat(ids, ",")
 	PR.seedMemo = { lx, ly, lz, g = g, key = key, seeds = seeds }
 	return key, seeds
 end
 PR.SeedSet = seedSet
---- The key of a seed set (its sorted ids), and with `ordered` the ids in the seeds' own order (the order
--- the field's search pushes them in, which breaks its ties of equal cost).
-function PR.SeedKey(seeds, ordered)
-	local ids = {}
-	for i, n in ipairs(seeds) do ids[i] = n.id end
-	if not ordered then table.sort(ids) end
-	return table.concat(ids, ",")
-end
 --- The field of the probes L sees (built at once when not kept), or nil when L sees no probe.
 function PR.FieldFor(g, L)
 	local key, seeds = seedSet(g, L)
@@ -1400,8 +1376,7 @@ function PR.FieldFor(g, L)
 		PR.QueueDoorField(g, f, sig)
 		return f
 	end
-	-- searched ahead in the background for these seeds in this order (PR.AdvancePrewarm): the same field
-	f = PR.BuildFields(g, L, nil, nil, seeds, PR.TakePrewarmed(g, key, seeds))
+	f = PR.BuildFields(g, L, nil, nil, seeds)
 	f.key, f.seedList = key, seeds
 	if not kept[key] then
 		kept.order[#kept.order + 1] = key
@@ -1469,13 +1444,8 @@ function PR.AdvanceDoorFields()
 		PR.doorFieldJob = nil
 	end
 end
--- then the prewarm (PR.AdvancePrewarm, defined below) in what is left of the same budget, when no door-field job runs
 hook.Add("Think", "pba_probes_door_field", function()
-	if (A.cfg.paths_model or 0) < 0.5 then return end
-	local t0 = SysTime()
-	PR.AdvanceDoorFields()
-	if (A.cfg.probe_prewarm or 1) < 0.5 then PR.prewarm = nil
-	elseif not PR.doorFieldJob then PR.PrewarmThink(t0 + (A.cfg.probe_field_ms or 1) / 1000) end
+	if (A.cfg.paths_model or 0) >= 0.5 then PR.AdvanceDoorFields() end
 end)
 
 --- Built at once around L (tests: as if the listener had been standing there); the background
@@ -1523,8 +1493,12 @@ local function fieldUsable(g, L, cfg)
 	return f.seenAny and f or nil
 end
 
--- the probes of the route from `best` down the field's tree to its seed (gap points included)
-local function fieldChain(f, best)
+-- Pulled polylines (probe positions, without S and L) from each probe S sees down to the listener,
+-- best first (S to the probe plus the probe's cost); several, as the k-path search gives, and
+-- PR.Paths keeps the distinct ones.
+local function fieldPathFrom(f, best)
+	local c = f.pulled[best.id]
+	if c then return c end
 	local g = f.g
 	local pts, id = { best.pos }, best.id
 	for _ = 1, #g.nodes do
@@ -1535,21 +1509,7 @@ local function fieldChain(f, best)
 		pts[#pts + 1] = g.nodes[nid].pos
 		id = nid
 	end
-	return pts
-end
--- What the pulled route's traces read besides its probes: the world (P.worldGen, the trace function) and
--- the trace backend. A route pulled ahead (prewarm) is taken only when all three are still the same.
-local function pullStamp(e)
-	return e.gen == A.Paths.worldGen and e.TH == util.TraceHull and e.tag == (nativeTraces() or false)
-end
--- Pulled polylines (probe positions, without S and L) from each probe S sees down to the listener,
--- best first (S to the probe plus the probe's cost); several, as the k-path search gives, and
--- PR.Paths keeps the distinct ones.
-local function fieldPathFrom(f, best)
-	local c = f.pulled[best.id]
-	if c then return c end
-	local pre = f.prePulled and f.prePulled[best.id]
-	if pre and pullStamp(pre) then c = pre.c else c = PR.Pull(fieldChain(f, best)) end
+	c = PR.Pull(pts)
 	f.pulled[best.id] = c
 	return c
 end
@@ -2263,7 +2223,6 @@ function PR.FieldRoutes(S, L, k, cfg)
 		g = PR.current
 	end
 	if not g then return {} end
-	if PR.prewarm then PR.NoteSource(S, k or 3) end
 	doorLeaves()
 	local f = PR.FieldFor(g, L)
 	if not f then return {} end
@@ -2315,282 +2274,6 @@ function PR.FieldRoutes(S, L, k, cfg)
 		end
 	end
 	return PR.DistinctRoutes(S, L, out)
-end
-
--- ------------------------------------------------------------------ prewarm (paths_model 1)
--- A walking listener meets a new seed set every few steps, and its evaluations then search two fields and
--- pull every candidate route down them at once (rp_downtown: 5-23 ms steps). Part of that work does not
--- depend on where exactly the listener will stand, and is done earlier, in background slices
--- (probe_field_ms per frame, when no door-field job runs): the fields of the seed sets seen from points
--- along the listener's velocity over the next PREWARM_HORIZON seconds, and the routes pulled down them
--- (and down the fields kept) from the probes each source evaluated lately sees, with the hull traces
--- attach makes from S (exact-coordinate memos).
--- Nothing it does changes an answer. A field searched ahead is taken (PR.TakePrewarmed) only for the very
--- seeds in the very order FieldFor would search from (the search breaks ties of equal cost by that order:
--- the first PREWARM_ORDERS orders met along the way are searched) and, for the door costs, the very costs
--- table; it never enters the kept fields itself (their order decides which ones FieldFor rebuilds). A
--- pulled route is taken only while the world and the trace backend it was pulled with are unchanged. It
--- never lists the doors (doorLeaves, PR.StateSig: the moment of that listing decides the door epoch).
-local PREWARM_HORIZON, PREWARM_STEP, PREWARM_SAMPLES = 0.75, 4, 48
-local PREWARM_KEEP, PREWARM_ORDERS, PREWARM_REPLAN = 9, 3, 0.1
-local PREWARM_SRC_S, PREWARM_SRCS = 2, 16
-
--- every entry of one seed set dropped (the set is kept now, or another order of it was searched)
-local function prewarmDrop(pw, key)
-	for x = #pw.list, 1, -1 do
-		local e = pw.list[x]
-		if e.key == key then
-			table.remove(pw.list, x)
-			pw.byOrder[e.okey] = nil
-		end
-	end
-end
-
---- The prewarmed fields of `seeds` in their order for graph g ({ len, doors, extra } for PR.BuildFields),
--- or nil. The set's other entries are dropped: FieldFor keeps the set from now on.
-function PR.TakePrewarmed(g, key, seeds)
-	local pw = PR.prewarm
-	if not pw or pw.g ~= g then return nil end
-	local e = pw.byOrder[PR.SeedKey(seeds, true)]
-	prewarmDrop(pw, key)
-	pw.taken, pw.missed = pw.taken + (e and 1 or 0), pw.missed + (e and 0 or 1)
-	return e
-end
-
---- Remembers S as a source evaluated now (its routes are pulled ahead down the fields to come).
-function PR.NoteSource(S, k)
-	local pw = PR.prewarm
-	local x, y, z = S:Unpack()
-	local now = SysTime()
-	local old
-	for i, s in ipairs(pw.srcs) do
-		if s[1] == x and s[2] == y and s[3] == z and s.k == k then s.t = now return end
-		if not old or s.t < pw.srcs[old].t then old = i end
-	end
-	if #pw.srcs >= PREWARM_SRCS then table.remove(pw.srcs, old) end
-	pw.srcs[#pw.srcs + 1] = { x, y, z, S = Vector(x, y, z), k = k, t = now }
-end
-
--- One entry: both searches of BuildFields for these seeds in this order, on the link costs the graph holds
--- now (none yet, or stale: the door part is then searched by FieldFor). Their L is a placeholder (AdoptField).
-local function prewarmBuild(pw, g, key, okey, seeds, at, yield, keep)
-	local spare = pw.spare
-	pw.spare = nil
-	local e = { key = key, okey = okey }
-	e.len = PR.BuildField(g, at, yield, spare and spare.len, false, seeds)
-	local lc = g.linkCosts
-	if lc and next(lc.extra) then
-		e.extra = lc.extra
-		e.doors = PR.BuildField(g, at, yield, spare and spare.doors, lc.extra, seeds)
-	end
-	local kept = PR.fieldsByKey
-	if kept and kept.g == g and kept[key] then return nil end -- FieldFor got there first
-	pw.byOrder[okey] = e
-	pw.list[#pw.list + 1] = e
-	-- the oldest entry of a set not on the way now goes; its tables are searched again by the next build
-	-- (no garbage per build: three tables per field of the probe count each)
-	if #pw.list > PREWARM_KEEP then
-		for x, o in ipairs(pw.list) do
-			if not keep[o.key] then
-				table.remove(pw.list, x)
-				pw.byOrder[o.okey] = nil
-				pw.spare = o
-				break
-			end
-		end
-	end
-	return e
-end
-
--- Pulls the routes of source src down field fx ahead, and makes attach's traces from S (its first loop and
--- join, which do not depend on L). A pulled route depends only on its chain of probes (PR.Pull of their
--- points): the fields of one seed set, in either order, with or without door costs, mostly share their
--- chains, pulled once (pw.chains) and copied per field (each field has its own route tables, as fieldPathFrom
--- makes them: attach keeps its answers on them).
-local function prewarmRoutes(pw, fx, src, yield)
-	local S = src.S
-	-- (once per field and source: the routes stay on the field)
-	local done = fx.prewarmed
-	if not done then
-		done = setmetatable({}, { __mode = "k" })
-		fx.prewarmed = done
-	end
-	if done[src] then return end
-	for _, n in ipairs(src.starts) do
-		if fx.cost[n.id] then
-			local inner = fx.pulled[n.id]
-			if not inner then
-				local pre = fx.prePulled and fx.prePulled[n.id]
-				if pre and pullStamp(pre) then
-					inner = pre.c
-				else
-					local pts = fieldChain(fx, n)
-					local ids, id = { n.id }, n.id
-					for _ = 1, #fx.g.nodes do
-						id = fx.nxt[id]
-						if not id then break end
-						ids[#ids + 1] = id
-					end
-					local ck = table.concat(ids, ",")
-					pre = pw.chains[ck]
-					if not (pre and pullStamp(pre)) then
-						local gen, TH, tag = A.Paths.worldGen, util.TraceHull, nativeTraces() or false
-						pre = { c = PR.Pull(pts, yield), gen = gen, TH = TH, tag = tag }
-						if pw.chainN >= 2048 then pw.chains, pw.chainN = {}, 0 end
-						pw.chains[ck], pw.chainN = pre, pw.chainN + 1
-					end
-					inner = {}
-					for x, v in ipairs(pre.c) do inner[x] = v end
-					-- (the world changed while it was pulled in slices: not kept)
-					if pullStamp(pre) then
-						fx.prePulled = fx.prePulled or {}
-						fx.prePulled[n.id] = { c = inner, gen = pre.gen, TH = pre.TH, tag = pre.tag }
-					end
-				end
-			end
-			local i, j = 1, #inner
-			while i < j and i < 8 and clearFat(S, inner[i + 1]) do i = i + 1 end
-			if i == 1 then sees(S, inner[1]) end
-			yield()
-		end
-	end
-	done[src] = true
-end
-
-local function prewarmWork(pw, g, L, vel, yield)
-	-- the seed sets ahead, in the order the listener meets them, with the orders of their seeds met first;
-	-- points on a lattice of the step, so that the next plan's points (a step further) are mostly the same
-	-- and their sight traces kept
-	local speed = vel:Length()
-	local step, n = PREWARM_STEP, 1
-	if speed > 1 then
-		step = PREWARM_STEP * math.max(1, math.ceil(speed * PREWARM_HORIZON / (PREWARM_STEP * PREWARM_SAMPLES)))
-		n = math.min(PREWARM_SAMPLES, 1 + floor(speed * PREWARM_HORIZON / step))
-	end
-	local sets, byKey = {}, {}
-	local lx, ly, lz
-	for s = 0, n - 1 do
-		local t = speed > 1 and s * step / speed or 0
-		local x = floor((L.x + vel.x * t) / PREWARM_STEP + 0.5) * PREWARM_STEP
-		local y = floor((L.y + vel.y * t) / PREWARM_STEP + 0.5) * PREWARM_STEP
-		local z = floor((L.z + vel.z * t) / PREWARM_STEP + 0.5) * PREWARM_STEP
-		if x ~= lx or y ~= ly or z ~= lz then
-			lx, ly, lz = x, y, z
-			local at = Vector(x, y, z)
-			-- the seeds seen from a lattice point, kept: the next plans walk over the same points
-			local vk = x .. "," .. y .. "," .. z
-			local seeds = pw.vis[vk]
-			if not seeds then
-				if pw.visN >= 4096 then pw.vis, pw.visN = {}, 0 end
-				seeds = PR.Visible(g, at, FIELD_SEEDS, 2)
-				pw.vis[vk], pw.visN = seeds, pw.visN + 1
-				yield()
-			end
-			if #seeds > 0 then
-				local key, okey = PR.SeedKey(seeds), PR.SeedKey(seeds, true)
-				local e = byKey[key]
-				if not e then
-					e = { key = key, orders = {} }
-					byKey[key] = e
-					sets[#sets + 1] = e
-				end
-				if #e.orders < PREWARM_ORDERS and not e[okey] then
-					e[okey] = true
-					e.orders[#e.orders + 1] = { okey = okey, seeds = seeds, at = at }
-				end
-			end
-		end
-	end
-	local now = SysTime()
-	local srcs = {}
-	for _, s in ipairs(pw.srcs) do
-		if now - s.t <= PREWARM_SRC_S then
-			if s.g ~= g then s.starts, s.g = PR.Visible(g, s.S, s.k + 2), g end
-			srcs[#srcs + 1] = s
-		end
-	end
-	-- the sets' fields (kept already, or each order searched ahead), then their routes; the first order of
-	-- the next sets before the further orders of one (a set's x-th order ranks with the first of the set
-	-- 2 (x - 1) further on: the later orders are less often the one met)
-	local tasks = {}
-	for i, e in ipairs(sets) do
-		for x = 1, #e.orders do tasks[#tasks + 1] = { e = e, x = x, rank = i + 2 * (x - 1) } end
-	end
-	table.sort(tasks, function(a, b)
-		if a.rank ~= b.rank then return a.rank < b.rank end
-		return a.x < b.x
-	end)
-	for _, t in ipairs(tasks) do
-		local e = t.e
-		local kept = PR.fieldsByKey
-		local kf = kept and kept.g == g and kept[e.key]
-		local f, d
-		if kf then
-			if t.x == 1 then f, d = kf, kf.doors end -- (kept: its one field, with the first order)
-		else
-			local o = e.orders[t.x]
-			local pe = pw.byOrder[o.okey] or prewarmBuild(pw, g, e.key, o.okey, o.seeds, o.at, yield, byKey)
-			if pe then f, d = pe.len, pe.doors end
-		end
-		if f then
-			for _, src in ipairs(srcs) do
-				prewarmRoutes(pw, f, src, yield)
-				if d then prewarmRoutes(pw, d, src, yield) end
-			end
-		end
-	end
-end
-
---- One background slice of the prewarm, until `deadline` (SysTime; default probe_field_ms from now), for the
--- listener at L moving at vel (units per second).
-function PR.AdvancePrewarm(L, vel, deadline)
-	local g = PR.current
-	if not g or PR.building or (A.cfg.paths_model or 0) < 0.5 or (A.cfg.probe_prewarm or 1) < 0.5 then
-		PR.prewarm = nil
-		return
-	end
-	local pw = PR.prewarm
-	if not pw or pw.g ~= g then
-		pw = { g = g, byOrder = {}, list = {}, srcs = {}, vis = {}, visN = 0, chains = {}, chainN = 0, taken = 0, missed = 0 }
-		PR.prewarm = pw
-	end
-	local now = SysTime()
-	if not pw.job then
-		-- a new plan once the listener moved a lattice step from the last one, or PREWARM_REPLAN later
-		local last = pw.planL
-		if last and (pw.next or 0) > now and last:DistToSqr(L) < PREWARM_STEP * PREWARM_STEP then return end
-		pw.next, pw.planL = now + PREWARM_REPLAN, Vector(L)
-		local Lc, vc = Vector(L), Vector(vel)
-		pw.job = coroutine.create(function()
-			prewarmWork(pw, g, Lc, vc, function() if SysTime() >= PR.prewarmDeadline then coroutine.yield() end end)
-		end)
-	end
-	PR.prewarmDeadline = deadline or now + (A.cfg.probe_field_ms or 1) / 1000
-	local ok, err = coroutine.resume(pw.job)
-	if not ok then
-		pw.job = nil
-		ErrorNoHaltWithStack("[PBA] probe prewarm failed: " .. tostring(err))
-	elseif coroutine.status(pw.job) == "dead" then
-		pw.job = nil
-	end
-end
-
--- The listener's velocity, from its positions 0.1 s apart (a vehicle, noclip or a spectator move it too);
--- a jump faster than 2000 u/s is a teleport, not a speed.
-function PR.PrewarmThink(deadline)
-	local L = A.ListenerPos and A.ListenerPos()
-	if not L or SysTime() >= deadline then return end
-	local now = SysTime()
-	local h = PR.prewarmVel
-	if not h then
-		h = { L = Vector(L), t = now, v = Vector(0, 0, 0) }
-		PR.prewarmVel = h
-	elseif now - h.t >= 0.1 then
-		local v = (L - h.L) * (1 / (now - h.t))
-		if v:LengthSqr() > 2000 * 2000 then v = Vector(0, 0, 0) end
-		h.L, h.t, h.v = Vector(L), now, v
-	end
-	PR.AdvancePrewarm(L, h.v, deadline)
 end
 
 function PR.Paths(S, L, k, cfg)
