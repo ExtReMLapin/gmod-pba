@@ -2148,6 +2148,59 @@ local SUITE = {
 			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
 			if not ok then error(err, 0) end
 		end },
+		{ name = "CornerPoint: trying the smallest slide first (pba_corner_step_first) gives the full halving's point, in fewer traces", func = function()
+			-- the same doorway; vertices around both jambs, from either room, and a pillar in room A
+			local boxes = { { Vector(512, -1000, -100), Vector(528, 97, 300) }, { Vector(512, 143, -100), Vector(528, 1000, 300) },
+				{ Vector(300, 200, -100), Vector(340, 240, 300) } }
+			local savedTL, savedNT, savedSF = util.TraceLine, A.cfg.native_traces, A.cfg.corner_step_first
+			local n = 0
+			local function stub()
+				-- a new function each time: the corner memos are kept per trace function
+				return function(t)
+					n = n + 1
+					local o = traceOut(t)
+					local best
+					if not t.ignoreworld then
+						for _, b in ipairs(boxes) do
+							local t0, t1 = segBox(t.start, t.endpos, b[1], b[2])
+							if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
+						end
+					end
+					o.Hit, o.HitWorld, o.Fraction, o.StartSolid, o.Entity = best ~= nil, best ~= nil, best or 1, false, nil
+					o.HitPos = t.start + (t.endpos - t.start) * (best or 1)
+					return o
+				end
+			end
+			A.cfg.native_traces = 0
+			local ok, err = pcall(function()
+				local seed = 4242
+				local function rnd(a, b)
+					seed = (seed * 1103515245 + 12345) % 2147483648
+					return a + (b - a) * seed / 2147483648
+				end
+				local cases = {}
+				for i = 1, 120 do
+					local S = Vector(rnd(560, 900), rnd(-200, 400), rnd(0, 100))
+					local L = Vector(rnd(100, 480), rnd(-200, 400), rnd(0, 100))
+					local V = Vector(rnd(490, 560), i % 2 == 0 and rnd(60, 100) or rnd(140, 180), rnd(0, 100))
+					cases[i] = { S, V, L }
+				end
+				local got, traces = {}, {}
+				for mode = 0, 1 do
+					A.cfg.corner_step_first = mode
+					util.TraceLine, n = stub(), 0
+					got[mode] = {}
+					for i, c in ipairs(cases) do got[mode][i] = P.CornerPoint(c[1], c[2], c[3]) end
+					traces[mode] = n
+				end
+				for i = 1, #cases do
+					expect(got[1][i] == got[0][i]).to.beTrue()
+				end
+				expect(traces[1] < traces[0] * 0.8).to.beTrue()
+			end)
+			util.TraceLine, A.cfg.native_traces, A.cfg.corner_step_first = savedTL, savedNT, savedSF
+			if not ok then error(err, 0) end
+		end },
 		{ name = "DetourDelta: the world closing on the best way round an object moves it by degrees along its edge (was a jump to the next edge: 10 -> 3 dB in 2 u, pba_twodoors)", func = function()
 			-- a tall slab across the line, its four vertical edges the ways round (best point at z = 0); the world
 			-- blocks every point below h, h rising through 0

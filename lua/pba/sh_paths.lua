@@ -1731,6 +1731,7 @@ function P.CornerPoint(a, v, b, y)
 	-- sees it: the leg it slides on stays clear (part of it), the other one is traced, the route only
 	-- shortens, and the vertex ends on the edge. Only from a vertex whose legs are both clear.
 	if cornerClear(a, q) and cornerClear(q, b) then
+		local stepFirst = (A.cfg.corner_step_first or 0) >= 0.5
 		for _ = 1, CORNER_SWEEPS do
 			local moved = false
 			for side = 1, 2 do
@@ -1738,6 +1739,17 @@ function P.CornerPoint(a, v, b, y)
 				local seg = far - q
 				local sl = seg:Length()
 				local s0, s1 = 0, 1
+				-- pba_corner_step_first: the smallest slide (CORNER_EPS) tried first. A vertex already on its
+				-- edge (60% of the sides on the offline bench: the confirming sweep, a leg it is pressed on)
+				-- cannot slide: one trace, where halving the whole leg took ~11. When it can, the same halving
+				-- follows (same answer). It differs only where that halving would land past an obstacle met
+				-- within CORNER_EPS of the vertex: none in 3 600 evaluations offline. (A doubling search from
+				-- the vertex saved 22% more traces but moved one copy of a route 1-2 dB from its twin where
+				-- the leg grazes the edge: visibility along such a leg is not monotonic.)
+				if stepFirst and sl >= CORNER_EPS then
+					if y then sliceCheck() end
+					if not cornerClear(other, q + seg * (CORNER_EPS / sl)) then s1 = 0 end
+				end
 				for _ = 1, CORNER_HALVINGS + 4 do
 					if (s1 - s0) * sl < CORNER_EPS then break end
 					if y then sliceCheck() end
