@@ -1663,7 +1663,23 @@ function P.WorldEdge(S, L, walls, cfg, noDoors)
 	if not noDoors then
 		d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
 		d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
-		if e2 and e2 == e1 then d2, l2 = 0, 0 end -- one leaf at the apex: paid once
+		if e2 and e2 == e1 then
+			-- one leaf at the apex: paid once. pba_edge_leg_doors: only that leaf is left out of the second leg,
+			-- not every door on it (pba_demo: two shut doors behind the apex dropped, 14 dB instead of 42, while
+			-- the straight line one step on paid all three: 28 dB in 16 u)
+			if (cfg.edge_leg_doors or 0) >= 0.5 then
+				local list = P.SegmentDoors(best.apex, L, (cfg.door_3d or 0) >= 0.5)
+				d2, l2 = 0, 0
+				for _, h in ipairs(list or {}) do
+					if h[1] ~= e1 then
+						local l, lp = P.DoorSpanLoss(h[1], best.apex, L, cfg, h[2], h[3])
+						d2, l2 = d2 + l, math.max(l2, lp or 0)
+					end
+				end
+			else
+				d2, l2 = 0, 0
+			end
+		end
 	end
 	best.doorDb = d1 + d2
 	best.tilt = best.db + AC.LevelDb(l1 or 0, cfg) + AC.LevelDb(l2 or 0, cfg)
@@ -2246,7 +2262,7 @@ function P.PathDiffuse(p, cfg)
 	if (cfg.diffuse or 0) < 0.5 or not p.direct or not p.length then return 0, 0 end
 	local straight = math.max(p.direct, cfg.diffuse_near or 512, 1)
 	local fl = ramp(p.length / straight, 2, 4.5)
-	local fb = ramp(p.bendDeg or 0, 180, 540)
+	local fb = ramp(p.bendUse or p.bendDeg or 0, 180, 540)
 	local share = (1 - (1 - fl) * (1 - fb)) * (cfg.diffuse_max or 0.85)
 	local bounce = -10 * math.log10(1 - math.Clamp(cfg.diffuse_absorb or 0.1, 0, 0.99))
 	local excess = math.max(p.length - straight, 0)
@@ -2273,7 +2289,7 @@ function P.DiffuseMix(p, share, absorbDb, cfg)
 	local raw = p.rawLossDb or p.lossDb or 0
 	if not share or share <= 0 then return raw, 0 end
 	local diff = math.Clamp(p.diffDb or 0, 0, math.max(raw, 0))
-	local corners = math.min((p.bendDeg or 0) / 90 * (cfg.diffuse_corner_db or 3), diff)
+	local corners = math.min((p.bendUse or p.bendDeg or 0) / 90 * (cfg.diffuse_corner_db or 3), diff)
 	local ec = (1 - share) * 10 ^ (-raw / 10)
 	local ed = share * 10 ^ (-(raw - diff + corners + (absorbDb or 0)) / 10)
 	local e = math.max(ec + ed, 1e-30)
@@ -3536,6 +3552,19 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			local best
 			for _, p in ipairs(r.paths) do if p.lossDb and (not best or p.lossDb < best.lossDb) then best = p end end
 			if best then P.BoundBeside(r.trans, best, cfg) end
+		end
+		-- pba_bend_final: the diffuse model reads the bend of the route as heard (its final points, corners on the
+		-- real edges), not the bend of the coarse polyline the route was evaluated on (probe positions, before the
+		-- corners are refined): that one jumped by 90-120 deg in 8 u while the route did not change (rp_downtown
+		-- street walk: diffuse share 0.13 -> 0.47 in one step)
+		local bendFinal = (cfg.bend_final or 0) >= 0.5
+		for _, p in ipairs(r.paths or {}) do
+			if bendFinal and p.points then
+				local _, b = P.PathShape(S, p.points, L)
+				p.bendUse = b
+			else
+				p.bendUse = nil
+			end
 		end
 		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
 		r.shadowDb = P.ShadowOf(r.voices, r.edge and math.max(r.edge.db - (r.edge.doorDb or 0), 0) or nil)
