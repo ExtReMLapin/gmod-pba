@@ -878,7 +878,17 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy)
 			detours = detours or {}
 			detours[#detours + 1] = { w, S, L }
 		end
-		if hitEnt or not P.PassTool(tr) then walls[#walls + 1] = w end
+		local prev = walls[#walls]
+		if not hitEnt and prev and not prev.ent and not prev.water and prev.surfIdx == w.surfIdx
+			and (prev.thickness < 0.01 or w.thickness < 0.01) and prev.exit:DistToSqr(w.entry) <= 4
+			and (A.cfg.wall_merge_graze or 0) >= 0.5 then
+			-- the same world surface met twice within 2 u, one of the two hits a zero-thickness face: a line
+			-- grazing a brush's face (a floor's top at a wall's foot) left the 0.5 u probe out of the solid and
+			-- counted the face as a wall of its own, then the brush behind it again (rp_downtown: 18 dB in 8 u
+			-- as the line reached the upper room's floor). One surface, one wall.
+			prev.exit = w.exit
+			prev.thickness = prev.entry:Distance(prev.exit)
+		elseif hitEnt or not P.PassTool(tr) then walls[#walls + 1] = w end
 		if exit == L then break end
 		start = exit + dir * 0.5
 	end
