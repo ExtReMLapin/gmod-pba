@@ -3410,6 +3410,12 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			local last = tw[#tw]
 			local dir = (L - S):GetNormalized()
 			local tpos = last.exit + dir * 2
+			-- pba_trans_pos_clamp: never past the listener (a wall exit within 2 u of L put the voice behind the
+			-- listener, and its direction flipped by 150-177 degrees along a wall: rp_downtown's street walk)
+			if (cfg.trans_pos_clamp or 0) >= 0.5 then
+				local rem = (L - last.exit):Dot(dir)
+				if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
+			end
 			r.trans = { walls = tw, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
 		end
 		-- experimental: Steam Audio baked pathing replaces the probe graph

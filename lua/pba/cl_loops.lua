@@ -142,17 +142,11 @@ local function applyNative(m, S, L)
 		pos, gain, lp = S, N.PhysClear(m.lvl, S:Distance(L)), 0
 		m.diffuse, m.tunnel = 0, false
 	else
-		local p, dp, pt = 0, 0, 0
-		for _, v in ipairs(r.voices) do
-			local g = N.PhysPath(v.gain, v.len, m.lvl, v.rawLossDb) -- the loss before headroom (N.PhysPath)
-			p, dp = p + g * g, dp + (v.diffuse or 0) * g * g
-			-- what enters the listener's space, through an opening or a wall: that space resonates with it
-			-- (one rule for every sound: N.EntrySend with the sound's law)
-			do local s = N.EntrySend(N.Law(m.lvl), v, L, N.LossLin(v, m.lvl)) pt = pt + s * s end
-		end
-		pos, gain, lp, trans = r.voices[1].pos, math.sqrt(p), r.voices[1].lp, math.sqrt(pt)
-		lpDb = r.voices[1].lpDb -- the continuous loss behind lp: the EQ follows it without steps (N.LowpassDb)
-		m.diffuse = dp / math.max(p, 1e-12) -- diffuse share (long winding path): the module blurs and reverbs it
+		-- the voices as one native voice (N.MixVoices: gain, diffuse share, the listener-room send of what
+		-- enters the listener's space through an opening or a wall, position and spectrum by energy)
+		local mx = N.MixVoices(r.voices, L, m.lvl, N.Law(m.lvl))
+		pos, gain, lp, trans, lpDb = mx.pos, mx.gain, mx.lp, mx.send, mx.lpDb
+		m.diffuse = mx.diffuse -- diffuse share (long winding path): the module blurs and reverbs it
 	end
 	-- same meters as the patch path (gain relative to the direct law in use, DSP equivalent)
 	m.g = math.min(gain / math.max(N.PhysClear(m.lvl, S:Distance(L)), 1e-6), 1)

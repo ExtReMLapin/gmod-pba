@@ -2456,6 +2456,19 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 					-- voice's direction swung 14.5 degrees in a 4 u step of the source when the copy kept
 					-- changed (field_continuity); on the edge they meet
 					if #pulled >= 3 and p.edgePos then p.pos = p.edgePos end
+					-- pba_route_pos_straight: a route whose corners all came to lie on the line once refined (its last
+					-- corner on the edge is the source itself) is heard where its line passes its clearance vertex (the
+					-- opening it goes through), not at the source: at the source, the listener-room send took the
+					-- source's own level as what enters the listener's space (rp_downtown's doorway: 12.5 dB in 4 u, the
+					-- route toggling between a corner at the jamb and none), and the direction swung by up to 177 deg
+					if #pulled >= 3 and (cfg.route_pos_straight or 0) >= 0.5 and p.pos and p.pos:DistToSqr(S) < 1 then
+						local v, ab = pulled[#pulled - 1], L - S
+						-- (its doorway's leaf when it has one: the vertex may be a probe deep in a room)
+						local ent = p.leaves and next(p.leaves)
+						if IsValid(ent) then v = ent:WorldSpaceCenter() end
+						local tt = math.Clamp((v - S):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1)
+						p.pos = S + ab * tt
+					end
 					-- the straight route is heard where the transmission voice would be: at the leaf it crosses
 					-- (its point on the line nearest the leaf's centre), not at the source
 					if #pulled == 2 and p.leaves then

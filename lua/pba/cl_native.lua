@@ -640,6 +640,39 @@ function N.EntrySend(law, v, L, lossLin)
 	local sh = N.ShadowShare(v.shadowDb or (l > 0 and -20 * math.log10(l) or 300))
 	return law(entry) * l * math.sqrt(sh * N.OpeningShare(v))
 end
+--- One sound rendered by ONE native voice (a loop, a stream): its voices together. Gain and diffuse share in
+-- power, the listener-room send in power (N.EntrySend each), and (pba_native_voice_mix) the apparent position
+-- and the spectrum mixed by energy too: direction weighted by energy at the energy-weighted distance (as
+-- P.SelectVoices merges members), the high-band loss by band energy (AC.MixTilt). The former rule took the
+-- first voice's position and filter: where two voices were near the same level and swapped order, the loop
+-- jumped by up to 177 degrees and 12.6 dB of low-pass in one 4 u step (rp_downtown, the radio heard in the
+-- street: the transmission at the wall beside the listener against the route through the doorway).
+-- law: the sound's distance law (N.Law(lvl), a stream's own). lvl: for N.PhysPath / N.LossLin.
+function N.MixVoices(voices, L, lvl, law, gainOf)
+	local p, dp, pt = 0, 0, 0
+	local sum, dist, tilts = Vector(0, 0, 0), 0, {}
+	for _, v in ipairs(voices) do
+		local g = gainOf and gainOf(v) or N.PhysPath(v.gain, v.len, lvl, v.rawLossDb)
+		local e = g * g
+		p, dp = p + e, dp + (v.diffuse or 0) * e
+		local s = N.EntrySend(law, v, L, N.LossLin(v, lvl))
+		pt = pt + s * s
+		local d = v.pos - L
+		local dl = d:Length()
+		if dl > 1e-3 then sum:Add(d * (e / dl)) dist = dist + dl * e end
+		tilts[#tilts + 1] = e
+		tilts[#tilts + 1] = v.lpDb or A.AC.LevelDb(v.lp or 0)
+	end
+	local v1 = voices[1]
+	local m = { gain = math.sqrt(p), diffuse = dp / math.max(p, 1e-12), send = math.sqrt(pt),
+		pos = v1.pos, lp = v1.lp, lpDb = v1.lpDb }
+	if (A.cfg.native_voice_mix or 0) >= 0.5 and #voices > 1 and p > 0 then
+		if sum:LengthSqr() > 1e-12 then m.pos = L + sum:GetNormalized() * (dist / p) end
+		m.lpDb = A.AC.MixTilt(unpack(tilts))
+		m.lp = A.AC.LowpassLevel(m.lpDb)
+	end
+	return m
+end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
 -- the voice has a slot (then the room bus must only get the transmission part).
 function N.BindSource(id, S, srcSend)

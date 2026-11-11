@@ -23,20 +23,14 @@ for ci, c in ipairs(SWEEP) do
 		if c.moveS then S, L = Q, S0 + lift end
 		P.cache, P.timeMemo = {}, {}
 		local r = P.Compute(S, L, 75)
-		local gain, send, df, lpDb, dir = 0, 0, 0, 0, L - S
+		local gain, send, df, lpDb, dir = 0, 0, 0, 0, S - L
 		if r.clear or not r.voices or #r.voices == 0 then
 			gain = N.PhysClear(75, S:Distance(L))
 		else
-			local p, dp, pt = 0, 0, 0
-			for _, v in ipairs(r.voices) do
-				local g = N.PhysPath(v.gain, v.len, 75, v.rawLossDb)
-				p, dp = p + g * g, dp + (v.diffuse or 0) * g * g
-				local s = N.EntrySend(N.Law(75), v, L, N.LossLin(v, 75))
-				pt = pt + s * s
-			end
-			gain, send, df = math.sqrt(p), math.sqrt(pt), dp / math.max(p, 1e-12)
-			lpDb = r.voices[1].lpDb or 0
-			dir = r.voices[1].pos - L
+			local mx = N.MixVoices(r.voices, L, 75, N.Law(75)) -- (cl_loops' rule: one native voice)
+			gain, send, df = mx.gain, mx.send, mx.diffuse
+			lpDb = mx.lpDb or pba.AC.LevelDb(mx.lp or 0)
+			dir = mx.pos - L
 		end
 		dir:Normalize()
 		local moved = c.moveS and S or L
