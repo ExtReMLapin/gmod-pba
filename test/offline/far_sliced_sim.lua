@@ -55,7 +55,7 @@ A.DebugNote = function() end
 A.Report = function() end
 A.Native = nil
 A.cfg.update_interval, A.cfg.max_active, A.cfg.max_anchors, A.cfg.oneshot_follow = 0.25, 24, 48, 0
-A.cfg.far_sliced, A.cfg.far_sliced_ms, A.cfg.paths_model = 1, 1.5, 1
+A.cfg.far_sliced, A.cfg.far_sliced_ms = 1, 1.5
 
 local f = assert(io.open(REPO .. "/lua/pba/cl_render.lua", "rb"))
 assert(loadstring(f:read("*a"), "cl_render.lua"))()

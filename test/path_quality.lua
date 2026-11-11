@@ -134,7 +134,6 @@ while #rows < N and tries < N * 400 do
 					-- no single-bend reference: where long detours live. PBA's chosen path is still measured
 					-- (share of long detours and the absorption they get), at most N of them
 					if #multi < N then
-						if A.Probes.BuildFieldNow then unhooked(function() A.Probes.BuildFieldNow(b) end) end
 						local _, mSilent, mRatio, mGuard = unhooked(level)
 						multi[#multi + 1] = { silent = mSilent, ratio = mRatio, guard = mGuard }
 					end
@@ -143,13 +142,7 @@ while #rows < N and tries < N * 400 do
 					-- same physics as PBA, absorption included (0 in practice: a single bend inside the S-L box
 					-- is at most 1.63 x the straight line and bends less than 180 degrees)
 					local refLevel = AC.GainToDb(AC.EngineGain(rp.length, 75)) - select(1, P.DiffuseMix(rp, P.PathDiffuse(rp, A.cfg)))
-					-- the listener-centred probe field (when present) is built around L, as if the player
-					-- had been standing there: the game keeps it current around the listener
-					if A.Probes.BuildFieldNow then unhooked(function() A.Probes.BuildFieldNow(b) end) end
 					local cold, coldSilent = unhooked(level)
-					-- let the background probe solve finish (at most 3 s)
-					local t0 = SysTime()
-					while next(A.Probes.queue or {}) and SysTime() - t0 < 3 do job:frames(1) end
 					local warm, warmSilent, warmRatio, warmGuard = unhooked(level)
 					rows[#rows + 1] = { excess = refLevel - warm, silent = warmSilent, cold = refLevel - cold,
 						coldSilent = coldSilent, refLen = rp.length, refDb = refLevel, direct = d, S = a, L = b, q = ref[2],
@@ -207,7 +200,7 @@ if args.details then
 	for i = 1, math.min(5, #rows) do
 		local r = rows[i]
 		local starts, goals = A.Probes.Visible(g, r.S, 3), A.Probes.Visible(g, r.L, 3)
-		local ps = A.Probes.Paths(r.S, r.L, A.cfg.max_paths, A.cfg)
+		local ps = A.Probes.FieldRoutes(r.S, r.L, A.cfg.max_paths, A.cfg)
 		out.worst5[i] = { excess = math.Round(r.excess, 1), silent = r.silent, cold = math.Round(r.cold, 1), coldSilent = r.coldSilent, S = tostring(r.S), L = tostring(r.L), q = tostring(r.q),
 			refLen = math.Round(r.refLen), direct = math.Round(r.direct), starts = #starts, goals = #goals, probePaths = #ps,
 			pathLen = ps[1] and math.Round(ps[1].length), pathLoss = ps[1] and math.Round(ps[1].lossDb, 1),

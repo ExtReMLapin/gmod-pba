@@ -259,7 +259,6 @@ steps = [
     ("lipsync_glass pba_materials", lambda: seq(lambda: load("pba_materials"), lambda: native_on(True),
                                                 lambda: [job("server", "lipsync_glass.lua", 30), job("client", "lipsync_client.lua", 10)])),
     ("water_ogg gm_construct", water_ogg),
-    ("paths_numeric_equiv pba_demo", lambda: seq(lambda: load("pba_demo", 1), lambda: job("client", "paths_numeric_equiv.lua"))),
     # door leaf crossed by the line = its doorway (one model): no jump at the leaf / wall boundary
     # continuous sounds: no flip-flop between two equal paths, a real move still switches once
     ("path_hysteresis twodoors", lambda: seq(doors_open, lambda: job("client", "path_hysteresis.lua"))),
@@ -288,10 +287,8 @@ steps = [
     # a one-shot followed while it plays: the voice reaches the source once the listener steps into sight
     # (pba_demo court, native then engine rendering)
     ("oneshot_follow pba_demo", lambda: py("oneshot_follow.py")),
-    # props on the paths through openings (portal and probe paths), not only on the straight line
+    # props on the probe routes through openings, not only on the straight line
     ("path_obstruction", lambda: py("path_obstruction.py")),
-    # one model for a partly blocked opening: a prop covering part of a doorway = a leaf covering the same part
-    ("mask_equivalence", lambda: py("mask_equivalence.py")),
     # special sounds: grates and fences (CONTENTS_GRATE) cost no wall loss, do not cut probe links and
     # stay out of the Steam Audio scene (12 grates of d1_canals_01)
     ("grate_loss d1_canals_01", lambda: seq(lambda: load("d1_canals_01"), lambda: job("client", "grate_loss.lua", 60))),
@@ -327,16 +324,7 @@ steps = [
     # physics: the diffuse leak through an opening (portal_diffuse_db) is a model the reference lacks
     ("path_quality pba_demo search", lambda: py("path_quality.py", "--check", "--set=pba_portal_diffuse_db=60",
                                                 "--max-under6=0.05", "--max-over6=0.05", "pba_demo")),
-    # the listener field alone (no immediate search): no cold silence beyond the warm ones
-    ("path_quality field only", lambda: py("path_quality.py", "--check", "--set=pba_probe_inline_ms=0",
-                                           "d1_town_01", "gm_construct")),
-    # probe paths averaged over the probes the source sees (pba_probe_field_blend): same quality bar as the
-    # field alone, and a source moving 4 u at a time gets no step of level or direction
-    ("path_quality field blend", lambda: py("path_quality.py", "--check", "--set=pba_probe_field_blend=1",
-                                            "--set=pba_probe_inline_ms=0", "d1_town_01", "gm_construct")),
     ("field_continuity noportal", lambda: seq(lambda: load("pba_noportal"), lambda: job("client", "field_continuity.lua", 300))),
-    # copies of one probe route counted once (report only: field and k-path, new vs former criterion)
-    ("probe_dedupe gm_construct", lambda: seq(lambda: load("gm_construct"), lambda: job("client", "probe_dedupe.lua", 600))),
     # cases reported on rp_downtown: a radio upstairs heard through the ceiling (loudest voice first), and
     # behind a pillar of the same room (probes off the floor, no doubled vertex: the route hugs the corner)
     ("downtown_cases rp_downtown", lambda: seq(lambda: load("rp_downtown_v4c_v2"), lambda: job("client", "downtown_cases.lua", 400))),
@@ -397,7 +385,7 @@ steps += special_steps
 PASS, FAIL, INCONC, REPORT = "PASS", "FAIL", "INCONCLUSIVE", "REPORT"
 RANK = {PASS: 0, REPORT: 1, INCONC: 2, FAIL: 3}
 # no criterion by design: listed, never counted
-REPORT_ONLY = {"ab_counts tworooms_open", "ab_counts lcorridor", "probe_dedupe gm_construct"}
+REPORT_ONLY = {"ab_counts tworooms_open", "ab_counts lcorridor"}
 
 def _why(d):
     for k in ("err", "error", "why", "fail", "note", "fails", "raw"):
@@ -432,16 +420,7 @@ def _check_loop_removed(d):
     return (PASS, "") if ok else (FAIL, f"tracked {d.get('trackedBeforeRemove')} before removal (want >= 1), "
                                         f"{d.get('serverLeft')} mirrors left after (want 0)")
 
-def _check_numeric_equiv(d):
-    if not isinstance(d, dict) or "chainsDifferent" not in d:
-        return None
-    err = _num(d.get("maxPointError"))
-    ok = (_num(d.get("pairs")) or 0) > 0 and d.get("chainsDifferent") == 0 and err is not None and err < 1e-3
-    return (PASS, "") if ok else (FAIL, f"pairs {d.get('pairs')}, chainsDifferent {d.get('chainsDifferent')} (want 0), "
-                                        f"maxPointError {err} (want < 1e-3)")
-
-CHECKS = {"GLuaTest pure suite": _check_pure, "GLuaTest pure suite (native helpers)": _check_pure, "menu_fit": _check_menu, "loop_removed": _check_loop_removed,
-          "paths_numeric_equiv pba_demo": _check_numeric_equiv}
+CHECKS = {"GLuaTest pure suite": _check_pure, "GLuaTest pure suite (native helpers)": _check_pure, "menu_fit": _check_menu, "loop_removed": _check_loop_removed}
 
 def judge_py(o):
     lines = o.out.splitlines()

@@ -2,7 +2,7 @@
 -- doorway without areaportal, so every occluded path comes from the probe graph).
 -- The listener stands in room A (256, 256, 64); the source moves 4 u at a time along two lines of
 -- room B parallel to the wall (x = 600 and x = 900, y 24 .. 488), behind the wall the whole way.
--- At each step P.Compute runs with paths_model 1 (the listener field, the one topology): the routes
+-- At each step P.Compute runs on the listener field (the one topology): the routes
 -- read in the field built at L, no search per sound.
 -- Per step: change of the loudest probe voice's level (dB) and direction (degrees, 3-D), of the probe
 -- voices' level together (dB), of the total level (with the transmission voice, reported only) and of
@@ -15,10 +15,7 @@ local P, PR = A.Paths, A.Probes
 if game.GetMap() ~= "pba_noportal" then return { pass = false, error = "load pba_noportal" } end
 job:wait(function() return PR.current ~= nil end, 300)
 local L = Vector(256, 256, 64)
-PR.BuildFieldNow(L)
-job:wait(function() return PR.field ~= nil end, 10)
 local cfg1 = table.Copy(A.cfg)
-cfg1.paths_model, cfg1.probe_field = 1, 1
 local modes = { field = cfg1 }
 
 -- One evaluation: nil when S sees L (no path wanted: the step is left out and breaks the sequence)
@@ -78,7 +75,6 @@ for name, cfg in pairs(modes) do
 	for _, x in ipairs({ 600, 900 }) do
 		local prev
 		for y = 24, 488, 4 do
-			PR.fieldHold = SysTime() + 2 -- keep the field built at L (the player may stand elsewhere)
 			local m = measure(cfg, Vector(x, y, 40))
 			if m then
 				n = n + 1
@@ -102,7 +98,6 @@ for name, cfg in pairs(modes) do
 		dirDeg = stats(d.dir, worst.dir), lenU = stats(d.len), missing = missing, steps = n }
 end
 P.InvalidateCache()
-PR.fieldHold = nil
 -- criteria on the probe voices; the total (with the transmission voice, whose loss near the doorway jamb
 -- also depends on the native occlusion) is reported, not judged
 local function ok(o) return o.pathDb.max < 1 and o.levelDb.max < 1 and o.dirDeg.max < 5 and o.lenU.p95 < 8 end

@@ -94,8 +94,6 @@ end
 
 -- the listener-centred field around L (built now unless the current one already is)
 local function fieldAt(L)
-	local f = A.Probes.field
-	if A.Probes.BuildFieldNow and not (f and f.L and f.L:DistToSqr(L) < 1) then A.Probes.BuildFieldNow(L) end
 end
 
 -- one position: cold, then (background probe solve done, at most 3 s) warm

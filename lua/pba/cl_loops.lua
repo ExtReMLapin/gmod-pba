@@ -74,8 +74,7 @@ local apply
 -- a mirror's far evaluation is ready (cl_slicer): applied at once
 local function sliceReady(m) if not m.done then apply(m) end end
 
---- Path result of a mirror (direction / low-pass hysteresis). A provisional result (probe search
--- still running) forces the next re-evaluation (reeval_adaptive). nil while a far sound's evaluation runs
+--- Path result of a mirror (direction / low-pass hysteresis). nil while a far sound's evaluation runs
 -- in slices (cl_slicer): the mirror keeps its values, and is applied again once it is ready (sliceReady).
 local function pathOf(m, S, L)
 	m.hyst = m.hyst or {}
@@ -83,7 +82,6 @@ local function pathOf(m, S, L)
 	if A.Slicer then raw = A.Slicer.Held(m, S, L, m.lvl, m.ent, sliceReady) else raw = A.Paths.Compute(S, L, m.lvl, nil, m.ent) end
 	if not raw then return nil end
 	local r = A.Paths.Stable(m.hyst, raw)
-	if r.provisional and m.reeval then m.reeval.force = true end
 	return r
 end
 

@@ -16,7 +16,7 @@ LIFT = next((float(a[len("--lift="):]) for a in sys.argv[2:] if a.startswith("--
 # pba_demo's rooms are only joined by doors (closed: no pair left). --doors=closed keeps them as they are.
 OPEN_DOORS = "--doors=closed" not in sys.argv[2:]
 REF_THROUGH_DOORS = "--ref-through-doors" in sys.argv[2:]  # the old reference (brush-only traces), to see the artefact
-SETS = [a[len("--set="):] for a in sys.argv[2:] if a.startswith("--set=")]  # e.g. --set=pba_probe_bridge_max=0
+SETS = [a[len("--set="):] for a in sys.argv[2:] if a.startswith("--set=")]  # e.g. --set=pba_portal_diffuse_db=60
 MAPS = [a for a in sys.argv[2:] if not a.startswith("--")] or ["pba_demo", "gm_construct", "d1_town_01"]
 PAIRS = 30
 # thresholds (share of pairs): None = report only. Set from the baseline.
@@ -24,7 +24,7 @@ MAX_OVER6 = next((float(a.split("=")[1]) for a in sys.argv[2:] if a.startswith("
 MAX_UNDER6 = next((float(a.split("=")[1]) for a in sys.argv[2:] if a.startswith("--max-under6=")), None)  # PBA too loud
 MAX_SILENT = 0.07  # warm, regression guard (0.033-0.067 today: street-to-rooftop bends in open air, target of the edge graph)
 MAX_COLD_SILENT = 0.15        # cold one-shots: ~1.0 before the inline probe solve (absolute guard)
-MAX_COLD_EXTRA_SILENT = 0.01  # cold silences beyond the warm ones: the listener field leaves none (check it with --set=pba_probe_inline_ms=0)
+MAX_COLD_EXTRA_SILENT = 0.01  # cold silences beyond the warm ones: the listener field leaves none
 MAX_COLD_GAP = 1.0  # dB, cold vs warm median, every variant (the field steps used --no-gap, which dropped
 # the check: the field alone (--set=pba_probe_inline_ms=0) measured 0.1 dB from warm on gm_construct once
 # cold was really cold)
@@ -58,7 +58,6 @@ for m in MAPS:
         time.sleep(4)  # leaves swing, door states reach the client
     # cold = the first evaluation: no probe route solved by an earlier run on this map (a run after another
     # one without a map load read every route from the cache: the field alone never got measured)
-    call("lua_exec", {"realm": "client", "code": "local PR = pba.Probes if PR then PR.pathCache, PR.pathCacheN, PR.queue = {}, 0, {} end return true"})
     for kv in SETS:
         k, v = kv.split("=", 1)
         call("console_exec", {"realm": "client", "cmd": f"{k} {v}"})

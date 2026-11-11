@@ -157,7 +157,7 @@ local function setDoor(k)
 	P.InvalidateCache() -- as the game's door updates do (pba.Doors.Apply)
 end
 
-for k, v in pairs({ native_traces = 0, paths_model = 1, probes = 1, probe_dist = 1e6, probe_field = 1, water = 1, path_props = 1 }) do A.cfg[k] = v end
+for k, v in pairs({ native_traces = 0, probes = 1, probe_dist = 1e6, water = 1, path_props = 1 }) do A.cfg[k] = v end
 A.Graph.Get = function() return nil end
 setDoor(1)
 DEPTH = DEPTH + 1

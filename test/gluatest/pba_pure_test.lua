@@ -122,7 +122,7 @@ local function withProbeRooms(holes, extra, over, fn)
 		return out
 	end
 	local saved = { util.TraceLine, util.TraceHull, util.PointContents }
-	local state = { "current", "field", "queue", "pathCache", "pathCacheN", "inlineFrame", "inlineUsed", "fieldHold", "fieldsByKey", "seedMemo", "fieldAway", "doorFieldQueue", "doorFieldJob", "doorFieldSpare" }
+	local state = { "current", "fieldsByKey", "seedMemo", "doorFieldQueue", "doorFieldJob", "doorFieldSpare" }
 	local savedPR, savedCfg = {}, {}
 	for _, k in ipairs(state) do savedPR[k] = PR[k] end
 	-- native_traces 0 always: the scene replaces util.Trace*, the engine's own traces would bypass it
@@ -134,7 +134,7 @@ local function withProbeRooms(holes, extra, over, fn)
 	util.TraceHull = function(t) return trace(t, t.maxs and t.maxs.x or 0) end
 	util.PointContents = function(p) return inside(p) and CONTENTS_SOLID or 0 end
 	local ok, err = pcall(function()
-		PR.queue, PR.pathCache, PR.pathCacheN, PR.inlineFrame, PR.field, PR.fieldHold, PR.fieldsByKey, PR.seedMemo = {}, {}, 0, nil, nil, nil, nil, nil
+		PR.fieldsByKey, PR.seedMemo = nil, nil
 		PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare = nil, nil, nil
 		local g = PR.BuildCo({ Vector(256, 256, 49) }, 128)
 		PR.Prepare(g)
@@ -297,11 +297,11 @@ end
 local function withProbeScene(fn)
 	local PR = A.Probes
 	local savedTL, savedTH = util.TraceLine, util.TraceHull
-	local keys = { "current", "field", "fieldJob", "fieldHold", "pathCache", "pathCacheN", "queue", "queueN" }
+	local keys = { "current" }
 	local savedPR, savedCfg = {}, {}
 	for _, k in ipairs(keys) do savedPR[k] = PR[k] end
 	-- native_traces: the scene replaces util.Trace*, the engine's own traces would bypass it
-	for _, k in ipairs({ "probe_field", "probe_inline_ms", "probe_field_blend", "native_traces" }) do savedCfg[k] = A.cfg[k] end
+	savedCfg.native_traces = A.cfg.native_traces
 	A.cfg.native_traces = 0
 	local function tr(t, pad)
 		local out = traceOut(t)
@@ -328,69 +328,26 @@ local function withProbeScene(fn)
 		end
 	end
 	PR.Prepare(g)
-	PR.current, PR.fieldJob, PR.fieldHold, PR.pathCache, PR.pathCacheN, PR.queue, PR.queueN = g, nil, nil, {}, 0, {}, 0
+	PR.current = g
 	local ok, err = pcall(fn, g)
 	util.TraceLine, util.TraceHull = savedTL, savedTH
 	for _, k in ipairs(keys) do PR[k] = savedPR[k] end
 	for k, v in pairs(savedCfg) do A.cfg[k] = v end
 	if not ok then error(err, 0) end
 end
--- The probe answer for S, the field built at L: the loudest path (length and loss), its azimuth seen
--- from L (degrees) and its level (dB, loss and spherical spreading). Field only: no A* search.
-local function probeAnswer(S, L, blend)
-	local cfg = table.Copy(A.cfg)
-	cfg.probe_field, cfg.probe_inline_ms, cfg.probe_bridge_max, cfg.probe_field_blend = 1, 0, 0, blend
-	cfg.diffuse = 0
-	A.cfg.probe_field, A.cfg.probe_inline_ms, A.cfg.probe_field_blend = 1, 0, blend
-	local best, bestDb
-	for _, p in ipairs(A.Probes.Paths(S, L, 3, cfg)) do
-		local db = -p.lossDb - 20 * math.log10(p.length)
-		if not bestDb or db > bestDb then best, bestDb = p, db end
-	end
-	if not best then return nil end
-	return best, math.deg(math.atan2(best.pos.y - L.y, best.pos.x - L.x)), bestDb
-end
--- S swept along y = 150 from x = -120 to 120 in 8 u steps (the probes it sees change on the way):
--- largest step of direction (degrees), length (%) and level (dB) of the loudest probe path.
-local function probeSweep(blend)
-	local L = Vector(40, -300, 64)
-	local dDir, dLen, dDb, sets, blended = 0, 0, 0, 0, true
-	local prev, prevSet
-	A.Probes.field = A.Probes.BuildField(A.Probes.current, L)
-	for x = -120, 120, 8 do
-		local S = Vector(x, 150, 64)
-		local set = {}
-		for _, n in ipairs(A.Probes.Visible(A.Probes.current, S, 3)) do set[#set + 1] = n.id end
-		set = table.concat(set, ",")
-		if prevSet and set ~= prevSet then sets = sets + 1 end
-		prevSet = set
-		local p, az, db = probeAnswer(S, L, blend)
-		if not p then error("no probe path at x = " .. x) end
-		if prev then
-			dDir = math.max(dDir, math.abs(az - prev[2]))
-			dLen = math.max(dLen, math.abs(p.length - prev[1].length) / prev[1].length * 100)
-			dDb = math.max(dDb, math.abs(db - prev[3]))
-		end
-		blended = blended and p.blend ~= nil
-		prev = { p, az, db }
-	end
-	return dDir, dLen, dDb, sets, blended
-end
-
 local CFG = table.Copy(A.cfg)
-CFG.max_paths, CFG.max_depth, CFG.merge, CFG.max_voices = 3, 8, 1, 3
+CFG.max_paths, CFG.merge, CFG.max_voices = 3, 1, 3
 CFG.reject_db, CFG.split_db, CFG.split_angle, CFG.trans_window_db = 12, 6, 60, 20
 CFG.diff_freq, CFG.diff_max_edge, CFG.diff_max_total = 500, 20, 30
 CFG.door_closed_db, CFG.trans_scale, CFG.trans_max = 28, 1, 70
 CFG.portal_diffuse_db, CFG.portal_diffuse_lp = 60, 4 -- edge diffraction only (the diffuse leak has its own case)
 CFG.lp1_db, CFG.lp2_db, CFG.lp3_db, CFG.lp4_db = 2, 6, 11, 16
 CFG.dsp_lp1, CFG.dsp_lp2, CFG.dsp_lp3, CFG.dsp_lp4 = 30, 30, 31, 31
-CFG.paths_model = 0 -- the tested default, whatever the server's setting (see the end of the suite)
 
 -- Far-sound slicer cases (cl_slicer.lua): the rooms of withProbeRooms (two holes, a pillar in room A), a
 -- counting clock (SysTime() + 1 at each call: one slice check, one tick; far_sliced_ms / 1000 ticks per
 -- frame), frames and real time moved by hand (nextFrame, setNow), no door of the map (ents stubbed);
--- fn(cfg, list): a paths_model 1 cfg and S / L pairs through the wall and round the pillar.
+-- fn(cfg, list): a cfg and S / L pairs through the wall and round the pillar.
 local sliceNow, sliceFrame = 1000, 1
 local function nextFrame() sliceFrame, sliceNow = sliceFrame + 1, sliceNow + 1 / 60 end
 local function setNow(t) sliceNow = t end
@@ -453,7 +410,7 @@ local function withSlicedRooms(fn)
 	local surf = util.GetSurfacePropName
 	util.GetSurfacePropName = function(i) if i == nil or not surf then return "concrete" end return surf(i) end -- (offline shim; stubbed traces leave SurfaceProps nil)
 	local ok, err = pcall(withProbeRooms, { { 16, 64, 112 }, { 360, 424, 140 } }, { { Vector(200, 150, -8), Vector(240, 190, 200) } },
-		{ native_traces = 0, paths_model = 1, far_sliced = 1, far_sliced_ms = 4000, group_time = 0 }, function()
+		{ native_traces = 0, far_sliced = 1, far_sliced_ms = 4000, group_time = 0 }, function()
 			-- what P.Walls reads besides: the material (concrete everywhere) and where a trace started in solid
 			-- leaves it (1 u steps)
 			local tl = util.TraceLine
@@ -472,7 +429,7 @@ local function withSlicedRooms(fn)
 				end
 				return o
 			end
-			local cfg = setmetatable({ paths_model = 1, probes = 1, probe_dist = 1e6, path_props = 1, water = 0, probe_field = 1,
+			local cfg = setmetatable({ probes = 1, probe_dist = 1e6, path_props = 1, water = 0,
 				far_sliced = 1, cache_ttl = 0, group_time = 0 }, { __index = CFG })
 			-- deterministic positions: sources in room B, listeners in room A (some behind the pillar)
 			local seed = 12345
@@ -605,55 +562,6 @@ local SUITE = {
 			local r = G.ClampToPoly(Vector(100, 300, 50), poly, c, n)
 			expect(near(r.y, 50) and near(r.z, 50)).to.beTrue()
 		end },
-		{ name = "FindChains + EvalChain: two-portal chain from area 1 to area 3", func = function()
-			local g = G.Build(synthBsp())
-			g.byKey[1].open = 1
-			local S, L = Vector(0, 25, 50), Vector(300, 125, 50)
-			local chains = P.FindChains(g, S, 1, L, 3, CFG)
-			expect(#chains).to.equal(1)
-			expect(#chains[1]).to.equal(2)
-			local p = P.EvalChain(S, L, chains[1], CFG)
-			expect(p.length >= S:Distance(L)).to.beTrue()
-			expect(p.diffDb > 0).to.beTrue()
-			expect(near(p.pos.x, 200)).to.beTrue()
-		end },
-		{ name = "EvalChain: closed door adds its loss", func = function()
-			local g = G.Build(synthBsp())
-			local S, L = Vector(0, 25, 50), Vector(300, 125, 50)
-			g.byKey[1].open, g.byKey[1].closedDb = 1, 28
-			local open = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, CFG)
-			g.byKey[1].open = 0
-			local closed = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, CFG)
-			-- closed: two portals, the closed one radiates its transmission (28 dB) without diffraction
-			expect(closed.lossDb > open.lossDb + 10).to.beTrue()
-			expect(closed.lossDb < open.lossDb + 28).to.beTrue()
-		end },
-		{ name = "EvalChain: diffuse leak through a wide-open opening caps loss and lowpass", func = function()
-			local g = G.Build(synthBsp())
-			g.byKey[1].open, g.byKey[2].open = 1, 1
-			-- sharp bend round both openings: strong edge diffraction
-			local S, L = Vector(90, -200, 50), Vector(210, 350, 50)
-			local edge = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, CFG)
-			local c2 = table.Copy(CFG)
-			c2.portal_diffuse_db, c2.portal_diffuse_lp = 8, 1
-			local leak = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, c2)
-			expect(leak.lossDb < edge.lossDb).to.beTrue()
-			expect(leak.lossDb <= 2 * 8 + 1e-6).to.beTrue() -- at most the diffuse part per opening
-			expect(leak.lp <= 1).to.beTrue()
-			-- a closed opening: no lowpass cap (the leaf transmits, muffled)
-			g.byKey[1].open = 0
-			local closed = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, c2)
-			expect(closed.lp > 1).to.beTrue()
-		end },
-		{ name = "EvalChain: a closed leaf sounds like the straight trace through it (loss and lowpass)", func = function()
-			local g = G.Build(synthBsp())
-			g.byKey[1].open, g.byKey[1].closedDb, g.byKey[1].closedLp = 0, 30, 2
-			-- straight line through portal 1: no diffraction, only the leaf
-			local S, L = Vector(50, 25, 50), Vector(150, 25, 50)
-			local p = P.EvalChain(S, L, { g.byKey[1] }, CFG)
-			expect(near(p.lossDb, AC.LeafDb(30, CFG), 0.5)).to.beTrue()
-			expect(p.lp).to.equal(2) -- the leaf material's lowpass, not the diffraction scale (lp4 at 20 dB)
-		end },
 		{ name = "SlitRatio: whole doorway = 1; a narrow gap in line passes the highs; out of line passes less", func = function()
 			-- doorway 48 u wide, source and listener 100 u either side
 			expect(near(AC.SlitRatio({ { -24, 24 } }, -24, 24, 0, 100, 100, 1000), 1, 1e-6)).to.beTrue()
@@ -666,148 +574,6 @@ local SUITE = {
 			expect(outHigh < inHigh).to.beTrue() -- the same crack out of line passes less
 			local Cv, Sv = AC.Fresnel(1)
 			expect(near(Cv, 0.7799, 3e-3) and near(Sv, 0.4383, 3e-3)).to.beTrue() -- tabulated C(1), S(1)
-		end },
-		{ name = "Masked opening: an object covering half a doorway sounds like a door leaf covering the same half (level +-1 dB, same lowpass)", func = function()
-			-- doorway 48 x 112 in the plane x = 100; u = -(y - 24) along the width, v = -(z - 56) along the height
-			local function doorway(open)
-				return { poly = rect(100, 0, 48, 0, 112), center = Vector(100, 24, 56), normal = Vector(1, 0, 0), open = open,
-					closedDb = 28, closedLp = 3 }
-			end
-			local cfg = table.Copy(CFG)
-			cfg.portal_diffuse_db, cfg.door_aperture, cfg.path_props_slit = 8, 1, 1
-			local wax, vax = Vector(0, -1, 0), Vector(0, 0, -1)
-			-- the leaf leaves y in [24, 48] free (u in [-24, 0]), as P.Aperture measures it
-			local leaf = doorway(0.5)
-			leaf.ap = { key = math.Round(0.5 * 255), w0 = -24, w1 = 24, wax = wax, intervals = { { -24, 0 } }, area = 0.5 }
-			-- the object covers the other half over the whole height; it passes what the leaf passes
-			local h = 112 / 3
-			local free = { { -24, 0 } }
-			local mask = { f = 0.5, g = 10 ^ (-AC.LeafDb(28, cfg) / 20), lp = 3, ap = { w0 = -24, w1 = 24, h0 = -56, h1 = 56,
-				wax = wax, vax = vax, area = 0.5, rows = { { -56, -56 + h, intervals = free }, { -56 + h, 56 - h, intervals = free },
-				{ 56 - h, 56, intervals = free } } } }
-			local cases = {
-				{ "in line with the free half", Vector(0, 36, 56), Vector(200, 36, 56) },
-				{ "in line with the covered half", Vector(0, 12, 56), Vector(200, 12, 56) },
-				{ "oblique through the free half", Vector(0, 70, 40), Vector(200, 0, 70) },
-				{ "bent round the covered jamb", Vector(0, -30, 56), Vector(200, -30, 56) },
-			}
-			local bad = {}
-			for _, c in ipairs(cases) do
-				local S, L = c[2], c[3]
-				local byLeaf = P.EvalChain(S, L, { leaf }, cfg)
-				local base = P.EvalChain(S, L, { doorway(1) }, cfg)
-				local add, lp = P.MaskedDb(base, S, L, { mask }, cfg)
-				local byObj, objLp = base.lossDb + add, math.max(base.lp, lp)
-				if math.abs(byObj - byLeaf.lossDb) > 1 or objLp ~= byLeaf.lp then
-					bad[#bad + 1] = string.format("%s: leaf %.1f dB lp%d, object %.1f dB lp%d", c[1], byLeaf.lossDb, byLeaf.lp, byObj, objLp)
-				end
-			end
-			if #bad > 0 then error(table.concat(bad, "; ")) end
-		end },
-		{ name = "Masked opening: an object in front of a CLOSED door adds nothing (the leaf already covers the opening)", func = function()
-			local closed = { poly = rect(100, 0, 48, 0, 112), center = Vector(100, 24, 56), normal = Vector(1, 0, 0), open = 0,
-				closedDb = 28, closedLp = 3 }
-			local cfg = table.Copy(CFG)
-			cfg.portal_diffuse_db, cfg.path_props_slit = 8, 1
-			local S, L = Vector(0, 12, 56), Vector(200, 12, 56)
-			local base = P.EvalChain(S, L, { closed }, cfg)
-			local free = { { -24, 0 } }
-			local mask = { f = 0.5, g = 10 ^ (-18 / 20), lp = 3, ap = { w0 = -24, w1 = 24, h0 = -56, h1 = 56,
-				wax = Vector(0, -1, 0), vax = Vector(0, 0, -1), area = 0.5, rows = { { -56, 56, intervals = free } } } }
-			local add = P.MaskedDb(base, S, L, { mask }, cfg)
-			if math.abs(add) > 0.01 then error(string.format("closed door %.1f dB, object adds %.1f dB", base.lossDb, add)) end
-		end },
-		{ name = "Masked opening: never louder than the free opening; a vending machine in front of a doorway (top 15 % free) loses >= 3 dB", func = function()
-			-- pba_tworooms as measured in game: portal x = 512, y 72..112, z 8..112; vending machine (metal,
-			-- 7 dB through it) 14 u in front of the plane, top at z 96.6
-			local cfg = table.Copy(pba.cfg)
-			cfg.path_props_slit = 1
-			local function doorway() return { poly = rect(512, 72, 112, 8, 112), center = Vector(512, 92, 60), normal = Vector(-1, 0, 0), open = 1, closedDb = 28, closedLp = 3 } end
-			local n = Vector(-1, 0, 0)
-			local wax = n:Cross(Vector(0, 0, 1)) wax:Normalize()
-			local vax = n:Cross(wax)
-			local function v(z) return (Vector(512, 92, z) - Vector(512, 92, 60)):Dot(vax) end
-			local function cover(ztop, g)
-				-- 2 rows: below the top of the object (masked), the strip above it (free)
-				local lo, mid, hi = v(8), v(ztop), v(112)
-				local ys, grid
-				if lo < hi then ys, grid = { lo, mid, hi }, { { true }, { false } } else ys, grid = { hi, mid, lo }, { { false }, { true } } end
-				if ztop >= 112 then grid = { { true }, { true } } end
-				return { f = 1, g = g, lp = 2, ap = P.GridAperture(wax, vax, { -20, 20 }, ys, grid) }
-			end
-			local S, L = Vector(784, 256, 40), Vector(256, 256, 64)
-			local base = P.EvalChain(S, L, { doorway() }, cfg)
-			local bad = {}
-			for _, c in ipairs({ { 112, 1, 0 }, { 112, 0.446, 3 }, { 96.6, 0.446, 3 }, { 96.6, 0.6, 3 } }) do
-				local add = P.MaskedDb(base, S, L, { cover(c[1], c[2]) }, cfg)
-				-- MaskedDb clamps at 0: compare the raw re-evaluation too (never louder than free)
-				local raw = P.EvalChain(S, L, { doorway() }, cfg, { cover(c[1], c[2]) }).lossDb - base.lossDb
-				if add < c[3] or raw < -0.01 then
-					bad[#bad + 1] = string.format("object top z %.1f, g %.3f: %+.2f dB (raw %+.2f), want >= %d", c[1], c[2], add, raw, c[3])
-				end
-			end
-			if #bad > 0 then error(string.format("free doorway %.2f dB; ", base.lossDb) .. table.concat(bad, "; ")) end
-		end },
-		{ name = "GridAperture / ApertureRatio: masked cells to free intervals per row; a full-height mask = the 1-D slit; a free top band passes less to a ray crossing the masked part", func = function()
-			-- 5 x 3 grid over 48 x 112, columns 4-5 masked in every row, edge found at u = 0
-			local xs, ys = { -24, -12.96, -4.32, 0, 12.96, 24 }, { -56, -18, 18, 56 }
-			local half = { { false, false, false, true, true }, { false, false, false, true, true }, { false, false, false, true, true } }
-			local ap = P.GridAperture(Vector(0, -1, 0), Vector(0, 0, -1), xs, ys, half)
-			expect(near(ap.area, 0.5, 1e-9)).to.beTrue()
-			expect(#ap.rows[2].intervals).to.equal(1)
-			expect(near(ap.rows[2].intervals[1][2], 0, 1e-9)).to.beTrue()
-			for _, f in ipairs({ 250, 500, 4000 }) do
-				local slit = AC.SlitRatio({ { -24, 0 } }, -24, 24, 6, 100, 120, f)
-				expect(near(AC.ApertureRatio(ap, 6, 10, 100, 120, f), slit, 1e-6)).to.beTrue()
-			end
-			-- an object covering the two lower rows over the whole width (v from -18 to 56 masked)
-			local low = { { false, false, false, false, false }, { true, true, true, true, true }, { true, true, true, true, true } }
-			local lap = P.GridAperture(Vector(0, -1, 0), Vector(0, 0, -1), xs, ys, low)
-			expect(near(lap.area, 38 / 112, 1e-9)).to.beTrue()
-			local inFree = AC.ApertureBand(lap, 0, -37, 100, 120, 500)
-			local inMasked = AC.ApertureBand(lap, 0, 37, 100, 120, 500)
-			expect(inMasked < inFree).to.beTrue()
-			expect(inFree < 1).to.beTrue()
-		end },
-		{ name = "PortalMasked: a vending machine against a deep doorway (path_obstruction A): no free strip seen through the jamb, the diffuse leak through the 15 % it leaves free; loses >= 7 dB", func = function()
-			local cfg = table.Copy(pba.cfg)
-			cfg.path_props_slit = 1
-			local S, L = Vector(784, 256, 40), Vector(256, 256, 64)
-			local base = P.EvalChain(S, L, { tworoomsDoorway() }, cfg)
-			local m, add
-			-- machine as measured in game (AABB), two sheets: 30 dB through it
-			withScene(wallWithHole(512, 528), { Vector(526, 63.7, 0), Vector(569, 116.4, 96.6) }, 30, function()
-				m = P.PortalMasked(tworoomsDoorway(), S, L, nil, cfg)
-			end)
-			add = P.MaskedDb(base, S, L, { m }, cfg)
-			local direct, diffuse = m.ap.area, m.dArea or m.ap.area
-			if not (add >= 7 and direct <= 0.03 and diffuse >= 0.10 and diffuse <= 0.20) then
-				error(string.format("drop %.2f dB (want >= 7); free for the direct sound %.3f (want <= 0.03), for the diffuse sound %.3f (want 0.10..0.20, the strip above the machine is 0.148)",
-					add, direct, diffuse))
-			end
-		end },
-		{ name = "PortalMasked: the way over an object's top edge is counted once (opaque object 10 u before the opening, lower than it: within 1 dB of the free strip alone)", func = function()
-			local cfg = table.Copy(pba.cfg)
-			cfg.path_props_slit = 1
-			local S, L = Vector(784, 256, 40), Vector(256, 256, 64)
-			local base = P.EvalChain(S, L, { tworoomsDoorway() }, cfg)
-			-- 8 u deep doorway (x 512..520), opaque slab x 522..540 covering it up to z = 80
-			local m
-			withScene(wallWithHole(512, 520), { Vector(522, 60, 0), Vector(540, 120, 80) }, 60, function()
-				m = P.PortalMasked(tworoomsDoorway(), S, L, nil, cfg)
-			end)
-			local add = P.MaskedDb(base, S, L, { m }, cfg)
-			-- reference: S sees the opening above z = 40 + 40 * 272 / 244 = 84.6 (over the slab's front
-			-- top edge); the slab covers the plane up to z = 80; nothing passes through it
-			local zs = 40 + 40 * 272 / 244
-			local wax, vax = Vector(0, 1, 0), Vector(0, 0, -1)
-			local ideal = { f = 1, g = 0, lp = 3, dArea = 32 / 104,
-				ap = P.GridAperture(wax, vax, { -20, 20 }, { -52, -(zs - 60), 52 }, { { false }, { true } }) }
-			local ref = P.MaskedDb(base, S, L, { ideal }, cfg)
-			if math.abs(add - ref) > 1 then
-				error(string.format("drop %.2f dB, the free strip alone %.2f dB (direct %.3f, diffuse %.3f, through %.1f dB)",
-					add, ref, m.ap.area, m.dArea or m.ap.area, -20 * math.log10(math.max(m.g, 1e-9))))
-			end
 		end },
 		{ name = "EvalWalls: a hollow prop crossed through has two sheets (vending machine >= the props cap); a thin panel keeps one sheet", func = function()
 			-- hollow surfaceprop: aluminium-like sheet, 0.05 in (one sheet: ~17.7 dB at 500 Hz, ~7.7 dB rendered)
@@ -1015,28 +781,6 @@ local SUITE = {
 			end
 			expect(wd <= 0.02).to.beTrue()
 		end },
-		{ name = "Diffuse, one model: a portal chain and a probe polyline on the same points get the same shape and share", func = function()
-			local g = G.Build(synthBsp())
-			g.byKey[1].open = 1
-			local S, L = Vector(0, 25, 50), Vector(300, 125, 50)
-			local p = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, CFG)
-			expect(near(p.direct, S:Distance(L))).to.beTrue()
-			expect(p.bendDeg > 0).to.beTrue()
-			local pts = { S }
-			for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-			pts[#pts + 1] = L
-			local saved = P.SegmentDoorLoss
-			P.SegmentDoorLoss = function() return 0, 0 end -- no game traces in the pure suite
-			local ok, q = pcall(P.EvalPolyline, pts, CFG)
-			P.SegmentDoorLoss = saved
-			expect(ok).to.beTrue()
-			expect(near(q.bendDeg, p.bendDeg)).to.beTrue()
-			expect(near(q.length, p.length)).to.beTrue()
-			local cfg = setmetatable({ diffuse = 1, diffuse_near = 1 }, { __index = CFG })
-			local dp, ap = P.PathDiffuse(p, cfg)
-			local dq, aq = P.PathDiffuse(q, cfg)
-			expect(near(dp, dq) and near(ap, aq)).to.beTrue()
-		end },
 		{ name = "Corners: close edges bend as one wedge (a thick jamb costs the whole turn), far ones add (pba_corner_wedge)", func = function()
 			local saved = P.SegmentDoorLoss
 			P.SegmentDoorLoss = function() return 0, 0 end -- no game traces in the pure suite
@@ -1135,74 +879,6 @@ local SUITE = {
 		-- and the clear part of the source blended into the transmission) are not two sources. Each is
 		-- modelled at up to the free-field level (shadow boundary = 0 dB, plus the diffuse leak); summed in
 		-- power they made the sound louder than with no obstacle at all (door_sweep, room 12: -1.1 dB)
-		{ name = "SelectVoices: routes summed never louder than the free field; one route, or weak ones, unchanged", func = function()
-			-- openings in the plane x = 100 between areas 1 and 2, one per { y0, y1 }
-			local function openings(list)
-				local areas, ents = { [0] = {}, [1] = {}, [2] = {} }, {}
-				for k, iv in ipairs(list) do
-					local poly = rect(100, iv[1], iv[2], 0, 100)
-					table.insert(areas[1], { key = k, other = 2, poly = poly })
-					table.insert(areas[2], { key = k, other = 1, poly = poly })
-					ents[k] = { classname = "func_areaportal", portalnumber = tostring(k), startopen = "1" }
-				end
-				return G.Build({ map = "synthetic", numAreas = 3, areas = areas, entities = ents })
-			end
-			local function heard(vs) -- total power at the listener (as cl_streams / door_sweep sum the voices)
-				local pw = 0
-				for _, v in ipairs(vs) do pw = pw + v.gain * v.gain end
-				return pw
-			end
-			local function lossDb(vs, direct) -- below the free field at the straight-line distance (> 0 = quieter)
-				return AC.GainToDb(AC.EngineGain(direct, 75)) - 10 * math.log10(math.max(heard(vs), 1e-12))
-			end
-			local function select(S, L, g, cfg, trans)
-				local paths = {}
-				for _, chain in ipairs(P.FindChains(g, S, 1, L, 2, cfg)) do paths[#paths + 1] = P.EvalChain(S, L, chain, cfg) end
-				return P.SelectVoices(L, paths, trans, 75, cfg, S:Distance(L)), paths
-			end
-			local leak = table.Copy(CFG)
-			leak.portal_diffuse_db = 8 -- the default: the diffuse leak on top of the edge diffraction
-			local bad = {}
-			-- a 4 u post between two openings, on the straight line: both routes graze it (path difference 0.04 u)
-			local S, L = Vector(0, 50, 50), Vector(200, 50, 50)
-			for _, c in ipairs({ { "edge only", CFG }, { "with the diffuse leak", leak } }) do
-				local vs, paths = select(S, L, openings({ { 0, 48 }, { 52, 100 } }), c[2])
-				expect(#paths).to.equal(2)
-				local d = lossDb(vs, S:Distance(L))
-				if d < -0.01 then bad[#bad + 1] = string.format("post, %s: %.2f dB", c[1], d) end
-			end
-			-- a doorway grazed by the line, its jamb's clear part also in the transmission (native volumetric
-			-- occlusion near a frame: half the source visible = 6 dB)
-			local g1 = openings({ { 0, 48 } })
-			local S2, L2 = Vector(0, 50, 50), Vector(200, 47, 50)
-			local trans = { walls = { {} }, lossDb = 6, lp = 1, length = S2:Distance(L2), pos = Vector(102, 49, 50) }
-			local vt = select(S2, L2, g1, leak, trans)
-			expect(#vt).to.equal(2)
-			local dt = lossDb(vt, S2:Distance(L2))
-			if dt < -0.01 then bad[#bad + 1] = string.format("doorway + clear part of the jamb: %.2f dB", dt) end
-			-- the fix only lowers what exceeded the free field, all voices alike (same balance)
-			if #bad == 0 then
-				local ratio = vt[2].gain / vt[1].gain
-				local raw = AC.EngineGain(S2:Distance(L2), 75) * 10 ^ (-6 / 20)
-				local _, ps = select(S2, L2, g1, leak, nil)
-				local p1 = ps[1]
-				local g1raw = AC.EngineGain(p1.length, 75) * 10 ^ (-p1.lossDb / 20)
-				expect(near(ratio, raw / g1raw, 1e-6)).to.beTrue()
-			end
-			-- unchanged: one route alone (loss clamped at 0 dB on its own), and two openings far apart, each well
-			-- below the free field, whose sum stays below it
-			local v1, p1 = select(S2, L2, g1, leak, nil)
-			expect(#v1).to.equal(1)
-			expect(near(v1[1].gain, AC.EngineGain(p1[1].length, 75) * 10 ^ (-p1[1].lossDb / 20), 1e-9)).to.beTrue()
-			local S3, L3 = Vector(0, 174, 50), Vector(200, 174, 50)
-			local vf, pf = select(S3, L3, openings({ { 0, 48 }, { 300, 348 } }), leak, nil)
-			expect(#pf).to.equal(2)
-			local raw = 0
-			for _, p in ipairs(pf) do raw = raw + (AC.EngineGain(p.length, 75) * 10 ^ (-p.lossDb / 20)) ^ 2 end
-			expect(near(heard(vf), raw, 1e-9)).to.beTrue()
-			expect(lossDb(vf, S3:Distance(L3)) > 3).to.beTrue()
-			if #bad > 0 then error(table.concat(bad, "; "), 0) end
-		end },
 		{ name = "Ramp: a new target is reached one interval later in equal dB steps, never in one jump", func = function()
 			local s, L, pos = {}, Vector(0, 0, 0), Vector(100, 0, 0)
 			P.RampTo(s, 0, 0.25, L, 1, 1, 1, 1, pos, 100)
@@ -1270,94 +946,6 @@ local SUITE = {
 			expect(s.pending).to.beTrue()
 			expect(P.RampAt(s, 0.25, L)).to.equal(0.5)
 			expect(s.pending).to.equal(false) -- sent once, then nothing until something changes
-		end },
-		{ name = "Probe field blend: S moved 8 u at a time across changes of the probes it sees: steps of direction < 15 deg, length < 2 %, level < 1 dB (one route per probe: 77 deg, 4.4 %, 10.3 dB)", func = function()
-			withProbeScene(function()
-				local dDir, dLen, dDb, sets, blended = probeSweep(1)
-				expect(sets >= 3).to.beTrue() -- the sweep does cross changes of the visible set
-				expect(blended).to.beTrue()
-				expect(dDir < 15).to.beTrue()
-				expect(dLen < 2).to.beTrue()
-				expect(dDb < 1).to.beTrue()
-				-- off: the previous answer, unchanged
-				local oDir, _, oDb = probeSweep(0)
-				-- off: the direction still jumps (77 deg); its level step (10.3 dB) went with main's route
-				-- dedupe (PR.SameRoute: 0.78 dB), so only the direction is the blend's own gain now
-				expect(oDir > 60).to.beTrue()
-			end)
-		end },
-		{ name = "Probe field blend: one probe alone carries the weight = the previous answer (S on a probe: same length, loss and apparent position)", func = function()
-			withProbeScene(function(g)
-				local L = Vector(40, -300, 64)
-				A.Probes.field = A.Probes.BuildField(g, L)
-				local n = g.nodes[g.index["-1,1,0"]] -- (-64, 192): its neighbours are one spacing away
-				local S = Vector(n.pos.x, n.pos.y, n.pos.z)
-				local new = probeAnswer(S, L, 1)
-				local old = probeAnswer(S, L, 0)
-				expect(new.blend).to.equal(1)
-				expect(near(new.length, old.length, 1e-6)).to.beTrue()
-				expect(near(new.lossDb, old.lossDb, 1e-6)).to.beTrue()
-				expect(new.pos:Distance(old.pos) < 1e-6).to.beTrue()
-				-- and directly: a single probe seen = its route joined to S, weight 1
-				local p = A.Probes.FieldBlend(A.Probes.field, S + Vector(8, -8, 0), L, { n }, A.cfg)
-				local pts = { S + Vector(8, -8, 0) }
-				for _, b in ipairs(A.Probes.Arrival(A.Probes.field, n).bends) do pts[#pts + 1] = b end
-				pts[#pts + 1] = L
-				local q = P.EvalRoute(pts, A.cfg) -- as any probe route: costed on its corners' edges
-				expect(near(p.length, q.length, 1e-6) and near(p.lossDb, q.lossDb, 1e-6) and p.pos:Distance(q.pos) < 1e-6).to.beTrue()
-			end)
-		end },
-		{ name = "Probe field blend: the last probe of a full PR.Visible list takes no part (it is the next to leave the set); a lone far probe still answers; nil only when no probe seen has a route", func = function()
-			withProbeScene(function(g)
-				local L = Vector(40, -300, 64)
-				local f = A.Probes.BuildField(g, L)
-				local a, b, c = g.nodes[g.index["-1,1,0"]], g.nodes[g.index["0,1,0"]], g.nodes[g.index["-1,0,0"]]
-				local S = Vector(-10, 150, 64)
-				expect(A.Probes.FieldBlend(f, S, L, { a, b, c }, A.cfg, true).blend).to.equal(2)
-				expect(A.Probes.FieldBlend(f, S, L, { a, b, c }, A.cfg, false).blend).to.equal(3)
-				expect(A.Probes.FieldBlend(f, Vector(-64, 392, 64), L, { a }, A.cfg).blend).to.equal(1)
-				local cut = { id = -1, pos = Vector(-64, 300, 64) } -- not in the field: no route
-				expect(A.Probes.FieldBlend(f, Vector(-64, 392, 64), L, { cut }, A.cfg)).to.beNil()
-			end)
-		end },
-		{ name = "Probe field blend: where S sees no probe within one spacing it keeps the blend (the kernel reaches 1.5 x the nearest probe), no switch to the per-sound path: level step < 1 dB, direction < 5 deg per 4 u", func = function()
-			withProbeScene(function(g)
-				-- a gap in the grid: probes of rows y = 64 and 192 at x = -64 and 64 removed (no longer
-				-- visible, links cut). S going north from y = 130 to 290 sees no probe within one spacing for
-				-- part of the way. Before: the blend gave up there and the per-sound path took over (6.05 dB
-				-- and 77 degrees in one step at x = 40)
-				local gone = {}
-				for _, n in ipairs(g.nodes) do
-					if (n.j == 0 or n.j == 1) and n.i >= -1 and n.i <= 0 then gone[n.id] = true end
-				end
-				for id in pairs(gone) do
-					local n = g.nodes[id]
-					g.index[n.i .. "," .. n.j .. ",0"] = nil
-					for m in pairs(n.nb) do g.nodes[m].nb[id] = nil end
-					n.nb = {}
-				end
-				g.adj = nil
-				A.Probes.Prepare(g)
-				local L = Vector(40, -300, 64)
-				A.Probes.field = A.Probes.BuildField(g, L)
-				local dDb, dDir, blended = 0, 0, true
-				for _, X in ipairs({ -80, -20, 0, 40 }) do
-					local prev
-					for y = 130, 290, 4 do
-						local p, az, db = probeAnswer(Vector(X, y, 64), L, 1)
-						if not p then error("no probe path at x = " .. X .. ", y = " .. y) end
-						blended = blended and p.blend ~= nil
-						if prev then
-							dDb = math.max(dDb, math.abs(db - prev[2]))
-							dDir = math.max(dDir, math.abs(az - prev[1]))
-						end
-						prev = { az, db }
-					end
-				end
-				expect(blended).to.beTrue()
-				expect(dDb < 1).to.beTrue()
-				expect(dDir < 5).to.beTrue()
-			end)
 		end },
 		{ name = "LowpassHold: a loss oscillating +-0.5 dB around any threshold never flips the level", func = function()
 			expect(AC.LowpassHold ~= nil).to.beTrue()
@@ -1453,21 +1041,7 @@ local SUITE = {
 			P.Stable(c, { L = L, clear = true }, cfg)
 			expect(P.Stable(c, result(2.5), cfg).voices[1].lp).to.equal(0)
 		end },
-		{ name = "Lowpass loss carried: a path's lpDb gives its level, a one-path voice keeps it", func = function()
-			local g = G.Build(synthBsp())
-			local S = Vector(150, 125, 50)
-			local seen = {}
-			for y = 125, -200, -5 do
-				local L = Vector(260, y, 50)
-				local p = P.EvalChain(S, L, { g.byKey[2] }, CFG)
-				expect(p.lpDb ~= nil).to.beTrue()
-				expect(AC.LowpassLevel(p.lpDb, CFG)).to.equal(p.lp)
-				seen[p.lp] = true
-				local v = P.SelectVoices(L, { p }, nil, 75, CFG)
-				expect(near(v[1].lpDb, p.lpDb, 1e-9)).to.beTrue()
-				expect(v[1].lp).to.equal(p.lp)
-			end
-			expect(seen[0] and seen[1] and seen[2]).to.beTrue() -- the sweep crossed thresholds
+		{ name = "Lowpass loss carried: a polyline's lpDb is its corners' loss", func = function()
 			local pts = { Vector(0, 0, 0), Vector(100, 100, 0), Vector(200, 0, 0) }
 			local saved = P.SegmentDoorLoss
 			P.SegmentDoorLoss = function() return 0, 0 end -- no game traces in the pure suite
@@ -1476,41 +1050,6 @@ local SUITE = {
 			expect(ok).to.beTrue()
 			expect(near(q.lpDb, q.diffDb, 1e-9)).to.beTrue()
 		end },
-		{ name = "Lowpass hysteresis end to end: a listener stepping 2 u back and forth across a threshold", func = function()
-			local g = G.Build(synthBsp())
-			local S = Vector(150, 125, 50)
-			local function at(y)
-				local L = Vector(260, y, 50)
-				local p = P.EvalChain(S, L, { g.byKey[2] }, CFG)
-				return { L = L, clear = false, voices = P.SelectVoices(L, { p }, nil, 75, CFG) }, p
-			end
-			-- first 1 u step where the level changes along the sweep
-			local y0
-			for y = 125, -200, -1 do
-				local _, a = at(y)
-				local _, b = at(y - 1)
-				if a.lp ~= b.lp then y0 = y break end
-			end
-			expect(y0 ~= nil).to.beTrue()
-			local _, a = at(y0)
-			local _, b = at(y0 - 1)
-			expect(math.abs((a.lpDb or a.diffDb) - (b.lpDb or b.diffDb)) < 1).to.beTrue() -- a small change of loss, a whole level
-			local function flips(margin)
-				local cfg = setmetatable({ lp_hyst_db = margin }, { __index = CFG })
-				local st, prev, n = {}, nil, 0
-				for i = 0, 20 do
-					local r = at(i % 2 == 0 and y0 or y0 - 1)
-					local lp = P.Stable(st, r, cfg).voices[1].lp
-					if prev and lp ~= prev then n = n + 1 end
-					prev = lp
-				end
-				return n
-			end
-			expect(flips(0)).to.equal(20)
-			expect(flips(1.5)).to.equal(0)
-		end },
-		-- SoundDuration "will not work with sound files prepended with a sound character" (wiki,
-		-- Global.SoundDuration): every lookup by file goes through A.SoundFile, one definition of the prefix.
 		{ name = "SoundFile: strips the leading sound characters only, keeps the case", func = function()
 			for c in string.gmatch("*^)(#@<>!?~$&%+`}", ".") do
 				expect(A.SoundFile(c .. "music/HL2_song.wav")).to.equal("music/HL2_song.wav")
@@ -1587,7 +1126,7 @@ local SUITE = {
 			P.InvalidateCache() -- what the client's door tracking does on every door message (sh_doors D.Apply)
 			expect(P.ReevalDue(st, S, L, 0.5, cfg)).to.beTrue()
 			expect(P.ReevalDue(st, S, L, 0.75, cfg)).to.equal(false) -- once
-			st.force = true -- provisional result (probe search running), owner volume change...
+			st.force = true -- owner volume change...
 			expect(P.ReevalDue(st, S, L, 1.0, cfg)).to.beTrue()
 			expect(P.ReevalDue(st, S, L, 1.25, cfg)).to.equal(false)
 		end },
@@ -1604,32 +1143,6 @@ local SUITE = {
 			local cfg = setmetatable({ reeval_adaptive = 0, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
 			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
 			for i = 0, 8 do expect(P.ReevalDue(st, S, L, i * 0.25, cfg)).to.beTrue() end
-		end },
-		{ name = "Compute: a result whose probe search is unfinished (frame budget spent, search queued) is provisional", func = function()
-			local savedWalls, savedGet, PR = P.Walls, A.Graph.Get, A.Probes
-			local savedPaths, savedBudget = PR.Paths, A.FrameBudgetExceeded
-			local over, queued = false, false
-			P.Walls = function(a, b)
-				local e, x = a + (b - a) * 0.45, a + (b - a) * 0.55
-				return { { t = 0.45, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" } }
-			end
-			A.Graph.Get = function() return nil end
-			PR.Paths = function() PR.provisional = queued or nil return {} end
-			A.FrameBudgetExceeded = function() return over end
-			local cfg = setmetatable({ probes = 1, probe_dist = 1e6, path_props = 0 }, { __index = CFG })
-			local ok, err = pcall(function()
-				local S, L = Vector(0, 0, 0), Vector(300, 0, 0)
-				P.InvalidateCache()
-				expect(P.Compute(S, L, 75, cfg).provisional).to.beNil() -- search done: final
-				over = true P.InvalidateCache()
-				expect(P.Compute(S, L, 75, cfg).provisional).to.beTrue()
-				over, queued = false, true P.InvalidateCache()
-				expect(P.Compute(S, L, 75, cfg).provisional).to.beTrue()
-			end)
-			P.Walls, A.Graph.Get, PR.Paths, A.FrameBudgetExceeded = savedWalls, savedGet, savedPaths, savedBudget
-			PR.provisional = nil
-			P.InvalidateCache()
-			if not ok then error(err, 0) end
 		end },
 		{ name = "NativeBlend: continuous in Steam Audio's occlusion from 0 to 1 (no cliff at a door frame's edge)", func = function()
 			local wl, wlp = 46, 4 -- 10 u of concrete
@@ -1797,42 +1310,6 @@ local SUITE = {
 			-- nothing heard any more: nothing to drive
 			expect(#P.FollowAssign(L, {}, { { pos = front, gain = 1 } })).to.equal(0)
 		end },
-		{ name = "Probe routes: one opening is heard once (field and k-path routes from neighbouring probes), at the level of the best", func = function()
-			-- pba_noportal measured offline: 14 % of the sources behind the wall got 2 or 3 routes through the one
-			-- hole (the same route reached from neighbouring probes, last bends 128 u apart on either side of the
-			-- wall), summed up to +2.9 dB over the best
-			local L = Vector(256, 256, 64)
-			local function sweep(over)
-				local n, multi, worst = 0, 0, 0
-				withProbeRooms({ { 64, 112, 112 } }, nil, over, function(g)
-					A.Probes.field = A.Probes.BuildField(g, L)
-					local cfg = setmetatable({ probe_bridge_max = 0 }, { __index = CFG })
-					for _, x in ipairs({ 600, 900 }) do for y = 24, 488, 8 do
-						local S = Vector(x, y, 40)
-						if not A.Probes.ClearSeg(S, L) then
-							local ps = A.Probes.Paths(S, L, 3, cfg)
-							n = n + 1
-							if #ps > 1 then multi = multi + 1 end
-							if #ps > 0 then
-								local vs = P.SelectVoices(L, ps, nil, 75, cfg)
-								local best, pw = -math.huge, 0
-								for _, p in ipairs(ps) do best = math.max(best, p.level) end
-								for _, v in ipairs(vs) do pw = pw + v.gain ^ 2 end
-								worst = math.max(worst, AC.GainToDb(math.sqrt(pw)) - best)
-							end
-						end
-					end end
-				end)
-				return n, multi, worst
-			end
-			for _, over in ipairs({ { probe_field = 1, probe_inline_ms = 0 }, -- the listener field alone
-				{ probe_field = 0, probe_inline_ms = 1000, probe_inline_frame_ms = 1e9 } }) do -- the k-path search alone
-				local n, multi, worst = sweep(over)
-				expect(n > 100).to.beTrue()
-				expect(multi).to.equal(0)
-				expect(worst < 0.1).to.beTrue()
-			end
-		end },
 		{ name = "Probe routes: of two routes through one opening the best is kept, whatever the order", func = function()
 			local S, L = Vector(900, 264, 40), Vector(256, 256, 64)
 			withProbeRooms({ { 64, 112, 112 } }, nil, nil, function()
@@ -1877,52 +1354,6 @@ local SUITE = {
 				expect(#A.Probes.DistinctRoutes(S, L, { P.EvalPolyline(a, CFG), P.EvalPolyline(b, CFG) })).to.equal(2)
 			end)
 		end },
-		{ name = "Probe search: a route longer than the old 2500-probe cap is found and cached, never cached as 'no route'", func = function()
-			-- a U: an 80 x 80 grid of probes cut by a wall between columns 39 and 40 except on the last row. S and L
-			-- are neighbours through the wall; A* floods most of the left half (> 2500 probes) before going round.
-			-- Before: the capped search returned nil, solve() {} and that {} was cached for the session.
-			local PR = A.Probes
-			local keys = { "current", "field", "fieldJob", "fieldHold", "pathCache", "pathCacheN", "queue", "queueN", "inlineFrame", "inlineUsed" }
-			local savedPR, savedTL, savedTH, savedNT = {}, util.TraceLine, util.TraceHull, A.cfg.native_traces
-			for _, k in ipairs(keys) do savedPR[k] = PR[k] end
-			local function clear(t) local o = traceOut(t) o.Hit, o.Fraction, o.StartSolid, o.HitPos = false, 1, false, t.endpos return o end
-			util.TraceLine, util.TraceHull, A.cfg.native_traces = clear, clear, 0
-			local ok, err = pcall(function()
-				local s, W = 16, 80
-				local g = { spacing = s, nodes = {}, index = {} }
-				for i = 0, W - 1 do for j = 0, W - 1 do
-					local n = { i = i, j = j, k = 0, o = 1, pos = Vector((i + 0.5) * s, (j + 0.5) * s, 8), nb = {} }
-					g.nodes[#g.nodes + 1] = n
-					n.id = #g.nodes
-					g.index[i .. "," .. j .. ",0"] = n.id
-				end end
-				for _, n in ipairs(g.nodes) do
-					for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
-						local m = g.index[(n.i + d[1]) .. "," .. (n.j + d[2]) .. ",0"]
-						local wall = math.min(n.i, n.i + d[1]) == 39 and d[2] == 0 and n.j < W - 1
-						if m and not wall then n.nb[m] = true end
-					end
-				end
-				PR.Prepare(g)
-				local s0, g0 = g.nodes[g.index["39,0,0"]], g.nodes[g.index["40,0,0"]]
-				-- the scene really needs more than the old cap
-				local capped, why = PR.FindPath(g, s0.pos, g0.pos, nil, 2500, { s0 }, { g0 })
-				expect(capped).to.beNil()
-				expect(why).to.equal("capped")
-				PR.current, PR.field, PR.fieldJob, PR.pathCache, PR.pathCacheN, PR.queue, PR.queueN, PR.inlineFrame = g, nil, nil, {}, 0, {}, 0, nil
-				local cfg = setmetatable({ probe_field = 0, probe_field_blend = 0, probe_bridge_max = 0, probe_inline_ms = 1e6,
-					probe_inline_frame_ms = 1e9 }, { __index = A.cfg })
-				PR.Paths(s0.pos, g0.pos, 1, cfg)
-				local n, entry = 0
-				for _, v in pairs(PR.pathCache) do n, entry = n + 1, v end
-				expect(n).to.equal(1)
-				expect(#entry).to.equal(1) -- the route round the wall, not {}
-				expect(next(PR.queue)).to.beNil()
-			end)
-			util.TraceLine, util.TraceHull, A.cfg.native_traces = savedTL, savedTH, savedNT
-			for _, k in ipairs(keys) do PR[k] = savedPR[k] end
-			if not ok then error(err, 0) end
-		end },
 		{ name = "Probe tighten: a vertex not traced clear on both sides is left where it is (it was slid round a pillar it is joined through)", func = function()
 			withProbeRooms({ { 64, 112, 112 } }, { { Vector(640, 200, -8), Vector(680, 300, 200) } }, { native_traces = 0 }, function()
 				-- a - v crosses the pillar, v - b is clear, a - b crosses it too. Before: v was slid towards a while it
@@ -1936,74 +1367,6 @@ local SUITE = {
 				local r2 = A.Probes.Tighten({ Vector(600, 320, 64), Vector(720, 320, 64), Vector(720, 160, 64) })
 				expect(routeClear(r2) and r2[2]:Distance(Vector(720, 320, 64)) > 8).to.beTrue()
 			end)
-		end },
-		{ name = "Probe joins: S joined to a bend it does not see, or the last bend to a listener that stepped round a corner, goes by the probe / the field's listener position, never through the wall", func = function()
-			-- room B: probe P sees the doorway's bend B1 round a pillar that hides B1 from S. Room A: a second pillar
-			-- hides the last bend B2 from the listener L2, one step (112 u) from where the field was built (fL)
-			local pillars = { { Vector(566, 240, -8), Vector(590, 260, 200) }, { Vector(466, 62, -8), Vector(490, 84, 200) } }
-			withProbeRooms({ { 64, 112, 112 } }, pillars, { native_traces = 0 }, function(g)
-				local PR = A.Probes
-				local S, P0 = Vector(600, 330, 64), Vector(704, 320, 64)
-				local B1, B2 = Vector(534, 106, 64), Vector(506, 106, 64)
-				local fL, L2 = Vector(400, 140, 64), Vector(450, 40, 64)
-				expect(PR.ClearSeg(S, P0) and PR.ClearSeg(P0, B1) and PR.ClearSeg(B1, B2) and not PR.ClearSeg(S, B1)).to.beTrue()
-				expect(PR.ClearSeg(B2, fL) and PR.ClearSeg(fL, L2) and not PR.ClearSeg(B2, L2)).to.beTrue()
-				local n = { id = 1, pos = P0 }
-				local function field(L)
-					return { g = g, L = L, cost = { [1] = 500 }, nxt = {}, pulled = {}, arr = { [1] = { bends = { B1, B2 }, probe = P0, joins = {} } } }
-				end
-				local function route(p, L)
-					local pts = { S }
-					for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-					pts[#pts + 1] = L
-					return pts
-				end
-				-- blend, head: before, { S, B1, B2, fL } through the pillar
-				local p = PR.FieldBlend(field(fL), S, fL, { n }, A.cfg)
-				expect(p ~= nil and routeClear(route(p, fL)) and #p.points == 3).to.beTrue()
-				-- blend, head and tail
-				p = PR.FieldBlend(field(fL), S, L2, { n }, A.cfg)
-				expect(p ~= nil and routeClear(route(p, L2)) and #p.points == 4).to.beTrue()
-				-- the tail with nothing that sees both sides: no route rather than one through the pillar
-				expect(PR.FieldBlend(field(Vector(450, 140, 64)), S, Vector(478, 40, 64), { n }, A.cfg)).to.beNil()
-				-- per-sound attach: the field route { P0, B1, B2 } ended at a probe seen from fL only
-				local r = PR.Attach({ P0, B1, B2 }, Vector(700, 330, 64), L2, fL)
-				expect(r ~= nil and routeClear(r)).to.beTrue()
-				expect(PR.Attach({ P0, B1, B2 }, Vector(700, 330, 64), L2)).to.beNil()
-			end)
-		end },
-		{ name = "Probe cache: a cache of another spacing is refused; a reloaded graph searches exactly as the built one (links in id order)", func = function()
-			-- before: pba_probe_spacing ignored until the cache file was deleted; links in the cache's string order
-			-- ("10" before "9") after a reload, so equal-cost routes broke the other way
-			local savedTo, savedFrom = util.TableToJSON, util.JSONToTable
-			local heads = {}
-			util.TableToJSON = function(t) heads[#heads + 1] = t return "H" .. #heads end
-			util.JSONToTable = function(s) return heads[tonumber(string.sub(s, 2))] end
-			local ok, err = pcall(withProbeRooms, { { 64, 112, 112 } }, nil, { native_traces = 0 }, function(g)
-				local PR = A.Probes
-				local text = PR.Serialize(g, "h")
-				expect(PR.Deserialize(text, "h", 64)).to.beNil()
-				local g2 = PR.Deserialize(text, "h", 128)
-				expect(g2 ~= nil and #g2.nodes == #g.nodes and #g.nodes > 20).to.beTrue()
-				local a1, a2 = g.adj, PR.Prepare(g2)
-				expect(#a2.nid).to.equal(#a1.nid)
-				local same = true
-				for k = 1, #a1.nid do
-					if a1.nid[k] ~= a2.nid[k] or math.abs(a1.len[k] - a2.len[k]) > 0.5 then same = false end
-				end
-				for id = 1, #g.nodes do
-					for k = a1.first[id] + 1, a1.first[id + 1] - 1 do
-						if a1.nid[k - 1] >= a1.nid[k] then same = false end
-					end
-				end
-				expect(same).to.beTrue()
-				local S, L = Vector(900, 400, 64), Vector(100, 400, 64)
-				local _, ids1 = PR.FindPath(g, S, L)
-				local _, ids2 = PR.FindPath(g2, S, L)
-				expect(ids1 ~= nil and table.concat(ids1, ",") == table.concat(ids2, ",")).to.beTrue()
-			end)
-			util.TableToJSON, util.JSONToTable = savedTo, savedFrom
-			if not ok then error(err, 0) end
 		end },
 		{ name = "Doors: closed end by geometry then start-open flag, brush doors keep their thickness, double doors add in power", func = function()
 			local D = pba.Doors
@@ -2071,52 +1434,6 @@ local SUITE = {
 				end
 			end)
 			states[9999] = saved
-			if not ok then error(err, 0) end
-		end },
-		{ name = "DoorTilt: one spectrum rule for a portal's door: gap and leaf of equal energy -> level 1, not the louder part's; a route segment through a leaf pays what the straight line pays (P.EvalWalls), monotonic as it opens", func = function()
-			expect(AC.LowpassLevel(P.DoorTilt(1, 0, 0, 3, 0, 0, CFG), CFG)).to.equal(0)
-			expect(AC.LowpassLevel(P.DoorTilt(0, 0, 1, 3, 0, 0, CFG), CFG)).to.equal(3)
-			expect(AC.LowpassLevel(P.DoorTilt(0.3, 0, 0.3, 3, 0, 0, CFG), CFG)).to.equal(1)
-			for k = 0, 4 do expect(AC.LowpassLevel(AC.LevelDb(k, CFG), CFG)).to.equal(k) end
-			-- the probe model: a leaf on a route segment is the leaf on the straight line (one wall, P.EvalWalls):
-			-- shut, its one loss and lowpass; open, an object (capped, the way round it); never louder as it shuts
-			local fakeDoor = { IsValid = function() return true end, GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9999 end,
-				OBBMins = function() return Vector(-1, -24, -48) end, OBBMaxs = function() return Vector(1, 24, 48) end,
-				WorldToLocal = function(_, v) return v end, LocalToWorld = function(_, v) return v end }
-			local D = pba.Doors
-			D.byEnt = D.byEnt or {}
-			local saved, savedTr, savedHull = D.byEnt[9999], util.TraceLine, util.TraceHull
-			-- every trace meets the leaf (the way round it is blocked too: an object with no detour)
-			util.TraceLine = function(t) local o = traceOut(t) o.Hit, o.Entity, o.HitPos, o.StartSolid = true, fakeDoor, Vector(50, 0, 0), false return o end
-			util.TraceHull = util.TraceLine -- P.SegmentDoorLoss traces a hull
-			-- (the former model's blend over the opening fraction: pba_door_3d 0; the leaf in 3-D has its own cases)
-			local cfg = setmetatable({ prop_max_db = 18, trans_scale = 1, trans_lf_bonus = 10, door_3d = 0 }, { __index = CFG })
-			local ok, err = pcall(function()
-				local function at(frac)
-					D.byEnt[9999] = { frac = frac, closedDb = 30, closedLp = 3 }
-					local l, lp, _, ent = P.SegmentDoorLoss(Vector(0, 0, 0), Vector(100, 0, 0), cfg)
-					return l, lp, ent
-				end
-				local shut, lpShut, ent = at(0)
-				expect(near(shut, AC.LeafDb(30, cfg), 1e-6)).to.beTrue()
-				expect(lpShut).to.equal(3)
-				expect(ent).to.equal(fakeDoor)
-				local open = at(1)
-				expect(open <= 18 + 1e-6).to.beTrue()
-				-- the same wall through P.EvalWalls: the one rule
-				D.byEnt[9999] = { frac = 0.02, closedDb = 30, closedLp = 3 }
-				local l = P.SegmentDoorLoss(Vector(0, 0, 0), Vector(100, 0, 0), cfg)
-				local w = P.EvalWalls({ { ent = fakeDoor, thickness = 0, detour = math.huge, minExtent = 2 } }, cfg)
-				expect(near(l, w, 1e-6)).to.beTrue()
-				-- opening from shut: the loss never grows, no step above 3 dB per 0.1 %
-				local prev = shut
-				for k = 1, 100 do
-					local v = at(k * 0.001)
-					if v > prev + 1e-6 or prev - v > 3 then error(string.format("probe door: %.1f -> %.1f dB at %.3f open", prev, v, k * 0.001)) end
-					prev = v
-				end
-			end)
-			util.TraceLine, util.TraceHull, D.byEnt[9999] = savedTr, savedHull, saved
 			if not ok then error(err, 0) end
 		end },
 		{ name = "CornerPoint: a vertex left on its probe in the next room ends on the edge its other leg grazes (was 98 u off it: 2.6 dB for 0.4)", func = function()
@@ -2313,29 +1630,6 @@ local SUITE = {
 			util.TraceLine, util.TraceHull, D.byEnt[9989] = savedTr, savedHull, saved
 			if not ok then error(err, 0) end
 		end },
-		{ name = "EvalChain: a door opening from shut: muffling falls a level at a time, level steps < 1.5 dB per 10 % more opening (no 'open <= 1 % is shut' step: 4 dB)", func = function()
-			local g = G.Build(synthBsp())
-			local p1 = g.byKey[1]
-			p1.closedDb, p1.closedLp = 30, 3
-			local cfg = table.Copy(CFG)
-			cfg.door_aperture = 0 -- the opening fraction as the gap (no game traces)
-			local S, L = Vector(50, 25, 50), Vector(150, 25, 50)
-			local prev
-			local f = 1e-5
-			while f < 1 do
-				p1.open = f
-				f = f * 1.1
-				local r = P.EvalChain(S, L, { p1 }, cfg)
-				if prev then
-					if r.lp > prev.lp or prev.lp - r.lp > 1 or math.abs(r.lossDb - prev.lossDb) > 1.5 then
-						error(string.format("open %.3f: %.2f dB lp%d -> %.2f dB lp%d", p1.open, prev.lossDb, prev.lp, r.lossDb, r.lp))
-					end
-				end
-				prev = r
-			end
-			p1.open = 0
-			expect(P.EvalChain(S, L, { p1 }, cfg).lp).to.equal(3)
-		end },
 		{ name = "SelectVoices: soft merging, a path swept across split_angle or split_db moves the loudest voice smoothly (power kept)", func = function()
 			local L = Vector(0, 0, 0)
 			local function mk(deg, loss, lp, lpDb)
@@ -2410,167 +1704,6 @@ local SUITE = {
 			expect(#m).to.equal(1)
 			expect(near(m[1].rawLossDb, (10 * 1 + 20 * 0.1) / 1.1, 1e-6)).to.beTrue()
 		end },
-		{ name = "FindChains: routes ranked by predicted level, not 40 units per dB (three short closed doors no longer push out the open doorway of a loud source)", func = function()
-			local areas, ents = { [0] = {}, [1] = {}, [2] = {} }, {}
-			for k, iv in ipairs({ { 0, 48 }, { 52, 100 }, { 104, 152 }, { 600, 648 } }) do
-				local poly = rect(100, iv[1], iv[2], 0, 100)
-				table.insert(areas[1], { key = k, other = 2, poly = poly })
-				table.insert(areas[2], { key = k, other = 1, poly = poly })
-				ents[k] = { classname = "func_areaportal", portalnumber = tostring(k), startopen = "1" }
-			end
-			local g = G.Build({ map = "synthetic", numAreas = 3, areas = areas, entities = ents })
-			for k = 1, 3 do g.byKey[k].open, g.byKey[k].closedDb = 0, 28 end
-			g.byKey[4].open = 1
-			local cfg = table.Copy(CFG)
-			cfg.max_paths, cfg.portal_diffuse_db = 3, 8
-			local S, L = Vector(0, 76, 50), Vector(200, 76, 50)
-			local function hasOpen(chains) for _, c in ipairs(chains) do if c[#c] == g.byKey[4] then return true end end return false end
-			local chains = P.FindChains(g, S, 1, L, 2, cfg, nil, 120)
-			expect(#chains).to.equal(3)
-			expect(chains[1][1] == g.byKey[4]).to.beTrue()
-			expect(hasOpen(P.FindChainsRef(g, S, 1, L, 2, cfg, nil, 120))).to.beTrue()
-			-- the premise: evaluated, the open route is the loudest
-			local all = {}
-			for _, c in ipairs(P.FindChains(g, S, 1, L, 2, cfg, 8, 120)) do all[#all + 1] = P.EvalChain(S, L, c, cfg) end
-			expect(#all).to.equal(4)
-			local kept = P.KeepLoudest(all, 3, 120)
-			local found = false
-			for _, p in ipairs(kept) do if p.chain[1] == g.byKey[4] then found = true end end
-			expect(found).to.beTrue()
-			expect(kept[1].chain[1] == g.byKey[4]).to.beTrue()
-		end },
-		-- Scene for the next cases: a world of concrete boxes seen by util.TraceLine (traces without
-		-- ignoreworld) and P.Walls; two areas split by an open doorway in the plane x = 100 (y 0..50, z 0..100,
-		-- partition 4 u deep on the source side), area 1 for x < 100. Restored even on error.
-		{ name = "Portal legs: one step across an open doorway into the next area keeps the level (the first leg crosses an interior wall: old 0 dB through it, ~50 dB step)", func = function()
-			local boxes = { { Vector(96, -1000, -100), Vector(100, 0, 300) }, { Vector(96, 50, -100), Vector(100, 1000, 300) },
-				{ Vector(96, 0, 100), Vector(100, 50, 300) },
-				{ Vector(20, 60, -100), Vector(36, 1000, 300) } } -- the interior wall, in area 1
-			local poly = rect(100, 0, 50, 0, 100)
-			local g = G.Build({ map = "synthetic", numAreas = 3, areas = { [0] = {}, [1] = { { key = 1, other = 2, poly = poly } },
-				[2] = { { key = 1, other = 1, poly = poly } } }, entities = { { classname = "func_areaportal", portalnumber = "1", startopen = "1" } } })
-			local function hit(a, b)
-				local best
-				for _, w in ipairs(boxes) do
-					local t0, t1 = segBox(a, b, w[1], w[2])
-					if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
-				end
-				return best
-			end
-			local saved = { util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area }
-			util.TraceLine = function(t)
-				local out = traceOut(t)
-				local f = not t.ignoreworld and hit(t.start, t.endpos) or nil
-				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
-				out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
-				return out
-			end
-			P.Walls = function(a, b)
-				local walls = {}
-				for _, w in ipairs(boxes) do
-					local t0, t1 = segBox(a, b, w[1], w[2])
-					if t0 and t1 - t0 > 1e-6 then
-						local e, x = a + (b - a) * t0, a + (b - a) * t1
-						walls[#walls + 1] = { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" }
-					end
-				end
-				table.sort(walls, function(x, y) return x.t < y.t end)
-				return walls
-			end
-			A.Graph.Get = function() return g end
-			A.Graph.Area = function(_, p) return p.x < 100 and 1 or 2 end
-			local cfg = setmetatable({ probes = 0, path_props = 0, water = 0, native_paths = 0 }, { __index = CFG })
-			local ok, err = pcall(function()
-				local S = Vector(0, 200, 50)
-				local function heard(L)
-					P.InvalidateCache()
-					local r = P.Compute(S, L, 75, cfg)
-					if r.clear then return AC.GainToDb(AC.EngineGain(S:Distance(L), 75)), r end
-					local pw = 0
-					for _, v in ipairs(r.voices) do pw = pw + v.gain * v.gain end
-					return 10 * math.log10(math.max(pw, 1e-30)), r
-				end
-				local before, rb = heard(Vector(99, 25, 50))
-				local after, ra = heard(Vector(101, 25, 50))
-				if math.abs(after - before) > 3 then error(string.format("step across the doorway: %.1f -> %.1f dB", before, after), 0) end
-				expect(rb.aS == nil or rb.aS == rb.aL).to.beTrue() -- same area: no portal model
-				expect(#ra.paths).to.equal(1) -- next area: the doorway's portal path
-				expect((ra.paths[1].legDb or 0) > 5).to.beTrue() -- its first leg pays the interior wall
-			end)
-			util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area = saved[1], saved[2], saved[3], saved[4]
-			P.InvalidateCache()
-			if not ok then error(err, 0) end
-		end },
-		{ name = "Portal legs: a blocked leg is routed through the probe graph (spliced, corners counted once), and the probes search S -> L although a chain exists", func = function()
-			local boxes = { { Vector(96, -1000, -100), Vector(100, 0, 300) }, { Vector(96, 50, -100), Vector(100, 1000, 300) },
-				{ Vector(96, 0, 100), Vector(100, 50, 300) }, { Vector(20, 60, -100), Vector(36, 1000, 300) } }
-			local poly = rect(100, 0, 50, 0, 100)
-			local g = G.Build({ map = "synthetic", numAreas = 3, areas = { [0] = {}, [1] = { { key = 1, other = 2, poly = poly } },
-				[2] = { { key = 1, other = 1, poly = poly } } }, entities = { { classname = "func_areaportal", portalnumber = "1", startopen = "1" } } })
-			local function hit(a, b)
-				local best
-				for _, w in ipairs(boxes) do
-					local t0, t1 = segBox(a, b, w[1], w[2])
-					if t0 and t1 - t0 > 1e-6 and (not best or t0 < best) then best = t0 end
-				end
-				return best
-			end
-			local PR = A.Probes
-			local saved = { util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area, PR.Paths }
-			util.TraceLine = function(t)
-				local out = traceOut(t)
-				local f = not t.ignoreworld and hit(t.start, t.endpos) or nil
-				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
-				out.HitPos = t.start + (t.endpos - t.start) * (f or 1)
-				return out
-			end
-			P.Walls = function(a, b)
-				local walls = {}
-				for _, w in ipairs(boxes) do
-					local t0, t1 = segBox(a, b, w[1], w[2])
-					if t0 and t1 - t0 > 1e-6 then
-						local e, x = a + (b - a) * t0, a + (b - a) * t1
-						walls[#walls + 1] = { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" }
-					end
-				end
-				table.sort(walls, function(x, y) return x.t < y.t end)
-				return walls
-			end
-			A.Graph.Get = function() return g end
-			A.Graph.Area = function(_, p) return p.x < 100 and 1 or 2 end
-			-- the probe graph: round the interior wall's end (y = 60) for the leg, nothing more for S -> L
-			local V1, V2 = Vector(10, 56, 50), Vector(40, 56, 50)
-			local calls = {}
-			PR.Paths = function(a, b, k, c)
-				calls[#calls + 1] = { a, b }
-				if b.x >= 100 and b.x < 100.5 then return { P.EvalPolyline({ a, V1, V2, b }, c) } end
-				return {}
-			end
-			-- corner_refine 0: the splice itself is tested, on the vertices as given (their edges are the corner
-			-- geometry's business, tested on its own)
-			local cfg = setmetatable({ probes = 1, probe_dist = 1e6, path_props = 0, water = 0, corner_refine = 0 }, { __index = CFG })
-			local ok, err = pcall(function()
-				local S, L = Vector(0, 200, 50), Vector(160, 25, 50)
-				P.InvalidateCache()
-				local r = P.Compute(S, L, 75, cfg)
-				local full = false
-				for _, c in ipairs(calls) do if c[1] == S and c[2] == L then full = true end end
-				expect(full).to.beTrue()
-				expect(r.legBlocked).to.beTrue()
-				local p = r.paths[1]
-				expect(p ~= nil and p.legRouted == true and #p.chain == 1).to.beTrue()
-				expect(#p.points).to.equal(3) -- V1, V2, the doorway
-				expect(p.points[1] == V1 and p.points[2] == V2).to.beTrue()
-				-- routed round the wall: the corners at V1, V2 and the doorway, not the wall's ~50 dB
-				expect(p.lossDb < 30 and p.legDb == nil).to.beTrue()
-				-- length: S -> V1 -> V2 -> doorway -> L
-				local d = p.points[3]
-				expect(near(p.length, S:Distance(V1) + V1:Distance(V2) + V2:Distance(d) + d:Distance(L), 0.5)).to.beTrue()
-			end)
-			util.TraceLine, P.Walls, A.Graph.Get, A.Graph.Area, PR.Paths = saved[1], saved[2], saved[3], saved[4], saved[5]
-			P.InvalidateCache()
-			if not ok then error(err, 0) end
-		end },
 		{ name = "World edge: a line sinking behind a low wall loses by degrees (<= 3 dB per unit; old: clear -> 52 dB in one unit), ~10 dB 64 u below the crest", func = function()
 			local boxes = { { Vector(100, -1000, -100), Vector(116, 1000, 64) } }
 			local function hit(a, b)
@@ -2630,51 +1763,6 @@ local SUITE = {
 			util.TraceLine, P.Walls, A.Graph.Get, A.Native = saved[1], saved[2], saved[3], savedNative
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
-		end },
-		{ name = "Stable: a provisional result keeps the last final one nearby (no dip to the transmission while the probes search); far away the provisional one stands", func = function()
-			local L = Vector(0, 0, 0)
-			local final = { S = Vector(300, 0, 0), L = L, voices = { { kind = "portal", pos = Vector(100, 50, 0), gain = 0.5, level = AC.GainToDb(0.5), lp = 0 } } }
-			local function prov(S) return { S = S, L = L, provisional = true,
-				voices = { { kind = "transmission", pos = Vector(50, 0, 0), gain = 0.001, level = -60, lp = 4 } } } end
-			local st = {}
-			P.Stable(st, final, CFG)
-			local r = P.Stable(st, prov(Vector(308, 0, 0)), CFG)
-			expect(near(r.voices[1].gain, 0.5, 1e-9)).to.beTrue()
-			expect(r.provisional).to.beTrue() -- still provisional: the caller forces the re-evaluation
-			-- moved far since the final result: the provisional answer is the better guess
-			local far = P.Stable(st, prov(Vector(900, 0, 0)), CFG)
-			expect(near(far.voices[1].gain, 0.001, 1e-9)).to.beTrue()
-		end },
-		{ name = "One corner model: a portal chain and a probe polyline on the same points lose the same at a sharp corner (leak 8 dB: old 8 vs 20 dB) and get the same lowpass", func = function()
-			local g = G.Build(synthBsp())
-			g.byKey[1].open, g.byKey[2].open = 1, 1
-			local cfg = table.Copy(CFG)
-			cfg.portal_diffuse_db, cfg.portal_diffuse_lp = 8, 1
-			local S, L = Vector(90, -200, 50), Vector(210, 350, 50)
-			local p = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, cfg)
-			local pts = { S }
-			for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-			pts[#pts + 1] = L
-			local saved = P.SegmentDoorLoss
-			P.SegmentDoorLoss = function() return 0, 0 end
-			local ok, q = pcall(P.EvalPolyline, pts, cfg)
-			P.SegmentDoorLoss = saved
-			expect(ok).to.beTrue()
-			if not near(q.diffDb, p.diffDb, 0.05) then error(string.format("chain %.2f dB, polyline %.2f dB", p.diffDb, q.diffDb), 0) end
-			expect(near(q.lossDb, p.lossDb, 0.05)).to.beTrue()
-			expect(q.lp).to.equal(p.lp)
-			-- the corner alone: never above the leak, 0 dB edge at grazing
-			expect(AC.Corner(1e6, 500, 20, 8) <= 8 + 1e-9).to.beTrue()
-			expect(AC.Corner(0, 500, 20, 60)).to.equal(0)
-		end },
-		{ name = "EvalChain cap: each door its own loss on top of the corners (two closed 60 dB doors in series: old cap 86 dB, the straight trace 100)", func = function()
-			local g = G.Build(synthBsp())
-			for k = 1, 2 do g.byKey[k].open, g.byKey[k].closedDb, g.byKey[k].closedLp = 0, 60, 4 end
-			local S, L = Vector(0, 25, 50), Vector(300, 125, 50)
-			local p = P.EvalChain(S, L, { g.byKey[1], g.byKey[2] }, CFG)
-			if p.lossDb < 2 * AC.LeafDb(60, CFG) - 0.5 then error(string.format("%.1f dB < 2 x %.1f", p.lossDb, AC.LeafDb(60, CFG)), 0) end
-			-- the corners alone are capped at diff_max_total, as a probe polyline's
-			expect(p.diffDb <= CFG.diff_max_total + 1e-9).to.beTrue()
 		end },
 		{ name = "Probe columns: a displacement's underside (traces from just under it hit again at their start) adds no empty segments and hides no floor below", func = function()
 			-- gm_construct (-3136, -832): 69-5000 68-68 68-68 67-67 ...: one empty segment per 0.5 u, and a run
@@ -2778,39 +1866,8 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "Probe field: usable while the listener walks within its region (1.5 spacings from where it was built), routes joined to where it is now, never through a wall", func = function()
-			-- before: a field was usable within one spacing of where it was built only (stale on arrival while running)
-			withProbeRooms({ { 64, 112, 112 } }, nil, { native_traces = 0, probe_field = 1, probe_inline_ms = 0 }, function(g)
-				local PR = A.Probes
-				local L0, L1, S = Vector(256, 256, 64), Vector(448, 216, 64), Vector(900, 300, 40)
-				PR.field = PR.BuildField(g, L0)
-				expect(L0:Distance(L1) > g.spacing and not PR.ClearSeg(S, L1)).to.beTrue()
-				for _, blend in ipairs({ 0, 1 }) do
-					local cfg = setmetatable({ probe_field = 1, probe_inline_ms = 0, probe_bridge_max = 0, probe_field_blend = blend },
-						{ __index = A.cfg })
-					local ps = PR.Paths(S, L1, 3, cfg)
-					expect(#ps > 0).to.beTrue()
-					for _, p in ipairs(ps) do
-						local pts = { S }
-						for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-						pts[#pts + 1] = L1
-						expect(routeClear(pts)).to.beTrue()
-					end
-				end
-				-- a route's cost is its seed's part replaced by that seed's distance to the listener now
-				local f = PR.field
-				local id = PR.Visible(g, S, 1)[1].id
-				local r = f.root[id]
-				expect(PR.ClearSeg(g.nodes[r].pos, L1)).to.beTrue()
-				expect(math.abs(PR.FieldCost(f, id, L1) - (f.cost[id] - f.base[r] + g.nodes[r].pos:Distance(L1))) < 1e-6).to.beTrue()
-			end)
-		end },
-		-- paths_model 1 (plan B): the listener field is the one topology; a door on a link is a cost of the
-		-- link (closed: its loss at 40 u per dB, as the chain search), so the field routes round a shut door
-		-- by the open doorway and back through it once opened. A mock door (prop_door_rotating) fills the
-		-- first hole; the second hole, 400 u down the wall, stays open.
-		{ name = "Field links pay their doors (paths_model 1): a shut door on the short way sends the field round by the open doorway, and back once opened", func = function()
-			withProbeRooms({ { 16, 64, 112 }, { 400, 448, 112 } }, nil, { native_traces = 0, paths_model = 1 }, function(g)
+		{ name = "Field links pay their doors: a shut door on the short way sends the field round by the open doorway, and back once opened", func = function()
+			withProbeRooms({ { 16, 64, 112 }, { 400, 448, 112 } }, nil, { native_traces = 0 }, function(g)
 				local PR = A.Probes
 				local mn, mx = Vector(510, 14, 0), Vector(530, 66, 112)
 				local door = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9990 end,
@@ -2826,7 +1883,7 @@ local SUITE = {
 					-- out of each other's sight, off the hole's line: the routes are the links' (the probes L sees are seeds)
 					local S, L = Vector(700, 150, 64), Vector(300, 150, 64)
 					expect(not PR.ClearSeg(S, L)).to.beTrue()
-					local cfg = setmetatable({ paths_model = 1, probe_field = 1 }, { __index = A.cfg })
+					local cfg = setmetatable({}, { __index = A.cfg })
 					-- the link costs: a link through the shut door costs its length + the leaf's loss x 40 u
 					local costs = PR.LinkCosts(g)
 					local through, beside = 0, 0
@@ -3197,8 +2254,8 @@ local SUITE = {
 				expect(dumpResult(r2)).to.equal(dumpResult(ref2))
 			end)
 		end },
-		{ name = "Compute (paths_model 1): the answer is the field's whatever the frame budget, never provisional, and the first field is built at once", func = function()
-			withProbeRooms({ { 16, 64, 112 } }, nil, { native_traces = 0, paths_model = 1 }, function(g)
+		{ name = "Compute: the answer is the field's whatever the frame budget, never provisional, and the first field is built at once", func = function()
+			withProbeRooms({ { 16, 64, 112 } }, nil, { native_traces = 0 }, function(g)
 				local PR = A.Probes
 				local savedWalls, savedBudget, savedGet = P.Walls, A.FrameBudgetExceeded, A.Graph.Get
 				local over = false
@@ -3208,7 +2265,7 @@ local SUITE = {
 				end
 				A.FrameBudgetExceeded = function() return over end
 				A.Graph.Get = function() return nil end -- no area graph: the field needs none
-				local cfg = setmetatable({ paths_model = 1, probes = 1, probe_dist = 1e6, path_props = 0, water = 0, probe_field = 1 }, { __index = CFG })
+				local cfg = setmetatable({ probes = 1, probe_dist = 1e6, path_props = 0, water = 0 }, { __index = CFG })
 				local ok, err = pcall(function()
 					local S, L = Vector(700, 300, 64), Vector(300, 300, 64)
 					PR.fieldsByKey = nil
@@ -3226,76 +2283,6 @@ local SUITE = {
 				P.Walls, A.FrameBudgetExceeded, A.Graph.Get = savedWalls, savedBudget, savedGet
 				P.InvalidateCache()
 				if not ok then error(err, 0) end
-			end)
-		end },
-		{ name = "Probe pair hysteresis: the probe a route is keyed on is kept while seen and at most half a spacing farther than the nearest; per graph", func = function()
-			local PR = A.Probes
-			local saved = PR.sticky
-			local g, g2 = { spacing = 128 }, { spacing = 128 }
-			local a, b = { id = 1, pos = Vector(0, 0, 0) }, { id = 2, pos = Vector(128, 0, 0) }
-			local ok, err = pcall(function()
-				PR.sticky = nil
-				expect(PR.StickyPick(g, { a, b }, Vector(40, 0, 0), 1)).to.equal(a)
-				expect(PR.StickyPick(g, { b, a }, Vector(80, 0, 0), 1)).to.equal(a) -- b nearer by 32 u: a kept
-				expect(PR.StickyPick(g2, { b, a }, Vector(80, 0, 0), 1)).to.equal(b) -- another graph: no memory
-				expect(PR.StickyPick(g, { b, a }, Vector(110, 0, 0), 1)).to.equal(b) -- b nearer by 92 u: b
-				expect(PR.StickyPick(g, { b }, Vector(110, 0, 0), 2)).to.equal(b) -- the listener's side is apart
-			end)
-			PR.sticky = saved
-			if not ok then error(err, 0) end
-		end },
-		{ name = "Probe blend visibility: a probe fades out continuously as the source goes behind a jamb, down to 0 before the ray to the probe is cut", func = function()
-			local PR = A.Probes
-			local wall = { Vector(100, -1000, -1000), Vector(116, 0, 1000) }
-			local saved, savedNT = { util.TraceLine, util.TraceHull }, A.cfg.native_traces
-			util.TraceLine = function(t)
-				local out = traceOut(t)
-				local t0, t1 = segBox(t.start, t.endpos, wall[1], wall[2])
-				out.Hit = t0 ~= nil and t1 - t0 > 1e-6
-				out.Fraction, out.StartSolid = out.Hit and t0 or 1, false
-				out.HitPos = t.start + (t.endpos - t.start) * out.Fraction
-				return out
-			end
-			util.TraceHull = util.TraceLine
-			A.cfg.native_traces = 0
-			local ok, err = pcall(function()
-				local P0 = Vector(200, -60, 0)
-				local prev, mid, lastSeen = 1, 0, nil
-				for y = 200, -100, -1 do
-					local S = Vector(0, y, 0)
-					local v = PR.VisFactor(S, P0)
-					expect(v <= prev + 1e-9).to.beTrue()
-					if v > 0 and v < 1 then mid = mid + 1 end
-					if PR.ClearSeg(S, P0) then lastSeen = v end
-					prev = v
-				end
-				expect(mid >= 2).to.beTrue() -- steps in between, not 1 -> 0
-				expect(lastSeen ~= nil and lastSeen <= 1 / 3 + 1e-9).to.beTrue()
-			end)
-			util.TraceLine, util.TraceHull, A.cfg.native_traces = saved[1], saved[2], savedNT
-			if not ok then error(err, 0) end
-		end },
-		{ name = "Probe bridge: compared with the graph's route when both exist (through a window slot: one bend, beside the detour by the door)", func = function()
-			-- a 20 u slot (sill 60, lintel 112) in the wall: too narrow for a gap point (24 u), so the graph goes by the
-			-- door at y 16..64. Before: the bridge was tried only when the graph found nothing
-			local sill = { Vector(512, 426, -8), Vector(528, 462, 60) }
-			withProbeRooms({ { 16, 64, 112 }, { 434, 454, 112 } }, { sill }, { native_traces = 0 }, function()
-				local PR = A.Probes
-				local S, L = Vector(800, 440, 150), Vector(250, 300, 40)
-				expect(not PR.ClearSeg(S, L)).to.beTrue()
-				local cfg = setmetatable({ probe_field = 0, probe_field_blend = 0, probe_bridge_max = 48, probe_inline_ms = 1e6,
-					probe_inline_frame_ms = 1e9 }, { __index = A.cfg })
-				local br, graph
-				for _, p in ipairs(PR.Paths(S, L, 3, cfg)) do
-					local pts = { S }
-					for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-					pts[#pts + 1] = L
-					expect(routeClear(pts)).to.beTrue()
-					if p.bridge then br = p else graph = graph or p end
-				end
-				expect(br ~= nil and graph ~= nil).to.beTrue()
-				expect(br.length < graph.length).to.beTrue()
-				expect(#br.points).to.equal(1)
 			end)
 		end },
 		{ name = "SameRoute: a thin pillar between two long routes keeps them apart (fan rays at most 16 u apart on any edge; 32 rays at most left 36 u gaps)", func = function()
@@ -3396,87 +2383,6 @@ local SUITE = {
 					expect(PR.NativeCheck(T, segs)).to.equal(#segs)
 				end)
 				util.TraceLine, util.TraceHull = savedTL, savedTH
-				if not ok then error(err, 0) end
-			end)
-		end },
-		{ name = "Probe routes at a door left ajar: one step past the jamb's shadow boundary the route bends round the edge that cut the line, not through the leaf (level step < 3 dB per 4 u)", func = function()
-			-- rp_downtown (native_output_walk): clear line 0 dB, 7 u further a probe route through the door leaf
-			-- (traced world only) -29.9 dB, one more step -16.2 dB. Here: the doorway y 64..112 of the two rooms, a
-			-- leaf (a door entity) hinged at its jamb y = 112 and open into room A along the wall's shadow line
-			-- (x 400..512, y 112..116); the source in room B, the listener walking in room A across the shadow
-			-- boundary of the jamb. Clear lines pass under the leaf; the jamb's corner bend (world only) crossed it
-			local PR = A.Probes
-			local door = { GetClass = function() return "prop_door_rotating" end, EntIndex = function() return 9996 end,
-				IsWorld = function() return false end }
-			local leaf = { Vector(400, 112, 0), Vector(512, 116, 108) }
-			withProbeRooms({ { 64, 112, 112 } }, nil, { native_traces = 0 }, function()
-				local baseL, baseH = util.TraceLine, util.TraceHull
-				local savedList, savedEpoch = PR.doorList, PR.doorEpoch
-				local function wrap(base)
-					return function(t)
-						local isDoor = type(t.filter) == "function" and select(2, pcall(t.filter, door)) == true
-						if not isDoor then return base(t) end
-						local out
-						if t.ignoreworld then
-							out = traceOut(t)
-							out.Hit, out.Fraction, out.StartSolid, out.Entity, out.HitPos = false, 1, false, nil, t.endpos
-						else
-							out = base(t)
-						end
-						local pad = t.maxs and t.maxs.x or 0
-						local d = Vector(pad, pad, pad)
-						local t0, t1 = segBox(t.start, t.endpos, leaf[1] - d, leaf[2] + d)
-						if t0 and t1 - t0 > 1e-6 and (not out.Hit or t0 < out.Fraction) then
-							out.Hit, out.Fraction, out.Entity, out.HitPos = true, t0, door, t.start + (t.endpos - t.start) * t0
-						end
-						return out
-					end
-				end
-				util.TraceLine, util.TraceHull = wrap(baseL), wrap(baseH)
-				PR.doorList, PR.doorEpoch = { fixed = true, list = { leaf } }, (PR.doorEpoch or 0) + 1
-				-- the leaf's state: wide open (a leaf is a lossy way through for the shape of a route, charged
-				-- from its state by P.SegmentDoorLoss: an open one costs nothing; unknown would count as shut)
-				local states = CLIENT and pba.Doors.byEnt or pba.Doors.entState
-				local savedState = states[9996]
-				states[9996] = { frac = 1, closedDb = 28 }
-				local ok, err = pcall(function()
-					local cfg = setmetatable({ probe_field = 0, probe_field_blend = 0, probe_inline_ms = 1e6, probe_inline_frame_ms = 1e9,
-						diffuse = 0 }, { __index = A.cfg })
-					local S = Vector(1000, 100, 64)
-					local prev, clear, blocked, worst = nil, 0, 0, 0
-					for y = 100, 140, 4 do
-						local L = Vector(300, y, 64)
-						local lvl
-						if PR.ClearSeg(S, L) then
-							clear = clear + 1
-							lvl = P.PathLevel(S:Distance(L), 0, 75)
-						else
-							blocked = blocked + 1
-							local best
-							for _, p in ipairs(PR.Paths(S, L, 3, cfg)) do
-								local pts = { S }
-								for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-								pts[#pts + 1] = L
-								expect(routeClear(pts)).to.beTrue()
-								local l = P.PathLevel(p.length, p.lossDb, 75)
-								if not lvl or l > lvl then lvl, best = l, p end
-							end
-							-- the loudest route goes round the leaf: no door loss on it
-							if DEBUGDOOR and best then print("  door", best.doorDb, best.length, best.diffDb) end
-							expect(best ~= nil and best.doorDb < 0.5).to.beTrue()
-						end
-						if DEBUGDOOR then print(y, lvl) end
-						expect(lvl ~= nil).to.beTrue()
-						if prev then worst = math.max(worst, math.abs(lvl - prev)) end
-						prev = lvl
-					end
-					if DEBUGDOOR then print("worst", worst) end
-					expect(clear >= 3 and blocked >= 3).to.beTrue()
-					expect(worst < 3).to.beTrue()
-				end)
-				util.TraceLine, util.TraceHull = baseL, baseH
-				PR.doorList, PR.doorEpoch = savedList, savedEpoch
-				states[9996] = savedState
 				if not ok then error(err, 0) end
 			end)
 		end },
@@ -3693,17 +2599,4 @@ local SUITE = {
 		end },
 	},
 }
--- Every case runs with paths_model 0 (the tested default) whatever the server's setting: the cases of the
--- field model set 1 themselves (their cfg or withProbeRooms' overrides). Run in a game with
--- pba_paths_model 1, nine former-model cases read the global setting and failed.
-for _, c in ipairs(SUITE.cases) do
-	local f = c.func
-	c.func = function()
-		local saved = A.cfg.paths_model
-		A.cfg.paths_model = 0
-		local ok, err = pcall(f)
-		A.cfg.paths_model = saved
-		if not ok then error(err, 0) end
-	end
-end
 return SUITE

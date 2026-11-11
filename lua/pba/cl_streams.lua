@@ -211,7 +211,6 @@ local function evaluate(ch, r, L)
 	end
 	if not raw then return "pending" end
 	local res = A.Paths.Stable(r.hyst, raw)
-	if res.provisional and r.reeval then r.reeval.force = true end -- probe search still running
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.lpDb, r.len, r.diffuse = nil, 1, { 1, 1, 1 }, 1, 0, nil, nil, 0

@@ -1,4 +1,4 @@
-"""Offline bench and identity check of one sound evaluation (P.Compute, paths_model 1), LuaJIT 2.1 via lupa.
+"""Offline bench and identity check of one sound evaluation (P.Compute), LuaJIT 2.1 via lupa.
 A synthetic scene (eval_scene.lua: two rooms, a doorway with a door leaf in three states, an opening, a
 pillar, a crate) and a fixed schedule of evaluations: random S/L pairs evaluated 3 times each (cold, then
 still), a crowd (20 sources, one still listener, 4 rounds) and a walk (3 sources, the listener stepping 24 u).

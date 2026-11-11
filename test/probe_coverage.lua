@@ -18,12 +18,12 @@ for _, n in ipairs(g.nodes) do
 	local d = n.pos:Distance(S)
 	if not best or d < best then best = d end
 end
-local paths = A.Probes.Paths(S, L, A.cfg.max_paths, A.cfg)
+local paths = A.Probes.FieldRoutes(S, L, A.cfg.max_paths, A.cfg)
 -- Paths() may answer from a background solve: give it a few frames
 for _ = 1, 60 do
 	if #paths > 0 then break end
 	job:frames(2)
-	paths = A.Probes.Paths(S, L, A.cfg.max_paths, A.cfg)
+	paths = A.Probes.FieldRoutes(S, L, A.cfg.max_paths, A.cfg)
 end
 A.Paths.InvalidateCache()
 local r = A.Paths.Compute(S, L, 75)

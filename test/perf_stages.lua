@@ -15,10 +15,10 @@ for i, p in ipairs(args.srcs or {}) do srcs[i] = Vector(p[1], p[2], p[3]) end
 
 local A = pba
 local targets = {
-	{ A.Paths, "P", { "Compute", "Walls", "EvalWalls", "FindChains", "EvalChain", "RelaxPoints", "Aperture", "EvalPolyline",
+	{ A.Paths, "P", { "Compute", "Walls", "EvalWalls", "EvalPolyline",
 		"SelectVoices", "DetourDelta", "SegmentDoorLoss", "WorldEdge", "AddEdge", "SameRoute", "EvalRoute", "RefineCorners",
-		"CornerPoint", "KeepLoudest", "LineLeaves", "WallDetours", "CheckLegs" } },
-	{ A.Probes or {}, "PR", { "Paths", "Visible", "FindPath", "Pull", "FieldRoutes", "FieldFor", "FieldBlend", "DistinctRoutes" } },
+		"CornerPoint", "KeepLoudest", "LineLeaves", "WallDetours" } },
+	{ A.Probes or {}, "PR", { "Visible", "Pull", "FieldRoutes", "FieldFor", "DistinctRoutes" } },
 	{ A.Native or {}, "N", { "Direct", "Path" } },
 	{ A.Graph, "G", { "Area", "Get" } },
 	{ util, "util", { "TraceLine", "TraceHull", "PointContents", "GetSurfacePropName", "GetSurfaceData" } },

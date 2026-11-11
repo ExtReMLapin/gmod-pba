@@ -194,7 +194,7 @@ local function clearFatWorld(a, b)
 end
 
 -- Door leaves are NOT obstacles for the shape of a route (its tightening, the vertices S and L skip, the
--- bridge, the corners' edges): a leaf is a lossy way through its doorway, charged by P.SegmentDoorLoss from
+-- corners' edges): a leaf is a lossy way through its doorway, charged by P.SegmentDoorLoss from
 -- its state (the gap's gain beside the leaf's AC.LeafDb: a closed door its leaf, an open one nothing), as
 -- the links and joins already had it. They were obstacles once (ed9df32): a route past a door left ajar
 -- went through the leaf and paid it where the listener stepped past the jamb. That jump was the route's
@@ -744,8 +744,7 @@ PR.LinkSegs = linkSegs
 --- Starts loading or building the probe graph for the current map (client, background).
 function PR.Start()
 	PR.current, PR.building = nil, nil
-	PR.pathCache, PR.pathCacheN, PR.queue = {}, 0, {}
-	PR.bridgeMemo, PR.sticky, PR.fieldAway, PR.fieldsByKey, PR.seedMemo = nil, nil, nil, nil, nil
+	PR.fieldsByKey, PR.seedMemo = nil, nil
 	PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare = nil, nil, nil
 	local g = A.Graph.Get()
 	if not g then return end
@@ -836,8 +835,8 @@ end
 -- is the flood fill's for a graph just built and the cache file's for one loaded from it. Equal costs
 -- in A* and in the field then broke the other way after a reload: the same sound took the other of
 -- two equal routes (a door either side of a pillar) from one session to the next.
--- Also the column index g.cols (column key -> probe ids, increasing), from g.index: PR.Visible and the
--- bridge look up the columns around a point instead of scanning every probe.
+-- Also the column index g.cols (column key -> probe ids, increasing), from g.index: PR.Visible looks
+-- up the columns around a point instead of scanning every probe.
 local nbIds = {}
 function PR.Prepare(g)
 	if g.adj and g.cols then return g.adj end
@@ -922,77 +921,6 @@ local function hpush(hk, hv, n, f, id)
 	end
 	return n
 end
-local function hpop(hk, hv, n)
-	local topK, top = hk[1], hv[1]
-	hk[1], hv[1] = hk[n], hv[n]
-	n = n - 1
-	local i = 1
-	while true do
-		local l, r, m = i * 2, i * 2 + 1, i
-		if l <= n and hk[l] < hk[m] then m = l end
-		if r <= n and hk[r] < hk[m] then m = r end
-		if m == i then break end
-		hk[m], hk[i], hv[m], hv[i] = hk[i], hk[m], hv[i], hv[m]
-		i = m
-	end
-	return top, topK, n
-end
-
---- A* over the probe graph from the probes visible from S to those visible from L, with
--- `avoid` (set of node ids) penalised. Returns a list of positions S .. L, or nil and "capped" when
--- it stopped at `maxExpand` (a route may exist: do not take it for "no route"), or nil alone when
--- the reachable probes are exhausted (no route).
-function PR.FindPath(g, S, L, avoid, maxExpand, starts, goals, yield)
-	starts, goals = starts or PR.Visible(g, S, 3), goals or PR.Visible(g, L, 3)
-	if #starts == 0 or #goals == 0 then return nil end
-	local goalSet = {}
-	for _, n in ipairs(goals) do goalSet[n.id] = n.pos:Distance(L) end
-	local adj = g.adj or PR.Prepare(g)
-	local first, nid, elen, nodes = adj.first, adj.nid, adj.len, g.nodes
-	local gs, prev, closed = {}, {}, {}
-	local hk, hv, n = {}, {}, 0
-	for _, s in ipairs(starts) do
-		gs[s.id] = S:Distance(s.pos)
-		n = hpush(hk, hv, n, gs[s.id] + s.pos:Distance(L), s.id)
-	end
-	local expanded = 0
-	local found, capped
-	while n > 0 do
-		local best, _
-		best, _, n = hpop(hk, hv, n)
-		if not closed[best] then
-			closed[best] = true
-			if goalSet[best] then found = best break end
-			expanded = expanded + 1
-			if expanded > (maxExpand or 4000) then capped = true break end
-			if yield and expanded % 32 == 0 then yield() end
-			local gb = gs[best]
-			for e = first[best], first[best + 1] - 1 do
-				local id = nid[e]
-				if not closed[id] then
-					local c = gb + elen[e] * ((avoid and avoid[id]) and 3 or 1)
-					if not gs[id] or c < gs[id] then
-						gs[id], prev[id] = c, best
-						n = hpush(hk, hv, n, c + nodes[id].pos:Distance(L), id)
-					end
-				end
-			end
-		end
-	end
-	if not found then return nil, capped and "capped" or nil end
-	local ids, c = {}, found
-	while c do table.insert(ids, 1, c) c = prev[c] end
-	local pts = { S }
-	for i, id in ipairs(ids) do
-		if i > 1 then
-			local via = g.nodes[ids[i - 1]].nb[id]
-			if via and via ~= true then pts[#pts + 1] = via end
-		end
-		pts[#pts + 1] = g.nodes[id].pos
-	end
-	pts[#pts + 1] = L
-	return pts, ids
-end
 
 --- String pulling: removes vertices while the (fat) shortcut stays clear of the world (doors: attach).
 function PR.Pull(pts)
@@ -1007,54 +935,8 @@ function PR.Pull(pts)
 	return out
 end
 
--- Pulled polylines between probe pairs are static (world geometry only): cached for the map.
-PR.pathCache = PR.pathCache or {}
-
--- Cache misses are not searched inline (a cold A* can cost >10 ms): they are queued and
--- solved in the background, a slice per frame; meanwhile the sound gets no probe path.
-PR.queue = PR.queue or {}
-PR.SLICE_MS = 0.5
-
--- No expansion cap: the result is cached for the whole session, and a search stopped at 2500 probes
--- returned nil, cached as {} = "no route" for that probe pair until the next map (a U-shaped
--- building, a door far off the S-L line: S and L 50 u apart through a wall, the route 2000 u round
--- it, silent for good). The search always runs in advance()'s coroutine, sliced by PR.deadline
--- (inline budget, then the background queue), and ends when the open set does (at most MAX_PROBES
--- expansions), so an empty answer here is a real "no route".
-local function solve(g, s0, g0, k, yield)
-	local out, avoid = {}, {}
-	for _ = 1, k do
-		local pts, ids = PR.FindPath(g, s0.pos, g0.pos, avoid, math.huge, { s0 }, { g0 }, yield)
-		if not pts then break end
-		for _, id in ipairs(ids) do avoid[id] = true end
-		out[#out + 1] = PR.Pull(pts)
-		if yield then yield() end
-	end
-	return out
-end
-
--- Advances one queued search until PR.deadline. Returns its paths once solved (and caches them).
-local function advance(ck, job)
-	job.co = job.co or coroutine.create(function()
-		return solve(job.g, job.s0, job.g0, job.k, function()
-			if SysTime() >= PR.deadline then coroutine.yield() end
-		end)
-	end)
-	local ok, res = coroutine.resume(job.co)
-	if not ok then
-		PR.queue[ck] = nil
-		ErrorNoHaltWithStack("[PBA] probe search failed: " .. tostring(res))
-	elseif coroutine.status(job.co) == "dead" then
-		PR.queue[ck] = nil
-		PR.pathCache[ck] = res
-		PR.pathCacheN = (PR.pathCacheN or 0) + 1
-		if PR.pathCacheN > 4000 then PR.pathCache, PR.pathCacheN = {}, 0 end
-		return res
-	end -- suspended: continued later
-end
-
 -- ------------------------------------------------------------------ doors and portals on the links
--- (paths_model 1.) The graph's links are world geometry only: a link through a doorway exists whether
+-- The graph's links are world geometry only: a link through a doorway exists whether
 -- its door is open or shut, and the field (shortest length) sent a route through a shut door where an
 -- open doorway stood 200 u farther. A door is a cost of the links through it, at the chain search's rate
 -- (P.DOOR_UNITS_PER_DB: 40 u per dB of door, the same exchange rate so that a map with areaportals and
@@ -1285,16 +1167,12 @@ end
 -- One Dijkstra over the probe graph from the probes the listener sees (as Hitman and Wwise do: the
 -- search starts from the listener): every probe gets its cost to the listener and its next hop. A
 -- sound then follows the hops from a probe it sees: no search per sound, so a one-shot gets its
--- path at once whatever the load, and sounds of one room leave it the same way. Rebuilt in
--- background slices (probe_field_ms per frame) when the listener moved half a spacing.
--- The field stays usable while the listener moves within its region: the search starts from up to
--- FIELD_SEEDS probes seen from where it was built (within 2 columns), each route remembers the seed it
+-- path at once whatever the load, and sounds of one room leave it the same way. The search starts
+-- from up to FIELD_SEEDS probes the listener sees (within 2 columns), each route remembers the seed it
 -- ends at (root) and, at query time, the route is joined to the listener NOW: its cost is the seed's
 -- part replaced by the seed's distance to the current listener when the listener still sees that seed,
 -- else the route goes on through the field's own listener position when that one sees the listener.
--- Before, a field was usable only within one spacing of where it was built: at 400 u/s it was stale on
--- arrival, and paths flipped between field, queue and bridge every fraction of a second.
-local FIELD_SEEDS, FIELD_REACH = 8, 3
+local FIELD_SEEDS = 8
 
 -- No `closed` set: keys pop in increasing order and a probe is pushed again only with a strictly lower
 -- cost, so the first pop of a probe carries its final cost (key == cost) and any later pop of it, or a
@@ -1308,17 +1186,14 @@ function PR.BuildField(g, L, yield, reuse, costs, seedList)
 		cost, nxt, root = reuse.cost, reuse.nxt, reuse.root
 		for id = 1, #g.nodes do cost[id], nxt[id], root[id] = nil, nil, nil end
 	end
-	-- arr: arrival of each probe's route at the listener, filled on first use (PR.FieldBlend)
+	-- arr: arrival of each probe's route at the listener, filled on first use (pba_group, PR.SharedJoin)
 	local f = { g = g, L = L, cost = cost, nxt = nxt, root = root, base = {}, seeds = {}, pulled = {}, arr = {}, arrEpoch = PR.doorEpoch }
 	local adj = g.adj or PR.Prepare(g)
 	local first, nid, elen = adj.first, adj.nid, adj.len
-	-- the doors and portals on the links as part of their cost: `costs` (PR.LinkCosts' table), false for
-	-- none, nil for paths_model's choice (1: the current door costs)
-	local extra
-	if costs then extra = costs
-	elseif costs == nil and (A.cfg.paths_model or 0) >= 0.5 then extra, f.stateSig = PR.LinkCosts(g) end
+	-- the doors and portals on the links as part of their cost: `costs` (PR.LinkCosts' table), or none
+	local extra = costs or nil
 	local hk, hv, n = {}, {}, 0
-	-- seedList (paths_model 1): the field of a set of seeds, at cost 0 each, whatever the listener's exact
+	-- seedList: the field of a set of seeds, at cost 0 each, whatever the listener's exact
 	-- position (fieldCost adds the seed's distance to the listener at query time): see PR.FieldRoutes
 	for _, s in ipairs(seedList or PR.Visible(g, L, FIELD_SEEDS, 2)) do
 		local c = seedList and 0 or s.pos:Distance(L)
@@ -1347,14 +1222,13 @@ function PR.BuildField(g, L, yield, reuse, costs, seedList)
 	return f
 end
 
---- The listener's fields. paths_model 0: one, by length (as before). paths_model 1: by length (f: the
+--- The listener's fields: by length (f: the
 -- shortest way, its doors paid on the route by P.EvalPolyline) and, when a door or portal on the links
 -- costs something, a second one with those costs (f.doors: the way round a shut door). One field at a fixed
 -- exchange rate (40 u per dB) gave one route per probe, and with door_s shut every probe of the room went
 -- round by the other door, 15 dB quieter than through the leaf (pba_twodoors): the routes of both fields
--- are ranked by their level afterwards (PR.DistinctRoutes), as the portal chains are (rankChains).
+-- are ranked by their level afterwards (PR.DistinctRoutes).
 function PR.BuildFields(g, L, yield, reuse, seedList)
-	if (A.cfg.paths_model or 0) < 0.5 then return PR.BuildField(g, L, yield, reuse) end
 	local extra, sig = PR.LinkCosts(g, yield)
 	local f = PR.BuildField(g, L, yield, reuse, false, seedList)
 	f.stateSig = sig
@@ -1365,7 +1239,7 @@ function PR.BuildFields(g, L, yield, reuse, seedList)
 	return f
 end
 
--- paths_model 1: a field is the field of the probes the listener sees (FIELD_SEEDS of PR.Visible), not of
+-- A field is the field of the probes the listener sees (FIELD_SEEDS of PR.Visible), not of
 -- where it was built. Built around a position and reused within reach, the answer at one listener point
 -- depended on that position: the routes ended at seeds round it and were joined to the listener through it,
 -- and one point of pba_demo heard -33.7 dB at its first evaluation and -47.8 at the next, once the upkeep
@@ -1454,7 +1328,7 @@ function PR.FieldFor(g, L)
 	return f
 end
 
---- Queues the rebuild of field f's door-cost part (f.doors) for state signature sig (paths_model 1). One
+--- Queues the rebuild of field f's door-cost part (f.doors) for state signature sig. One
 -- job at a time; a field whose state changed again while queued or building is taken up by the next job.
 function PR.QueueDoorField(g, f, sig)
 	local q = PR.doorFieldQueue
@@ -1514,15 +1388,7 @@ function PR.AdvanceDoorFields()
 		PR.doorFieldJob = nil
 	end
 end
-hook.Add("Think", "pba_probes_door_field", function()
-	if (A.cfg.paths_model or 0) >= 0.5 then PR.AdvanceDoorFields() end
-end)
-
---- Built at once around L (tests: as if the listener had been standing there); the background
--- upkeep around the real listener is held for 2 s so that it does not replace it.
-function PR.BuildFieldNow(L)
-	if PR.current then PR.field, PR.fieldJob, PR.fieldHold = PR.BuildFields(PR.current, L), nil, SysTime() + 2 end
-end
+hook.Add("Think", "pba_probes_door_field", function() PR.AdvanceDoorFields() end)
 
 --- Which of field f's seeds the listener at L sees (set of probe ids), and whether it sees the field's
 -- own listener position; computed once per listener position (every sound of a frame shares it).
@@ -1555,14 +1421,6 @@ local function fieldCost(f, id, L)
 	return nil
 end
 PR.FieldCost = fieldCost
-
-local function fieldUsable(g, L, cfg)
-	local f = PR.field
-	if not (f and f.g == g and ((cfg or A.cfg).probe_field or 1) >= 0.5) then return nil end
-	if f.L:DistToSqr(L) > (FIELD_REACH * g.spacing) ^ 2 then return nil end
-	fieldSeen(f, L)
-	return f.seenAny and f or nil
-end
 
 -- Pulled polylines (probe positions, without S and L) from each probe S sees down to the listener,
 -- best first (S to the probe plus the probe's cost); several, as the k-path search gives, and
@@ -1605,138 +1463,6 @@ local function fieldPaths(f, starts, S, L)
 	for i, e in ipairs(list) do out[i], out.nodes[i] = fieldPathFrom(f, e[1]), e[1] end
 	return out
 end
-
--- Rebuilt as soon as the listener is half a spacing from where the field was built, with no time gate:
--- the build is sliced (probe_field_ms per frame) and the previous field answers meanwhile (fieldCost),
--- so its cost per frame is bounded whatever the speed.
-hook.Add("Think", "pba_probes_field", function()
-	local g = PR.current
-	-- (paths_model 1 keeps its fields by seed set, PR.FieldFor: no upkeep around the player)
-	if (A.cfg.paths_model or 0) >= 0.5 then return end
-	local model1 = false
-	if not g or (A.cfg.probe_field or 1) < 0.5 or (PR.fieldHold and SysTime() < PR.fieldHold) then return end
-	local L = A.ListenerPos and A.ListenerPos()
-	if not L then
-		local ply = LocalPlayer()
-		if not IsValid(ply) then return end
-		L = ply:EyePos()
-	end
-	local f, job = PR.field, PR.fieldJob
-	if job and job.g ~= g then job = nil end
-	local stale = not f or f.g ~= g or f.L:DistToSqr(L) > (g.spacing / 2) ^ 2
-	-- paths_model 1: a door or portal state the field's link costs read has changed (checked 4 times a second)
-	if not stale and not job and model1 and (PR.sigNext or 0) <= SysTime() then
-		PR.sigNext = SysTime() + 0.25
-		if f.stateSig ~= PR.StateSig(g) then stale = true end
-	end
-	if not job and stale then
-		job = { g = g }
-		local spare = PR.fieldSpare
-		PR.fieldSpare = nil
-		job.co = coroutine.create(function()
-			return PR.BuildFields(g, L, function() if SysTime() >= PR.fieldDeadline then coroutine.yield() end end, spare)
-		end)
-		PR.fieldJob = job
-	end
-	if not job then return end
-	PR.fieldDeadline = SysTime() + (A.cfg.probe_field_ms or 1) / 1000
-	local ok, res = coroutine.resume(job.co)
-	if not ok then
-		PR.fieldJob = nil
-		ErrorNoHaltWithStack("[PBA] probe field failed: " .. tostring(res))
-	elseif coroutine.status(job.co) == "dead" then
-		PR.fieldSpare, PR.field, PR.fieldJob = PR.field, res, nil
-	end
-end)
-
--- Hysteresis of the probe pair a per-sound route is keyed on (probe_field_blend 0). The route is the
--- one between the probe nearest S and the probe nearest L that they see; a moving source or listener
--- whose nearest probe changes takes the other probe's route at once (through another opening, or the
--- same one tightened differently: a 10 dB / 77 degree step in the pure test), and back when it steps
--- back. A probe chosen within the last STICKY_S seconds is kept while it is still among the probes
--- seen and at most STICKY_MARGIN spacings farther than the nearest one. Per graph: ids of another
--- graph mean nothing.
-local STICKY_S, STICKY_MARGIN = 1, 0.5
-local function stickyPick(g, list, p, side)
-	local best = list[1]
-	if not best then return nil end
-	local st = PR.sticky
-	if not st or st.g ~= g then
-		st = { g = g, {}, {}, n = 0 }
-		PR.sticky = st
-	end
-	local now, t = SysTime(), st[side]
-	local lim = p:Distance(best.pos) + g.spacing * STICKY_MARGIN
-	local pick, pd
-	for _, n in ipairs(list) do
-		local u = t[n.id]
-		if u and now - u < STICKY_S then
-			local d = p:Distance(n.pos)
-			if d <= lim and (not pd or d < pd) then pick, pd = n, d end
-		end
-	end
-	pick = pick or best
-	t[pick.id] = now
-	st.n = st.n + 1
-	if st.n > 4096 then -- drop the stale entries
-		for x = 1, 2 do
-			for id, u in pairs(st[x]) do
-				if now - u >= STICKY_S then st[x][id] = nil end
-			end
-		end
-		st.n = 0
-	end
-	return pick
-end
-PR.StickyPick = stickyPick
-
-local function pulledPaths(g, S, L, k, cfg, starts)
-	cfg = cfg or A.cfg
-	starts = starts or PR.Visible(g, S, 3)
-	local goals = PR.Visible(g, L, 3)
-	if #starts == 0 or #goals == 0 then return {} end
-	local s0, g0 = stickyPick(g, starts, S, 1), stickyPick(g, goals, L, 2)
-	local ck = s0.id .. ">" .. g0.id .. ">" .. k
-	local c = PR.pathCache[ck]
-	if c then return c end
-	local job = PR.queue[ck]
-	if not job then
-		job = { g = g, s0 = s0, g0 = g0, k = k }
-		PR.queue[ck] = job
-		PR.queueN = (PR.queueN or 0) + 1
-	end
-	-- a one-shot sound is evaluated once: answered from the background queue it only ever got the
-	-- transmission (silence behind an opening on maps without areaportals). Solve now, within a small
-	-- budget per call and per frame; beyond it the search goes on in the background as before.
-	local frame = FrameNumber()
-	if PR.inlineFrame ~= frame then PR.inlineFrame, PR.inlineUsed = frame, 0 end
-	local budget = math.min(cfg.probe_inline_ms or 3, (cfg.probe_inline_frame_ms or 6) - PR.inlineUsed)
-	if budget > 0 then
-		local t0 = SysTime()
-		PR.deadline = t0 + budget / 1000
-		local res = advance(ck, job)
-		PR.inlineUsed = PR.inlineUsed + (SysTime() - t0) * 1000
-		if res then return res end
-	end
-	-- not solved in time: the listener field answers at once (its best route; the k-path search, with
-	-- the alternative routes, goes on in the background). PR.provisional tells P.Compute the answer
-	-- will change once the search is solved (a continuous sound then re-evaluates at its next turn).
-	PR.provisional = true
-	local f = fieldUsable(g, L, cfg)
-	if f then return fieldPaths(f, starts, S, L) end
-	return {}
-end
-
-hook.Add("Think", "pba_probes_solve", function()
-	if not PR.current or not next(PR.queue) then return end
-	PR.deadline = SysTime() + PR.SLICE_MS / 1000
-	while SysTime() < PR.deadline do
-		local ck, job = next(PR.queue)
-		if not ck then return end
-		if job.g ~= PR.current then PR.queue[ck] = nil
-		else advance(ck, job) end -- suspended: the while condition ends the slice
-	end
-end)
 
 --- Tightens a pulled polyline around the obstacle edges: probes sit on a grid, often far from the
 -- edge the sound actually bends around (a doorway frame, a window sill), which made the diffraction
@@ -1847,124 +1573,6 @@ local function tighten(pts)
 end
 PR.Tighten = tighten
 
---- One-bend bridge: two places that see each other through open air (a street and a rooftop 900 u
--- above, a pit and its rim, a window over a courtyard) may have no graph link but stairs. The bend is a
--- probe seen from S that also sees L, found geometrically: from the probes S sees, the region S sees
--- is grown along the graph links (each probe reached is traced from S), and the same from L; probes are
--- taken shortest detour first (S to the probe to L, at most probe_bridge_ratio x the straight line),
--- and the first one seen from both ends (thin, then fat traces) is the bend. Before, the 48 probes of
--- shortest detour of the whole map were tried by count: in a dense ellipse all 48 could sit inside one
--- building, and every probe of the map was scanned at each call. At most 4 x probe_bridge_max thin
--- traces and probe_bridge_max candidates confirmed with the fat traces. Returns { S, q, L } or nil.
-local function bridge(g, S, L, cfg)
-	local maxn = cfg.probe_bridge_max or 48
-	if maxn <= 0 then return nil end
-	local limit = S:Distance(L) * (cfg.probe_bridge_ratio or 1.5)
-	local adj = g.adj or PR.Prepare(g)
-	local first, nid, nodes = adj.first, adj.nid, g.nodes
-	local hk, hv, hn = {}, {}, 0
-	local seenBy = { {}, {} } -- [1]: seen from S, [2]: seen from L (true / false once traced)
-	local function lenOf(n) return S:Distance(n.pos) + n.pos:Distance(L) end
-	for side = 1, 2 do
-		for _, n in ipairs(PR.Visible(g, side == 1 and S or L, 3)) do
-			seenBy[side][n.id] = true
-			local ln = lenOf(n)
-			if ln <= limit then hn = hpush(hk, hv, hn, ln, side == 1 and n.id or -n.id) end
-		end
-	end
-	local traces, fat = 0, 0
-	while hn > 0 and traces < maxn * 4 and fat < maxn do
-		local v, _
-		v, _, hn = hpop(hk, hv, hn)
-		local side = v > 0 and 1 or 2
-		local id = abs(v)
-		local n = nodes[id]
-		local oset = seenBy[3 - side]
-		local seesOther = oset[id]
-		if seesOther == nil then
-			traces = traces + 1
-			seesOther = clearSeg(n.pos, side == 1 and L or S)
-			oset[id] = seesOther
-		end
-		if seesOther then
-			fat = fat + 1
-			if clearFat(S, n.pos) and clearFat(n.pos, L) then return { S, n.pos, L } end
-		end
-		local mine, from = seenBy[side], side == 1 and S or L
-		for e = first[id], first[id + 1] - 1 do
-			local m = nid[e]
-			if mine[m] == nil then
-				local ln = lenOf(nodes[m])
-				if ln <= limit then
-					traces = traces + 1
-					local ok = clearSeg(from, nodes[m].pos)
-					mine[m] = ok
-					if ok then hn = hpush(hk, hv, hn, ln, side == 1 and m or -m) end
-				else
-					mine[m] = false
-				end
-			end
-		end
-	end
-	return nil
-end
-PR.Bridge = bridge
-
--- The bridge for S and L, evaluated, or nil. Its bend is searched once per pair of 16 u cells of S and L
--- (world geometry only), then only checked (two fat traces) and tightened for the exact S and L (last 4
--- kept). Per graph, at most 2048 cells pairs.
-local BRIDGE_CELL = 16
-local function bridgePath(g, S, L, cfg)
-	if (cfg.probe_bridge_max or 48) <= 0 then return nil end
-	local memo = PR.bridgeMemo
-	if not memo or memo.g ~= g or memo.n > 2048 then
-		memo = { g = g, n = 0, e = {} }
-		PR.bridgeMemo = memo
-	end
-	local ck = floor(S.x / BRIDGE_CELL) .. "," .. floor(S.y / BRIDGE_CELL) .. "," .. floor(S.z / BRIDGE_CELL) .. ">"
-		.. floor(L.x / BRIDGE_CELL) .. "," .. floor(L.y / BRIDGE_CELL) .. "," .. floor(L.z / BRIDGE_CELL)
-	local e = memo.e[ck]
-	if not e then
-		local b = bridge(g, S, L, cfg)
-		e = { q = b and b[2] or false, done = {} }
-		memo.e[ck] = e
-		memo.n = memo.n + 1
-	end
-	if not e.q then return nil end
-	local sx, sy, sz = S:Unpack()
-	local lx, ly, lz = L:Unpack()
-	if e.epoch ~= PR.doorEpoch then e.done, e.epoch = {}, PR.doorEpoch end
-	for _, d in ipairs(e.done) do
-		if d[1] == sx and d[2] == sy and d[3] == sz and d[4] == lx and d[5] == ly and d[6] == lz then return d[7] or nil end
-	end
-	local p = false
-	if clearFat(S, e.q) and clearFat(e.q, L) then
-		local pulled = tighten({ S, e.q, L })
-		if #pulled >= 3 then
-			p = A.Paths.EvalRoute(pulled, cfg)
-			p.probe, p.bridge = true, true
-		end
-	end
-	if #e.done >= 4 then table.remove(e.done, 1) end
-	e.done[#e.done + 1] = { sx, sy, sz, lx, ly, lz, p }
-	return p or nil
-end
-PR.BridgePath = bridgePath
-
--- The bridge is compared with the graph's routes when both exist: through a window over a courtyard,
--- the graph's route goes down the stairwell and round, and was kept alone. A bridge is searched only
--- when the shortest route found is longer than BRIDGE_TRY x the straight line (a bridge cannot do much
--- better than an almost straight route), and added when shorter than it; PR.DistinctRoutes then
--- orders the routes by level.
-local BRIDGE_TRY = 1.15
-local function addBridge(g, S, L, cfg, out)
-	local best = math.huge
-	for _, p in ipairs(out) do best = math.min(best, p.length) end
-	if best <= S:Distance(L) * BRIDGE_TRY then return end
-	local b = bridgePath(g, S, L, cfg)
-	if b and b.length < best then out[#out + 1] = b end
-end
-
 -- S and L attached to a pulled polyline (skipping the vertices they already see), then tightened. World
 -- geometry only, which does not change: the result for the same polyline, S and L (a loop and a listener
 -- that did not move, re-evaluated 4 times a second) is kept on the polyline and given again instead of
@@ -2016,18 +1624,8 @@ local function attach(inner, S, L, via)
 end
 PR.Attach = attach
 
--- ------------------------------------------------------------------ blend over the probes S sees
--- (Raghuvanshi 2021, eq. 6: the delay at a point is interpolated from the neighbouring samples'
--- apparent positions.) The field's route from one probe, attached and tightened per source, makes
--- the answer depend on which probe S sees first: when S moves, the set of probes it sees changes and
--- the length, the bends and the apparent position step (route through another opening, or the same
--- route tightened differently: 10 dB and 77 degrees in one 8 u step in the pure test). Instead each
--- probe's route is tightened once per field, from the probe itself, and kept (its arrival); a source
--- is joined to the first bend of each arrival and the results are averaged with weights that are
--- continuous in S, so a small move of S gives a small change.
-
 -- The arrival of probe n's route at the listener the field was built at: the bends after n (n itself
--- when it sees the listener) and the probe (joinRoute). Filled on first use, shared by every source
+-- when it sees the listener). Filled on first use, shared by every source
 -- that sees n, dropped with the field. nil when the route cannot be attached (false kept in f.arr).
 local function arrival(f, n)
 	-- (a field built by hand, as in the pure tests, has no door state: its arrivals are kept)
@@ -2044,55 +1642,11 @@ local function arrival(f, n)
 		if T[i]:DistToSqr(n.pos) > 1e-6 then bends[#bends + 1] = T[i] end
 	end
 	if #bends == 0 then bends[1] = n.pos end
-	a = { bends = bends, probe = n.pos, joins = {} }
+	a = { bends = bends }
 	f.arr[n.id] = a
 	return a
 end
 PR.Arrival = arrival
-
--- The route for S and L along arrival a of field f: S, its bends, L. Both joins are checked: the first
--- bend is the first one after the probe, seen from the probe, not always from S (S behind a pillar that
--- the probe sees round: the route went through the pillar), and the last bend was tightened towards
--- f.L, up to a few spacings from L (the listener stepped round a jamb: through the jamb). A blocked join
--- gets the point that is known to see both sides: the probe itself (seen by S, PR.Visible) at the head,
--- f.L (seen by the last bend, and from which the listener walked) at the tail; only that new vertex is
--- tightened. nil when it does not see both sides either. Last 8 (S, L) per arrival, as attach.
-local function joinRoute(f, a, S, L)
-	local sx, sy, sz = S:Unpack()
-	local lx, ly, lz = L:Unpack()
-	local memo = a.joins
-	for _, e in ipairs(memo) do
-		if e[1] == sx and e[2] == sy and e[3] == sz and e[4] == lx and e[5] == ly and e[6] == lz then return e[7] or nil end
-	end
-	local bends = a.bends
-	local b1, bk = bends[1], bends[#bends]
-	local pts = { S }
-	local ok = true
-	if not sees(S, b1) then
-		local q = a.probe
-		if q:DistToSqr(b1) > 0.01 and sees(S, q) and sees(q, b1) then
-			local t = tighten({ S, q, b1 })
-			if #t == 3 then pts[2] = t[2] end
-		else
-			ok = false
-		end
-	end
-	for _, b in ipairs(bends) do pts[#pts + 1] = b end
-	if ok and not sees(bk, L) then
-		local q = f.L
-		if q:DistToSqr(bk) > 0.01 and sees(bk, q) and sees(q, L) then
-			local t = tighten({ bk, q, L })
-			if #t == 3 then pts[#pts + 1] = t[2] end
-		else
-			ok = false
-		end
-	end
-	pts[#pts + 1] = L
-	if #memo >= 8 then table.remove(memo, 1) end
-	memo[#memo + 1] = { sx, sy, sz, lx, ly, lz, ok and pts }
-	return ok and pts or nil
-end
-PR.JoinRoute = joinRoute
 
 -- ------------------------------------------------------------------ shared arrivals (pba_group)
 -- A far sound's routes, read from the field, were each attached and tightened for that sound and that
@@ -2200,136 +1754,6 @@ local function groupGuard(S, L, cfg, srcEnt)
 	end
 end
 
-PR.BLEND_LAMBDA = 1 -- length scale of the weights, in probe spacings (routes longer by more fade out)
-PR.BLEND_REACH = 1.5 -- the kernel reaches at least this many times the nearest probe's distance
-PR.BLEND_N = 5 -- probes asked of PR.Visible for a blend (the last one only bounds the others' weights)
-
--- How much S sees probe position p, continuously: the fraction of RING_N rays from S to points RING_R
--- around p (in the plane across S -> p; probes keep CLEAR units free around them) that are clear,
--- mapped so that half the ring hidden gives 0. A source walking behind a door jamb hides one side of
--- the ring after the other before the ray to the probe itself is cut (PR.Visible drops the probe): its
--- weight fades out over those few units instead of jumping from full to nothing.
-local RING_R, RING_N = 8, 6
-local function visFactor(S, p)
-	local ax = p - S
-	local len = ax:Length()
-	if len < RING_R then return 1 end
-	ax = ax * (1 / len)
-	local e1 = ax:Cross(abs(ax.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
-	e1:Normalize()
-	local e2 = ax:Cross(e1)
-	local clear = 0
-	for k = 0, RING_N - 1 do
-		local a = k * 2 * math.pi / RING_N
-		if clearSeg(S, p + e1 * (math.cos(a) * RING_R) + e2 * (math.sin(a) * RING_R)) then clear = clear + 1 end
-	end
-	return math.Clamp(2 * clear / RING_N - 1, 0, 1)
-end
-PR.VisFactor = visFactor
-
---- One path for S from the field f: the arrivals of the probes S sees (`starts`, nearest first, as
--- PR.Visible gives them), each joined to S and evaluated like any probe path (P.EvalPolyline), then
--- averaged. Weight of probe i = kernel(distance S - probe) x visibility(S, probe) x exp(-(length via
--- i - shortest) / lambda):
--- - the kernel is (1 - (d / D)^2)^2, zero from D on. D is one spacing (every probe that close is a
---   candidate of PR.Visible), widened to 1.5 x the nearest probe's distance where probes are sparse
---   (the nearest always weighs: no gap where the blend would give up), and bounded, when PR.Visible
---   stopped at its maximum (`full`), by the distance of the last probe: that probe is the next to leave
---   the set, so probes enter and leave it with weight 0;
--- - the visibility (visFactor) fades a probe out as S goes behind an edge, before PR.Visible drops it;
--- - the length term favours the shorter routes (a probe whose route goes round the other way).
--- Length, losses and shape are averaged; the apparent position is the average direction seen from L,
--- at the average distance. Points (for props on the path) and door lowpass: the heaviest route's.
--- Before the widening, S seeing no probe within one spacing fell back to the per-sound path: a switch
--- of model, 6 dB / 77 degrees in one 4 u step in the pure test. Traces: the two joins per probe (joinRoute,
--- kept for a source and listener that did not move), the visibility rays and P.EvalPolyline's door
--- checks; nil only when no probe S sees has a route that joins S and L (caller falls back).
-function PR.FieldBlend(f, S, L, starts, cfg, full)
-	cfg = cfg or A.cfg
-	local n = #starts
-	if n == 0 then return nil end
-	local exp = math.exp
-	local sx, sy, sz = S:Unpack()
-	local D = f.g.spacing
-	local d = {}
-	for i = 1, n do
-		local x, y, z = starts[i].pos:Unpack()
-		d[i] = sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2)
-	end
-	local nearest
-	for i = 1, n do
-		if f.cost[starts[i].id] then nearest = i break end
-	end
-	if not nearest then return nil end
-	D = math.max(D, PR.BLEND_REACH * d[nearest])
-	if full then D = math.min(D, d[n]) end
-	local function route(node)
-		local a = arrival(f, node)
-		return a and joinRoute(f, a, S, L)
-	end
-	local cand, lmin = {}, math.huge
-	for i = 1, n do
-		local node = starts[i]
-		if d[i] < D and f.cost[node.id] then
-			local pts = route(node)
-			if pts then -- a probe whose route cannot be joined to S and L takes no part
-				local u = d[i] / D
-				local len = 0
-				for x = 1, #pts - 1 do len = len + pts[x]:Distance(pts[x + 1]) end
-				cand[#cand + 1] = { pts = pts, k = (1 - u * u) ^ 2, v = visFactor(S, node.pos), len = len }
-				if len < lmin then lmin = len end
-			end
-		end
-	end
-	if #cand == 0 then -- the nearest probe at the edge of a full list (ties): it alone
-		local pts = route(starts[nearest])
-		if not pts then return nil end
-		cand[1] = { pts = pts, k = 1, v = 1, len = 0 }
-		lmin = 0
-	end
-	local lambda, wsum = f.g.spacing * PR.BLEND_LAMBDA, 0
-	for _, c in ipairs(cand) do
-		c.w = c.k * c.v * exp(-(c.len - lmin) / lambda)
-		wsum = wsum + c.w
-	end
-	if wsum <= 1e-9 then -- every probe half hidden: weights without the visibility rather than nothing
-		for _, c in ipairs(cand) do
-			c.w = c.k * exp(-(c.len - lmin) / lambda)
-			wsum = wsum + c.w
-		end
-	end
-	if wsum <= 1e-9 then return nil end
-	local out = { chain = {}, probe = true, blend = #cand, length = 0, diffDb = 0, doorDb = 0, lossDb = 0, direct = 0, bendDeg = 0 }
-	local lx, ly, lz = L:Unpack()
-	local ux, uy, uz, dist, best, bw = 0, 0, 0, 0, nil, -1
-	for _, c in ipairs(cand) do
-		local w = c.w / wsum
-		if w > 0 then
-			local p = A.Paths.EvalRoute(c.pts, cfg)
-			out.length = out.length + w * p.length
-			out.diffDb = out.diffDb + w * p.diffDb
-			out.doorDb = out.doorDb + w * p.doorDb
-			out.lossDb = out.lossDb + w * p.lossDb
-			out.direct = out.direct + w * p.direct
-			out.bendDeg = out.bendDeg + w * p.bendDeg
-			local x, y, z = p.pos:Unpack()
-			x, y, z = x - lx, y - ly, z - lz
-			local r = sqrt(x * x + y * y + z * z)
-			if r > 1e-6 then ux, uy, uz, dist = ux + w * x / r, uy + w * y / r, uz + w * z / r, dist + w * r end
-			if w > bw then best, bw = p, w end
-		end
-	end
-	out.points = best.points
-	out.lp = math.max(A.AC.LowpassLevel(out.diffDb, cfg), best.doorDb > 0 and best.lp or 0)
-	local u = sqrt(ux * ux + uy * uy + uz * uz)
-	if u > 1e-6 then
-		out.pos = Vector(lx + ux / u * dist, ly + uy / u * dist, lz + uz / u * dist)
-	else
-		out.pos = best.pos -- opposite directions with equal weights: no average direction
-	end
-	return out
-end
-
 --- Whether two routes from S to L (polylines a, b) are one physical route: P.SameRoute (one rule for the
 -- probes' copies of a route and for the way over an edge beside the routes), with the graph's own thin
 -- trace (clearSeg: native traces when checked, tool brushes passed, displacements both ways).
@@ -2387,13 +1811,12 @@ local function seenRoute(done, pts)
 	return false
 end
 
---- paths_model 1: the routes of S to L read from the listener field, one per physical route, best first:
+--- The routes of S to L read from the listener field, one per physical route, best first:
 -- the field's routes from the probes S sees (k + 2 nearest seen, each a route down its own tree branch),
 -- joined to S and L (attach: tightened, kept per S and L and door epoch), costed on their real edges
 -- (P.EvalRoute), the copies of one route dropped (PR.DistinctRoutes). No search per sound, no queue, no
--- budget: the first field of a graph, or one left more than FIELD_REACH behind (the listener teleported),
--- is built at once (15-27 ms once); otherwise the background upkeep keeps it within half a spacing. Empty
--- when the listener sees no seed of the field (a wall between it and where the field was built) or S
+-- budget: the field of the probes the listener sees is built at once when not kept (PR.FieldFor). Empty
+-- when the listener sees no probe or S
 -- sees no probe: the sound keeps its transmission and the way over the edge (P.Compute).
 function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	cfg = cfg or A.cfg
@@ -2485,75 +1908,6 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 		end
 	end
 	if guardDone then guardDone() end
-	return PR.DistinctRoutes(S, L, out)
-end
-
-function PR.Paths(S, L, k, cfg, srcEnt)
-	cfg = cfg or A.cfg
-	if (cfg.paths_model or 0) >= 0.5 then return PR.FieldRoutes(S, L, k, cfg, srcEnt) end
-	local g = PR.current
-	if not g then return {} end
-	doorLeaves() -- the door epoch (routes kept per S and L are redone when a leaf moved)
-	local out = {}
-	local starts
-	if (cfg.probe_field_blend or 0) >= 0.5 then
-		local f = fieldUsable(g, L, cfg)
-		if f then
-			local vis = PR.Visible(g, S, PR.BLEND_N)
-			local p = PR.FieldBlend(f, S, L, vis, cfg, #vis >= PR.BLEND_N)
-			if p then
-				out[1] = p
-				addBridge(g, S, L, cfg, out)
-				if #out > 1 then return PR.DistinctRoutes(S, L, out) end
-				return out
-			end
-			starts = { vis[1], vis[2], vis[3] } -- the first three: what PR.Visible(g, S, 3) gives
-		end
-	end
-	local inners = pulledPaths(g, S, L, k, cfg, starts)
-	-- (the way over the edge that cuts the line, S just past the shadow boundary, is P.WorldEdge's, beside
-	-- these routes in P.Compute: the probes had their own estimator of it, which found nothing on 97 steps
-	-- past a jamb and was a fifth model of one corner)
-	if #inners == 0 then
-		local b = bridgePath(g, S, L, cfg)
-		if b then out[1] = b end
-		return out
-	end
-	for _, inner in ipairs(inners) do
-		local pulled = attach(inner, S, L, inners.via)
-		if pulled and #pulled >= 3 then
-			local p = A.Paths.EvalRoute(pulled, cfg)
-			p.probe = true
-			out[#out + 1] = p
-		end
-	end
-	-- the field's routes come cheapest first: of two copies of one route (neighbouring probes' routes
-	-- through one opening, tightened a unit apart) the cheapest probe's is kept, not the one whose
-	-- tightening residue happens to be a fraction of a dB louder (S standing on a probe got its
-	-- neighbour's copy, not the route of the probe it stands on)
-	if inners.via and #out > 1 then
-		local kept = {}
-		for _, p in ipairs(out) do
-			local pts = { S }
-			for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-			pts[#pts + 1] = L
-			local dup = false
-			for _, q in ipairs(kept) do
-				if PR.SameRoute(q[2], pts) then dup = true break end
-			end
-			if not dup then kept[#kept + 1] = { p, pts } end
-		end
-		out = {}
-		for x, e in ipairs(kept) do out[x] = e[1] end
-	end
-	if #out > 0 then addBridge(g, S, L, cfg, out)
-	else
-		local b = bridgePath(g, S, L, cfg)
-		if b then out[1] = b end
-	end
-	-- one physical route once (the field's starts and the k-path search find copies of one route), not
-	-- one per apparent position: copies tightened to bends either side of a wall are a spacing apart, and
-	-- two doorways closer than a spacing are two routes
 	return PR.DistinctRoutes(S, L, out)
 end
 

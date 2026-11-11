@@ -1,4 +1,4 @@
--- Far sounds' evaluations spread over frames (pba_far_sliced, paths_model 1).
+-- Far sounds' evaluations spread over frames (pba_far_sliced).
 -- Sound takes d / 343 m/s to arrive, and any route is at least as long as the straight line d: a sound
 -- 2000 u away is heard 0.11 s after it was made at the earliest. Its evaluation (the routes of the listener
 -- field, tightened and costed for this exact source and listener: 20-24 ms for a new far route on
@@ -53,10 +53,10 @@ function SL.ResetStats()
 end
 if not SL.stats then SL.ResetStats() end
 
---- The slicer runs for this configuration (paths_model 1 only: the former model has its own budgets).
+--- The slicer runs for this configuration.
 function SL.On(cfg)
 	cfg = cfg or A.cfg
-	return (cfg.far_sliced or 0) >= 0.5 and (cfg.paths_model or 0) >= 0.5 and CLIENT and A.Probes ~= nil
+	return (cfg.far_sliced or 0) >= 0.5 and CLIENT and A.Probes ~= nil
 end
 
 --- Seconds per frame (real time), bounded: the unit of the margin and of "due before the next frame".

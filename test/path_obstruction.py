@@ -1,18 +1,11 @@
 """Props on the SEGMENTS of the chosen paths (not only on the straight line).
 A vending machine (about 90 u tall), frozen, right in front of the doorway on the source side where the
 path bends, must lower the level heard through that doorway by at least 3 dB:
-  A. pba_tworooms, door open: portal path;
-  B. pba_noportal (same opening, no areaportal): probe path.
+  A. pba_tworooms, door open;
+  B. pba_noportal (same opening, no areaportal).
+Both are probe routes (the listener field).
 Before the fix the props were only looked for on the straight source-listener line, so the level
 through the doorway did not change.
-Portal path (A): since pba_path_props_slit (default 1) the masked doorway is evaluated like a partly
-open door: the direct sound through the part of the opening the source sees past the machine (rays that
-the jamb blocks count as covered where the machine covers the doorway), the room's diffuse sound through
-the part of the opening's plane it leaves free (the 15 % above it), the rest through the machine (two
-sheets, ~30 dB) and then the doorway. Measured with the former amplitude law: -6.0 dB (A), -5.3 dB (B);
-first versions of the new law: -0.03 then -2.2 dB (strip seen through the jamb, way over the top counted
-twice, one sheet). Offline (box scene with the in-game geometry, pure test "vending machine against a
-deep doorway"): -9.4 dB. The threshold stays 3 dB. (B: segment traces, ~10 dB expected with two sheets.)
 Usage: python -I -u path_obstruction.py <mcp.py>
 """
 import json

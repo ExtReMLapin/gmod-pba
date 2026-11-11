@@ -81,226 +81,6 @@ function P.WorldSegMemo(fn, limit)
 	end
 end
 
--- ------------------------------------------------------------------ geometry
-
-local function planeHit(a, b, c, n)
-	local ab = b - a
-	local den = ab:Dot(n)
-	if math.abs(den) < 1e-4 then return (a + b) * 0.5 end
-	local t = math.Clamp((c - a):Dot(n) / den, 0, 1)
-	return a + ab * t
-end
-
--- ------------------------------------------------------------------ numeric portal geometry
--- Hot path: GMod Vector operations are C calls that LuaJIT cannot compile, so the relaxation and
--- the portal search work on plain numbers. A portal's geometry never changes once the graph is
--- built: it is converted once and cached on the portal (rebuilt if its polygon is replaced).
-
-local function portalNum(p)
-	local k = p._num
-	if k and k.poly == p.poly then return k end
-	local c, n = p.center, p.normal
-	k = { poly = p.poly, cx = c.x, cy = c.y, cz = c.z, nx = n.x, ny = n.y, nz = n.z, cnt = #p.poly,
-		ax = {}, ay = {}, az = {}, ex = {}, ey = {}, ez = {}, ux = {}, uy = {}, uz = {}, uu = {}, sc = {} }
-	for i, v in ipairs(p.poly) do k.ax[i], k.ay[i], k.az[i] = v.x, v.y, v.z end
-	for i = 1, k.cnt do
-		local j = i % k.cnt + 1
-		local ux, uy, uz = k.ax[j] - k.ax[i], k.ay[j] - k.ay[i], k.az[j] - k.az[i]
-		k.ux[i], k.uy[i], k.uz[i], k.uu[i] = ux, uy, uz, math.max(ux * ux + uy * uy + uz * uz, 1e-6)
-		-- edge normal in the plane: (b - a) x n
-		local ex, ey, ez = uy * k.nz - uz * k.ny, uz * k.nx - ux * k.nz, ux * k.ny - uy * k.nx
-		k.ex[i], k.ey[i], k.ez[i] = ex, ey, ez
-		k.sc[i] = (k.cx - k.ax[i]) * ex + (k.cy - k.ay[i]) * ey + (k.cz - k.az[i]) * ez -- centre side
-	end
-	p._num = k
-	return k
-end
-P.PortalNum = portalNum
-
---- Closest point to (x, y, z) inside the portal polygon (numeric G.ClampToPoly).
-local function clampNum(k, x, y, z)
-	local d = (x - k.cx) * k.nx + (y - k.cy) * k.ny + (z - k.cz) * k.nz
-	local qx, qy, qz = x - k.nx * d, y - k.ny * d, z - k.nz * d
-	local inside = true
-	for i = 1, k.cnt do
-		local sq = (qx - k.ax[i]) * k.ex[i] + (qy - k.ay[i]) * k.ey[i] + (qz - k.az[i]) * k.ez[i]
-		if sq * k.sc[i] < 0 then inside = false break end
-	end
-	if inside then return qx, qy, qz end
-	local bx, by, bz, bd = qx, qy, qz, math.huge
-	for i = 1, k.cnt do
-		local t = ((qx - k.ax[i]) * k.ux[i] + (qy - k.ay[i]) * k.uy[i] + (qz - k.az[i]) * k.uz[i]) / k.uu[i]
-		if t < 0 then t = 0 elseif t > 1 then t = 1 end
-		local px, py, pz = k.ax[i] + k.ux[i] * t, k.ay[i] + k.uy[i] * t, k.az[i] + k.uz[i] * t
-		local dd = (px - qx) ^ 2 + (py - qy) ^ 2 + (pz - qz) ^ 2
-		if dd < bd then bd, bx, by, bz = dd, px, py, pz end
-	end
-	return bx, by, bz
-end
-
---- Relaxes the crossing points of a portal chain between S and L (pure).
-function P.RelaxPoints(S, L, chain, iters)
-	local n = #chain
-	local X, Y, Z, K = {}, {}, {}, {}
-	for i, p in ipairs(chain) do
-		local k = portalNum(p)
-		K[i], X[i], Y[i], Z[i] = k, k.cx, k.cy, k.cz
-	end
-	local sx, sy, sz, lx, ly, lz = S.x, S.y, S.z, L.x, L.y, L.z
-	for _ = 1, iters or 4 do
-		for i = 1, n do
-			local ax, ay, az, bx, by, bz
-			if i == 1 then ax, ay, az = sx, sy, sz else ax, ay, az = X[i - 1], Y[i - 1], Z[i - 1] end
-			if i == n then bx, by, bz = lx, ly, lz else bx, by, bz = X[i + 1], Y[i + 1], Z[i + 1] end
-			local k = K[i]
-			-- planeHit: the segment a -> b against the portal plane (clamped to the segment)
-			local dx, dy, dz = bx - ax, by - ay, bz - az
-			local den = dx * k.nx + dy * k.ny + dz * k.nz
-			local hx, hy, hz
-			if math.abs(den) < 1e-4 then
-				hx, hy, hz = (ax + bx) * 0.5, (ay + by) * 0.5, (az + bz) * 0.5
-			else
-				local t = ((k.cx - ax) * k.nx + (k.cy - ay) * k.ny + (k.cz - az) * k.nz) / den
-				if t < 0 then t = 0 elseif t > 1 then t = 1 end
-				hx, hy, hz = ax + dx * t, ay + dy * t, az + dz * t
-			end
-			X[i], Y[i], Z[i] = clampNum(k, hx, hy, hz)
-		end
-	end
-	local pts = {}
-	for i = 1, n do pts[i] = Vector(X[i], Y[i], Z[i]) end
-	return pts
-end
-
---- Reference (Vector) version, kept for the equivalence test.
-function P.RelaxPointsRef(S, L, chain, iters)
-	local pts = {}
-	for i, p in ipairs(chain) do pts[i] = p.center end
-	local n = #chain
-	for _ = 1, iters or 4 do
-		for i = 1, n do
-			local prev = (i == 1) and S or pts[i - 1]
-			local nxt = (i == n) and L or pts[i + 1]
-			local p = chain[i]
-			pts[i] = A.Graph.ClampToPoly(planeHit(prev, nxt, p.center, p.normal), p.poly, p.center, p.normal)
-		end
-	end
-	return pts
-end
-
--- ------------------------------------------------------------------ door apertures
-
-local DOOR_LEAVES = { prop_door_rotating = true, func_door = true, func_door_rotating = true }
-local GAP_SAMPLES = 32
-
---- Free intervals of a partly open doorway, measured (game state): traces across the portal
--- plane at mid height, every 1/32 of its width, hitting door leaves only. Works for any door
--- (rotating, sliding, double). Cached per opening state. Returns { w0, w1, wax, intervals, area }
--- in coordinates along the width axis `wax` from the portal centre.
-function P.Aperture(p)
-	local key = math.Round((p.open or 1) * 255)
-	if p.ap and p.ap.key == key then return p.ap end
-	local n = p.normal
-	local wax = n:Cross(Vector(0, 0, 1))
-	if wax:LengthSqr() < 1e-4 then p.ap = { key = key } return p.ap end -- floor / ceiling portal
-	wax:Normalize()
-	local w0, w1 = math.huge, -math.huge
-	for _, v in ipairs(p.poly) do
-		local u = (v - p.center):Dot(wax)
-		w0, w1 = math.min(w0, u), math.max(w1, u)
-	end
-	local ap = { key = key, w0 = w0, w1 = w1, wax = wax, intervals = {} }
-	local step = (w1 - w0) / GAP_SAMPLES
-	local free, cur = 0, nil
-	for k = 0, GAP_SAMPLES - 1 do
-		local u = w0 + (k + 0.5) * step
-		local pt = p.center + wax * u
-		local tr = util.TraceLine({ start = pt + n * 12, endpos = pt - n * 12, ignoreworld = true,
-			filter = function(e) return DOOR_LEAVES[e:GetClass()] or false end })
-		if not tr.Hit then
-			free = free + 1
-			if cur then cur[2] = w0 + (k + 1) * step else cur = { w0 + k * step, w0 + (k + 1) * step } ap.intervals[#ap.intervals + 1] = cur end
-		else
-			cur = nil
-		end
-	end
-	ap.area = free / GAP_SAMPLES
-	if free == 0 and (p.open or 1) > 0.01 then
-		-- no leaf found by the traces (unlinked or exotic door): the opening fraction as a gap
-		local o = p.open or 1
-		ap.intervals, ap.area = { { w1 - (w1 - w0) * o, w1 } }, o
-	end
-	p.ap = ap
-	return ap
-end
-
--- free intervals common to two sorted lists of intervals
-local function cutIntervals(a, b)
-	local out, i, j = {}, 1, 1
-	while i <= #a and j <= #b do
-		local lo, hi = math.max(a[i][1], b[j][1]), math.min(a[i][2], b[j][2])
-		if hi > lo then out[#out + 1] = { lo, hi } end
-		if a[i][2] < b[j][2] then i = i + 1 else j = j + 1 end
-	end
-	return out
-end
-
---- Share (0..1) of the opening that an aperture leaves free.
-local function apertureArea(ap)
-	local w = ap.w1 - ap.w0
-	local function len(ivs) local s = 0 for _, iv in ipairs(ivs) do s = s + iv[2] - iv[1] end return s / w end
-	if not ap.rows then return len(ap.intervals) end
-	local s = 0
-	for _, row in ipairs(ap.rows) do s = s + (row[2] - row[1]) * len(row.intervals) end
-	return s / (ap.h1 - ap.h0)
-end
-P.ApertureArea = apertureArea
-
---- Aperture of an opening masked by objects, from a grid of samples (pure): xs (column bounds
--- along the width axis wax, from w0 to w1) and ys (row bounds along vax, from h0 to h1) in
--- coordinates from the portal centre; blocked[j][i] true when the cell (column i, row j) is
--- masked. Free intervals per row, as AC.ApertureRatio wants them.
-function P.GridAperture(wax, vax, xs, ys, blocked)
-	local rows = {}
-	for j = 1, #ys - 1 do
-		local ivs, cur = {}, nil
-		for i = 1, #xs - 1 do
-			if blocked[j][i] then
-				cur = nil
-			elseif cur then
-				cur[2] = xs[i + 1]
-			else
-				cur = { xs[i], xs[i + 1] }
-				ivs[#ivs + 1] = cur
-			end
-		end
-		rows[j] = { ys[j], ys[j + 1], intervals = ivs }
-	end
-	local ap = { w0 = xs[1], w1 = xs[#xs], h0 = ys[1], h1 = ys[#ys], wax = wax, vax = vax, rows = rows }
-	ap.area = apertureArea(ap)
-	return ap
-end
-
---- A door leaf's aperture (free intervals over the whole height) further masked by an object.
-local function intersectAperture(leaf, mask)
-	local rows = {}
-	for j, row in ipairs(mask.rows) do rows[j] = { row[1], row[2], intervals = cutIntervals(row.intervals, leaf.intervals) } end
-	local ap = { w0 = mask.w0, w1 = mask.w1, h0 = mask.h0, h1 = mask.h1, wax = mask.wax, vax = mask.vax, rows = rows }
-	ap.area = apertureArea(ap)
-	return ap
-end
-
---- Spectral tilt (dB) of what passes one doorway (pure): its open part (amplitude gOpen, tilt tOpen dB),
--- its leaf (amplitude gLeaf, lowpass level leafLp) and the objects masking it (gMask, maskLp), summed by
--- band energy (AC.MixTilt). The one rule of a door's spectrum for both models, the portal chain
--- (P.EvalChain) and the probe polyline (P.SegmentDoorLoss): they had two (the louder part's level; open
--- under half way the leaf's level, else none), and a door closing to where the gap and the leaf carry
--- the same energy jumped from level 0-1 to 3 while the gap still let half the sound through clear.
-function P.DoorTilt(gOpen, tOpen, gLeaf, leafLp, gMask, maskLp, cfg)
-	return AC.MixTilt(gOpen * gOpen, tOpen, gLeaf * gLeaf, AC.LevelDb(leafLp, cfg),
-		(gMask or 0) ^ 2, AC.LevelDb(maskLp or 0, cfg))
-end
-
 --- The whole bend as one wedge (pure): the corner loss (AC.Corner) of a path of length `len` whose ends are
 -- `direct` apart, the path difference being its whole excess length. Each corner of a path is evaluated
 -- with its neighbours (Epstein-Peterson), which is right for corners far apart but not for close ones: the
@@ -314,118 +94,6 @@ function P.WedgeDb(len, direct, cfg)
 	cfg = cfg or A.cfg
 	if (cfg.corner_wedge or 1) < 0.5 then return 0 end
 	return math.max(AC.Corner(math.max(len - direct, 0), cfg.diff_freq, cfg.diff_max_edge, cfg.portal_diffuse_db or 60), 0)
-end
-
---- Evaluates a portal chain: length, diffraction, door losses, apparent position.
--- Pure for fully open / closed portals; a partly open door reads its measured aperture.
--- masks[i] (optional): objects masking part of the i-th opening ({ ap = aperture they leave,
--- g = amplitude passing them, through and round, lp = their lowpass level }, see portalMasked). A
--- masked opening is the same object as a partly open door: the direct sound through the free part
--- (Fresnel), the diffuse sound through the free area, the rest through what covers the opening.
-function P.EvalChain(S, L, chain, cfg, masks)
-	cfg = cfg or A.cfg
-	local pts = P.RelaxPoints(S, L, chain)
-	local len, diff, loss = 0, 0, 0
-	local allOpen = true
-	local free, paidMin = 0, 1 -- the openings' corners wide open (dB), the least share of the sound paying them
-	local tilt = 0 -- what muffles (dB, AC.MixTilt): the openings in series add their tilts
-	local prev = S
-	for i, p in ipairs(chain) do
-		local pt = pts[i]
-		local nxt = pts[i + 1] or L
-		len = len + prev:Distance(pt)
-		local delta = prev:Distance(pt) + pt:Distance(nxt) - prev:Distance(nxt)
-		-- the corner (AC.Corner, the same as a probe vertex): edge wave and reverberant leak; the opening
-		-- then shares them out by what is free of it (the direct part by the Fresnel zone, the leak by area)
-		local _, gEdge, gDiffuse = AC.Corner(delta, cfg.diff_freq, cfg.diff_max_edge, cfg.portal_diffuse_db or 60)
-		local open = math.Clamp(p.open or 1, 0, 1)
-		local m = masks and masks[i]
-		-- direct part: diffraction round the doorway, times the share of the Fresnel zone that
-		-- the actual gap lets through (1 wide open, 0 closed)
-		-- diffuse part: the source room's diffuse field leaves through the free AREA (power law)
-		-- leaf (and masking object): transmits over the area it covers, like the straight trace through it
-		local area, leafArea, s = 1, 1, 1 -- s: share of a gap that was not measured (amplitude)
-		local ap
-		-- only a shut door has no gap: the former 'open <= 0.01 is shut' made the gap's sqrt(0.01) = -20 dB
-		-- appear at once beside the leaf's 18 dB (+2 dB in one step)
-		if open <= 0 then
-			area, leafArea, s = 0, 0, 0
-		else
-			if open < 0.99 then
-				local lap = (cfg.door_aperture or 1) >= 0.5 and P.Aperture(p) or {}
-				if lap.wax then ap, area, leafArea = lap, lap.area, lap.area else area, leafArea, s = open, open, math.sqrt(open) end
-			end
-			if m then
-				if ap and ap.intervals then ap = intersectAperture(ap, m.ap) area = ap.area
-				else ap = m.ap area = leafArea * m.ap.area end
-			end
-		end
-		-- free area for the diffuse sound: an object covers the opening's plane (m.dArea), which is not
-		-- the part the source sees past it (ap, the direct sound); a leaf covers both alike
-		local dArea = area
-		if m and leafArea > 0 then dArea = leafArea * (m.dArea or m.ap.area) end
-		local rRef, rLow, rHigh = s, s, s
-		if ap then
-			local hit = planeHit(prev, nxt, p.center, p.normal)
-			local dh = hit - p.center
-			local u0, v0 = dh:Dot(ap.wax), ap.vax and dh:Dot(ap.vax) or 0
-			local d1, d2 = prev:Distance(hit), hit:Distance(nxt)
-			rRef = s * AC.ApertureBand(ap, u0, v0, d1, d2, cfg.diff_freq)
-			rLow = s * AC.ApertureBand(ap, u0, v0, d1, d2, 250)
-			rHigh = s * AC.ApertureBand(ap, u0, v0, d1, d2, 4000)
-		end
-		if area < 0.99 or dArea < 0.99 then allOpen = false end
-		local gDirect = gEdge * rRef
-		local go = math.sqrt(gDirect * gDirect + gDiffuse * gDiffuse * dArea)
-		local gc = math.sqrt(1 - leafArea) * 10 ^ (-AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg) / 20)
-		local gFree = math.sqrt(gEdge * gEdge + gDiffuse * gDiffuse) -- the doorway itself, wide open
-		-- masking objects stand before (or after) the opening: what passes through them (m.g; the way
-		-- round them is the free part, counted once) still has to go through the doorway: the direct
-		-- share they block with its edge diffraction, the diffuse share they cover with its leak. A
-		-- masked opening is never louder than a free one. A leaf IS the opening: it radiates its
-		-- transmission itself (gc).
-		local gm = m and m.g * math.sqrt(gEdge * gEdge * math.max(leafArea - area, 0)
-			+ gDiffuse * gDiffuse * math.max(leafArea - dArea, 0)) or 0
-		local g = math.sqrt(go * go + gc * gc + gm * gm)
-		-- diffDb = the corner (edge diffraction + diffuse leak), as far as the sound pays it: the open part
-		-- and what passes the masking objects go round it, a leaf radiates its transmission from the opening
-		-- itself (a shut door's corner costs nothing more than its leaf). Weighted by the energy share of
-		-- those parts: the whole corner wide open, none shut, continuous in between. doorDb = loss - diffDb
-		-- is what the door's state adds (gap, leaf)
-		local paid = g > 0 and (go * go + gm * gm) / (g * g) or 0
-		diff = diff - AC.GainToDb(gFree) * paid
-		free, paidMin = free - AC.GainToDb(gFree), math.min(paidMin, paid)
-		-- spectrum: each part keeps its own (P.DoorTilt). The open part: the doorway's diffraction (with
-		-- the diffuse leak), plus the gap's own tilt when it passes the lows better than the highs (at
-		-- most 40 dB: a crack passing no highs at all); the leaf: its material's lowpass; the masking
-		-- objects: theirs
-		local tOpen = -AC.GainToDb(gFree)
-		if rLow > rHigh then tOpen = tOpen + AC.GainToDb(rLow / math.max(rHigh, rLow * 0.01)) end
-		tilt = tilt + P.DoorTilt(go, tOpen, gc, p.closedLp or 3, gm, m and m.lp or 0, cfg)
-		loss = loss - AC.GainToDb(math.max(g, 1e-6))
-		prev = pt
-	end
-	len = len + prev:Distance(L)
-	-- the corners together as one wedge at least (P.WedgeDb), paid as the openings' corners are (a shut
-	-- door's corner costs nothing more than its leaf)
-	local extra = math.max(P.WedgeDb(len, S:Distance(L), cfg) - free, 0) * paidMin
-	diff, loss, tilt = diff + extra, loss + extra, tilt + extra
-	-- one cap, on the corners only, as for a probe polyline (P.EvalPolyline): the corners' losses together
-	-- at most diff_max_total, what the doors' states add (gap, leaf, masking objects) on top, each door its
-	-- own. The former caps were two other bases: diff_max_total + 40 for the corners (a probe path through
-	-- the same openings stopped at diff_max_total), and diff_max_total + door_closed_db (28) per portal for
-	-- the whole loss, whatever each leaf's own loss: two closed 60 dB steel doors in series came out at 86 dB
-	-- through the portals and 100 dB through the straight trace (P.EvalWalls sums the walls it crosses)
-	local doors = loss - diff
-	diff = math.min(diff, cfg.diff_max_total)
-	loss = diff + doors
-	local lp = AC.LowpassLevel(tilt, cfg)
-	-- every opening wide open: the diffuse part carries the treble through
-	if allOpen then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
-	local direct, bend = P.PathShape(S, pts, L)
-	-- lpDb: the continuous loss behind the level (AC.LowpassHold); the cap may set lp instead
-	return { chain = chain, points = pts, length = len, diffDb = diff, doorDb = loss - diff, lossDb = loss,
-		pos = pts[#pts], lp = lp, lpDb = tilt, direct = direct, bendDeg = bend, cornerPaid = paidMin }
 end
 
 --- The door state of an openable entity ({ frac, closedDb, closedLp }, sh_doors: the server's poll,
@@ -476,7 +144,7 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	-- to the vertex after it: the probes' routes pass the leaves (they are not shape obstacles), so a
 	-- clearance vertex can lie inside an open leaf, and its way round from a vertex 5 u deep in the leaf was
 	-- "enclosed" (none: the full object loss, 18 dB) and 2 u deep a graze (0.1 dB), one 2 u step apart
-	-- (pba_twodoors, paths_model 1). The span's ends are outside the leaf.
+	-- (pba_twodoors). The span's ends are outside the leaf.
 	local paid, leaves -- the leaves paid (each once); every leaf crossed (open ones too: P.LeafOfPaths)
 	local nd = #dp - 1
 	-- the leaves of each segment (several in a row: P.SegmentDoors), each paid once, on its span: from the
@@ -538,160 +206,8 @@ function P.EvalPolyline(pts, cfg, doorPts)
 		pos = pts[#pts - 1], lp = lp, lpDb = diff + doorTilt, direct = direct, bendDeg = bend, leaves = leaves }
 end
 
--- ------------------------------------------------------------------ portal search
-
---- k best portal chains from area aS to area aL, with distinct last portals (one Dijkstra
--- over portal nodes; cost = length + door penalty). Pure given the graph.
--- The Dijkstra picks the route INTO each last portal with a fixed exchange rate (40 units per dB of
--- door); the routes are then RANKED by their predicted level, the engine's distance law over their
--- length minus their doors (rankChains): at a fixed rate, three short routes through closed doors (18
--- dB each = 720 units) ranked ahead of an open doorway 900 units longer, and the cut to max_paths
--- dropped the open route of a loud source, whose level barely falls over those 900 units, 10 dB louder.
--- limit: chains returned (default max_paths); sndlvl: the source's level for the distance law (75).
-local DOOR_UNITS_PER_DB = 40
-P.DOOR_UNITS_PER_DB = DOOR_UNITS_PER_DB -- the probe field's links use the same rate (cl_probes PR.LinkCosts)
-local function rankChains(cands, limit, sndlvl)
-	for _, c in ipairs(cands) do c.lvl = AC.GainToDb(AC.EngineGain(c.len, sndlvl or 75)) - c.doorDb end
-	table.sort(cands, function(x, y)
-		if x.lvl ~= y.lvl then return x.lvl > y.lvl end
-		return x.cost < y.cost
-	end)
-	local out = {}
-	for i = 1, math.min(#cands, limit) do out[i] = cands[i].chain end
-	return out
-end
-function P.FindChains(g, S, aS, L, aL, cfg, limit, sndlvl)
-	cfg = cfg or A.cfg
-	local closedDef = cfg.door_closed_db
-	local penalty = {} -- per call: the door state may change between calls
-	local function pdb(p) -- dB lost crossing p
-		local c = penalty[p]
-		if not c then
-			c = -AC.GainToDb(AC.DoorGain(p.open or 1, AC.LeafDb(p.closedDb or closedDef, cfg)))
-			penalty[p] = c
-		end
-		return c
-	end
-	local sqrt = math.sqrt
-	local function dist3(k, x, y, z) return sqrt((k.cx - x) ^ 2 + (k.cy - y) ^ 2 + (k.cz - z) ^ 2) end
-	local dist, prev, depth, done, num = {}, {}, {}, {}, {}
-	local geo, ddb = {}, {} -- along the best route into each portal: length and dB of doors
-	local open = {}
-	local sx, sy, sz = S.x, S.y, S.z
-	for _, p in ipairs(g.areaPortals[aS] or {}) do
-		local k = portalNum(p)
-		num[p] = k
-		geo[p], ddb[p] = dist3(k, sx, sy, sz), pdb(p)
-		dist[p] = geo[p] + ddb[p] * DOOR_UNITS_PER_DB
-		depth[p] = 1
-		open[#open + 1] = p
-	end
-	-- area through which we left p (the side not equal to the area we came from)
-	local fromArea = {}
-	for _, p in ipairs(open) do fromArea[p] = aS end
-	local maxDepth = cfg.max_depth
-	while #open > 0 do
-		local bi, best = 1, open[1]
-		local bd = dist[best]
-		for i = 2, #open do
-			local d = dist[open[i]]
-			if d < bd then bi, best, bd = i, open[i], d end
-		end
-		table.remove(open, bi) -- keeps the list order: same tie-breaking as before
-		if not done[best] then
-			done[best] = true
-			local nextArea = (best.a1 == fromArea[best]) and best.a2 or best.a1
-			if nextArea ~= aL and depth[best] < maxDepth then
-				local kb = num[best]
-				for _, q in ipairs(g.areaPortals[nextArea] or {}) do
-					if not done[q] and q ~= best then
-						local kq = num[q]
-						if not kq then kq = portalNum(q) num[q] = kq end
-						local step, db = dist3(kq, kb.cx, kb.cy, kb.cz), pdb(q)
-						local c = bd + step + db * DOOR_UNITS_PER_DB
-						if not dist[q] or c < dist[q] then
-							dist[q], prev[q], depth[q], fromArea[q] = c, best, depth[best] + 1, nextArea
-							geo[q], ddb[q] = geo[best] + step, ddb[best] + db
-							open[#open + 1] = q
-						end
-					end
-				end
-			end
-		end
-	end
-	-- candidates: portals that lead into aL
-	local cands = {}
-	local lx, ly, lz = L.x, L.y, L.z
-	for _, q in ipairs(g.areaPortals[aL] or {}) do
-		if dist[q] and done[q] then
-			local entered = (q.a1 == fromArea[q]) and q.a2 or q.a1
-			if entered == aL then
-				local chain, c = {}, q
-				while c do table.insert(chain, 1, c) c = prev[c] end
-				local last = dist3(num[q], lx, ly, lz)
-				cands[#cands + 1] = { chain = chain, cost = dist[q] + last, len = geo[q] + last, doorDb = ddb[q] }
-			end
-		end
-	end
-	return rankChains(cands, limit or cfg.max_paths, sndlvl)
-end
-
---- Reference (Vector) version, kept for the equivalence test.
-function P.FindChainsRef(g, S, aS, L, aL, cfg, limit, sndlvl)
-	cfg = cfg or A.cfg
-	local function pdb(p) -- dB lost crossing p
-		local gdoor = AC.DoorGain(p.open or 1, AC.LeafDb(p.closedDb or cfg.door_closed_db, cfg))
-		return -AC.GainToDb(gdoor)
-	end
-	local dist, prev, depth, done = {}, {}, {}, {}
-	local geo, ddb = {}, {}
-	local open = {}
-	for _, p in ipairs(g.areaPortals[aS] or {}) do
-		geo[p], ddb[p] = S:Distance(p.center), pdb(p)
-		dist[p] = geo[p] + ddb[p] * DOOR_UNITS_PER_DB
-		depth[p] = 1
-		open[#open + 1] = p
-	end
-	-- area through which we left p (the side not equal to the area we came from)
-	local fromArea = {}
-	for _, p in ipairs(open) do fromArea[p] = aS end
-	while #open > 0 do
-		local bi, best = 1, open[1]
-		for i = 2, #open do if dist[open[i]] < dist[best] then bi, best = i, open[i] end end
-		table.remove(open, bi)
-		if not done[best] then
-			done[best] = true
-			local nextArea = (best.a1 == fromArea[best]) and best.a2 or best.a1
-			if nextArea ~= aL and depth[best] < cfg.max_depth then
-				for _, q in ipairs(g.areaPortals[nextArea] or {}) do
-					if not done[q] and q ~= best then
-						local step, db = best.center:Distance(q.center), pdb(q)
-						local c = dist[best] + step + db * DOOR_UNITS_PER_DB
-						if not dist[q] or c < dist[q] then
-							dist[q], prev[q], depth[q], fromArea[q] = c, best, depth[best] + 1, nextArea
-							geo[q], ddb[q] = geo[best] + step, ddb[best] + db
-							open[#open + 1] = q
-						end
-					end
-				end
-			end
-		end
-	end
-	-- candidates: portals that lead into aL
-	local cands = {}
-	for _, q in ipairs(g.areaPortals[aL] or {}) do
-		if dist[q] and done[q] then
-			local entered = (q.a1 == fromArea[q]) and q.a2 or q.a1
-			if entered == aL then
-				local chain, c = {}, q
-				while c do table.insert(chain, 1, c) c = prev[c] end
-				local last = q.center:Distance(L)
-				cands[#cands + 1] = { chain = chain, cost = dist[q] + last, len = geo[q] + last, doorDb = ddb[q] }
-			end
-		end
-	end
-	return rankChains(cands, limit or cfg.max_paths, sndlvl)
-end
+-- The probe field's links pay a door at this exchange rate (cl_probes PR.LinkCosts): 40 units per dB.
+P.DOOR_UNITS_PER_DB = 40
 
 -- ------------------------------------------------------------------ transmission
 
@@ -728,10 +244,8 @@ local function isClosure(ent) return closureWeight(ent) >= 1 end
 P.IsClosure = isClosure
 P.ClosureWeight = closureWeight
 
---- True when one of the paths goes through the doorway that door entity `ent` fills: a portal path
--- through a portal linked to a door (leaf touching its opening: hinge side when open, in it when closed),
--- or, with routeLeaves (paths_model 1, the line crossing no world wall: the routes are the doorways' one
--- model), a probe route that crosses that leaf (P.EvalPolyline: it pays the leaf, open or shut). Not when
+--- True when one of the paths goes through the doorway that door entity `ent` fills: with routeLeaves (the
+-- line crossing no world wall: the routes are the doorways' one model), a probe route that crosses that leaf (P.EvalPolyline: it pays the leaf, open or shut). Not when
 -- the world cuts the line too: the line's way is then through the leaf AND the wall, its own; on
 -- rp_downtown a route crossing the leaf by the source and going 900 u round by other doors took the leaf
 -- off the line, which kept its plaster alone, 16.7 dB, and 37.8 one step on beside the leaf. (Homotopy to
@@ -740,9 +254,6 @@ P.ClosureWeight = closureWeight
 local function leafOfPaths(ent, paths, routeLeaves)
 	for _, path in ipairs(paths) do
 		if routeLeaves and path.leaves and path.leaves[ent] then return true end
-		for _, p in ipairs(path.chain or {}) do
-			if p.target and ent:NearestPoint(p.center):Distance(p.center) <= (p.radius or 64) then return true end
-		end
 	end
 	return false
 end
@@ -1592,13 +1103,11 @@ end
 -- step). Searched up to EDGE_FAR units off the line, the edge's weight fading out over the last half: an
 -- obstacle growing past the search range fades to its transmission instead of dropping to it.
 -- walls: P.Walls(S, L) (only the world ones are used). Returns { db, weight, apex, delta, doorDb, tilt }
--- or nil (db includes the doors crossed on its legs, tilt what muffles it). noDoors: the legs pay no
--- door (a portal path's leg, P.CheckLegs: its doorway's leaf is the chain's own term, and the leg
--- starts in that doorway, within a hull of the leaf: paid twice, a 14 dB step where a leg got blocked).
+-- or nil (db includes the doors crossed on its legs, tilt what muffles it).
 local EDGE_STEPS = { 4, 8, 16, 32, 64, 128, 256, 512 }
 local EDGE_FAR = 512
 local EDGE_REFINE = 4
-function P.WorldEdge(S, L, walls, cfg, noDoors)
+function P.WorldEdge(S, L, walls, cfg)
 	cfg = cfg or A.cfg
 	if (cfg.world_edge or 1) < 0.5 then return nil end
 	local first, last
@@ -1660,25 +1169,23 @@ function P.WorldEdge(S, L, walls, cfg, noDoors)
 	-- the thin traces see the world only, so a closed door's doorway is an edge for them, its leaf the loss
 	-- behind it (without it the edge gave 2 dB through a shut door beside the probes' 16)
 	local d1, l1, e1, d2, l2, e2 = 0, 0, nil, 0, 0, nil
-	if not noDoors then
-		d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
-		d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
-		if e2 and e2 == e1 then
-			-- one leaf at the apex: paid once. pba_edge_leg_doors: only that leaf is left out of the second leg,
-			-- not every door on it (pba_demo: two shut doors behind the apex dropped, 14 dB instead of 42, while
-			-- the straight line one step on paid all three: 28 dB in 16 u)
-			if (cfg.edge_leg_doors or 0) >= 0.5 then
-				local list = P.SegmentDoors(best.apex, L, (cfg.door_3d or 0) >= 0.5)
-				d2, l2 = 0, 0
-				for _, h in ipairs(list or {}) do
-					if h[1] ~= e1 then
-						local l, lp = P.DoorSpanLoss(h[1], best.apex, L, cfg, h[2], h[3])
-						d2, l2 = d2 + l, math.max(l2, lp or 0)
-					end
+	d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
+	d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
+	if e2 and e2 == e1 then
+		-- one leaf at the apex: paid once. pba_edge_leg_doors: only that leaf is left out of the second leg,
+		-- not every door on it (pba_demo: two shut doors behind the apex dropped, 14 dB instead of 42, while
+		-- the straight line one step on paid all three: 28 dB in 16 u)
+		if (cfg.edge_leg_doors or 0) >= 0.5 then
+			local list = P.SegmentDoors(best.apex, L, (cfg.door_3d or 0) >= 0.5)
+			d2, l2 = 0, 0
+			for _, h in ipairs(list or {}) do
+				if h[1] ~= e1 then
+					local l, lp = P.DoorSpanLoss(h[1], best.apex, L, cfg, h[2], h[3])
+					d2, l2 = d2 + l, math.max(l2, lp or 0)
 				end
-			else
-				d2, l2 = 0, 0
 			end
+		else
+			d2, l2 = 0, 0
 		end
 	end
 	best.doorDb = d1 + d2
@@ -1784,7 +1291,7 @@ function P.CornerPoint(a, v, b, y)
 	local q = v + (target - v) * lo
 	-- The way to the foot stops where one leg meets the edge, not at the edge: a vertex left on its probe in
 	-- the next room (its leg grazed the other jamb with the hull, the tightening left it there) stayed 98 u
-	-- off the edge its other leg grazes, 2.6 dB for an edge giving 0.4 (pba_twodoors, paths_model 1). So the
+	-- off the edge its other leg grazes, 2.6 dB for an edge giving 0.4 (pba_twodoors). So the
 	-- vertex then slides along each leg in turn, towards that leg's far end, as far as the other end still
 	-- sees it: the leg it slides on stays clear (part of it), the other one is traced, the route only
 	-- shortens, and the vertex ends on the edge. Only from a vertex whose legs are both clear.
@@ -1921,7 +1428,7 @@ function P.EvalRoute(pts, cfg)
 	local p = P.EvalPolyline(P.RefineCorners(pts, cfg), cfg, pts)
 	local inner = {}
 	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
-	p.edgePos = p.pos -- the last corner on its edge (paths_model 1 hears the route there)
+	p.edgePos = p.pos -- the last corner on its edge (the route is heard there)
 	p.points, p.pos = inner, pts[#pts - 1]
 	return p
 end
@@ -2223,7 +1730,7 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 			-- the object's tilt: what passes through it (its material's muffling) and what goes round it (the
 			-- diffraction's, about its loss) mixed by energy, as a doorway's gap and leaf (P.DoorTilt). Its
 			-- lowpass LEVEL is whole: a route past an open leaf went from level 1 (4 dB of tilt) to 0 in one
-			-- 2 u step while its loss moved 0.4 dB (pba_twodoors, paths_model 1).
+			-- 2 u step while its loss moved 0.4 dB (pba_twodoors).
 			local tObj = AC.LevelDb(l, cfg)
 			if dd then tObj = AC.MixTilt(10 ^ (-transDb / 10), tObj, 10 ^ (-dd / 10), dd) end
 			if not noCap and not leaf3d and pThrough > cap then
@@ -2577,26 +2084,9 @@ end
 -- AC.LowpassHold): the engine DSP preset or the native EQ no longer flips as the listener steps.
 -- Returns r, or a copy with the voices reordered or relabelled: the cached result is shared and
 -- never modified.
--- A provisional result (P.Compute: probe search unfinished, frame budget spent) has only what was cheap:
--- often the transmission alone. A loop heard round a doorway then dropped to the wall's 40-65 dB for the
--- few frames the search took, and came back: a dip at every step that moved it to a new cell. While the
--- result is provisional the sound keeps its last final result, if source and listener are still within
--- KEEP_FINAL units of where it was computed (a few cells: farther, the old answer is wrong too, and the
--- provisional one is the better guess). The result stays marked provisional: the caller still forces the
--- re-evaluation that will bring the final one.
 local COS30 = math.cos(math.rad(30))
-local KEEP_FINAL = 128
 function P.Stable(state, r, cfg)
 	cfg = cfg or A.cfg
-	if state and r and r.L then
-		local f = state.final
-		if not r.provisional then
-			state.final = r
-		elseif f and f ~= r and f.S and r.S and f.L:DistToSqr(r.L) <= KEEP_FINAL * KEEP_FINAL
-			and f.S:DistToSqr(r.S) <= KEEP_FINAL * KEEP_FINAL then
-			r = setmetatable({ provisional = true, keptFinal = true }, { __index = f })
-		end
-	end
 	local vs = r and r.voices
 	if not vs or #vs == 0 or not r.L then
 		if state then -- clear sight: heard without low-pass
@@ -2807,8 +2297,7 @@ end
 -- bumped by everything that calls P.InvalidateCache (door states, map, probe graph, native scene,
 -- settings). True when the sound must be re-evaluated now, and then stamps `state` (a table the
 -- caller keeps per sound). Re-evaluated when the source or the listener moved more than reeval_move
--- since the last evaluation, the world changed, state.force is set (provisional result, owner volume
--- change...), or reeval_max_s elapsed (a prop pushed into a path sends no event); never twice within
+-- since the last evaluation, the world changed, state.force is set (owner volume change...), or reeval_max_s elapsed (a prop pushed into a path sends no event); never twice within
 -- half an update_interval (the callers' own rate is one interval). reeval_adaptive 0: always true.
 function P.ReevalDue(state, S, L, now, cfg)
 	cfg = cfg or A.cfg
@@ -2922,257 +2411,21 @@ end
 -- container parked in front of an opening. Same object model as on the straight line (P.Walls /
 -- P.EvalWalls: detour around the object, capped by prop_max_db); doors are left to the portal state,
 -- the emitter never obstructs its own sound.
--- Portal paths: the relaxed point sits on an edge of a zero-thickness portal plane, so a single ray
--- slips past an object pushed against the doorway (through the jamb). What the objects mask is measured
--- instead, over the opening (15 samples, plus a ring of probes along its edges, the edges between
--- masked and free parts then located by bisection), twice, because the two parts of the sound through
--- an opening do not see the same thing:
---   * the direct sound: the part of the opening the source and the listener see past the objects
---     (rays before and after it). A ray the WORLD blocks (the jamb of a deep doorway) does not see
---     that point at all: the sound reaches it round the jamb, through the doorway, so the point is
---     masked if an object covers the doorway there (as below), not "free" behind the wall;
---   * the diffuse sound of the room: the part of the opening's plane the objects cover, seen along
---     its normal (fully up to COVER_NEAR from the plane, fading to nothing at COVER_FAR).
--- The opening is then evaluated like a partly open door (P.EvalChain with masks): the same object, one
--- model. The way round the objects is that free part, counted once: what passes the covered part is
--- their own transmission only. pba_path_props_slit 0: the former amplitude law (1 - f) + f * g on the
--- masked share f. Probe paths: segment traces.
-local PORTAL_GRID = { 5, 3 }
-local MASK_REFINE = 3 -- bisection steps per edge: 1/8 of a sample spacing
-local COVER_NEAR, COVER_FAR = 24, 64
 local function objectsOn(a, b, srcEnt, cfg, out)
 	for _, w in ipairs(P.Walls(a, b, cfg.trans_max_walls, srcEnt)) do
 		if w.ent and not OPENABLE[w.ent:GetClass()] then out[#out + 1] = w end
 	end
 	return out
 end
--- objects on a -> b appended to out; true when the world (not water) blocks a -> b
-local function legOn(a, b, srcEnt, cfg, out)
-	local world = false
-	for _, w in ipairs(P.Walls(a, b, cfg.trans_max_walls, srcEnt)) do
-		if w.ent then
-			if not OPENABLE[w.ent:GetClass()] then out[#out + 1] = w end
-		elseif not w.water then
-			world = true
-		end
-	end
-	return world
-end
--- cheap tests of one point of the opening (no detour): against the objects already found, and
--- coverage of the plane by any obstacle along its normal
-local maskSet, maskOut, covOut = {}, {}, {}
-local function inMaskSet(e) return maskSet[e] == true end
-local maskTr = { mask = MASK_SOLID, ignoreworld = true, filter = inMaskSet, output = maskOut }
-local function objHit(a, b)
-	maskTr.start, maskTr.endpos = a, b
-	util.TraceLine(maskTr)
-	return maskOut.Hit
-end
-local function coverFilter(e) return traceFilter(e) and not OPENABLE[e:GetClass()] end
-local covTr = { mask = MASK_SOLID, ignoreworld = true, filter = coverFilter, output = covOut }
-local function coverAt(q, dir)
-	covTr.start, covTr.endpos = q, q + dir * COVER_FAR
-	util.TraceLine(covTr)
-	if not covOut.Hit then return 0 end
-	local dist = covOut.StartSolid and 0 or covOut.Fraction * COVER_FAR
-	return math.Clamp((COVER_FAR - dist) / (COVER_FAR - COVER_NEAR), 0, 1)
-end
--- boundaries between differing cells of a grid (state[j][i]) at positions eu (columns) / ev (rows),
--- located by bisection with test(u, v); midpoints elsewhere
-local function gridEdges(state, eu, ev, u0, u1, v0, v1, test)
-	local function edge(a, b, was, f)
-		for _ = 1, MASK_REFINE do
-			local mid = (a + b) / 2
-			if f(mid) == was then a = mid else b = mid end
-		end
-		return (a + b) / 2
-	end
-	local xs, ys = { u0 }, { v0 }
-	for i = 1, #eu - 1 do
-		local x = (eu[i] + eu[i + 1]) / 2
-		for j = 1, #ev do
-			if state[j][i] ~= state[j][i + 1] then
-				x = edge(eu[i], eu[i + 1], state[j][i], function(u) return test(u, ev[j]) end)
-				break
-			end
-		end
-		xs[i + 1] = x
-	end
-	xs[#eu + 1] = u1
-	for j = 1, #ev - 1 do
-		local y = (ev[j] + ev[j + 1]) / 2
-		for i = 1, #eu do
-			if state[j][i] ~= state[j + 1][i] then
-				y = edge(ev[j], ev[j + 1], state[j][i], function(v) return test(eu[i], v) end)
-				break
-			end
-		end
-		ys[j + 1] = y
-	end
-	ys[#ev + 1] = v1
-	return xs, ys
-end
-local function portalMasked(portal, prev, nxt, srcEnt, cfg)
-	local n = portal.normal
-	local wax = n:Cross(Vector(0, 0, 1))
-	if wax:LengthSqr() < 1e-4 then wax = n:Cross(Vector(1, 0, 0)) end
-	wax:Normalize()
-	local vax = n:Cross(wax)
-	local u0, u1, v0, v1 = math.huge, -math.huge, math.huge, -math.huge
-	for _, x in ipairs(portal.poly or {}) do
-		local d = x - portal.center
-		u0, u1 = math.min(u0, d:Dot(wax)), math.max(u1, d:Dot(wax))
-		v0, v1 = math.min(v0, d:Dot(vax)), math.max(v1, d:Dot(vax))
-	end
-	if u0 > u1 then return nil end
-	local NU, NV = PORTAL_GRID[1], PORTAL_GRID[2]
-	local su, sv = {}, {}
-	for i = 1, NU do su[i] = u0 + (u1 - u0) * (0.05 + 0.9 * (i - 0.5) / NU) end
-	for j = 1, NV do sv[j] = v0 + (v1 - v0) * (0.05 + 0.9 * (j - 0.5) / NV) end
-	local function at(u, v) return portal.center + wax * u + vax * v end
-	-- normal pointing to prev's side, and to nxt's side
-	local toPrev = (prev - portal.center):Dot(n) >= 0 and n or -n
-	local toNxt = -toPrev
-	local blocked, total, objs, legs = 0, 0, {}, {}
-	for j = 1, NV do legs[j] = {} end
-	for i = 1, NU do
-		for j = 1, NV do
-			local q = at(su[i], sv[j])
-			local o1, o2 = {}, {}
-			local w1 = legOn(prev, q, srcEnt, cfg, o1)
-			local w2 = legOn(q, nxt, srcEnt, cfg, o2)
-			for _, w in ipairs(o1) do objs[#objs + 1] = w end
-			for _, w in ipairs(o2) do objs[#objs + 1] = w end
-			total = total + 1
-			if #o1 + #o2 > 0 then blocked = blocked + 1 end
-			legs[j][i] = { q = q, o1 = o1, w1 = w1, o2 = o2, w2 = w2 }
-		end
-	end
-	if blocked == 0 then return nil end
-	local f = blocked / total
-	if (cfg.path_props_slit or 1) < 0.5 then
-		-- former law: what passes the object, as on the straight line (the objects of every sample)
-		local seen, uniq = {}, {}
-		for _, w in ipairs(objs) do if not seen[w.ent] then seen[w.ent] = true uniq[#uniq + 1] = w end end
-		local loss, lp = P.EvalWalls(uniq, cfg)
-		return { f = f, g = 10 ^ (-loss / 20), lp = lp }
-	end
-	ignoreEnt = srcEnt -- coverFilter (traceFilter) never counts the emitter
-	for k in pairs(maskSet) do maskSet[k] = nil end
-	for _, w in ipairs(objs) do maskSet[w.ent] = true end
-	-- direct sound at q: a leg the world leaves clear is masked by an object on it; a leg the world
-	-- blocks reaches q round the jamb: masked if an object covers the doorway there on that side
-	local function leg(a, b, q, dir)
-		if detClear(a, b) then return objHit(a, b) end
-		return coverAt(q, dir) > 0
-	end
-	local function directAt(q) return leg(prev, q, q, toPrev) or leg(q, nxt, q, toNxt) end
-	local function coverBoth(q) return math.max(coverAt(q, toPrev), coverAt(q, toNxt)) end
-	-- the 15 samples, then what passes the objects over the masked samples: their own transmission
-	-- (the way round them is the free part, counted once), averaged in power
-	local D, C = {}, {}
-	for j = 1, NV + 2 do D[j], C[j] = {}, {} end
-	local pw, nw, best, lp = 0, 0, -1, 0
-	for i = 1, NU do
-		for j = 1, NV do
-			local s = legs[j][i]
-			local m1 = (s.w1 and coverAt(s.q, toPrev) > 0) or (not s.w1 and #s.o1 > 0)
-			local m2 = (s.w2 and coverAt(s.q, toNxt) > 0) or (not s.w2 and #s.o2 > 0)
-			D[j + 1][i + 1] = m1 or m2
-			C[j + 1][i + 1] = coverBoth(s.q)
-			local mine, seen = {}, {} -- an object across the plane is hit before and after it: once
-			for _, list in ipairs({ m1 and s.o1 or {}, m2 and s.o2 or {} }) do
-				for _, w in ipairs(list) do
-					if not seen[w.ent] then seen[w.ent] = true mine[#mine + 1] = w end
-				end
-			end
-			if #mine > 0 then
-				local loss, l = P.EvalWalls(mine, cfg, true, true)
-				local e = 10 ^ (-loss / 10)
-				pw, nw = pw + e, nw + 1
-				if e > best then best, lp = e, l end
-			end
-		end
-	end
-	-- the samples sit at 14 % .. 86 % of the width and 20 % .. 80 % of the height: a ring of probes
-	-- just inside the edges (tested where the next sample is masked / covered) finds a free strip
-	-- between them and the edges (above an object lower than the opening)
-	local eu, ev = { u0 + (u1 - u0) * 0.01 }, { v0 + (v1 - v0) * 0.01 }
-	for i = 1, NU do eu[i + 1] = su[i] end
-	for j = 1, NV do ev[j + 1] = sv[j] end
-	eu[NU + 2], ev[NV + 2] = u1 - (u1 - u0) * 0.01, v1 - (v1 - v0) * 0.01
-	for j = 1, NV + 2 do
-		for i = 1, NU + 2 do
-			if D[j][i] == nil then
-				local ii, jj = math.Clamp(i, 2, NU + 1), math.Clamp(j, 2, NV + 1)
-				local q = at(eu[i], ev[j])
-				D[j][i] = D[jj][ii] and directAt(q) or false
-				C[j][i] = C[jj][ii] > 0 and coverBoth(q) or 0
-			end
-		end
-	end
-	local xs, ys = gridEdges(D, eu, ev, u0, u1, v0, v1, function(u, v) return directAt(at(u, v)) end)
-	local covered = {}
-	for j = 1, NV + 2 do
-		covered[j] = {}
-		for i = 1, NU + 2 do covered[j][i] = C[j][i] > 0 end
-	end
-	local cx, cy = gridEdges(covered, eu, ev, u0, u1, v0, v1, function(u, v) return coverBoth(at(u, v)) > 0 end)
-	local free = 0
-	for j = 1, NV + 2 do
-		for i = 1, NU + 2 do free = free + (cx[i + 1] - cx[i]) * (cy[j + 1] - cy[j]) * (1 - C[j][i]) end
-	end
-	for k in pairs(maskSet) do maskSet[k] = nil end
-	if nw == 0 then lp = 4 end -- masked only round the jamb, nothing traversed: opaque
-	return { f = f, g = nw > 0 and math.sqrt(pw / nw) or 0, lp = lp, ap = P.GridAperture(wax, vax, xs, ys, D),
-		dArea = free / ((u1 - u0) * (v1 - v0)) }
-end
-P.PortalMasked = portalMasked -- tests
-
---- Loss (dB) and lowpass level that objects masking openings of portal path p add (pure).
--- masks[i]: what masks the i-th portal of p.chain (nil = nothing): ap = aperture they leave
--- (P.GridAperture), f = share of the samples masked, g = amplitude passing the objects, lp = their
--- lowpass level. The masked chain is evaluated again like partly open doors; path_props_slit 0:
--- the former amplitude law, (1 - f) + f g per opening.
-function P.MaskedDb(p, S, L, masks, cfg)
-	cfg = cfg or A.cfg
-	if (cfg.path_props_slit or 1) >= 0.5 then
-		-- between the same ends as the chain itself (a leg rerouted by the probes starts or ends it at a
-		-- probe vertex), against the chain's own loss (a leg's wall penalty is not the openings')
-		local r = P.EvalChain(p.chainS or S, p.chainL or L, p.chain, cfg, masks)
-		return math.max(r.lossDb - (p.chainLossDb or p.lossDb), 0), r.lp
-	end
-	local add, lp = 0, 0
-	for i = 1, #p.chain do
-		local m = masks[i]
-		if m then
-			add = add - AC.GainToDb((1 - m.f) + m.f * m.g)
-			lp = math.max(lp, m.f >= 0.5 and m.lp or 0)
-		end
-	end
-	return add, lp
-end
 
 local function pathProps(p, S, L, cfg, srcEnt)
 	local pts = { S }
 	for _, q in ipairs(p.points) do pts[#pts + 1] = q end
 	pts[#pts + 1] = L
-	local add, lpAdd = 0, 0
-	if p.chain and #p.chain > 0 then
-		local masks, any = {}, false
-		local off = p.chainOff or 0 -- probe vertices before the first opening (P.CheckLegs)
-		for i, portal in ipairs(p.chain) do
-			masks[i] = portalMasked(portal, pts[off + i], pts[off + i + 2] or L, srcEnt, cfg)
-			any = any or masks[i] ~= nil
-		end
-		if not any then return end
-		add, lpAdd = P.MaskedDb(p, S, L, masks, cfg)
-	else
-		local objs = {}
-		for i = 1, #pts - 1 do objectsOn(pts[i], pts[i + 1], srcEnt, cfg, objs) end
-		if #objs == 0 then return end
-		add, lpAdd = P.EvalWalls(objs, cfg)
-	end
+	local objs = {}
+	for i = 1, #pts - 1 do objectsOn(pts[i], pts[i + 1], srcEnt, cfg, objs) end
+	if #objs == 0 then return end
+	local add, lpAdd = P.EvalWalls(objs, cfg)
 	if add <= 0 then return end
 	p.lossDb, p.propDb, p.lp = p.lossDb + add, add, math.max(p.lp or 0, lpAdd)
 end
@@ -3198,143 +2451,6 @@ function P.FreeSource(S)
 	return best or S
 end
 
--- ------------------------------------------------------------------ portal legs against the world
--- A BSP area is coarse: one node per region closed by areaportals, so a whole floor of rooms is often one
--- area. A portal path's first leg (S -> first opening) and last leg (last opening -> L) were only checked
--- for objects: a leg through an interior wall cost 0 dB, and whether a chain existed decided the model.
--- One step across an open areaportal doorway (aS == aL -> aS ~= aL) went from the transmission or the
--- probes to a portal path straight through the walls of the next room. Each leg is now traced against the
--- world (the transmission's own wall traces, P.Walls); a blocked leg is routed through the probe graph
--- between its ends, or, without probes, pays its walls (P.EvalWalls) combined with the way over their edge
--- (P.WorldEdge), as the straight line would. The opening's own structure is not a wall of its leg: the
--- relaxed point lies on the edge of a zero-thickness portal on one face of the wall, so a leg reaching it
--- clips the side of a deep doorway's tunnel (a 64 u bunker wall as well as an 8 u partition), and a
--- portal drawn larger than the doorway has its edge inside the wall. Such a hit lies in the opening's
--- prism: it projects onto the opening (its outline grown by LEG_EDGE) within LEG_REVEAL of its plane. A
--- wall farther, or beside the doorway, counts; a baffle right in front of it (closer than LEG_REVEAL) is
--- taken for the doorway's structure, as before.
-local LEG_EDGE, LEG_REVEAL = 4, 96
-local function inPrism(k, q)
-	local d = (q.x - k.cx) * k.nx + (q.y - k.cy) * k.ny + (q.z - k.cz) * k.nz
-	if math.abs(d) > LEG_REVEAL then return false end
-	local qx, qy, qz = q.x - k.nx * d, q.y - k.ny * d, q.z - k.nz * d
-	local cx, cy, cz = clampNum(k, qx, qy, qz)
-	return (cx - qx) ^ 2 + (cy - qy) ^ 2 + (cz - qz) ^ 2 <= LEG_EDGE * LEG_EDGE
-end
-local function legWorldWalls(a, b, portal, srcEnt, cfg)
-	if detClear(a, b) then return nil end
-	local out = {}
-	local k = portalNum(portal)
-	for _, w in ipairs(P.Walls(a, b, cfg.trans_max_walls, srcEnt)) do
-		if not w.ent and not w.water and not inPrism(k, w.entry) and not inPrism(k, w.exit or w.entry) then
-			out[#out + 1] = w
-		end
-	end
-	return #out > 0 and out or nil
-end
-P.LegWorldWalls = legWorldWalls -- tests
-
-local function probesUsable(a, b, cfg)
-	return CLIENT and A.Probes and A.Probes.Paths and (cfg.probes or 0) >= 0.5 and a:Distance(b) <= (cfg.probe_dist or 0)
-end
-
--- inner vertices of a probe route a -> b (a blocked leg), or nil; an unfinished search marks r provisional
-local function probeLeg(a, b, r, cfg)
-	if not probesUsable(a, b, cfg) then return nil end
-	if A.FrameBudgetExceeded and A.FrameBudgetExceeded() then r.provisional = true return nil end
-	A.Probes.provisional = nil
-	local ps = A.Probes.Paths(a, b, 1, cfg)
-	if A.Probes.provisional then r.provisional = true end
-	local q = ps and ps[1]
-	if q and q.points and #q.points > 0 then return q.points end
-	return nil
-end
-
--- loss (dB) and tilt (dB) of the world walls ws on a -> b with the way over their edge
-local function legPenalty(a, b, ws, cfg)
-	local loss, l, mid = P.EvalWalls(ws, cfg)
-	local t = { lossDb = loss, midDb = mid, lp = l }
-	local e = P.WorldEdge(a, b, ws, cfg, true) -- the leg's doorway is the chain's: no door on the edge
-	if e then P.AddEdge(t, e, nil, cfg) end
-	return t.lossDb, t.tilt or AC.LevelDb(t.lp, cfg)
-end
-
---- A portal path p from S to L with its first and last legs checked against the world (see above).
--- Unchanged when both are clear. A leg rerouted by the probes is spliced in: the chain is evaluated again
--- from the route's last vertex (V) to the next route's first vertex (W), so each corner is counted once
--- with its real neighbours, and the route's own corners and doors are added (P.EvalPolyline). The path
--- keeps what P.MaskedDb needs to evaluate its openings again (chainS, chainL, chainLossDb, chainOff: probe
--- vertices before the first opening). Sets r.legBlocked when a leg is blocked.
-function P.CheckLegs(p, S, L, cfg, srcEnt, r)
-	cfg = cfg or A.cfg
-	local chain, pts = p.chain, p.points
-	local n = chain and #chain or 0
-	if n == 0 or #pts < n or (cfg.portal_legs or 1) < 0.5 then return p end
-	local function inset(i) -- the leg's end pulled 1 u into the opening, off its edge
-		local q = pts[i]
-		local dd = chain[i].center - q
-		local l = dd:Length()
-		return l > 1 and q + dd * (1 / l) or q
-	end
-	local w1 = legWorldWalls(S, inset(1), chain[1], srcEnt, cfg)
-	local w2 = legWorldWalls(inset(n), L, chain[n], srcEnt, cfg)
-	if not w1 and not w2 then return p end
-	if r then r.legBlocked = true end
-	r = r or {}
-	-- a route that reaches the opening from its far side went through another opening: not this leg
-	local function sameSide(v, portal, ref)
-		local a = (v - portal.center):Dot(portal.normal)
-		return math.abs(a) < 1 or (a > 0) == ((ref - portal.center):Dot(portal.normal) > 0)
-	end
-	local r1 = w1 and probeLeg(S, pts[1], r, cfg) or nil
-	if r1 and not sameSide(r1[#r1], chain[1], S) then r1 = nil end
-	local r2 = w2 and probeLeg(pts[n], L, r, cfg) or nil
-	if r2 and not sameSide(r2[1], chain[n], L) then r2 = nil end
-	local V, W = r1 and r1[#r1] or S, r2 and r2[1] or L
-	local c = (r1 or r2) and P.EvalChain(V, W, chain, cfg) or p
-	local len, diff, door, lpDb = c.length, c.diffDb, c.doorDb, c.lpDb or 0
-	local points = {}
-	if r1 then
-		local poly = { S }
-		for _, v in ipairs(r1) do poly[#poly + 1] = v points[#points + 1] = v end
-		poly[#poly + 1] = c.points[1]
-		local e = P.EvalRoute(poly, cfg)
-		len = len + e.length - V:Distance(c.points[1])
-		diff, door, lpDb = diff + e.diffDb, door + e.doorDb, lpDb + e.lpDb
-	end
-	for _, v in ipairs(c.points) do points[#points + 1] = v end
-	if r2 then
-		local poly = { c.points[n] }
-		for _, v in ipairs(r2) do poly[#poly + 1] = v points[#points + 1] = v end
-		poly[#poly + 1] = L
-		local e = P.EvalRoute(poly, cfg)
-		len = len + e.length - c.points[n]:Distance(W)
-		diff, door, lpDb = diff + e.diffDb, door + e.doorDb, lpDb + e.lpDb
-	end
-	if r1 or r2 then -- the joined route's corners as one wedge at least (P.WedgeDb), as the chain's own
-		local w = P.WedgeDb(len, S:Distance(L), cfg) * (c.cornerPaid or 1)
-		if w > diff then diff, lpDb = w, lpDb + w - diff end
-	end
-	diff = math.min(diff, cfg.diff_max_total)
-	local pen = 0
-	if w1 and not r1 then
-		local db, t = legPenalty(S, inset(1), w1, cfg)
-		pen, lpDb = pen + db, lpDb + t
-	end
-	if w2 and not r2 then
-		local db, t = legPenalty(inset(n), L, w2, cfg)
-		pen, lpDb = pen + db, lpDb + t
-	end
-	local q = { chain = chain, points = points, length = len, diffDb = diff, doorDb = door, lossDb = diff + door + pen,
-		pos = points[#points], lpDb = lpDb, legDb = pen > 0 and pen or nil, legRouted = (r1 or r2) and true or nil,
-		chainS = V, chainL = W, chainLossDb = c.lossDb, chainOff = r1 and #r1 or 0 }
-	q.lp = AC.LowpassLevel(lpDb, cfg)
-	-- every opening open and nothing else on the way: the leak keeps the treble (as P.EvalChain)
-	if door + pen <= 1e-6 then q.lp = math.min(q.lp, cfg.portal_diffuse_lp or 4) end
-	q.direct, q.bendDeg = P.PathShape(S, points, L)
-	return q
-end
-
 local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (pba_trans_leaf_fade)
 local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a same-way route at its own loss (pba_edge_dup_mix)
 local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
@@ -3344,9 +2460,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt)
 	local now = RealTime()
 	local c = P.cache[key]
-	-- a provisional result is not served again: the search behind it may be solved by now (its answer is
-	-- then in the probe cache, cheap), and P.Stable holds the last final result meanwhile
-	if c and now - c.t < cfg.cache_ttl and not c.r.provisional then return c.r end
+	if c and now - c.t < cfg.cache_ttl then return c.r end
 	-- pba_group_time: the same emitter's last result, while neither it nor the listener moved more than
 	-- reeval_move, the world model did not change (P.cacheGen), its straight line is in the same state and
 	-- it is at most reeval_max_s old: the rule a loop's adaptive re-evaluation already follows (P.ReevalDue),
@@ -3379,11 +2493,10 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		r.clear = true
 	else
 		r.clear = false
-		local g = A.Graph.Get()
 		r.paths = {}
-		-- portals and probes describe the world geometry only: use them only when the world
-		-- itself blocks the direct line (not when a prop... does). A door leaf belongs to its
-		-- doorway: crossing it also looks for the portal paths, whose door state models the leaf
+		-- the probes describe the world geometry only: their routes are used only when the world itself
+		-- blocks the direct line (not when a prop... does). A door leaf belongs to its doorway: crossing it
+		-- also reads the routes, whose door costs model the leaf
 		local worldBlocked, leafBlocked = false, false
 		local oneModel = (cfg.door_leaf_portal or 1) >= 0.5
 		for _, w in ipairs(walls) do
@@ -3391,27 +2504,14 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			if oneModel and w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
 		end
 		r.worldBlocked = worldBlocked
-		-- paths_model 1: the listener field over the probe graph is the one topology (doors and portals are
-		-- costs of its links, cl_probes): its routes, read at once, beside the way over the edge and the
-		-- transmission; no portal chain, no search per sound, nothing provisional (the answer does not
-		-- depend on the frame budget nor on the sounds evaluated before)
-		local fieldOnly = (cfg.paths_model or 0) >= 0.5 and CLIENT and A.Probes and A.Probes.FieldRoutes and true or false
-		if fieldOnly then
-			if (worldBlocked or leafBlocked) and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
-				r.paths = P.KeepLoudest(A.Probes.Paths(S, L, cfg.max_paths, cfg, srcEnt), cfg.max_paths, sndlvl)
-				r.viaProbes = #r.paths > 0
-			end
-		elseif g and (worldBlocked or leafBlocked) then
-			r.aS, r.aL = A.Graph.Area(g, S), A.Graph.Area(g, L)
-			if r.aS ~= 0 and r.aL ~= 0 and r.aS ~= r.aL then
-				-- twice max_paths candidates, cut once their levels are computed (P.KeepLoudest)
-				-- each candidate's legs checked against the world before the cut: a route whose leg crosses
-				-- a wall may no longer be among the loudest
-				for _, chain in ipairs(P.FindChains(g, S, r.aS, L, r.aL, cfg, cfg.max_paths * 2, sndlvl)) do
-					r.paths[#r.paths + 1] = P.CheckLegs(P.EvalChain(S, L, chain, cfg), S, L, cfg, srcEnt, r)
-				end
-				r.paths = P.KeepLoudest(r.paths, cfg.max_paths, sndlvl)
-			end
+		-- the listener field over the probe graph is the one topology (doors and portals are costs of its
+		-- links, cl_probes): its routes, read at once, beside the way over the edge and the transmission; no
+		-- search per sound, nothing provisional (the answer does not depend on the frame budget nor on the
+		-- sounds evaluated before)
+		local field = CLIENT and A.Probes and A.Probes.FieldRoutes and true or false
+		if field and (worldBlocked or leafBlocked) and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+			r.paths = P.KeepLoudest(A.Probes.FieldRoutes(S, L, cfg.max_paths, cfg, srcEnt), cfg.max_paths, sndlvl)
+			r.viaProbes = #r.paths > 0
 		end
 		SLICE.hold = false -- (no listener field read from here on: cl_slicer may take the frame back)
 		P.WallDetours(walls)
@@ -3426,7 +2526,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if leafBlocked and #r.paths > 0 then
 			tw = {}
 			for _, w in ipairs(walls) do
-				if not (w.ent and OPENABLE[w.ent:GetClass()] and leafOfPaths(w.ent, r.paths, fieldOnly and not worldBlocked)) then tw[#tw + 1] = w end
+				if not (w.ent and OPENABLE[w.ent:GetClass()] and leafOfPaths(w.ent, r.paths, field and not worldBlocked)) then tw[#tw + 1] = w end
 			end
 			r.leafByPortal = #tw < #walls
 		end
@@ -3557,27 +2657,6 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				r.viaNative = true
 			end
 		end
-		-- the probes also search when a portal leg is blocked: the area graph is too coarse there (several
-		-- rooms in one area), the routes it misses are theirs. A route both find (the same doorway) is one
-		-- physical route: kept once, the louder (PR.DistinctRoutes)
-		if not fieldOnly and worldBlocked and (#r.paths == 0 or r.legBlocked) and CLIENT and A.Probes and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
-			if A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
-				r.provisional = true -- searched later: a continuous sound re-evaluates at its next turn
-			else
-				A.Probes.provisional = nil
-				local found = A.Probes.Paths(S, L, cfg.max_paths, cfg)
-				r.viaProbes = #found > 0
-				if #r.paths == 0 then
-					r.paths = found
-				elseif #found > 0 then
-					for _, q in ipairs(found) do r.paths[#r.paths + 1] = q end
-					if A.Probes.DistinctRoutes then r.paths = A.Probes.DistinctRoutes(S, L, r.paths) end
-					r.paths = P.KeepLoudest(r.paths, cfg.max_paths, sndlvl)
-				end
-				-- the search goes on in the background (answered by the listener field or nothing yet)
-				r.provisional = r.provisional or A.Probes.provisional or nil
-			end
-		end
 		-- the way over the world obstacle's edge (P.WorldEdge), in power with the transmission, so that a
 		-- ridge, a low wall or a jamb shadows by degrees. Always looked for when the world cuts the line, not
 		-- only without a route: a route that bends round that very edge (homotopic to the one-bend way over
@@ -3587,72 +2666,68 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- (12 dB) where the edge gave 1, and the edge was heard only where the probes found nothing.
 		sliceCheck()
 		if worldBlocked and r.trans then
-			if not fieldOnly and A.FrameBudgetExceeded and A.FrameBudgetExceeded() then
-				r.provisional = true
-			else
-				local e = P.WorldEdge(S, L, r.trans.walls, cfg)
-				if e then
-					local way = { S, e.apex, L }
-					local dup, near, nearD = false, nil, math.huge
-					for _, p in ipairs(r.paths) do
-						if p.points and #p.points > 0 and not p.native then
-							sliceCheck()
-							local pts = { S }
-							for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-							pts[#pts + 1] = L
-							if P.SameRoute(way, pts) then dup = p break end
-							-- how far this route passes from the edge's apex (pba_edge_dup_blend)
-							for i = 1, #pts - 1 do
-								local a, ab = pts[i], pts[i + 1] - pts[i]; local t = math.Clamp((e.apex - a):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1); local d = e.apex:Distance(a + ab * t)
-								if d < nearD then near, nearD = p, d end
-							end
+			local e = P.WorldEdge(S, L, r.trans.walls, cfg)
+			if e then
+				local way = { S, e.apex, L }
+				local dup, near, nearD = false, nil, math.huge
+				for _, p in ipairs(r.paths) do
+					if p.points and #p.points > 0 and not p.native then
+						sliceCheck()
+						local pts = { S }
+						for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+						pts[#pts + 1] = L
+						if P.SameRoute(way, pts) then dup = p break end
+						-- how far this route passes from the edge's apex (pba_edge_dup_blend)
+						for i = 1, #pts - 1 do
+							local a, ab = pts[i], pts[i + 1] - pts[i]; local t = math.Clamp((e.apex - a):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1); local d = e.apex:Distance(a + ab * t)
+							if d < nearD then near, nearD = p, d end
 						end
 					end
-					-- pba_edge_dup_best: a route of the same way (homotopic) that its own corners cost more than
-					-- the way over the edge is not the tightest way of that class (it bends at a farther corner):
-					-- the edge stands for it. Else the route kept alone and the edge, once the zipper finds the two
-					-- distinct, added in full beside it: gm_melancholia's stairs, 3.7 dB (route) then route 3.6 +
-					-- edge 1.6 one 4 u step on, 6.7 dB louder.
-					if dup and (cfg.edge_dup_best or 1) >= 0.5 and e.db < (dup.lossDb or math.huge) then
-						-- pba_edge_dup_mix: the one estimate takes the route's loss moved toward the edge's by how much
-						-- cheaper the edge is (in full from EDGE_MIX_DB): the edge's search finds it from one step to the
-						-- next (the obstacle's middle moving with a wall the line grazes) already cheaper than the route,
-						-- and the swap was a step (gm_melancholia's stairs 16 u up: 1.5 dB in 4 u)
-						if (cfg.edge_dup_mix or 0) >= 0.5 and dup.lossDb then
-							local diff = dup.lossDb - e.db
-							local w = ramp(diff, 0, EDGE_MIX_DB)
-							if w < 1 then
-								e = table.Copy(e)
-								e.db = dup.lossDb - diff * w
-								e.mixDb = e.db - (dup.lossDb - diff)
-							end
-						end
-						for x = #r.paths, 1, -1 do if r.paths[x] == dup then table.remove(r.paths, x) end end
-						dup = false
-					end
-					-- pba_edge_dup_blend: the zipper's answer (one way or two) is all or nothing, and where it turns
-					-- from "the same way" to "distinct" the two estimates of what is still one way were summed at once
-					-- (gm_melancholia's stairs, 16 u above the eyes: 2.2-2.6 dB in one 4 u step). A route passing
-					-- within edge_dup_blend_u of the apex is that much the same way: the weaker of the two keeps
-					-- (1 - w) of its power, w = 1 at the apex, 0 at edge_dup_blend_u.
-					if not dup and near and (cfg.edge_dup_blend or 1) >= 0.5 then
-						local span = math.max(cfg.edge_dup_blend_u or 64, 1)
-						local w = math.Clamp(1 - nearD / span, 0, 0.999)
-						if w > 0 then
-							local cut = -10 * math.log10(1 - w)
-							if e.db <= (near.lossDb or math.huge) then
-								near.lossDb = near.lossDb + cut
-								near.blendDb = cut
-							else
-								e = table.Copy(e)
-								e.db = e.db + cut
-								e.blendDb = cut
-							end
-						end
-					end
-					r.edge, r.edgeDup, r.edgePath = e, dup and true or nil, dup or nil
-					if not dup then P.AddEdge(r.trans, e, L, cfg) end
 				end
+				-- pba_edge_dup_best: a route of the same way (homotopic) that its own corners cost more than
+				-- the way over the edge is not the tightest way of that class (it bends at a farther corner):
+				-- the edge stands for it. Else the route kept alone and the edge, once the zipper finds the two
+				-- distinct, added in full beside it: gm_melancholia's stairs, 3.7 dB (route) then route 3.6 +
+				-- edge 1.6 one 4 u step on, 6.7 dB louder.
+				if dup and (cfg.edge_dup_best or 1) >= 0.5 and e.db < (dup.lossDb or math.huge) then
+					-- pba_edge_dup_mix: the one estimate takes the route's loss moved toward the edge's by how much
+					-- cheaper the edge is (in full from EDGE_MIX_DB): the edge's search finds it from one step to the
+					-- next (the obstacle's middle moving with a wall the line grazes) already cheaper than the route,
+					-- and the swap was a step (gm_melancholia's stairs 16 u up: 1.5 dB in 4 u)
+					if (cfg.edge_dup_mix or 0) >= 0.5 and dup.lossDb then
+						local diff = dup.lossDb - e.db
+						local w = ramp(diff, 0, EDGE_MIX_DB)
+						if w < 1 then
+							e = table.Copy(e)
+							e.db = dup.lossDb - diff * w
+							e.mixDb = e.db - (dup.lossDb - diff)
+						end
+					end
+					for x = #r.paths, 1, -1 do if r.paths[x] == dup then table.remove(r.paths, x) end end
+					dup = false
+				end
+				-- pba_edge_dup_blend: the zipper's answer (one way or two) is all or nothing, and where it turns
+				-- from "the same way" to "distinct" the two estimates of what is still one way were summed at once
+				-- (gm_melancholia's stairs, 16 u above the eyes: 2.2-2.6 dB in one 4 u step). A route passing
+				-- within edge_dup_blend_u of the apex is that much the same way: the weaker of the two keeps
+				-- (1 - w) of its power, w = 1 at the apex, 0 at edge_dup_blend_u.
+				if not dup and near and (cfg.edge_dup_blend or 1) >= 0.5 then
+					local span = math.max(cfg.edge_dup_blend_u or 64, 1)
+					local w = math.Clamp(1 - nearD / span, 0, 0.999)
+					if w > 0 then
+						local cut = -10 * math.log10(1 - w)
+						if e.db <= (near.lossDb or math.huge) then
+							near.lossDb = near.lossDb + cut
+							near.blendDb = cut
+						else
+							e = table.Copy(e)
+							e.db = e.db + cut
+							e.blendDb = cut
+						end
+					end
+				end
+				r.edge, r.edgeDup, r.edgePath = e, dup and true or nil, dup or nil
+				if not dup then P.AddEdge(r.trans, e, L, cfg) end
 			end
 		end
 		if (cfg.path_props or 1) >= 0.5 then
@@ -3707,7 +2782,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		r.shadowDb = P.ShadowOf(r.voices, r.edge and math.max(r.edge.db - (r.edge.doorDb or 0), 0) or nil)
 	end
 	P.cache[key] = { t = now, r = r }
-	if timeOn and not r.provisional then
+	if timeOn then
 		P.timeStats.computed = P.timeStats.computed + 1
 		local list = P.timeMemo
 		if #list >= TIME_KEEP then table.remove(list, 1) end
