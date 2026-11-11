@@ -200,6 +200,26 @@ function AC.MixTilt(...)
 	if lo <= 0 or hi <= 0 then return 0 end
 	return max(10 * log10(lo / hi), 0)
 end
+-- The same without varargs (select / unpack are LuaJIT NYI): two components, or a list e1, t1, e2, t2, ...
+local function mixTiltAdd(lo, hi, e, t)
+	if e and e > 0 then
+		lo = lo + e
+		hi = hi + e * 10 ^ (-(t or 0) / 10)
+	end
+	return lo, hi
+end
+function AC.MixTilt2(e1, t1, e2, t2)
+	local lo, hi = mixTiltAdd(0, 0, e1, t1)
+	lo, hi = mixTiltAdd(lo, hi, e2, t2)
+	if lo <= 0 or hi <= 0 then return 0 end
+	return max(10 * log10(lo / hi), 0)
+end
+function AC.MixTiltList(t)
+	local lo, hi = 0, 0
+	for i = 1, #t, 2 do lo, hi = mixTiltAdd(lo, hi, t[i], t[i + 1]) end
+	if lo <= 0 or hi <= 0 then return 0 end
+	return max(10 * log10(lo / hi), 0)
+end
 
 function AC.DSPForLevel(level, cfg)
 	cfg = cfg or A.cfg

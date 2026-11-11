@@ -50,6 +50,13 @@ P.SliceCheck = sliceCheck
 
 -- exact equality of two coordinates, the sign of a zero included (a trace from -0 is not assumed the same)
 local function same(p, q) return p == q and (p ~= 0 or 1 / p == 1 / q) end
+-- table.sort orders, made once: a comparator written inline is a new closure at every call (LuaJIT NYI FNEW)
+local function byFirst(u, v) return u[1] < v[1] end
+-- table.insert(t, at, v) without the library call (its position form is LuaJIT NYI)
+local function insertAt(t, at, v)
+	for i = #t, at, -1 do t[i + 1] = t[i] end
+	t[at] = v
+end
 
 --- fn(a, b) -> boolean (a world-only segment test) kept by the exact coordinates of a and b: the candidate
 -- routes of one evaluation repeat most of their tightening and corner traces (two thirds of them, pure
@@ -131,6 +138,12 @@ P.LeafLoss = leafLoss
 -- route, a hull off the walls, while pts has its corners on the edges; from a vertex on an edge every
 -- trace toward the other side of that edge grazes it, and a leaf's way round flipped valid / blocked
 -- from one frame to the next).
+local function segMeets(segHits, x, ent)
+	local l = segHits[x]
+	if not l then return nil end
+	for _, h in ipairs(l) do if h[1] == ent then return h end end
+	return nil
+end
 function P.EvalPolyline(pts, cfg, doorPts)
 	cfg = cfg or A.cfg
 	local len, diff, door, doorTilt = 0, 0, 0, 0
@@ -153,12 +166,6 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	-- pba_door_3d: also the leaves beside the route (P.LeafWay: the free part of the passage), each on the
 	-- route's stretch past it, with the route's length before and after it (Fresnel distances)
 	for x = 1, nd do segHits[x] = P.SegmentDoors(dp[x], dp[x + 1], d3) or false end
-	local function meets(x, ent)
-		local l = segHits[x]
-		if not l then return nil end
-		for _, h in ipairs(l) do if h[1] == ent then return h end end
-		return nil
-	end
 	for x = 1, nd do
 		for _, h in ipairs(segHits[x] or {}) do
 			local ent = h[1]
@@ -170,7 +177,7 @@ function P.EvalPolyline(pts, cfg, doorPts)
 				paid = paid or {}
 				paid[ent] = true
 				local j = x
-				while j < nd and meets(j + 1, ent) do j = j + 1 end
+				while j < nd and segMeets(segHits, j + 1, ent) do j = j + 1 end
 				local span, d0, d9
 				if d3 then
 					span, d0, d9 = {}, 0, 0
@@ -318,13 +325,14 @@ local detClear = P.WorldSegMemo(detTrace, 16384)
 -- against nothing one frame later).
 -- (slice checks inside: its callers hold no shared trace table across it, P.Walls computing its detours
 -- after its own traces)
+local function objectWayClear(e, ent, S, L)
+	local we = ent:LocalToWorld(e)
+	return detClear(S, we) and detClear(we, L)
+end
 local function objectDetour(ent, S, L)
 	local mn, mx = ent:OBBMins(), ent:OBBMaxs()
 	local lS, lL = ent:WorldToLocal(S), ent:WorldToLocal(L)
-	return P.DetourDelta(lS, lL, mn, mx, function(e)
-		local we = ent:LocalToWorld(e)
-		return detClear(S, we) and detClear(we, L)
-	end, true)
+	return P.DetourDelta(lS, lL, mn, mx, objectWayClear, true, ent, S, L)
 end
 
 --- Walls crossed by the straight line S -> L, traced from S only (see P.Walls).
@@ -419,7 +427,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy)
 			local dS = p:DistToSqr(S)
 			local at = #walls + 1
 			for i, w in ipairs(walls) do if w.entry:DistToSqr(S) > dS then at = i break end end
-			table.insert(walls, at, ws)
+			insertAt(walls, at, ws)
 		end
 	end
 	return walls
@@ -531,6 +539,10 @@ local function boxClamp(p, mn, mx)
 end
 -- distance from segment a..b to box mn..mx (local): 0 and the entry fraction when it crosses the box, else
 -- the least distance (convex along the segment: ternary search), the fraction there and the box point
+local function segBoxAt(t, a, b, mn, mx)
+	local p = a + (b - a) * t
+	return p:Distance(boxClamp(p, mn, mx))
+end
 local function segBoxDist(a, b, mn, mx)
 	local t0, t1 = 0, 1
 	local hit = true
@@ -546,14 +558,10 @@ local function segBoxDist(a, b, mn, mx)
 		end
 	end
 	if hit then return 0, (t0 + t1) * 0.5 end
-	local function f(t)
-		local p = a + (b - a) * t
-		return p:Distance(boxClamp(p, mn, mx))
-	end
 	local lo, hi = 0, 1
 	for _ = 1, 40 do
 		local m1, m2 = lo + (hi - lo) / 3, hi - (hi - lo) / 3
-		if f(m1) <= f(m2) then hi = m2 else lo = m1 end
+		if segBoxAt(m1, a, b, mn, mx) <= segBoxAt(m2, a, b, mn, mx) then hi = m2 else lo = m1 end
 	end
 	local t = (lo + hi) * 0.5
 	local p = a + (b - a) * t
@@ -713,6 +721,9 @@ local EDGE_PAIRS = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 },
 -- the ways' legs. Returns the
 -- extra length of the way round the leaf over the route's own (0 beside it, math.huge when there is none),
 -- the loss (dB) of the free part of the passage it goes through, and the route's clearance from the leaf.
+local function obbCorner(k, mn, mx)
+	return Vector(bit.band(k, 1) == 0 and mn.x or mx.x, bit.band(k, 2) == 0 and mn.y or mx.y, bit.band(k, 4) == 0 and mn.z or mx.z)
+end
 function P.LeafWay(ent, V, cfg, d0, d9, clear, cutBefore, cutAfter)
 	cfg = cfg or A.cfg
 	d0, d9 = d0 or 0, d9 or 0
@@ -767,10 +778,7 @@ function P.LeafWay(ent, V, cfg, d0, d9, clear, cutBefore, cutAfter)
 	local route = polyLen(V, 1, n)
 	local cands = {}
 	for _, pr in ipairs(EDGE_PAIRS) do
-		local function corner(k)
-			return Vector(bit.band(k, 1) == 0 and mn.x or mx.x, bit.band(k, 2) == 0 and mn.y or mx.y, bit.band(k, 4) == 0 and mn.z or mx.z)
-		end
-		local p0, p1 = corner(pr[1]), corner(pr[2])
+		local p0, p1 = obbCorner(pr[1], mn, mx), obbCorner(pr[2], mn, mx)
 		local dv = p1 - p0
 		local lo, hi = 0, 1
 		for _ = 1, WAY_HALVINGS do
@@ -783,7 +791,7 @@ function P.LeafWay(ent, V, cfg, d0, d9, clear, cutBefore, cutAfter)
 		local x = p0 + dv * ((lo + hi) * 0.5)
 		cands[#cands + 1] = { x:Distance(lA) + x:Distance(lB), x, dv }
 	end
-	table.sort(cands, function(u, v) return u[1] < v[1] end)
+	table.sort(cands, byFirst)
 	local center = ent:LocalToWorld((mn + mx) * 0.5)
 	local tries = 0
 	for _, c in ipairs(cands) do
@@ -923,7 +931,7 @@ function P.LineLeaves(S, L, walls, cfg)
 					local d = h[2]:DistToSqr(S)
 					local at = #walls + 1
 					for i, x in ipairs(walls) do if x.entry:DistToSqr(S) > d then at = i break end end
-					table.insert(walls, at, w)
+					insertAt(walls, at, w)
 				end
 			end
 		end
@@ -937,6 +945,15 @@ end
 -- same start with the leaves found left out, at most MAX_DOORS_SEG times.
 local MAX_DOORS_SEG = 4
 local doorSkip = {}
+-- the keys set in doorSkip, so that it is emptied without pairs() (LuaJIT NYI ITERN)
+local doorSkipKeys, doorSkipN = {}, 0
+local function clearDoorSkip()
+	for i = 1, doorSkipN do
+		doorSkip[doorSkipKeys[i]] = nil
+		doorSkipKeys[i] = nil
+	end
+	doorSkipN = 0
+end
 local function doorsOnlyNew(e) return DOORS_ONLY[e:GetClass()] and not doorSkip[e] or false end
 local doorTrN = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ignoreworld = true,
 	mins = Vector(-DOOR_HULL, -DOOR_HULL, -DOOR_HULL), maxs = Vector(DOOR_HULL, DOOR_HULL, DOOR_HULL) }
@@ -947,7 +964,7 @@ local doorTrR = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ig
 function P.SegmentDoors(a, b, reach)
 	local list
 	local tr0 = reach and doorTrR or doorTrN
-	for k in pairs(doorSkip) do doorSkip[k] = nil end
+	clearDoorSkip()
 	for _ = 1, MAX_DOORS_SEG do
 		tr0.start, tr0.endpos = a, b
 		util.TraceHull(tr0)
@@ -956,8 +973,10 @@ function P.SegmentDoors(a, b, reach)
 		list = list or {}
 		list[#list + 1] = { tr.Entity, tr.HitPos, tr.StartSolid }
 		doorSkip[tr.Entity] = true
+		doorSkipN = doorSkipN + 1
+		doorSkipKeys[doorSkipN] = tr.Entity
 	end
-	for k in pairs(doorSkip) do doorSkip[k] = nil end
+	clearDoorSkip()
 	return list
 end
 --- Door loss (dB), lowpass level, tilt (dB) and the first door entity of segment a -> b: every leaf it
@@ -978,7 +997,7 @@ end
 -- the frame of S and L: the object's local frame for an oriented box) between S and L.
 -- The way round a box bends on one of its edges: for each of the 12 edges, the point of the edge
 -- that makes S -> point -> L shortest (the sum is convex along the edge: bisection on its slope),
--- shortest first; `valid(e)` (optional) rejects detour points blocked by the world (object on the
+-- shortest first; `valid(e, va, vb, vc)` (optional; va..vc: its state, no closure needed) rejects detour points blocked by the world (object on the
 -- floor, against a wall), and the first valid one stands. Works for any orientation (a tilted slab, a
 -- source above or below) and for a line that misses the box (a hull caught it): the nearest edge is
 -- then beside the line and the detour tends to nothing, continuously. The former six candidates
@@ -998,8 +1017,16 @@ end
 local EDGES = { -- the 12 edges of a box as corner index pairs (bit k of the index: max on axis k)
 	{ 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
 local candShared = {}
+-- (module-level helpers of P.DetourDelta: no closure made per call, LuaJIT NYI FNEW)
+local function boxCorner(i, cx, cy, cz)
+	return cx[bit.band(i, 1) + 1], cy[bit.band(bit.rshift(i, 1), 1) + 1], cz[bit.band(bit.rshift(i, 2), 1) + 1]
+end
+local function edgeAlong(c, t, sx, sy, sz, lx, ly, lz, len)
+	local x, y, z = c[5] + c[8] * t, c[6] + c[9] * t, c[7] + c[10] * t
+	return x, y, z, math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
+end
 --- sliced: slice checks between its world tests (objectDetour's calls; its scratch list is then its own).
-function P.DetourDelta(S, L, mins, maxs, valid, sliced)
+function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
 	local cand = (sliced and SLICE.co) and {} or candShared
 	-- source or listener enclosed by the obstacle: no way round it
 	if enclosed(S, mins, maxs) or enclosed(L, mins, maxs) then return math.huge end
@@ -1010,13 +1037,10 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced)
 	local cx = { mins.x, maxs.x }
 	local cy = { mins.y, maxs.y }
 	local cz = { mins.z, maxs.z }
-	local function corner(i)
-		return cx[bit.band(i, 1) + 1], cy[bit.band(bit.rshift(i, 1), 1) + 1], cz[bit.band(bit.rshift(i, 2), 1) + 1]
-	end
 	local n = 0
 	for _, e in ipairs(EDGES) do
-		local px, py, pz = corner(e[1])
-		local qx, qy, qz = corner(e[2])
+		local px, py, pz = boxCorner(e[1], cx, cy, cz)
+		local qx, qy, qz = boxCorner(e[2], cx, cy, cz)
 		local dx, dy, dz = qx - px, qy - py, qz - pz
 		-- f(t) = |S - P(t)| + |P(t) - L| is convex: bisection on the sign of its slope
 		local lo, hi = 0, 1
@@ -1042,18 +1066,14 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced)
 	-- the world closes on that edge instead of jumping to the next edge: an open leaf's way round went
 	-- from 10 to 3 dB in a 2 u step of the listener when the shortest edge's best point came clear
 	-- (pba_twodoors, open slide). Edges are tried while their best point could still beat the best way found.
-	table.sort(cand, function(u, v) return u[1] < v[1] end)
+	table.sort(cand, byFirst)
 	if not valid then return n > 0 and math.max(cand[1][1], 0) or math.huge end
 	local best = math.huge
-	local function along(c, t)
-		local x, y, z = c[5] + c[8] * t, c[6] + c[9] * t, c[7] + c[10] * t
-		return x, y, z, math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
-	end
 	for i = 1, n do
 		local c = cand[i]
 		if c[1] >= best then break end
 		if sliced then sliceCheck() end
-		if valid(Vector(c[2], c[3], c[4])) then
+		if valid(Vector(c[2], c[3], c[4]), va, vb, vc) then
 			best = c[1]
 			break
 		end
@@ -1066,17 +1086,17 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced)
 			for k = 1, EDGE_SAMPLES do
 				if sliced then sliceCheck() end
 				local t = t0 + (tEnd - t0) * k / EDGE_SAMPLES
-				local x, y, z, d = along(c, t)
+				local x, y, z, d = edgeAlong(c, t, sx, sy, sz, lx, ly, lz, len)
 				if d >= best then break end
-				if valid(Vector(x, y, z)) then
+				if valid(Vector(x, y, z), va, vb, vc) then
 					local lo, hi = prev, t -- blocked .. clear
 					for _ = 1, EDGE_CLEAR_HALVINGS do
 						if sliced then sliceCheck() end
 						local m = (lo + hi) * 0.5
-						local mx, my, mz = along(c, m)
-						if valid(Vector(mx, my, mz)) then hi = m else lo = m end
+						local mx, my, mz = edgeAlong(c, m, sx, sy, sz, lx, ly, lz, len)
+						if valid(Vector(mx, my, mz), va, vb, vc) then hi = m else lo = m end
 					end
-					local _, _, _, dc = along(c, hi)
+					local _, _, _, dc = edgeAlong(c, hi, sx, sy, sz, lx, ly, lz, len)
 					if dc < best then best = dc end
 					break
 				end
@@ -1107,6 +1127,10 @@ end
 local EDGE_STEPS = { 4, 8, 16, 32, 64, 128, 256, 512 }
 local EDGE_FAR = 512
 local EDGE_REFINE = 4
+local function edgeClearAt(u, h, M, S, L)
+	local Q = M + u * h
+	return detClear(S, Q) and detClear(Q, L), Q
+end
 function P.WorldEdge(S, L, walls, cfg)
 	cfg = cfg or A.cfg
 	if (cfg.world_edge or 1) < 0.5 then return nil end
@@ -1134,23 +1158,19 @@ function P.WorldEdge(S, L, walls, cfg)
 	side:Normalize()
 	dirs[#dirs + 1] = side
 	dirs[#dirs + 1] = side * -1
-	local function clearAt(u, h)
-		local Q = M + u * h
-		return detClear(S, Q) and detClear(Q, L), Q
-	end
 	local best
 	for _, u in ipairs(dirs) do
 		local lo = 0
 		for _, h in ipairs(EDGE_STEPS) do
 			if best and h >= best.h * 2 then break end -- twice as far off the line as the best: a longer way
 			sliceCheck()
-			local ok = clearAt(u, h)
+			local ok = edgeClearAt(u, h, M, S, L)
 			if ok then
 				local hi = h
 				for _ = 1, EDGE_REFINE do
 					sliceCheck()
 					local mid = (lo + hi) * 0.5
-					if clearAt(u, mid) then hi = mid else lo = mid end
+					if edgeClearAt(u, mid, M, S, L) then hi = mid else lo = mid end
 				end
 				local Q = M + u * hi
 				local delta = S:Distance(Q) + Q:Distance(L) - len
@@ -1203,7 +1223,7 @@ function P.AddEdge(t, e, L, cfg)
 	local eD = e.weight * 10 ^ (-e.db / 10)
 	if eD <= 0 then return t end
 	local eT = 10 ^ (-t.lossDb / 10)
-	local tilt = AC.MixTilt(eT, AC.LevelDb(t.lp or 0, cfg), eD, e.tilt or e.db)
+	local tilt = AC.MixTilt2(eT, AC.LevelDb(t.lp or 0, cfg), eD, e.tilt or e.db)
 	t.lossDb = math.max(-10 * math.log10(eT + eD), 0)
 	if t.midDb then t.midDb = math.max(-10 * math.log10(10 ^ (-t.midDb / 10) + eD), 0) end
 	t.lp = math.min(t.lp or 0, AC.LowpassLevel(tilt, cfg))
@@ -1527,6 +1547,18 @@ function P.SameRoute(a, b, clear, tag)
 	sameN = sameN + 1
 	return res
 end
+local function zipPush(stack, i, j, fa, fb, na, nb)
+	local ta = i < na and fa[i + 1] / math.max(fa[na], 1e-9)
+	local tb = j < nb and fb[j + 1] / math.max(fb[nb], 1e-9)
+	-- pushed last = tried first: the chain that is behind advances first
+	if ta and tb and ta < tb then
+		stack[#stack + 1] = { i, j, i, j + 1 }
+		stack[#stack + 1] = { i, j, i + 1, j }
+	else
+		if ta then stack[#stack + 1] = { i, j, i + 1, j } end
+		if tb then stack[#stack + 1] = { i, j, i, j + 1 } end
+	end
+end
 function sameTraced(a, b, clear, na, nb)
 	-- arc length fractions of the vertices: the zipper advances the chain that is behind
 	local fa, fb = { 0 }, { 0 }
@@ -1536,19 +1568,7 @@ function sameTraced(a, b, clear, na, nb)
 	-- stack holds moves not tried yet (a triangle is traced only when its move is taken); a state is entered
 	-- once, a move that failed may succeed from another state
 	local seen, stack = {}, {}
-	local function push(i, j)
-		local ta = i < na and fa[i + 1] / math.max(fa[na], 1e-9)
-		local tb = j < nb and fb[j + 1] / math.max(fb[nb], 1e-9)
-		-- pushed last = tried first: the chain that is behind advances first
-		if ta and tb and ta < tb then
-			stack[#stack + 1] = { i, j, i, j + 1 }
-			stack[#stack + 1] = { i, j, i + 1, j }
-		else
-			if ta then stack[#stack + 1] = { i, j, i + 1, j } end
-			if tb then stack[#stack + 1] = { i, j, i, j + 1 } end
-		end
-	end
-	push(1, 1)
+	zipPush(stack, 1, 1, fa, fb, na, nb)
 	while #stack > 0 do
 		sliceCheck()
 		local m = table.remove(stack)
@@ -1560,7 +1580,7 @@ function sameTraced(a, b, clear, na, nb)
 			if ok then
 				if ni == na and nj == nb then return true end
 				seen[key] = true
-				push(ni, nj)
+				zipPush(stack, ni, nj, fa, fb, na, nb)
 			end
 		end
 	end
@@ -1584,9 +1604,14 @@ local HOLLOW_MIN = 16
 -- step added or swapped a whole wall (rp_downtown street walk: 19.8 -> 29.9, 35 -> 54.9 dB). Sound crosses a
 -- wall over the zone, not along one ray. The bent lines keep both ends (a listener hugging a wall has no
 -- offset end inside it) and are traced from each end towards the offset midpoint, so a midpoint inside a wall
--- counts that wall's chord on both halves. keep(w) picks the walls counted (the caller's split). Returns
+-- counts that wall's chord on both halves. keep(w, karg) picks the walls counted (the caller's split). Returns
 -- loss, lp (the centre's), mid.
-function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep)
+local function bundleDoor(w) return w.ent and OPENABLE[w.ent:GetClass()] end
+--- P.BundleWalls / P.BundleEdge's keep for the world walls (P.Compute's split), and for those Steam Audio's scene
+-- holds (karg: the native module read displacements). Module-level: no closure per call (LuaJIT NYI FNEW).
+function P.KeepWorldWall(w) return not w.ent and not w.water end
+function P.KeepNativeWorldWall(w, nativeDisp) return not w.ent and not w.water and not P.NativeLacks(w, nativeDisp) end
+function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg)
 	if (cfg.trans_bundle or 0) < 0.5 then return loss, lp, mid end
 	local d = S:Distance(L)
 	local lambda = 343 / (cfg.diff_freq or 1000) / 0.01905 -- units
@@ -1600,16 +1625,15 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep)
 	-- door leaves count on every line of the bundle: an offset line through a shut doorway beside the wall
 	-- the centre cuts was paid nothing (door_sweep closed: 12.0 -> 6.2 dB in 2 u). The caller pays the
 	-- centre's leaves itself, so they are taken off the mean again.
-	local function door(w) return w.ent and OPENABLE[w.ent:GetClass()] end
 	local cDoors = {}
-	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)) do if door(w) then cDoors[#cDoors + 1] = w end end
+	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)) do if bundleDoor(w) then cDoors[#cDoors + 1] = w end end
 	local dl, dm = 0, 0
 	if #cDoors > 0 then dl, _, dm = P.EvalWalls(cDoors, cfg, true, true) end
 	local gl, gm, n = 10 ^ (-(loss + dl) / 10), 10 ^ (-(mid + dm) / 10), 1
 	for _, o in ipairs({ u * r, u * -r, v * r, v * -r }) do
 		local m, sel = M + o, {}
 		for _, half in ipairs({ P.Walls(S, m, cfg.trans_max_walls, srcEnt, true), P.Walls(L, m, cfg.trans_max_walls, srcEnt, true) }) do
-			for _, w in ipairs(half) do if keep(w) or door(w) then sel[#sel + 1] = w end end
+			for _, w in ipairs(half) do if keep(w, karg) or bundleDoor(w) then sel[#sel + 1] = w end end
 		end
 		local l2, _, m2 = 0, 0, 0
 		if #sel > 0 then l2, _, m2 = P.EvalWalls(sel, cfg, true, true) end
@@ -1625,7 +1649,16 @@ end
 -- clears them, 0 when the line itself does not. Continuous where the line's own depth stays whole up to
 -- a wall's square end (16 u, then nothing in one step).
 local BEDGE_STEPS, BEDGE_BISECT = 4, 4
-function P.BundleEdge(S, L, srcEnt, cfg, keep)
+local function bundleCross(o, S, L, cfg, srcEnt, dir, spans, keep, karg)
+	for _, w in ipairs(P.Walls(S + o, L + o, cfg.trans_max_walls, srcEnt, true)) do
+		if keep(w, karg) then
+			local x = (w.entry - S):Dot(dir)
+			for _, sp in ipairs(spans) do if x >= sp[1] and x <= sp[2] then return true end end
+		end
+	end
+	return false
+end
+function P.BundleEdge(S, L, srcEnt, cfg, keep, karg)
 	local lambda = 343 / (cfg.diff_freq or 1000) / 0.01905
 	local r = math.min(cfg.trans_bundle_r or 24, 0.5 * math.sqrt(lambda * S:Distance(L)))
 	local dir = (L - S):GetNormalized()
@@ -1633,22 +1666,13 @@ function P.BundleEdge(S, L, srcEnt, cfg, keep)
 	-- elsewhere (the far jamb of another doorway on a long line) has not stayed in these walls
 	local spans = {}
 	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)) do
-		if keep(w) then
+		if keep(w, karg) then
 			local a, b = (w.entry - S):Dot(dir), (w.exit - S):Dot(dir)
 			spans[#spans + 1] = { math.min(a, b) - r, math.max(a, b) + r }
 		end
 	end
 	if #spans == 0 then return 0 end
 	if r < 0.5 then return 1 end
-	local function cross(o)
-		for _, w in ipairs(P.Walls(S + o, L + o, cfg.trans_max_walls, srcEnt, true)) do
-			if keep(w) then
-				local x = (w.entry - S):Dot(dir)
-				for _, sp in ipairs(spans) do if x >= sp[1] and x <= sp[2] then return true end end
-			end
-		end
-		return false
-	end
 	local u = dir:Cross(math.abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
 	u:Normalize()
 	local v = dir:Cross(u)
@@ -1658,11 +1682,11 @@ function P.BundleEdge(S, L, srcEnt, cfg, keep)
 		local a = 0
 		for k = 1, BEDGE_STEPS do
 			local t = f * k / BEDGE_STEPS
-			if not cross(o * (r * t)) then
+			if not bundleCross(o * (r * t), S, L, cfg, srcEnt, dir, spans, keep, karg) then
 				local b = t -- a: still crossing, b: clear
 				for _ = 1, BEDGE_BISECT do
 					local m = (a + b) * 0.5
-					if cross(o * (r * m)) then a = m else b = m end
+					if bundleCross(o * (r * m), S, L, cfg, srcEnt, dir, spans, keep, karg) then a = m else b = m end
 				end
 				f = (a + b) * 0.5
 				break
@@ -1732,7 +1756,7 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 			-- lowpass LEVEL is whole: a route past an open leaf went from level 1 (4 dB of tilt) to 0 in one
 			-- 2 u step while its loss moved 0.4 dB (pba_twodoors).
 			local tObj = AC.LevelDb(l, cfg)
-			if dd then tObj = AC.MixTilt(10 ^ (-transDb / 10), tObj, 10 ^ (-dd / 10), dd) end
+			if dd then tObj = AC.MixTilt2(10 ^ (-transDb / 10), tObj, 10 ^ (-dd / 10), dd) end
 			if not noCap and not leaf3d and pThrough > cap then
 				-- the reflected sound dominates: capped loss, muffled like that level of loss
 				pThrough, pMid = cap, math.min(pMid, cap + cfg.trans_lf_bonus)
@@ -1774,14 +1798,15 @@ P.PathLevel = pathLevel
 
 --- The n loudest of evaluated paths (pure; their order kept on equal levels): the cut to max_paths is
 -- made on the levels computed (diffraction, gaps, leaves), not on the search's estimate.
+local function byLevelThenIndex(a, b)
+	if a.lvl ~= b.lvl then return a.lvl > b.lvl end
+	return a.i < b.i
+end
 function P.KeepLoudest(paths, n, sndlvl)
 	if #paths <= n then return paths end
 	local idx = {}
 	for i, p in ipairs(paths) do idx[i] = { p = p, i = i, lvl = pathLevel(p.length, p.lossDb, sndlvl) } end
-	table.sort(idx, function(a, b)
-		if a.lvl ~= b.lvl then return a.lvl > b.lvl end
-		return a.i < b.i
-	end)
+	table.sort(idx, byLevelThenIndex)
 	local out = {}
 	for i = 1, n do out[i] = idx[i].p end
 	return out
@@ -1868,6 +1893,46 @@ end
 -- pba_trans_window_soft: past the window's edge the transmission loses TRANS_WINDOW_SLOPE dB more per dB, dropped
 -- only TRANS_WINDOW_FLOOR dB under the dominant voice (where its highs no longer count)
 local TRANS_WINDOW_SLOPE, TRANS_WINDOW_FLOOR = 3, 60
+-- P.SelectVoices' helpers, module-level (no closures per call: LuaJIT NYI FNEW)
+local SPLIT_SOFT_DEG, SPLIT_SOFT_DB = 10, 2
+local function byLevelDesc(a, b) return a.level > b.level end
+local function svDirOf(p, L) return (p.pos - L):GetNormalized() end
+local function svEnergyOf(p, sndlvl)
+	local g = AC.EngineGain(p.length, sndlvl) * 10 ^ (-p.lossDb / 20)
+	return g * g
+end
+-- a path's tilt (dB): the loss behind its level when that loss gives it, else its level's equivalent
+local function svTiltOf(p, cfg)
+	if p.lpDb and AC.LowpassLevel(p.lpDb, cfg) == (p.lp or 0) then return p.lpDb, true end
+	return AC.LevelDb(p.lp or 0, cfg), false
+end
+local function svNewVoice(voices, p, d)
+	local v = { kind = "portal", dir = d, s = 1, dom = p, members = {}, e = 0, hi = 0, df = 0, raw = 0, dist = 0, len = 0,
+		sum = Vector(0, 0, 0), cont = true }
+	voices[#voices + 1] = v
+	return v
+end
+-- e: energy given to v; pull: 0..1, how much it turns v toward d
+local function svGive(v, p, d, e, pull, L, cfg)
+	if e <= 0 then return end
+	local t, cont = svTiltOf(p, cfg)
+	v.e = v.e + e
+	v.hi = v.hi + e * 10 ^ (-t / 10)
+	v.df = v.df + (p.diffuse or 0) * e
+	v.raw = v.raw + (p.mixLossDb or p.rawLossDb or p.lossDb) * e
+	v.dist = v.dist + p.pos:Distance(L) * e
+	v.len = v.len + p.length * e
+	v.sum:Add(d * (e * pull))
+	v.cont = v.cont and cont
+	v.members[#v.members + 1] = p
+end
+local function svApart(ang, A0) -- 0: in a voice's direction .. 1: far enough for a voice of its own
+	if A0 <= 0 then return 1 end
+	return ramp(ang, math.max(A0 - SPLIT_SOFT_DEG, 0), A0 + SPLIT_SOFT_DEG)
+end
+local function svLoud(dl, D0) -- 1: loud enough for a voice of its own .. 0
+	return 1 - ramp(dl, math.max(D0 - SPLIT_SOFT_DB, 0), D0 + SPLIT_SOFT_DB)
+end
 function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	cfg = cfg or A.cfg
 	-- loud sources keep their headroom above the engine's full scale (see AC.Headroom)
@@ -1889,7 +1954,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		p.level = pathLevel(p.length, p.lossDb, sndlvl)
 		list[#list + 1] = p
 	end
-	table.sort(list, function(a, b) return a.level > b.level end)
+	table.sort(list, byLevelDesc)
 	local best = list[1] and list[1].level or -math.huge
 	local kept = {}
 	for _, p in ipairs(list) do
@@ -1906,60 +1971,22 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	-- adds its power without turning the voice round. The low-pass of a voice comes from its members'
 	-- band energies (AC.MixTilt): a clear and a muffled path of equal power are heard with the treble of
 	-- the clear one (level 1), not the mean of their levels (2).
-	local SPLIT_SOFT_DEG, SPLIT_SOFT_DB = 10, 2
 	local voices = {}
-	local function dirOf(p) return (p.pos - L):GetNormalized() end
-	local function energyOf(p)
-		local g = AC.EngineGain(p.length, sndlvl) * 10 ^ (-p.lossDb / 20)
-		return g * g
-	end
-	-- a path's tilt (dB): the loss behind its level when that loss gives it, else its level's equivalent
-	local function tiltOf(p)
-		if p.lpDb and AC.LowpassLevel(p.lpDb, cfg) == (p.lp or 0) then return p.lpDb, true end
-		return AC.LevelDb(p.lp or 0, cfg), false
-	end
-	local function newVoice(p, d)
-		local v = { kind = "portal", dir = d, s = 1, dom = p, members = {}, e = 0, hi = 0, df = 0, raw = 0, dist = 0, len = 0,
-			sum = Vector(0, 0, 0), cont = true }
-		voices[#voices + 1] = v
-		return v
-	end
-	-- e: energy given to v; pull: 0..1, how much it turns v toward d
-	local function give(v, p, d, e, pull)
-		if e <= 0 then return end
-		local t, cont = tiltOf(p)
-		v.e = v.e + e
-		v.hi = v.hi + e * 10 ^ (-t / 10)
-		v.df = v.df + (p.diffuse or 0) * e
-		v.raw = v.raw + (p.mixLossDb or p.rawLossDb or p.lossDb) * e
-		v.dist = v.dist + p.pos:Distance(L) * e
-		v.len = v.len + p.length * e
-		v.sum:Add(d * (e * pull))
-		v.cont = v.cont and cont
-		v.members[#v.members + 1] = p
-	end
 	if cfg.merge >= 0.5 then
 		local A0, D0 = cfg.split_angle or 60, cfg.split_db or 6
-		local function apart(ang) -- 0: in a voice's direction .. 1: far enough for a voice of its own
-			if A0 <= 0 then return 1 end
-			return ramp(ang, math.max(A0 - SPLIT_SOFT_DEG, 0), A0 + SPLIT_SOFT_DEG)
-		end
-		local function loud(dl) -- 1: loud enough for a voice of its own .. 0
-			return 1 - ramp(dl, math.max(D0 - SPLIT_SOFT_DB, 0), D0 + SPLIT_SOFT_DB)
-		end
 		-- portal voices: one slot is left for the transmission
 		local slots = math.max((cfg.max_voices or 3) - 1, 1)
 		for _, p in ipairs(kept) do
-			local d, e = dirOf(p), energyOf(p)
+			local d, e = svDirOf(p, L), svEnergyOf(p, sndlvl)
 			if #voices == 0 then
-				give(newVoice(p, d), p, d, e, 1)
+				svGive(svNewVoice(voices, p, d), p, d, e, 1, L, cfg)
 			else
 				local ap, nearest = {}, 0
 				for j, v in ipairs(voices) do
-					ap[j] = apart(math.deg(math.acos(math.Clamp(d:Dot(v.dir), -1, 1))))
+					ap[j] = svApart(math.deg(math.acos(math.Clamp(d:Dot(v.dir), -1, 1))), A0)
 					nearest = math.max(nearest, v.s * (1 - ap[j])) -- how much a voice already speaks for it
 				end
-				local s = #voices < slots and loud(best - p.level) * (1 - nearest) or 0
+				local s = #voices < slots and svLoud(best - p.level, D0) * (1 - nearest) or 0
 				if s < 1 then
 					-- the rest goes to the voices near it (a tiny weight on the closest direction when none is
 					-- near: its power is kept), each weighted by how much it is a voice of its own
@@ -1968,20 +1995,20 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 						w[j] = v.s * ((1 - ap[j]) + 1e-6 * ((1 + d:Dot(v.dir)) / 2) ^ 8) + 1e-12
 						W = W + w[j]
 					end
-					for j, v in ipairs(voices) do give(v, p, d, e * (1 - s) * w[j] / W, 1 - ap[j]) end
+					for j, v in ipairs(voices) do svGive(v, p, d, e * (1 - s) * w[j] / W, 1 - ap[j], L, cfg) end
 				end
 				if s > 0 then
-					local v = newVoice(p, d)
+					local v = svNewVoice(voices, p, d)
 					v.s = s
-					give(v, p, d, e * s, 1)
+					svGive(v, p, d, e * s, 1, L, cfg)
 				end
 			end
 		end
 	else
 		for i, p in ipairs(kept) do
 			if i > cfg.max_voices then break end
-			local d = dirOf(p)
-			give(newVoice(p, d), p, d, energyOf(p), 1)
+			local d = svDirOf(p, L)
+			svGive(svNewVoice(voices, p, d), p, d, svEnergyOf(p, sndlvl), 1, L, cfg)
 		end
 	end
 
@@ -1995,7 +2022,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 			v.pos = v.dom.pos
 		end
 		local tilt = 10 * math.log10(pw / math.max(v.hi, 1e-30))
-		if #v.members == 1 then tilt = tiltOf(v.members[1]) end -- exactly its own (no rounding at a threshold)
+		if #v.members == 1 then tilt = svTiltOf(v.members[1], cfg) end -- exactly its own (no rounding at a threshold)
 		v.lp = AC.LowpassLevel(tilt, cfg)
 		v.diffuse = v.df / pw -- energy-weighted diffuse share of the voice
 		-- loss (dB) before the headroom, energy-weighted over the members: the native full version applies
@@ -2085,6 +2112,7 @@ end
 -- Returns r, or a copy with the voices reordered or relabelled: the cached result is shared and
 -- never modified.
 local COS30 = math.cos(math.rad(30))
+local function voiceDir(v, L) return v.pos and (v.pos - L):GetNormalized() end
 function P.Stable(state, r, cfg)
 	cfg = cfg or A.cfg
 	local vs = r and r.voices
@@ -2095,12 +2123,11 @@ function P.Stable(state, r, cfg)
 		return r
 	end
 	local L = r.L
-	local function dir(v) return v.pos and (v.pos - L):GetNormalized() end
 	local hyst = cfg.path_hyst_db or 2
 	if state.dir and #vs > 1 and hyst > 0 then
 		local keep, best = nil, COS30
 		for i, v in ipairs(vs) do
-			local d = dir(v)
+			local d = voiceDir(v, L)
 			if d and d:Dot(state.dir) >= best then keep, best = i, d:Dot(state.dir) end
 		end
 		if keep and keep ~= 1 and vs[keep].level >= vs[1].level - hyst then
@@ -2109,7 +2136,7 @@ function P.Stable(state, r, cfg)
 			r = setmetatable({ voices = nv }, { __index = r })
 		end
 	end
-	state.dir = dir(r.voices[1]) or state.dir
+	state.dir = voiceDir(r.voices[1], L) or state.dir
 	local v1 = r.voices[1]
 	local lp = AC.LowpassHold(v1.lp or 0, v1.lpDb, state.lp, cfg.lp_hyst_db or 0, cfg)
 	if lp ~= (v1.lp or 0) then
@@ -2228,22 +2255,22 @@ end
 -- power to the voice closest in direction (no energy lost or counted twice). Returns, per old voice,
 -- { pos, gain, lp, len, sh } (position, low-pass, length of its first new voice; gain = power sum),
 -- or false: fade it out.
+local function unitFrom(p, L)
+	local d = p - L
+	local l = d:Length()
+	return l > 1e-6 and d * (1 / l) or d
+end
 function P.FollowAssign(L, olds, voices)
 	local out, n, k = {}, #olds, #voices
 	if n == 0 then return out end
-	local function dir(p)
-		local d = p - L
-		local l = d:Length()
-		return l > 1e-6 and d * (1 / l) or d
-	end
 	local groups, used = {}, {}
 	for i = 1, n do groups[i] = {} end
 	if k > 0 then groups[1][1], used[1] = 1, true end
 	for i = 2, n do
-		local di, best, bj = dir(olds[i]), -math.huge, nil
+		local di, best, bj = unitFrom(olds[i], L), -math.huge, nil
 		for j = 2, k do
 			if not used[j] then
-				local c = di:Dot(dir(voices[j].pos))
+				local c = di:Dot(unitFrom(voices[j].pos, L))
 				if c > best then best, bj = c, j end
 			end
 		end
@@ -2251,11 +2278,11 @@ function P.FollowAssign(L, olds, voices)
 	end
 	for j = 2, k do
 		if not used[j] then
-			local dj, best, bi = dir(voices[j].pos), -math.huge, 1
+			local dj, best, bi = unitFrom(voices[j].pos, L), -math.huge, 1
 			for i = 1, n do
 				local g = groups[i][1]
 				if g then
-					local c = dj:Dot(dir(voices[g].pos))
+					local c = dj:Dot(unitFrom(voices[g].pos, L))
 					if c > best then best, bi = c, i end
 				end
 			end
@@ -2538,7 +2565,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				for _, w in ipairs(tw) do if w.ent or w.water then rest[#rest + 1] = w else world[#world + 1] = w end end
 				if #world > 0 then
 					local wl, wlp, wm = P.EvalWalls(world, cfg, true)
-					wl, wlp, wm = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, function(w) return not w.ent and not w.water end)
+					wl, wlp, wm = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepWorldWall)
 					local el, elp, em = 0, 0, 0
 					if #rest > 0 then el, elp, em = P.EvalWalls(rest, cfg, true) end
 					loss, mid, lp = math.min(wl + el, cfg.trans_max), math.min(wm + em, cfg.trans_max), math.max(wlp, elp)
@@ -2570,7 +2597,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 						if #known > 0 then
 							for _, w in ipairs(entWalls) do other[#other + 1] = w end
 							local wl, wlp, wm = P.EvalWalls(known, cfg, true)
-							wl, wlp, wm = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, function(w) return not w.ent and not w.water and not P.NativeLacks(w, nativeDisp) end)
+							wl, wlp, wm = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepNativeWorldWall, nativeDisp)
 							local el, elp, em = 0, 0, 0
 							if #other > 0 then el, elp, em = P.EvalWalls(other, cfg, true) end
 							local bl, blp, bm = P.NativeBlend(d.occlusion, wl, wlp, wm)
@@ -2621,7 +2648,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 					-- (only for leaves on the line: past the wall it still goes through them, not into the open, where
 					-- the clear line takes over from the transmission instead)
 					if fade > 0 and onLine and (cfg.trans_bundle_edge or 0) >= 0.5 then
-						local e = P.BundleEdge(S, L, srcEnt, cfg, function(w) return not w.ent and not w.water end)
+						local e = P.BundleEdge(S, L, srcEnt, cfg, P.KeepWorldWall)
 						-- linear in dB: the voice often carries the highs (the route's leaves muffle more than the
 						-- wall), which its level sets until it is some 30 dB under the route
 						fade = e > 0 and fade * 10 ^ (-TRANS_EDGE_DB * (1 - e) / 10) or 0

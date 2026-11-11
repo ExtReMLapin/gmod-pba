@@ -97,9 +97,11 @@ local function unchanged(j)
 		and j.in8 == (PR.NativeTraces and PR.NativeTraces() or false)
 end
 
+-- the job's coroutine body, made once (no closure per job): j comes with the first resume (later resumes pass
+-- it again, as the slice check's yield result, which it ignores)
+local function jobBody(j) return A.Paths.Compute(j.S, j.L, j.lvl, j.cfg, j.ent) end
 local function newCo(j)
-	local S, L, lvl, cfg, ent = j.S, j.L, j.lvl, j.cfg, j.ent
-	j.co = coroutine.create(function() return A.Paths.Compute(S, L, lvl, cfg, ent) end)
+	j.co = coroutine.create(jobBody)
 	-- no pause before the evaluation has read its listener field (A.Paths.slice.hold, PR.FieldFor): that
 	-- part runs in its first slice, at its request, in the order of the requests
 	j.hold, j.fresh = true, true
@@ -121,7 +123,7 @@ local function run(j, tEnd, first)
 	local pco, pt, ph = sl.co, sl.t, sl.hold
 	sl.co, sl.t, sl.hold = j.co, tEnd, j.hold
 	local t0 = A.Paths.slice.clock()
-	local ok, r = coroutine.resume(j.co)
+	local ok, r = coroutine.resume(j.co, j)
 	local dt = A.Paths.slice.clock() - t0
 	j.cpu = j.cpu + dt
 	j.hold = sl.hold
@@ -277,6 +279,11 @@ function SL.Run()
 	end
 end
 
+-- SL.Held's job.onDone, made once: the owner's onReady(owner) when set
+local function heldDone(_, j)
+	local f = j.heldReady
+	if f then f(j.heldOwner) end
+end
 --- Continuous sounds (loops, streams, followed one-shots): `owner` is the caller's table for that sound.
 -- Returns the final result to use now, or nil while its evaluation runs in slices: the caller keeps what it
 -- has (no new value goes to its hysteresis), and onReady(owner) is called once the result is ready, which
@@ -294,7 +301,8 @@ function SL.Held(owner, S, L, sndlvl, srcEnt, onReady)
 	owner.pbaSliceSeen = true
 	if not job then return r end
 	owner.pbaSlice = job
-	job.onDone = function() if onReady then onReady(owner) end end
+	job.heldReady, job.heldOwner = onReady, owner
+	job.onDone = heldDone
 	return nil
 end
 

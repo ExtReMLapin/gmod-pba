@@ -707,7 +707,7 @@ function N.MixVoices(voices, L, lvl, law, gainOf)
 		pos = v1.pos, lp = v1.lp, lpDb = v1.lpDb }
 	if (A.cfg.native_voice_mix or 0) >= 0.5 and #voices > 1 and p > 0 then
 		if sum:LengthSqr() > 1e-12 then m.pos = L + sum:GetNormalized() * (dist / p) end
-		m.lpDb = A.AC.MixTilt(unpack(tilts))
+		m.lpDb = A.AC.MixTiltList(tilts)
 		m.lp = A.AC.LowpassLevel(m.lpDb)
 	end
 	return m
