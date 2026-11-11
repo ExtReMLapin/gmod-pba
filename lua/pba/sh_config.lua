@@ -103,7 +103,7 @@ A.CONFIG = {
 	probe_dist      = { 3000, 0, 30000, "sv", "Beyond this distance no probe path search (transmission only)." },
 	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_pba is installed." },
 	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },
-	native_render   = { 0, 0, 1, "cl", "Experimental: the native module plays processed sounds itself (Steam Audio HRTF + 3-band EQ)." },
+	native_render   = { 1, 0, 1, "cl", "With the native module installed: it plays processed sounds itself (Steam Audio HRTF, 3-band EQ, simulated room reverb). 0 = the engine plays them (muffling presets only, no simulated reverb)." },
 	native_reverb   = { 0.4, 0, 2, "cl", "Room reverb level of natively rendered sounds (Steam Audio reflections simulated at the listener). Each sound feeds the reverb with its level times its distance (the reverb/direct balance of a real room, whatever the game's distance law); 0.4 matches an empty room's physics (rp_downtown, measured: reverb = direct + 3 dB at 1 m, +18 dB at 5.5 m). Lower for a drier sound." },
 	native_voice_mix = { 1, 0, 1, "cl", "A loop or a stream rendered as one native voice takes its voices' position and low-pass mixed by energy (0: the loudest voice's, which jumped where two voices of about the same level swapped order)." },
 	native_room_shadow = { 1, 0, 1, "cl", "Natively rendered sounds: the listener's room reverb is fed by what arrives into the listener's space in proportion to how much of the clear-line energy the arrivals lost on the way (through walls, round corners, past doors), in dB up to pba_native_room_shadow_db: none in clear sight or just past a door jamb (the source's own reverb renders that space), all of it behind a wall, continuously in between. 0 = all of it for any arrival that is not the clear line (a step past a door jamb switched the reverb up by 16 dB)." },
@@ -214,6 +214,8 @@ if CLIENT and cookie then
 		-- 1.1 dev builds: far grouping shipped with 2 deg and no reuse in time before the bench
 		{ name = "group_angle", old = 2, key = "pba_mig_group_angle_v1" },
 		{ name = "group_time", old = 0, key = "pba_mig_group_time_v1" },
+		-- 1.1: native rendering on by default (the simulated reverb is only heard with it)
+		{ name = "native_render", old = 0, key = "pba_mig_native_render_v1" },
 	}
 	for _, m in ipairs(MIGRATE) do
 		local cv = A.cv[m.name]
