@@ -2054,6 +2054,39 @@ end
 -- units (30 cm): a prop whose thinnest box side is larger is a closed volume, not a panel (a door model
 -- is ~12 u thick with its handles)
 local HOLLOW_MIN = 16
+--- World part of the straight line's transmission as the power mean over a bundle of lines through the
+-- first Fresnel zone (pba_trans_bundle): the line and four bent through its midpoint offset across it by the
+-- zone's radius there, sqrt(lambda d) / 2 at pba_diff_freq, at most pba_trans_bundle_r. One line paid each
+-- wall it cut in full: where it grazed a junction (a floor meeting the outer wall at a doorway's foot) a 16 u
+-- step added or swapped a whole wall (rp_downtown street walk: 19.8 -> 29.9, 35 -> 54.9 dB). Sound crosses a
+-- wall over the zone, not along one ray. The bent lines keep both ends (a listener hugging a wall has no
+-- offset end inside it) and are traced from each end towards the offset midpoint, so a midpoint inside a wall
+-- counts that wall's chord on both halves. keep(w) picks the walls counted (the caller's split). Returns
+-- loss, lp (the centre's), mid.
+function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep)
+	if (cfg.trans_bundle or 0) < 0.5 then return loss, lp, mid end
+	local d = S:Distance(L)
+	local lambda = 343 / (cfg.diff_freq or 1000) / 0.01905 -- units
+	local r = math.min(cfg.trans_bundle_r or 24, 0.5 * math.sqrt(lambda * d))
+	if r < 0.5 then return loss, lp, mid end
+	local dir = (L - S):GetNormalized()
+	local u = dir:Cross(math.abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
+	u:Normalize()
+	local v = dir:Cross(u)
+	local M = (S + L) * 0.5
+	local gl, gm, n = 10 ^ (-loss / 10), 10 ^ (-mid / 10), 1
+	for _, o in ipairs({ u * r, u * -r, v * r, v * -r }) do
+		local m, sel = M + o, {}
+		for _, half in ipairs({ P.Walls(S, m, cfg.trans_max_walls, srcEnt, true), P.Walls(L, m, cfg.trans_max_walls, srcEnt, true) }) do
+			for _, w in ipairs(half) do if keep(w) then sel[#sel + 1] = w end end
+		end
+		local l2, _, m2 = 0, 0, 0
+		if #sel > 0 then l2, _, m2 = P.EvalWalls(sel, cfg, true, true) end
+		gl, gm, n = gl + 10 ^ (-l2 / 10), gm + 10 ^ (-m2 / 10), n + 1
+	end
+	return -10 * math.log10(gl / n), lp, -10 * math.log10(gm / n)
+end
+
 function P.EvalWalls(walls, cfg, noCap, noDetour)
 	cfg = cfg or A.cfg
 	local loss, mid, lp = 0, 0, 0
@@ -3300,6 +3333,18 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		end
 		if #tw > 0 then
 			local loss, lp, mid = P.EvalWalls(tw, cfg)
+			-- Lua backend: the world walls' part over a bundle of parallel lines (P.BundleWalls)
+			if (cfg.trans_bundle or 0) >= 0.5 and not (CLIENT and A.Native and A.Native.ready) then
+				local world, rest = {}, {}
+				for _, w in ipairs(tw) do if w.ent or w.water then rest[#rest + 1] = w else world[#world + 1] = w end end
+				if #world > 0 then
+					local wl, wlp, wm = P.EvalWalls(world, cfg, true)
+					wl, wlp, wm = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, function(w) return not w.ent and not w.water end)
+					local el, elp, em = 0, 0, 0
+					if #rest > 0 then el, elp, em = P.EvalWalls(rest, cfg, true) end
+					loss, mid, lp = math.min(wl + el, cfg.trans_max), math.min(wm + em, cfg.trans_max), math.max(wlp, elp)
+				end
+			end
 			-- native backend: volumetric occlusion of the direct line by the WORLD (Steam Audio
 			-- knows the map, not the props / doors). Near a door frame part of the source is still
 			-- visible: blend the clear part into the world share of the loss.
@@ -3326,6 +3371,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 						if #known > 0 then
 							for _, w in ipairs(entWalls) do other[#other + 1] = w end
 							local wl, wlp, wm = P.EvalWalls(known, cfg, true)
+							wl, wlp, wm = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, function(w) return not w.ent and not w.water and not P.NativeLacks(w, nativeDisp) end)
 							local el, elp, em = 0, 0, 0
 							if #other > 0 then el, elp, em = P.EvalWalls(other, cfg, true) end
 							local bl, blp, bm = P.NativeBlend(d.occlusion, wl, wlp, wm)
@@ -3399,7 +3445,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				local e = P.WorldEdge(S, L, r.trans.walls, cfg)
 				if e then
 					local way = { S, e.apex, L }
-					local dup = false
+					local dup, near, nearD = false, nil, math.huge
 					for _, p in ipairs(r.paths) do
 						if p.points and #p.points > 0 and not p.native then
 							sliceCheck()
@@ -3407,6 +3453,11 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 							for _, v in ipairs(p.points) do pts[#pts + 1] = v end
 							pts[#pts + 1] = L
 							if P.SameRoute(way, pts) then dup = p break end
+							-- how far this route passes from the edge's apex (pba_edge_dup_blend)
+							for i = 1, #pts - 1 do
+								local a, ab = pts[i], pts[i + 1] - pts[i]; local t = math.Clamp((e.apex - a):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1); local d = e.apex:Distance(a + ab * t)
+								if d < nearD then near, nearD = p, d end
+							end
 						end
 					end
 					-- pba_edge_dup_best: a route of the same way (homotopic) that its own corners cost more than
@@ -3417,6 +3468,26 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 					if dup and (cfg.edge_dup_best or 1) >= 0.5 and e.db < (dup.lossDb or math.huge) then
 						for x = #r.paths, 1, -1 do if r.paths[x] == dup then table.remove(r.paths, x) end end
 						dup = false
+					end
+					-- pba_edge_dup_blend: the zipper's answer (one way or two) is all or nothing, and where it turns
+					-- from "the same way" to "distinct" the two estimates of what is still one way were summed at once
+					-- (gm_melancholia's stairs, 16 u above the eyes: 2.2-2.6 dB in one 4 u step). A route passing
+					-- within edge_dup_blend_u of the apex is that much the same way: the weaker of the two keeps
+					-- (1 - w) of its power, w = 1 at the apex, 0 at edge_dup_blend_u.
+					if not dup and near and (cfg.edge_dup_blend or 1) >= 0.5 then
+						local span = math.max(cfg.edge_dup_blend_u or 64, 1)
+						local w = math.Clamp(1 - nearD / span, 0, 0.999)
+						if w > 0 then
+							local cut = -10 * math.log10(1 - w)
+							if e.db <= (near.lossDb or math.huge) then
+								near.lossDb = near.lossDb + cut
+								near.blendDb = cut
+							else
+								e = table.Copy(e)
+								e.db = e.db + cut
+								e.blendDb = cut
+							end
+						end
 					end
 					r.edge, r.edgeDup, r.edgePath = e, dup and true or nil, dup or nil
 					if not dup then P.AddEdge(r.trans, e, L, cfg) end

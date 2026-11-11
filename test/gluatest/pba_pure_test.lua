@@ -1671,7 +1671,7 @@ local SUITE = {
 			end
 			A.Graph.Get = function() return nil end
 			A.Native = { ready = true, Direct = function() return { occlusion = occ } end }
-			local cfg = setmetatable({ probes = 0, path_props = 0 }, { __index = CFG })
+			local cfg = setmetatable({ probes = 0, path_props = 0, trans_bundle = 0 }, { __index = CFG })
 			local ok, err = pcall(function()
 				local S, L = Vector(0, 0, 0), Vector(300, 0, 0)
 				local function at(o) occ = o P.InvalidateCache() return P.Compute(S, L, 75, cfg).trans end

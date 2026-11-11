@@ -20,7 +20,15 @@ local SNDLVL = 75
 job:wait(function() return A.Probes.current ~= nil end, 300)
 local g = A.Probes.current
 local nodes = g.nodes
-math.randomseed(SEED)
+-- a private generator (LCG): the shared math.random is drawn by other code between the job's frames, and
+-- the pairs and walks differed from run to run (two parallel runs: different skipped counts, worst steps)
+local rngState = SEED % 2147483648
+local function rand(n)
+	rngState = (rngState * 1103515245 + 12345) % 2147483648
+	local x = rngState / 2147483648
+	if n then return math.floor(x * n) + 1 end
+	return x
+end
 local t0job = SysTime()
 
 local function clear(a, b) return not util.TraceLine({ start = a, endpos = b, mask = MASK_SOLID_BRUSHONLY }).Hit end
@@ -35,7 +43,7 @@ end
 local function walk(p0)
 	if not free(p0, p0) then return nil end
 	for _ = 1, 12 do
-		local yaw = math.random() * 2 * math.pi
+		local yaw = rand() * 2 * math.pi
 		local dir = Vector(math.cos(yaw), math.sin(yaw), 0)
 		local pts, ok = { p0 }, true
 		for i = 1, STEPS do
@@ -113,7 +121,7 @@ local tries, pairs_ = 0, 0
 while pairs_ < N and tries < N * 400 do
 	tries = tries + 1
 	local lift = Vector(0, 0, args.lift or 12)
-	local a, b = nodes[math.random(#nodes)].pos + lift, nodes[math.random(#nodes)].pos + lift
+	local a, b = nodes[rand(#nodes)].pos + lift, nodes[rand(#nodes)].pos + lift
 	local d = a:Distance(b)
 	if d >= 300 and d <= 1200 then
 		if clear(a, b) then

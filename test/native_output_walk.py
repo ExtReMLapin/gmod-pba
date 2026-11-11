@@ -9,7 +9,7 @@ Walks:
     (-323.2, -335.1, 24), a ceiling 52 u above the eyes) to the open sky one metre left (-375.2, -332.5, 24)
     and two metres further (-479.2, -327.3, 24), then back (the back half: the same points read again).
 Method: the player is teleported (noclip: points in mid-air or crossing walls hold) with a server lua_exec,
-then SETTLE s (1 s: re-evaluation, ramps, the reverb's simulation) and a WINDOW s reading of the module's
+then SETTLE s (2.5 s, the reverb window pba_native_reverb_window: with 1 s the reverb read at a step still held part of the previous one, and two parallel runs read 11.9 and 25.3 dB at the same point) and a WINDOW s reading of the module's
 own mix: pba.Native.energyL/R (what SetListener returns each frame, summed) and RenderDebug (the direct
 part), both divided by the window's duration (an energy per second: windows of different lengths compare).
 total - direct = reverb.
@@ -38,7 +38,7 @@ import sys
 import time
 
 MCP = sys.argv[1]
-SETTLE = next((float(a[9:]) for a in sys.argv[2:] if a.startswith("--settle=")), 1.0)
+SETTLE = next((float(a[9:]) for a in sys.argv[2:] if a.startswith("--settle=")), 2.5)
 WINDOW = next((float(a[9:]) for a in sys.argv[2:] if a.startswith("--window=")), 0.5)
 STEP, MAX_DB, EDGE_DB, FLOOR_DB, NOISE_DB = 16.0, 2.0, 4.0, 60.0, 1.0
 TEST = os.path.dirname(os.path.abspath(__file__))
