@@ -6,7 +6,7 @@
 -- instead of duplicating.
 
 pba = pba or {}
-pba.VERSION = "0.1.0-dev"
+pba.VERSION = "1.1.0"
 
 local files = {
 	{ "pba/sh_config.lua", "sh" },
