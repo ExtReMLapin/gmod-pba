@@ -424,7 +424,8 @@ def _check_loop_removed(d):
 CHECKS = {"GLuaTest pure suite": _check_pure, "GLuaTest pure suite (native helpers)": _check_pure, "menu_fit": _check_menu, "loop_removed": _check_loop_removed}
 
 def judge_py(o):
-    lines = o.out.splitlines()
+    # _cvsnap's notes come after the verdict (at exit): they would hide the last JSON object
+    lines = [l for l in o.out.splitlines() if not l.startswith(("restored settings:", "settings left by a killed test"))]
     last = next((l for l in reversed(lines) if l.strip()), "") or next((l for l in reversed(o.err.splitlines()) if l.strip()), "")
     fails = [l for l in lines if l.startswith("FAIL")]
     if o.rc != 0:
