@@ -141,6 +141,11 @@ Build (Windows x64):
 3. Copy `gmcl_pba_win64.dll` and `native/deps/steamaudio/lib/windows-x64/phonon.dll` into
    `garrysmod/lua/bin/`, with the game closed (a loaded `phonon.dll` is never released).
 
+The Workshop updates the Lua, not the module. With the module installed (and only then), the
+client asks GitHub's public API (`api.github.com`, nothing else, at most once a day) for the
+latest release and says in the console and the Steam Audio tab when a newer one is out.
+`pba_update_check 0` turns this off.
+
 The native module (`native/`) is MIT licensed (see `native/LICENSE`).
 
 ## Demo map

@@ -67,5 +67,12 @@ L.execute("timer.Remove = timer.Remove or function() end")
 L.execute(open(os.path.join(repo, "lua", "pba", "cl_native.lua"), encoding="utf-8").read())
 src_native = open(os.path.join(repo, "test", "gluatest", "pba_pure_native_test.lua"), encoding="utf-8").read()
 print(L.execute(runner.replace('"pba_pure_test"', '"pba_pure_native_test"'), src_native))
+
+# The native module update check (cl_update.lua): network, cookies and the module are stubbed by the suite.
+upd = os.path.join(repo, "lua", "pba", "cl_update.lua")
+if os.path.exists(upd):
+    L.execute(open(upd, encoding="utf-8").read())
+src_update = open(os.path.join(repo, "test", "gluatest", "pba_pure_update_test.lua"), encoding="utf-8").read()
+print(L.execute(runner.replace('"pba_pure_test"', '"pba_pure_update_test"'), src_update))
 if len(sys.argv) > 2:
     print(L.execute(open(sys.argv[2], encoding="utf-8").read(), repo))  # the repo path as `...`

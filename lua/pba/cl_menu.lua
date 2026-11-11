@@ -78,7 +78,9 @@ function Build.native(panel)
 	local function dep(ctl, need) if IsValid(ctl) then deps[#deps + 1] = { ctl, need } end return ctl end
 	local R = "render"
 	panel.apStatus = panel:Help("")
+	panel.apUpdate = panel:Help("")
 	dep(chk(panel, "Use the Steam Audio module", "native"), "module")
+	dep(chk(panel, "Check for module updates", "update_check"), "module")
 
 	panel:Help("Rendering (headphones recommended):")
 	dep(chk(panel, "Native rendering", "native_render"), "ready")
@@ -339,6 +341,17 @@ function A.RefreshMenu()
 				else
 					p.apStatus:SetText(text)
 					p.apStatus:SetTextColor(color)
+				end
+			end
+			-- native module update (cl_update.lua): empty when up to date or unknown
+			if IsValid(p.apUpdate) then
+				local U = A.Update or {}
+				local t = U.text and (U.text .. "  (console: pba_update_open)") or ""
+				if p.apUpdate:GetText() ~= t then
+					p.apUpdate:SetText(t)
+					p.apUpdate:SetTextColor(U.incompatible and RED or ORANGE)
+					p.apUpdate:SetVisible(t ~= "")
+					p.apUpdate:InvalidateParent()
 				end
 			end
 			for _, d in ipairs(p.apDeps or {}) do

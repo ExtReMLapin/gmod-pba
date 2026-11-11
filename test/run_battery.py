@@ -203,6 +203,8 @@ steps = [
     ("GLuaTest pure suite", pure),
     # the native helpers (physical law, sends, directivity, EQ) in the real game state
     ("GLuaTest pure suite (native helpers)", lambda: seq(lambda: native_on(True), lambda: pure("pba_pure_native_test.lua"))),
+    # the native module update check (network, cookies and module stubbed)
+    ("GLuaTest pure suite (update check)", lambda: pure("pba_pure_update_test.lua")),
     # metrics of the perceptual bench (Python, no game): full battery only
     ("perceptual metrics (pure)", lambda: py("test_perceptual.py")),
     ("cvsnap killed-test recovery (pure)", lambda: py("test_cvsnap.py")),
