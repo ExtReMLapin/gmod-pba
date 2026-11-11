@@ -42,3 +42,22 @@ else()
 	target_link_libraries(gmcl_pba PRIVATE phonon)
 endif()
 set_target_properties(gmcl_pba PROPERTIES PREFIX "" SUFFIX ".dll" OUTPUT_NAME "gmcl_pba_${MODULE_SUFFIX}")
+
+# Version of the module, written into it at build time from the addon's own version (pba.VERSION in
+# lua/autorun/pba_init.lua, the one tools/make_release.py checks against the release): the Lua reads it with
+# pba_native.ModuleVersion(). -DPBA_VERSION=x.y.z overrides it.
+set(PBA_INIT_LUA "${CMAKE_CURRENT_SOURCE_DIR}/../lua/autorun/pba_init.lua")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PBA_INIT_LUA}")
+file(STRINGS "${PBA_INIT_LUA}" PBA_VERSION_LINE REGEX "^pba[.]VERSION *= *\"")
+string(REGEX REPLACE "^pba[.]VERSION *= *\"([^\"]*)\".*$" "\\1" PBA_VERSION_FROM_LUA "${PBA_VERSION_LINE}")
+if(NOT PBA_VERSION_FROM_LUA)
+	message(FATAL_ERROR "pba.VERSION not found in ${PBA_INIT_LUA}")
+endif()
+set(PBA_VERSION "" CACHE STRING "version written into the module (empty: pba.VERSION of pba_init.lua)")
+if(PBA_VERSION)
+	set(PBA_MODULE_VERSION "${PBA_VERSION}")
+else()
+	set(PBA_MODULE_VERSION "${PBA_VERSION_FROM_LUA}")
+endif()
+message(STATUS "gmcl_pba module version: ${PBA_MODULE_VERSION}")
+target_compile_definitions(gmcl_pba PRIVATE PBA_MODULE_VERSION="${PBA_MODULE_VERSION}")

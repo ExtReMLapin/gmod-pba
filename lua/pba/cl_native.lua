@@ -14,6 +14,38 @@ local N = A.Native or {}
 A.Native = N
 
 local MODULE = "lua/bin/gmcl_pba_" .. (jit.arch == "x64" and "win64" or "win32") .. ".dll"
+-- Module compatibility. The Lua comes from the Workshop (updated by itself), the module is installed by hand: it
+-- can be of another version. pba_native.ModuleVersion() -> version text (the addon's pba.VERSION it was built
+-- from), API number (raised in native/src/pba_native.cpp, PBA_NATIVE_API, when a function changes). This Lua
+-- accepts the API range N.API_MIN..N.API_MAX; any other module, or one without ModuleVersion (older than this
+-- check), is left unused as if it were not installed. No automatic update.
+N.API_MIN, N.API_MAX = 1, 1
+local UPDATE_HINT = "update gmcl_pba_win64.dll and phonon.dll in garrysmod/lua/bin with the ones of the PBA release matching the addon"
+
+-- -> true, nil, version, api | false, message, version, api (mod: the module's table, pba_native)
+function N.CheckModule(mod)
+	if type(mod) ~= "table" then return false, "native module not loaded" end
+	local range = N.API_MIN == N.API_MAX and tostring(N.API_MIN) or (N.API_MIN .. "-" .. N.API_MAX)
+	if type(mod.ModuleVersion) ~= "function" then
+		return false, string.format("native module not up to date: API %s expected, an older version (without a version number) is installed; %s (addon %s)",
+			range, UPDATE_HINT, tostring(A.VERSION))
+	end
+	local ok, ver, api = pcall(mod.ModuleVersion)
+	if not ok or type(api) ~= "number" then
+		return false, string.format("native module version unreadable (%s); %s", tostring(ok and api or ver), UPDATE_HINT)
+	end
+	ver = tostring(ver)
+	if api < N.API_MIN then
+		return false, string.format("native module not up to date: API %s expected, API %d installed (module %s, addon %s); %s",
+			range, api, ver, tostring(A.VERSION), UPDATE_HINT), ver, api
+	end
+	if api > N.API_MAX then
+		return false, string.format("native module newer than the addon: API %s expected, API %d installed (module %s, addon %s); %s",
+			range, api, ver, tostring(A.VERSION), UPDATE_HINT), ver, api
+	end
+	return true, nil, ver, api
+end
+
 local SKIP_PREFIX = { "tools/toolsclip", "tools/toolsplayerclip", "tools/toolsnpcclip", "tools/toolstrigger",
 	"tools/toolshint", "tools/toolsskip", "tools/toolsskybox", "tools/toolsfog", "tools/toolsoccluder" }
 
@@ -171,13 +203,20 @@ function N.BuildWorld()
 end
 
 function N.Start()
-	N.ready, N.pathsReady, N.err = false, false, nil
+	N.ready, N.pathsReady, N.err, N.outdated = false, false, nil, nil
 	if (A.cfg.native or 1) < 0.5 then return end
 	if (A.cfg.allow_native or 1) < 0.5 then N.err = "disabled by the server (pba_allow_native 0)" return end
 	if not file.Exists(MODULE, "GAME") then N.err = "module not installed" return end
 	if not pba_native then
 		local ok, err = pcall(require, "pba")
 		if not ok or not pba_native then N.err = "require failed: " .. tostring(err) return end
+	end
+	local compatible, why, ver, api = N.CheckModule(pba_native)
+	N.moduleVersion, N.moduleApi = ver, api
+	if not compatible then
+		N.err, N.outdated = why, true
+		MsgC(Color(255, 90, 60), "[PBA] " .. why .. "\n")
+		return
 	end
 	local ok, err = pba_native.Init()
 	if not ok then N.err = err return end
@@ -223,8 +262,8 @@ function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	N.loadMs = (SysTime() - t0) * 1000
 	N.tris, N.mins, N.maxs, N.nMats = nt, mins, maxs, #mats
 	N.ready = nt > 0
-	MsgN(string.format("[PBA] native backend: Steam Audio %d, %d triangles, %d materials, gathered in %.0f ms over %.1f s, loaded in %.0f ms",
-		pba_native.Version(), nt, #mats, N.buildMs or 0, SysTime() - (N.buildStart or SysTime()), N.loadMs))
+	MsgN(string.format("[PBA] native backend: module %s (API %d), Steam Audio %d, %d triangles, %d materials, gathered in %.0f ms over %.1f s, loaded in %.0f ms",
+		tostring(N.moduleVersion), N.moduleApi or 0, pba_native.Version(), nt, #mats, N.buildMs or 0, SysTime() - (N.buildStart or SysTime()), N.loadMs))
 	if N.ready then N.StartRender() end
 	if N.ready then N.WantReverbBake() end
 	if N.ready and (A.cfg.native_paths or 0) >= 0.5 then

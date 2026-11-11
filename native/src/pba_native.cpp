@@ -4,6 +4,8 @@
 // The module only computes; pba's Lua side keeps playing the sounds. Lua API, in the
 // global table `pba_native` after require("pba"):
 //   Version() -> number (Steam Audio version, MMmmpp)
+//   ModuleVersion() -> text, number (version of this module, written at build time from the addon's
+//       pba.VERSION; API compatibility number, PBA_NATIVE_API: the Lua accepts a range of it)
 //   Init() -> true | false, err
 //   LoadWorld(verts, tris, matIdx, materials) -> numTriangles
 //       verts: flat {x,y,z,...} in Source units; tris: flat 0-based indices {a,b,c,...};
@@ -1022,6 +1024,20 @@ bool EnsureSimulator() {
 }
 
 } // namespace
+
+// API compatibility number of the module: raised when a function the Lua calls changes its arguments, its
+// results or its behaviour. lua/pba/cl_native.lua accepts a range (N.API_MIN..N.API_MAX) and leaves an
+// out-of-range module unused.
+static const int PBA_NATIVE_API = 1;
+#ifndef PBA_MODULE_VERSION
+#define PBA_MODULE_VERSION "unknown"
+#endif
+
+LUA_FUNCTION(ModuleVersion) {
+	LUA->PushString(PBA_MODULE_VERSION);
+	LUA->PushNumber(PBA_NATIVE_API);
+	return 2;
+}
 
 LUA_FUNCTION(Version) {
 	LUA->PushNumber(STEAMAUDIO_VERSION_MAJOR * 10000 + STEAMAUDIO_VERSION_MINOR * 100 + STEAMAUDIO_VERSION_PATCH);
@@ -2515,6 +2531,8 @@ GMOD_MODULE_OPEN() {
 	LUA->CreateTable();
 	LUA->PushCFunction(Version);
 	LUA->SetField(-2, "Version");
+	LUA->PushCFunction(ModuleVersion);
+	LUA->SetField(-2, "ModuleVersion");
 	LUA->PushCFunction(Init);
 	LUA->SetField(-2, "Init");
 	LUA->PushCFunction(LoadWorld);

@@ -307,6 +307,7 @@ local function nativeState()
 	end
 	if N.building then return "module", ORANGE, "Steam Audio module: loading the map geometry..." end
 	if (A.cfg.native or 1) < 0.5 then return "module", ORANGE, "Native backend switched off (pba_native 0)." end
+	if N.outdated then return "module", RED, "Steam Audio module NOT UP TO DATE, left unused: " .. tostring(N.err) end
 	if N.err == "module not installed" or not N.err then
 		return "missing", RED, "Steam Audio module NOT INSTALLED: these options need gmcl_pba_win64.dll and phonon.dll in garrysmod/lua/bin."
 	end

@@ -106,7 +106,7 @@ local function nativeTraces()
 	if NT ~= nil then return NT end
 	if not ntSegs then return false end
 	NT = false
-	local T = pba_native and pba_native.trace
+	local T = pba_native and not (A.Native and A.Native.outdated) and pba_native.trace
 	if not (T and T.Init and T.Init()) then return false end
 	-- a wrong layout (vtable, Ray_t) makes most traces differ; a rare hull difference exists (rp_downtown:
 	-- 1 hull in 1500, 24 u off, lines all identical) and must not switch the whole path off at a map load

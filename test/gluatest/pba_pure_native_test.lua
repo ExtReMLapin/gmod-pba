@@ -63,6 +63,48 @@ return {
 				and N.EntrySend ~= nil and N.SlotSend ~= nil and N.LossLin ~= nil and N.Law ~= nil and N.Directivity ~= nil and N.VoiceEQ ~= nil).to.beTrue()
 			expect(near(N.REF_UNITS, 1 / 0.01905, 0.01)).to.beTrue()
 		end },
+		{ name = "CheckModule: a module is used only inside the accepted API range; absent, older (no ModuleVersion) or out of range: left unused, with a message", func = function()
+			-- stubs of pba_native: only ModuleVersion is read
+			local lo, hi = N.API_MIN, N.API_MAX
+			expect(type(lo) == "number" and type(hi) == "number" and lo <= hi).to.beTrue()
+			local function stub(ver, api) return { ModuleVersion = function() return ver, api end, Version = function() return 40801 end } end
+			-- absent
+			local ok, msg = N.CheckModule(nil)
+			expect(ok).to.equal(false)
+			expect(type(msg) == "string").to.beTrue()
+			-- older module: Version() (Steam Audio) but no ModuleVersion
+			ok, msg = N.CheckModule({ Version = function() return 40801 end })
+			expect(ok).to.equal(false)
+			expect(msg:find("older version", 1, true) ~= nil).to.beTrue()
+			expect(msg:find(tostring(lo), 1, true) ~= nil).to.beTrue()
+			-- below and above the range: the message names the installed API
+			for _, api in ipairs({ lo - 1, hi + 1, hi + 50 }) do
+				local v
+				ok, msg, v = N.CheckModule(stub("9.9.9", api))
+				expect(ok).to.equal(false)
+				expect(v).to.equal("9.9.9")
+				expect(msg:find("API " .. api .. " installed", 1, true) ~= nil).to.beTrue()
+			end
+			-- a broken ModuleVersion (error, no number): unused
+			ok = N.CheckModule({ ModuleVersion = function() error("boom") end })
+			expect(ok).to.equal(false)
+			ok = N.CheckModule(stub("1.0.0", nil))
+			expect(ok).to.equal(false)
+			-- inside the range, both ends included: used, version and API passed through
+			for api = lo, hi do
+				local v, a
+				ok, msg, v, a = N.CheckModule(stub("1.2.3", api))
+				expect(ok).to.beTrue()
+				expect(msg).to.beNil()
+				expect(v).to.equal("1.2.3")
+				expect(a).to.equal(api)
+			end
+			-- a wider range accepts what it covers (the range is not an equality)
+			N.API_MIN, N.API_MAX = lo, hi + 2
+			local okWide = N.CheckModule(stub("x", hi + 2))
+			N.API_MIN, N.API_MAX = lo, hi
+			expect(okWide).to.equal(true)
+		end },
 		{ name = "PhysClear: 1/r, -6.02 dB per doubling beyond 1 m, flat below 1 m, the engine's gain at 1 m", func = function()
 			withCfg(BASE, function()
 				for _, lvl in ipairs({ 60, 75, 85, 90 }) do
