@@ -182,6 +182,11 @@ Reflection g_room;                 // reverb at the listener, fed by every voice
 // extra room-reverb send of a diffuse voice: send x (1 + g_diffuseSend x share). 1.5 keeps the total
 // (direct + reverb) about constant in a typical room (measured on pba_demo: direct x 0.11 at share 0.85)
 float g_diffuseSend = 1.5f;
+// The diffuse redistribution is energy-neutral only where the listener's room gives the energy back:
+// outdoors (short or no tail) the share taken off the direct was simply lost (gm_melancholia under the
+// open sky: -8 dB of direct for a winding route). The share is scaled by the room's mid-band reverb time
+// over this reference (s): 1 at and above it (a room: unchanged), 0 with no tail. 0 = always 1 (former).
+float g_diffuseRtRef = 1.0f;
 Reflection g_echo[kEchoSlots];     // per-source reflections
 Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax), bank 0
 Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same input as g_src[k])
@@ -482,7 +487,8 @@ void RenderBlock() {
 		};
 		// diffuse energy (long winding path): the direct part gives way to the room reverb send, and
 		// its direction blurs (binaural spatial blend); the total energy is kept
-		const float dif = v.diffuse;
+		const float encl = g_diffuseRtRef > 0 ? std::clamp(g_roomRt[1] / g_diffuseRtRef, 0.0f, 1.0f) : 1.0f;
+		const float dif = v.diffuse * encl;
 		const float directGain = std::sqrt(std::max(1.0f - dif, 0.0f));
 		const float sendBoost = 1.0f + g_diffuseSend * dif;
 		// path / straight-line share (see Voice::pathMixCur): a voice given a path by Update fades
@@ -881,6 +887,11 @@ void SetWet(float room, float echo) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	g_wetRoom = std::clamp(room, 0.0f, 4.0f);
 	g_wetEcho = std::clamp(echo, 0.0f, 4.0f);
+}
+
+void SetDiffuseRtRef(float s) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_diffuseRtRef = std::clamp(s, 0.0f, 10.0f);
 }
 
 void SetDiffuseSend(float k) {

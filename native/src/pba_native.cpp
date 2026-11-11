@@ -2160,7 +2160,7 @@ LUA_FUNCTION(SetOutputMode) {
 	return 0;
 }
 
-// SetReflections(roomWet, echoWet [, rays [, bounces [, diffuseSend]]]) : levels of the room reverb and
+// SetReflections(roomWet, echoWet [, rays [, bounces [, diffuseSend [, diffuseRtRef]]]]) : levels of the room reverb and
 // of the echoes; the reflection thread only simulates while one of them is > 0; diffuseSend: extra
 // room-reverb send of diffuse voices
 LUA_FUNCTION(SetReflections) {
@@ -2169,6 +2169,7 @@ LUA_FUNCTION(SetReflections) {
 	if (LUA->IsType(4, Type::Number)) g_reflBounces = std::clamp((int)LUA->GetNumber(4), 4, 256);
 	render::SetWet(room, echo);
 	if (LUA->IsType(5, Type::Number)) render::SetDiffuseSend((float)LUA->GetNumber(5));
+	if (LUA->IsType(6, Type::Number)) render::SetDiffuseRtRef((float)LUA->GetNumber(6));
 	g_reflWanted = room > 0 || echo > 0;
 	return 0;
 }
