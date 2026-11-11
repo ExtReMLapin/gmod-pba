@@ -157,8 +157,8 @@ class PyOut:
         return self.out + (("\n[stderr]\n" + self.err) if self.err.strip() else "") + f"\n[exit code {self.rc}]"
 
 def py(script, *args, timeout=1500):
-    p = subprocess.run([sys.executable, "-I", os.path.join(TEST, script), MCP, *args], capture_output=True,
-                       text=True, encoding="utf-8", timeout=timeout)
+    p = subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(TEST, script), MCP, *args],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     return PyOut(p.returncode, p.stdout or "", p.stderr or "")
 
 def make_ogg():
@@ -205,6 +205,7 @@ steps = [
     ("GLuaTest pure suite (native helpers)", lambda: seq(lambda: native_on(True), lambda: pure("pba_pure_native_test.lua"))),
     # metrics of the perceptual bench (Python, no game): full battery only
     ("perceptual metrics (pure)", lambda: py("test_perceptual.py")),
+    ("cvsnap killed-test recovery (pure)", lambda: py("test_cvsnap.py")),
     ("menu_fit", lambda: seq(lambda: load(TW), lambda: job("client", "menu_fit.lua"))),
     # SoundDuration of prefixed names ("^", ")", "*"...): pba's version in both realms
     ("sound_prefix_check", lambda: seq(lambda: load(TW), lambda: [job("client", "sound_prefix_check.lua", 15),
