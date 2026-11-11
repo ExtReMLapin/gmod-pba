@@ -1630,6 +1630,34 @@ local SUITE = {
 			util.TraceLine, util.TraceHull, D.byEnt[9989] = savedTr, savedHull, saved
 			if not ok then error(err, 0) end
 		end },
+		{ name = "RouteHeardPos: a route through several leaves is heard at the same place whatever the leaves table's order (pba_demo: send 6.5 dB apart between game instances)", func = function()
+			-- pba_demo's source walk, step 30: one route through three doors in a row; next(p.leaves) picked the door
+			-- the entity-keyed table happened to list first (its hash: the userdata's address, per game instance)
+			local PR = A.Probes
+			local S, L = Vector(-2633.84, 299.1, 60), Vector(-3776, 224, 60)
+			local xs = { -3640, -3112, -2936 }
+			local perms = { { 1, 2, 3 }, { 1, 3, 2 }, { 2, 1, 3 }, { 2, 3, 1 }, { 3, 1, 2 }, { 3, 2, 1 } }
+			local cfg = setmetatable({ route_pos_straight = 1 }, { __index = CFG })
+			local seen = {}
+			for trial = 1, 20 do
+				local doors = {}
+				for k, x in ipairs(xs) do
+					local c = Vector(x, 256.25, 54.25)
+					doors[k] = { IsValid = function() return true end, WorldSpaceCenter = function() return c end,
+						EntIndex = function() return 40 + k end }
+				end
+				local leaves = {}
+				for _, k in ipairs(perms[(trial - 1) % 6 + 1]) do leaves[doors[k]] = true end
+				local bent = PR.RouteHeardPos({ edgePos = Vector(S), leaves = leaves },
+					{ S, Vector(-2934.87, 274.8, 43.82), Vector(-3121.75, 275.25, 40), Vector(-3520, 320, 48), L }, S, L, cfg)
+				local straight = PR.RouteHeardPos({ pos = Vector(S), leaves = leaves }, { S, L }, S, L, cfg)
+				seen[#seen + 1] = { bent.pos, straight.pos }
+			end
+			for _, s in ipairs(seen) do
+				-- the last leaf on the way, the one the sound enters the listener's room through (x = -3640)
+				expect(math.abs(s[1].x - (-3640)) < 2 and math.abs(s[2].x - (-3640)) < 2).to.beTrue()
+			end
+		end },
 		{ name = "SelectVoices: soft merging, a path swept across split_angle or split_db moves the loudest voice smoothly (power kept)", func = function()
 			local L = Vector(0, 0, 0)
 			local function mk(deg, loss, lp, lpDb)

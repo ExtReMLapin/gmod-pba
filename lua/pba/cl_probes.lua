@@ -1811,6 +1811,59 @@ local function seenRoute(done, pts)
 	return false
 end
 
+--- The leaf a route is heard through (pure): of the leaves it crosses, the last one on the way from S to L
+-- (the farthest along the line S -> L: the routes using it lie on that line), the one the sound enters the
+-- listener's room through; ties to the lower entity index. Was next(leaves): a table keyed by entities is
+-- listed in the order of their hashes (the userdata's address), so a route through three doors in a row was
+-- heard at a different door from one game instance to another (pba_demo's source walk: the listener-room send
+-- 6.5 dB apart with the same code, model_sweep).
+function PR.HeardLeaf(leaves, S, L)
+	if not leaves then return nil end
+	local ab = L - S
+	local best, bestT, bestI
+	for ent in pairs(leaves) do
+		if IsValid(ent) then
+			local t = (ent:WorldSpaceCenter() - S):Dot(ab)
+			local i = ent.EntIndex and ent:EntIndex() or 0
+			if not best or t > bestT or (t == bestT and i < bestI) then best, bestT, bestI = ent, t, i end
+		end
+	end
+	return best
+end
+
+--- Where a probe route p (its polyline pulled, S .. L) is heard from (pure): sets p.pos.
+function PR.RouteHeardPos(p, pulled, S, L, cfg)
+	-- heard from its last corner ON the edge, not from its clearance vertex: two copies of one
+	-- route (from two probes the source sees) end on clearance vertices 60 u apart and the
+	-- voice's direction swung 14.5 degrees in a 4 u step of the source when the copy kept
+	-- changed (field_continuity); on the edge they meet
+	if #pulled >= 3 and p.edgePos then p.pos = p.edgePos end
+	-- pba_route_pos_straight: a route whose corners all came to lie on the line once refined (its last
+	-- corner on the edge is the source itself) is heard where its line passes its clearance vertex (the
+	-- opening it goes through), not at the source: at the source, the listener-room send took the
+	-- source's own level as what enters the listener's space (rp_downtown's doorway: 12.5 dB in 4 u, the
+	-- route toggling between a corner at the jamb and none), and the direction swung by up to 177 deg
+	if #pulled >= 3 and (cfg.route_pos_straight or 0) >= 0.5 and p.pos and p.pos:DistToSqr(S) < 1 then
+		local v, ab = pulled[#pulled - 1], L - S
+		-- (its doorway's leaf when it has one: the vertex may be a probe deep in a room)
+		local ent = PR.HeardLeaf(p.leaves, S, L)
+		if IsValid(ent) then v = ent:WorldSpaceCenter() end
+		local tt = math.Clamp((v - S):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1)
+		p.pos = S + ab * tt
+	end
+	-- the straight route is heard where the transmission voice would be: at the leaf it crosses
+	-- (its point on the line nearest the leaf's centre), not at the source
+	if #pulled == 2 and p.leaves then
+		local ent = PR.HeardLeaf(p.leaves, S, L)
+		if IsValid(ent) then
+			local ab = L - S
+			local tt = math.Clamp((ent:WorldSpaceCenter() - S):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1)
+			p.pos = S + ab * tt
+		end
+	end
+	return p
+end
+
 --- The routes of S to L read from the listener field, one per physical route, best first:
 -- the field's routes from the probes S sees (k + 2 nearest seen, each a route down its own tree branch),
 -- joined to S and L (attach: tightened, kept per S and L and door epoch), costed on their real edges
@@ -1874,34 +1927,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 					straight = straight or #pulled == 2
 					local p = A.Paths.EvalRoute(pulled, cfg)
 					p.probe = true
-					-- heard from its last corner ON the edge, not from its clearance vertex: two copies of one
-					-- route (from two probes the source sees) end on clearance vertices 60 u apart and the
-					-- voice's direction swung 14.5 degrees in a 4 u step of the source when the copy kept
-					-- changed (field_continuity); on the edge they meet
-					if #pulled >= 3 and p.edgePos then p.pos = p.edgePos end
-					-- pba_route_pos_straight: a route whose corners all came to lie on the line once refined (its last
-					-- corner on the edge is the source itself) is heard where its line passes its clearance vertex (the
-					-- opening it goes through), not at the source: at the source, the listener-room send took the
-					-- source's own level as what enters the listener's space (rp_downtown's doorway: 12.5 dB in 4 u, the
-					-- route toggling between a corner at the jamb and none), and the direction swung by up to 177 deg
-					if #pulled >= 3 and (cfg.route_pos_straight or 0) >= 0.5 and p.pos and p.pos:DistToSqr(S) < 1 then
-						local v, ab = pulled[#pulled - 1], L - S
-						-- (its doorway's leaf when it has one: the vertex may be a probe deep in a room)
-						local ent = p.leaves and next(p.leaves)
-						if IsValid(ent) then v = ent:WorldSpaceCenter() end
-						local tt = math.Clamp((v - S):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1)
-						p.pos = S + ab * tt
-					end
-					-- the straight route is heard where the transmission voice would be: at the leaf it crosses
-					-- (its point on the line nearest the leaf's centre), not at the source
-					if #pulled == 2 and p.leaves then
-						local ent = next(p.leaves)
-						if IsValid(ent) then
-							local ab = L - S
-							local tt = math.Clamp((ent:WorldSpaceCenter() - S):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1)
-							p.pos = S + ab * tt
-						end
-					end
+					PR.RouteHeardPos(p, pulled, S, L, cfg)
 					out[#out + 1] = p
 				end
 			end
