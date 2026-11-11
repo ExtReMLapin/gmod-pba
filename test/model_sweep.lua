@@ -1,0 +1,52 @@
+-- Client lua_exec (model_sweep.py): the model level of the continuity tests. A dense walk of the listener
+-- (or of the source) computed in one call, each point from scratch (P.Compute, result caches cleared), and
+-- read as the native rendering would use it (cl_loops' rule for a natively rendered loop at level 75):
+-- direct gain (N.PhysClear / N.PhysPath), listener-room send (N.EntrySend), diffuse share, low-pass loss,
+-- apparent direction. No sound plays, nothing waits: what used to take a teleport, a settle and a reading
+-- window per step is one P.Compute per point. The rendering itself is checked at a few points by the
+-- end-to-end tests (native_send_continuity, doorway_lateral, native_output_walk).
+-- Run as a client lua_job (it yields a frame every 10 points: the job's 2 s resume budget).
+-- Input: SWEEP = { { S = {x,y,z}, A = {x,y,z}, B = {x,y,z}, step = u, moveS = bool, lift = z }, ... }
+-- (A -> B: the listener's feet, or the source when moveS; lift: eye height added to the listener).
+local P, N = pba.Paths, pba.Native
+local out = {}
+local function V(t) return Vector(t[1], t[2], t[3]) end
+local function solid(p) return bit.band(util.PointContents(p), CONTENTS_SOLID) ~= 0 end
+for ci, c in ipairs(SWEEP) do
+	local S0, A, B = V(c.S), V(c.A), V(c.B)
+	local lift = Vector(0, 0, c.lift or 64)
+	local n = math.max(math.ceil(A:Distance(B) / (c.step or 4)), 1)
+	local rows, prev = {}, nil
+	for i = 0, n do
+		local Q = LerpVector(i / n, A, B)
+		local S, L = S0, Q + lift
+		if c.moveS then S, L = Q, S0 + lift end
+		P.cache, P.timeMemo = {}, {}
+		local r = P.Compute(S, L, 75)
+		local gain, send, df, lpDb, dir = 0, 0, 0, 0, L - S
+		if r.clear or not r.voices or #r.voices == 0 then
+			gain = N.PhysClear(75, S:Distance(L))
+		else
+			local p, dp, pt = 0, 0, 0
+			for _, v in ipairs(r.voices) do
+				local g = N.PhysPath(v.gain, v.len, 75, v.rawLossDb)
+				p, dp = p + g * g, dp + (v.diffuse or 0) * g * g
+				local s = N.EntrySend(N.Law(75), v, L, N.LossLin(v, 75))
+				pt = pt + s * s
+			end
+			gain, send, df = math.sqrt(p), math.sqrt(pt), dp / math.max(p, 1e-12)
+			lpDb = r.voices[1].lpDb or 0
+			dir = r.voices[1].pos - L
+		end
+		dir:Normalize()
+		local moved = c.moveS and S or L
+		local cross = prev and util.TraceLine({ start = prev, endpos = moved, mask = MASK_SOLID_BRUSHONLY }).Hit or false
+		rows[#rows + 1] = { i, math.Round(20 * math.log10(math.max(gain, 1e-9)), 2), math.Round(20 * math.log10(math.max(send, 1e-9)), 2),
+			math.Round(df, 3), math.Round(lpDb, 2), math.Round(dir.x, 3), math.Round(dir.y, 3), math.Round(dir.z, 3),
+			(solid(moved) or cross) and 1 or 0 }
+		prev = moved
+		if job and i % 10 == 9 then job:frames(1) end
+	end
+	out[ci] = rows
+end
+return util.TableToJSON(out)

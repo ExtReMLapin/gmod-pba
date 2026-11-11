@@ -359,6 +359,7 @@ steps = [
     ("native_output_walk", lambda: py("native_output_walk.py")),
     # the module's output while stepping SIDEWAYS across the radio room's doorway (rp_downtown, reported: half a
     # metre changed the reverb completely): total, direct, reverb per 4 u step, two distance laws, four lines
+    ("model_sweep", lambda: py("model_sweep.py")),
     ("doorway_lateral rp_downtown", lambda: py("doorway_lateral.py")),
     # the same across gm_melancholia's stairs below the upper room's radio (reported 2026-11-10)
     ("doorway_lateral melancholia stairs", lambda: py("doorway_lateral.py", "--case=stairs")),
