@@ -211,6 +211,9 @@ if CLIENT and cookie then
 	local MIGRATE = {
 		-- 1.0.x: 0.15 with the send following the direct gain; the send now follows the distance (1.1)
 		{ name = "native_reverb", old = 0.15, key = "pba_mig_native_reverb_v2" },
+		-- 1.1 dev builds: far grouping shipped with 2 deg and no reuse in time before the bench
+		{ name = "group_angle", old = 2, key = "pba_mig_group_angle_v1" },
+		{ name = "group_time", old = 0, key = "pba_mig_group_time_v1" },
 	}
 	for _, m in ipairs(MIGRATE) do
 		local cv = A.cv[m.name]
