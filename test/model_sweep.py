@@ -71,6 +71,7 @@ for m in maps:
     if lua("client", "return game.GetMap()") != m:
         call("map_load", {"map": m, "maxplayers": 4}, timeout=300)
         time.sleep(6)
+    lua("client", "if pba and pba.Probes and not pba.Probes.current and not pba.Probes.building then pba.Probes.Start() end return true")
     for _ in range(180):
         if lua("client", "return pba and pba.Probes ~= nil and pba.Probes.current ~= nil and not pba.Probes.building"):
             break

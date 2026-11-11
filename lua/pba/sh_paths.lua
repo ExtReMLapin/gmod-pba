@@ -3263,6 +3263,7 @@ function P.CheckLegs(p, S, L, cfg, srcEnt, r)
 	return q
 end
 
+local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (pba_trans_leaf_fade)
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
 	S = P.FreeSource(S)
@@ -3417,6 +3418,37 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
 			end
 			r.trans = { walls = tw, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
+			-- pba_trans_leaf_fade: a line through the world AND through leaves a route owns (the route through
+			-- those doorways) is that route's way plus the world it grazes. Where the world part thins out (the
+			-- line clipping a wall's end or a door's jamb) the line becomes the route's own way, which the route
+			-- already carries: the transmission fades in with the world depth crossed (0 -> TRANS_FADE_U) instead
+			-- of appearing at full level (pba_demo: a voice 11 dB under the route in and out from one step to the
+			-- next, the one-voice low-pass jumping 11-16 dB; rp_downtown's shut radio door: +3 dB as the line
+			-- touched the jamb, line and route paying the same leaf)
+			if worldBlocked and (cfg.trans_leaf_fade or 0) >= 0.5 then
+				local owned, depth = false, 0
+				for _, w in ipairs(walls) do
+					if not w.ent and not w.water then depth = depth + (w.thickness or 0)
+					elseif w.ent and OPENABLE[w.ent:GetClass()] and #r.paths > 0 and leafOfPaths(w.ent, r.paths, true) then owned = true end
+				end
+				-- (or a leaf the line passes beside, within reach of its doorway: the line clipping the jamb of a shut
+				-- door is the way through that door one step back)
+				if not owned and #r.paths > 0 then
+					for _, h in ipairs(P.SegmentDoors(S, L, true) or {}) do
+						if OPENABLE[h[1]:GetClass()] and leafOfPaths(h[1], r.paths, true) then owned = true break end
+					end
+				end
+				if owned then
+					local fade = ramp(depth, 0, TRANS_FADE_U)
+					if fade <= 0 then
+						r.trans = nil
+					elseif fade < 1 then
+						local add = -10 * math.log10(fade)
+						r.trans.lossDb = r.trans.lossDb + add
+						if r.trans.midDb then r.trans.midDb = r.trans.midDb + add end
+					end
+				end
+			end
 		end
 		-- experimental: Steam Audio baked pathing replaces the probe graph
 		if worldBlocked and #r.paths == 0 and CLIENT and A.Native and A.Native.pathsReady then
