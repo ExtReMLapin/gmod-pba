@@ -2074,17 +2074,25 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep)
 	u:Normalize()
 	local v = dir:Cross(u)
 	local M = (S + L) * 0.5
-	local gl, gm, n = 10 ^ (-loss / 10), 10 ^ (-mid / 10), 1
+	-- door leaves count on every line of the bundle: an offset line through a shut doorway beside the wall
+	-- the centre cuts was paid nothing (door_sweep closed: 12.0 -> 6.2 dB in 2 u). The caller pays the
+	-- centre's leaves itself, so they are taken off the mean again.
+	local function door(w) return w.ent and OPENABLE[w.ent:GetClass()] end
+	local cDoors = {}
+	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)) do if door(w) then cDoors[#cDoors + 1] = w end end
+	local dl, dm = 0, 0
+	if #cDoors > 0 then dl, _, dm = P.EvalWalls(cDoors, cfg, true, true) end
+	local gl, gm, n = 10 ^ (-(loss + dl) / 10), 10 ^ (-(mid + dm) / 10), 1
 	for _, o in ipairs({ u * r, u * -r, v * r, v * -r }) do
 		local m, sel = M + o, {}
 		for _, half in ipairs({ P.Walls(S, m, cfg.trans_max_walls, srcEnt, true), P.Walls(L, m, cfg.trans_max_walls, srcEnt, true) }) do
-			for _, w in ipairs(half) do if keep(w) then sel[#sel + 1] = w end end
+			for _, w in ipairs(half) do if keep(w) or door(w) then sel[#sel + 1] = w end end
 		end
 		local l2, _, m2 = 0, 0, 0
 		if #sel > 0 then l2, _, m2 = P.EvalWalls(sel, cfg, true, true) end
 		gl, gm, n = gl + 10 ^ (-l2 / 10), gm + 10 ^ (-m2 / 10), n + 1
 	end
-	return -10 * math.log10(gl / n), lp, -10 * math.log10(gm / n)
+	return math.max(-10 * math.log10(gl / n) - dl, 0), lp, math.max(-10 * math.log10(gm / n) - dm, 0)
 end
 
 function P.EvalWalls(walls, cfg, noCap, noDetour)
