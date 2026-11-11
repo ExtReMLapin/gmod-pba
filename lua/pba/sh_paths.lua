@@ -2111,6 +2111,61 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep)
 	return math.max(-10 * math.log10(gl / n) - dl, 0), lp, math.max(-10 * math.log10(gm / n) - dm, 0)
 end
 
+--- How far inside the world the straight line runs (pba_trans_bundle_edge), as a fraction of the first Fresnel
+-- zone's radius (P.BundleWalls' r): the smallest of the four offsets across it (up, down, either side) at which
+-- a parallel line first stops crossing the world walls keep(w) picks where the line crosses them (stepped, then
+-- bisected); 1 when no offset line
+-- clears them, 0 when the line itself does not. Continuous where the line's own depth stays whole up to
+-- a wall's square end (16 u, then nothing in one step).
+local BEDGE_STEPS, BEDGE_BISECT = 4, 4
+function P.BundleEdge(S, L, srcEnt, cfg, keep)
+	local lambda = 343 / (cfg.diff_freq or 1000) / 0.01905
+	local r = math.min(cfg.trans_bundle_r or 24, 0.5 * math.sqrt(lambda * S:Distance(L)))
+	local dir = (L - S):GetNormalized()
+	-- the stretches of the line its own world walls take (widened by r): an offset line crossing the world
+	-- elsewhere (the far jamb of another doorway on a long line) has not stayed in these walls
+	local spans = {}
+	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)) do
+		if keep(w) then
+			local a, b = (w.entry - S):Dot(dir), (w.exit - S):Dot(dir)
+			spans[#spans + 1] = { math.min(a, b) - r, math.max(a, b) + r }
+		end
+	end
+	if #spans == 0 then return 0 end
+	if r < 0.5 then return 1 end
+	local function cross(o)
+		for _, w in ipairs(P.Walls(S + o, L + o, cfg.trans_max_walls, srcEnt, true)) do
+			if keep(w) then
+				local x = (w.entry - S):Dot(dir)
+				for _, sp in ipairs(spans) do if x >= sp[1] and x <= sp[2] then return true end end
+			end
+		end
+		return false
+	end
+	local u = dir:Cross(math.abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
+	u:Normalize()
+	local v = dir:Cross(u)
+	local f = 1
+	for _, o in ipairs({ u, -u, v, -v }) do
+		-- the first clear offset, stepped (a doorway's far jamb crosses again further out), then bisected
+		local a = 0
+		for k = 1, BEDGE_STEPS do
+			local t = f * k / BEDGE_STEPS
+			if not cross(o * (r * t)) then
+				local b = t -- a: still crossing, b: clear
+				for _ = 1, BEDGE_BISECT do
+					local m = (a + b) * 0.5
+					if cross(o * (r * m)) then a = m else b = m end
+				end
+				f = (a + b) * 0.5
+				break
+			end
+			a = t
+		end
+	end
+	return f
+end
+
 function P.EvalWalls(walls, cfg, noCap, noDetour)
 	cfg = cfg or A.cfg
 	local loss, mid, lp = 0, 0, 0
@@ -2303,6 +2358,9 @@ end
 -- mix, p.rawLossDb stays without it).
 -- direct (optional): straight-line distance source - listener (else the transmission's length or
 -- the paths' own `direct`): the voices together never exceed the free field at that distance.
+-- pba_trans_window_soft: past the window's edge the transmission loses TRANS_WINDOW_SLOPE dB more per dB, dropped
+-- only TRANS_WINDOW_FLOOR dB under the dominant voice (where its highs no longer count)
+local TRANS_WINDOW_SLOPE, TRANS_WINDOW_FLOOR = 3, 60
 function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	cfg = cfg or A.cfg
 	-- loud sources keep their headroom above the engine's full scale (see AC.Headroom)
@@ -2449,9 +2507,23 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		local g = AC.EngineGain(trans.length, sndlvl) * 10 ^ (-trans.lossDb / 20)
 		local lvl = AC.GainToDb(g)
 		local dom = voices[1] and voices[1].level or -math.huge
-		if #voices == 0 or lvl >= dom - cfg.trans_window_db then
+		-- pba_trans_window_soft: faded out past the window's edge instead of cut there: the transmission, often the
+		-- one voice carrying the highs, took them all away in one step as it crossed the window (pba_demo: one-voice
+		-- low-pass 30.5 -> 40.5 dB at 21 dB under the route)
+		local keep, raw = #voices == 0 or lvl >= dom - cfg.trans_window_db, trans.rawLossDb
+		if #voices > 0 and (cfg.trans_window_soft or 0) >= 0.5 then
+			local over = (dom - cfg.trans_window_db) - lvl
+			if over > 0 then
+				local add = TRANS_WINDOW_SLOPE * over
+				keep = lvl - add >= dom - TRANS_WINDOW_FLOOR
+				g = g * 10 ^ (-add / 20)
+				lvl = lvl - add
+				raw = raw and raw + add
+			end
+		end
+		if keep then
 			voices[#voices + 1] = { kind = "transmission", pos = trans.pos, gain = g, level = lvl, lp = trans.lp, members = {},
-				len = trans.length, rawLossDb = trans.rawLossDb, edgeShare = trans.edgeShare }
+				len = trans.length, rawLossDb = raw, edgeShare = trans.edgeShare }
 		end
 	end
 	-- loudest first: a sound played on one channel (a loop mirror, another addon's radio stream) takes
@@ -3264,6 +3336,8 @@ function P.CheckLegs(p, S, L, cfg, srcEnt, r)
 end
 
 local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (pba_trans_leaf_fade)
+local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a same-way route at its own loss (pba_edge_dup_mix)
+local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
 	S = P.FreeSource(S)
@@ -3431,6 +3505,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 					if not w.ent and not w.water then depth = depth + (w.thickness or 0)
 					elseif w.ent and OPENABLE[w.ent:GetClass()] and #r.paths > 0 and leafOfPaths(w.ent, r.paths, true) then owned = true end
 				end
+				local onLine = owned
 				-- (or a leaf the line passes beside, within reach of its doorway: the line clipping the jamb of a shut
 				-- door is the way through that door one step back)
 				if not owned and #r.paths > 0 then
@@ -3440,6 +3515,17 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				end
 				if owned then
 					local fade = ramp(depth, 0, TRANS_FADE_U)
+					-- pba_trans_bundle_edge: and with how far inside the world the line runs across the Fresnel zone,
+					-- so it is out before the line leaves the wall (pba_demo: 14 dB under the route, the one voice
+					-- carrying the highs, gone in one step at a jamb: one-voice low-pass 27.7 -> 40.5 dB)
+					-- (only for leaves on the line: past the wall it still goes through them, not into the open, where
+					-- the clear line takes over from the transmission instead)
+					if fade > 0 and onLine and (cfg.trans_bundle_edge or 0) >= 0.5 then
+						local e = P.BundleEdge(S, L, srcEnt, cfg, function(w) return not w.ent and not w.water end)
+						-- linear in dB: the voice often carries the highs (the route's leaves muffle more than the
+						-- wall), which its level sets until it is some 30 dB under the route
+						fade = e > 0 and fade * 10 ^ (-TRANS_EDGE_DB * (1 - e) / 10) or 0
+					end
 					if fade <= 0 then
 						r.trans = nil
 					elseif fade < 1 then
@@ -3528,6 +3614,19 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 					-- distinct, added in full beside it: gm_melancholia's stairs, 3.7 dB (route) then route 3.6 +
 					-- edge 1.6 one 4 u step on, 6.7 dB louder.
 					if dup and (cfg.edge_dup_best or 1) >= 0.5 and e.db < (dup.lossDb or math.huge) then
+						-- pba_edge_dup_mix: the one estimate takes the route's loss moved toward the edge's by how much
+						-- cheaper the edge is (in full from EDGE_MIX_DB): the edge's search finds it from one step to the
+						-- next (the obstacle's middle moving with a wall the line grazes) already cheaper than the route,
+						-- and the swap was a step (gm_melancholia's stairs 16 u up: 1.5 dB in 4 u)
+						if (cfg.edge_dup_mix or 0) >= 0.5 and dup.lossDb then
+							local diff = dup.lossDb - e.db
+							local w = ramp(diff, 0, EDGE_MIX_DB)
+							if w < 1 then
+								e = table.Copy(e)
+								e.db = dup.lossDb - diff * w
+								e.mixDb = e.db - (dup.lossDb - diff)
+							end
+						end
 						for x = #r.paths, 1, -1 do if r.paths[x] == dup then table.remove(r.paths, x) end end
 						dup = false
 					end
