@@ -77,12 +77,27 @@ def _alive(pid):
     return True
 
 
+def _instances(call):
+    """Ids of the live game instances, None when unknown."""
+    try:
+        r = call("instances_list", {})
+        return {i.get("id") for i in (r or {}).get("instances") or []}
+    except BaseException:
+        return None
+
+
 def recover(call):
-    """Restores the snapshots of guarded processes that were killed (their journal is still there)."""
+    """Restores the snapshots of guarded processes that were killed (their journal is still there).
+    A journal of this instance is applied by any guard (a killed child test's snapshot is what its
+    parent had set). One of an instance that is gone (closed or crashed: the config they share
+    still holds its test values) only by an outermost guard, before it does anything."""
     try:
         names = os.listdir(JOURNAL_DIR)
     except OSError:
         return
+    me = os.environ.get("MCP_INSTANCE", "")
+    outer = not os.environ.get("PBA_CVSNAP_OUTER")
+    live = None
     dead = []
     for n in names:
         path = os.path.join(JOURNAL_DIR, n)
@@ -91,12 +106,22 @@ def recover(call):
             if _alive(pid):
                 continue
             with open(path, encoding="utf-8") as f:
-                dead.append((json.load(f), path))
+                j = json.load(f)
         except (ValueError, OSError):
             continue
+        inst = j.get("instance", "")
+        if inst != me:
+            if not outer:
+                continue
+            if live is None:
+                live = _instances(call)
+            if live is None or inst in live:
+                continue  # its game still runs: only a guard on that game may restore it
+        dead.append((j, path))
     dead.sort(key=lambda e: -e[0].get("t", 0))  # newest first: the oldest snapshot is applied last
     for j, path in dead:
-        print("settings left by a killed test (pid %s):" % os.path.basename(path).split(".")[0], flush=True)
+        print("settings left by a killed test (pid %s, %s):" % (os.path.basename(path).split(".")[0],
+              j.get("instance") or "default instance"), flush=True)
         restore(call, j.get("snap"))
         try:
             os.remove(path)
@@ -124,8 +149,9 @@ def guard(call):
         os.makedirs(JOURNAL_DIR, exist_ok=True)
         if not os.path.exists(_journal()):  # a second guard() in the same process keeps the first one
             with open(_journal(), "w", encoding="utf-8") as f:
-                json.dump({"t": time.time(), "snap": snap}, f)
+                json.dump({"t": time.time(), "instance": os.environ.get("MCP_INSTANCE", ""), "snap": snap}, f)
     except OSError:
         pass
+    os.environ.setdefault("PBA_CVSNAP_OUTER", str(os.getpid()))  # child tests inherit it
     atexit.register(release, call, snap)
     return snap

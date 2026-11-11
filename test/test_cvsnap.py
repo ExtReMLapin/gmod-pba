@@ -41,6 +41,8 @@ class FakeGame:
         realm = args.get("realm")
         if tool == "lua_exec":
             return {"values": [dict(state[realm])]}
+        if tool == "instances_list":
+            return {"instances": [{"id": i} for i in state.get("instances", [])]}
         if tool == "console_exec":
             name, v = args["cmd"].split(" ", 1)
             state[realm][name[len("pba_"):]] = v
@@ -69,6 +71,45 @@ class KilledTest(unittest.TestCase):
                 _cvsnap.JOURNAL_DIR = old
             self.assertEqual(call._load()["client"], {"cl_enable": "1", "native_render": "1"})
             self.assertEqual(os.listdir(jdir) if os.path.isdir(jdir) else [], [])
+
+    def test_other_instance_only_once_gone(self):
+        """A journal of another instance is applied only once that game is gone, by an outermost guard."""
+        with tempfile.TemporaryDirectory() as d:
+            game = os.path.join(d, "game.json")
+            jdir = os.path.join(d, "journal")
+            os.makedirs(jdir)
+            state = {"client": {"cl_enable": "0"}, "server": {}, "instances": ["client-1", "client-2"]}
+            with open(game, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+            dead = subprocess.run([sys.executable, "-I", "-c", "import os; print(os.getpid())"],
+                                  capture_output=True, text=True).stdout.strip()
+            with open(os.path.join(jdir, dead + ".json"), "w", encoding="utf-8") as f:
+                json.dump({"t": 1, "instance": "client-2", "snap": {"client": {"cl_enable": "1"}}}, f)
+            call = FakeGame(game)
+            env = {k: os.environ.get(k) for k in ("MCP_INSTANCE", "PBA_CVSNAP_OUTER")}
+            old = getattr(_cvsnap, "JOURNAL_DIR", None)
+            _cvsnap.JOURNAL_DIR = jdir
+            try:
+                os.environ["MCP_INSTANCE"] = "client-1"
+                os.environ.pop("PBA_CVSNAP_OUTER", None)
+                _cvsnap.recover(call)
+                self.assertEqual(call._load()["client"]["cl_enable"], "0", "client-2 still runs: left alone")
+                state["instances"] = ["client-1"]
+                with open(game, "w", encoding="utf-8") as f:
+                    json.dump(state, f)
+                os.environ["PBA_CVSNAP_OUTER"] = "1"
+                _cvsnap.recover(call)
+                self.assertEqual(call._load()["client"]["cl_enable"], "0", "a nested guard leaves it")
+                os.environ.pop("PBA_CVSNAP_OUTER", None)
+                _cvsnap.recover(call)
+                self.assertEqual(call._load()["client"]["cl_enable"], "1", "gone: restored by the outermost guard")
+            finally:
+                _cvsnap.JOURNAL_DIR = old
+                for k, v in env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
 
 
 if __name__ == "__main__":
