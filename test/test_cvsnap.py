@@ -113,4 +113,6 @@ class KilledTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(argv=[sys.argv[0]], verbosity=1)
+    r = unittest.main(argv=[sys.argv[0]], exit=False, verbosity=1).result
+    print("PASS" if r.wasSuccessful() else "FAIL")
+    sys.exit(0 if r.wasSuccessful() else 1)
