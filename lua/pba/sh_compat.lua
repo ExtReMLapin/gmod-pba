@@ -9,7 +9,11 @@
 --     and occlusion in Lua (one ray from the player to the radio: blocked = volume x 0.35, no muffling).
 --     PBA receives that volume as the owner's, so a wall was counted twice (rRadio's -9 dB, then pba's
 --     path). With pba_compat_auto 1 its occlusion is turned off while pba runs (and given back when pba is
---     off); its distance falloff stays: it is its only distance law and its range is the server's choice.
+--     off). Its distance falloff (full up to 120 u, nothing past 900 u) is replaced too: pba takes the
+--     radio's knob volume and a real law (full up to rRadio's FullVolumeDistance, then min / d), so the radio
+--     carries and reverberates like any sound (user's decision 2026-11-12: a boombox in a concrete hangar was
+--     -39 dB at 15 m, silent at 17 m, its reverb gone with it; now -16 dB). rRadio still unloads the stream
+--     past MaxHearingDistance x UnloadDistanceFactor (2250 u by default).
 
 local A = pba
 A.Compat = A.Compat or {}
@@ -154,7 +158,38 @@ function C.RRadio()
 		C.rradioOcc = nil
 	end
 end
+--- rRadio's distance falloff (cl_streams adapter): the source's power is the radio's knob volume (clamped
+-- like rRadio does, 0 when muted) and its law min is the radio type's FullVolumeDistance. A volume of exactly
+-- 0 inside its hearing range is rRadio stopping or fading it out: kept (its 250 ms fades are not followed).
+function C.RRadioVolume(ch, r)
+	local R = rRadio
+	local e = r.emitter
+	if not (R and R.client and R.util and R.util.GetRadioEntity and e) then return end
+	local ok, ent = pcall(R.util.GetRadioEntity, e)
+	if not ok or not IsValid(ent) then return end
+	local st = R.client.radio and R.client.radio.state
+	if not (st and st.GetVolume) then return end
+	local okv, knob = pcall(st.GetVolume, ent)
+	knob = okv and tonumber(knob) or nil
+	if not knob then return end
+	local mv = GetConVar("rammel_rradio_max_volume")
+	knob = math.Clamp(knob, 0, mv and mv:GetFloat() or 1)
+	local m = R.client.audio and R.client.audio.manager
+	if m and m.IsMuted then
+		local okm, muted = pcall(m.IsMuted, ent)
+		if okm and muted then knob = 0 end
+	end
+	local cfg = istable(R.config) and R.config[ent.ConfigKey or ""] or {}
+	local full = math.max(tonumber(cfg.FullVolumeDistance) or 120, 1)
+	local maxD = tonumber(cfg.MaxHearingDistance) or 900
+	if (r.vol or 1) <= 0 and ent:GetPos():Distance(A.ListenerPos() or ent:GetPos()) < maxD then knob = 0 end
+	return knob, full
+end
+
 if CLIENT then
+	A.Streams = A.Streams or {}
+	A.Streams.adapters = A.Streams.adapters or {}
+	A.Streams.adapters.rradio = C.RRadioVolume
 	timer.Remove("pba_compat_rradio") -- the former 2 s re-application (autorefresh of a running game)
 	hook.Add("rRadio_ConfigChanged", "pba_compat", function() C.RRadio() end)
 end
