@@ -118,6 +118,7 @@ A.CONFIG = {
 	native_room_open_area = { 4608, 0, 100000, "cl", "Area (square units) of the opening an arrival enters the listener's space by (a door: 48 x 96 = 4608): the listener's room reverb gets the power through it (the flux at the opening times its area), not the full flux. 0 = the full flux (16-20 dB more room reverb behind a doorway)." },
 	native_echo     = { 0.25, 0, 4, "cl", "Echo level: reflections simulated for each loud sound (gunfire, explosions), heard in addition to the engine's sound. 0 = off." },
 	native_echo_lvl = { 95, 60, 160, "cl", "Minimum sound level (dB SNDLVL) for a sound to get simulated echoes." },
+	native_echo_own = { 0, 0, 1, "cl", "Echoes on your own loud sounds too (your gunfire): the engine plays them, the module adds their reflections." },
 	native_bounces  = { 16, 4, 256, "cl", "Bounces per ray of the reverb simulation: enough to fill the simulated window, or reflective rooms (tile, metal) get a reverb time capped too short. Background thread CPU grows with it." },
 	native_rays     = { 2048, 256, 8192, "cl", "Rays per reflection simulation (quality vs CPU of the background thread). Changing it rebuilds the Steam Audio scene (a few seconds)." },
 	native_scene    = { 1, 0, 1, "cl", "Ray tracer of the Steam Audio scene: 1 = Embree (faster), 0 = Steam Audio's built-in one. Changing it rebuilds the scene." },

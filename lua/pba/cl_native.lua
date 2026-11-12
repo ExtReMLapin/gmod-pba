@@ -883,12 +883,14 @@ function N.UpdateFollowers(L)
 end
 
 --- Echoes of a loud sound (reflections only, on top of whatever plays the direct sound). enginePlays:
--- the engine plays this one (the player's own sounds, an echo-only relay), never the module.
+-- the engine plays this one (the player's own sounds, an echo-only relay), never the module. own: the
+-- local player's own sound (echoed only with pba_native_echo_own).
 N.echoSkip = N.echoSkip or {}
 local function skip(why) N.echoSkip[why] = (N.echoSkip[why] or 0) + 1 end
 
-function N.Echo(data, pos, enginePlays)
+function N.Echo(data, pos, enginePlays, own)
 	if not N.render or (A.cfg.native_echo or 0) <= 0 or not pba_native.Echo then return skip("off") end
+	if own and (A.cfg.native_echo_own or 0) < 0.5 then return skip("own") end
 	-- every sound played by the module ("all native"): its reflections come from its source reverb slot;
 	-- echoes too would simulate the same reflections twice (audit). The ones the engine plays have no slot:
 	-- without their echoes the player's own gunfire had no reflections at all

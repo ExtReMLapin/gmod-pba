@@ -1026,7 +1026,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	-- echoes (native reflections) for loud sounds, whoever plays the direct sound
 	local ply = LocalPlayer()
 	local own = IsValid(ply) and data.Entity == ply
-	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos, own) end
+	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos, own, own) end
 	if own then return end -- own sounds: always clear (the engine plays them)
 	data.Pos = pos
 	if A.Process(data, false) then return false end
@@ -1062,7 +1062,10 @@ net.Receive(NET, function()
 		Flags = net.ReadUInt(16), DSP = net.ReadUInt(8), EntIndex = net.ReadUInt(16),
 	}
 	if not name then return end -- id never received (lost first packets): drop
-	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, data.Pos, echoOnly) end
+	if A.Native and A.Native.render and A.Enabled() then
+		local lp = LocalPlayer()
+		A.Native.Echo(data, data.Pos, echoOnly, IsValid(lp) and data.EntIndex == lp:EntIndex())
+	end
 	-- the engine already plays this one for us (clear line of sight): only the echoes were wanted
 	if echoOnly then return end
 	A.stats.relayedIn = A.stats.relayedIn + 1
