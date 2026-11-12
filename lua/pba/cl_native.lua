@@ -58,6 +58,9 @@ local ABSORB = {
 	-- field measurements, packed snow less); a middle estimate. It fell back to 0.10 everywhere (an
 	-- echoing snowfield, gm_snowhimsy)
 	[MAT_SNOW] = { 0.30, 0.65, 0.85 },
+	-- foliage: leaves absorb and scatter, more in the treble (estimate); vents: sheet metal like
+	-- MAT_METAL; computers: plastic cases. They fell back to 0.10
+	[MAT_FOLIAGE] = { 0.15, 0.35, 0.55 }, [MAT_VENT] = { 0.20, 0.07, 0.06 }, [MAT_COMPUTER] = { 0.10, 0.10, 0.10 },
 }
 
 -- Absorption by surfaceprop NAME (finer than MAT_*: GMod has no "fabric" or "foam" MAT_ type).
@@ -70,6 +73,12 @@ local ABSORB_SURF = {
 	paper = { 0.10, 0.15, 0.20 },                                     -- estimate
 	plaster = { 0.12, 0.06, 0.04 },                                   -- Steam Audio preset "plaster"
 	brick = { 0.03, 0.04, 0.07 },                                     -- Steam Audio preset "brick"
+	-- surfaceprops whose MAT_ type says the wrong thing acoustically (estimates from usual tables)
+	cavern_rock = { 0.02, 0.03, 0.05 },                               -- typed MAT_FOLIAGE: bare rock
+	gravel = { 0.25, 0.50, 0.65 },                                    -- typed MAT_CONCRETE: porous
+	ceiling_tile = { 0.40, 0.70, 0.80 },                              -- typed MAT_DIRT: acoustic tiles
+	hay = { 0.35, 0.70, 0.85 },                                       -- typed MAT_WOOD: loose fibre
+	slime = { 0.01, 0.01, 0.02 },                                     -- typed MAT_SLOSH: liquid, like water
 }
 -- Models whose surfaceprop says nothing of their padding (couches declared "dirt", seats "metal").
 -- Estimates (unoccupied upholstered seating, hay, a stack of tyres with its cavities).
