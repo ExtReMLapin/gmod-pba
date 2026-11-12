@@ -540,15 +540,17 @@ function N.EnsureSound(name)
 		return false
 	end
 	local data = file.Read("sound/" .. n, "GAME")
-	if not data or #data > (A.cfg.native_file_mb or 48) * 1024 * 1024 then N.failed[n] = RealTime() return false end
+	-- an empty read (a file the game lists but cannot read, e.g. inside a mounted package) made
+	-- LoadSound raise "no data" every loop update: left to the engine like an undecodable sound
+	if not data or #data == 0 or #data > (A.cfg.native_file_mb or 48) * 1024 * 1024 then N.failed[n] = RealTime() return false end
 	if #data > 512 * 1024 and pba_native.LoadSoundAsync then
 		pba_native.LoadSoundAsync(n, data)
 		N.loading = N.loading or {}
 		N.loading[n] = true
 		return false, nil, "pending"
 	end
-	local secs = pba_native.LoadSound(n, data)
-	if not secs then N.failed[n] = RealTime() return false end
+	local okLoad, secs = pcall(pba_native.LoadSound, n, data)
+	if not okLoad or not secs then N.failed[n] = RealTime() return false end
 	return true, n
 end
 
