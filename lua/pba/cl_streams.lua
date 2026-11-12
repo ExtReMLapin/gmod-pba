@@ -246,11 +246,24 @@ local function evaluate(ch, r, L)
 	local N0 = A.Native
 	srcVol(ch, r) -- r.lawMin of an adapter, for the law below
 	local law = function(d) return bassGain(ch, d, r) end
+	-- pba_native_voice_mix, for the BASS channel too (continuity review C1): its position, filter and length are
+	-- the voices' mixed by energy (in the channel's law), as one native voice's (N.MixVoices), not voices[1]'s.
+	-- Two voices near the same level swapping order turned the radio by up to 177 degrees and its filter by 12 dB
+	local mix = (A.cfg.native_voice_mix or 0) >= 0.5 and #res.voices > 1
+	local sum, dist, lenE, tilts = Vector(0, 0, 0), 0, 0, {}
 	for _, v in ipairs(res.voices) do
 		local len = v.len or dS
 		local loss = N0 and N0.LossLin and N0.LossLin(v, 75) or v.gain / math.max(AC.EngineGain(len, 75), 1e-6)
 		local gv = loss * bassGain(ch, len, r)
 		p, pd = p + gv * gv, pd + gv * gv * (v.diffuse or 0)
+		if mix then
+			local e, dv = gv * gv, v.pos - L
+			local dl = dv:Length()
+			if dl > 1e-3 then sum:Add(dv * (e / dl)) dist = dist + dl * e end
+			lenE = lenE + len * e
+			tilts[#tilts + 1] = e
+			tilts[#tilts + 1] = v.lpDb or AC.LevelDb(v.lp or 0)
+		end
 		-- what ENTERS the listener's space (through an opening or a wall): the same rule as every sound
 		if N0 and N0.EntrySend then local s = N0.EntrySend(law, v, L, loss) pe = pe + s * s end
 	end
@@ -259,11 +272,17 @@ local function evaluate(ch, r, L)
 	-- energy-weighted diffuse share (diffuse model): rendered by the native module only (BASS has no DSP)
 	r.diffuse = pd / math.max(p, 1e-12)
 	local g = math.sqrt(p) / math.max(bassGain(ch, dS, r), 1e-6)
-	local apparent = res.voices[1].pos
+	local v1 = res.voices[1]
+	local apparent, lp, lpDb, vlen = v1.pos, v1.lp or 0, v1.lpDb, v1.len
+	if mix and p > 0 then
+		if sum:LengthSqr() > 1e-12 then apparent = L + sum:GetNormalized() * (dist / p) end
+		lpDb = AC.MixTiltList(tilts)
+		lp, vlen = AC.LowpassLevel(lpDb), lenE / p
+	end
 	-- BASS attenuates from the apparent (closer) position: compensate to the real distance
 	local corr = bassGain(ch, dS, r) / math.max(bassGain(ch, apparent:Distance(L), r), 1e-6)
 	r.apparent, r.g = apparent, math.Clamp(g * corr, 0, 1)
-	r.gRel, r.lp, r.lpDb, r.len = math.Clamp(g, 0, 1), res.voices[1].lp or 0, res.voices[1].lpDb, res.voices[1].len
+	r.gRel, r.lp, r.lpDb, r.len = math.Clamp(g, 0, 1), lp, lpDb, vlen
 	-- the BASS filter: the same continuous low-pass EQ as a native voice (N.LowpassEQ: the volume already
 	-- holds the loss at diff_freq, the EQ only the other bands' difference)
 	local N = A.Native
