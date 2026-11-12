@@ -196,12 +196,38 @@ function N.BuildWorld()
 			end
 		end
 	end
-	-- displacements (terrain): not in GetBrushSurfaces; read from the BSP, one "ground"
-	-- material (thick earth: no transmission)
-	local dv, di = A.BSP.LoadDisplacements(game.GetMap())
+	-- displacements (terrain): not in GetBrushSurfaces; read from the BSP with their material name.
+	-- Absorption follows the texture's $surfaceprop as for flat faces (earth when it has none);
+	-- transmission stays thick earth for all (the ground does not let sound through). Blended
+	-- textures (WorldVertexTransition): the main $surfaceprop only; $surfaceprop2 weighted by the
+	-- per-vertex alpha would be a later refinement.
+	local dv, di, dnames, dntris = A.BSP.LoadDisplacements(game.GetMap())
 	if dv and #di > 0 then
-		mats[#mats + 1] = { absorption = { 0.15, 0.25, 0.35 }, scattering = 0.3, transmission = { 0.0001, 0.00003, 0.00001 } }
-		local mi = #mats - 1
+		local groundT = { 0.0001, 0.00003, 0.00001 }
+		local dispMi, dmi = {}, {}
+		for k, name in ipairs(dnames) do
+			local mi = dispMi[name]
+			if not mi then
+				local m = name ~= "" and Material(name) or nil
+				local surf = m and not m:IsError() and m:GetString("$surfaceprop") or nil
+				local key = "pba_disp:" .. (surf or "")
+				mi = matOf[key]
+				if not mi then
+					if surf then
+						local sm = saMaterial(surf, A.cfg, nil, N.WORLD_THICK)
+						sm.transmission = groundT
+						mats[#mats + 1] = sm
+					else
+						mats[#mats + 1] = { absorption = { 0.15, 0.25, 0.35 }, scattering = 0.3, transmission = groundT }
+					end
+					mi = #mats - 1
+					matOf[key] = mi
+				end
+				dispMi[name] = mi
+			end
+			dmi[k] = mi
+		end
+		N.dispMats = dispMi -- material name -> scene material index (inspection)
 		local base = #verts / 3
 		for i = 1, #dv, 3 do
 			verts[#verts + 1], verts[#verts + 2], verts[#verts + 3] = dv[i], dv[i + 1], dv[i + 2]
@@ -209,7 +235,9 @@ function N.BuildWorld()
 			maxs.x, maxs.y, maxs.z = math.max(maxs.x, dv[i]), math.max(maxs.y, dv[i + 1]), math.max(maxs.z, dv[i + 2])
 		end
 		for i = 1, #di do tris[#tris + 1] = base + di[i] end
-		for _ = 1, #di / 3 do matIdx[#matIdx + 1] = mi end
+		for k = 1, #dmi do
+			for _ = 1, dntris[k] do matIdx[#matIdx + 1] = dmi[k] end
+		end
 		N.dispTris = #di / 3
 	end
 	return verts, tris, matIdx, mats, mins, maxs

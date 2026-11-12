@@ -151,6 +151,10 @@ end
 -- index list. Reads lumps 3 VERTEXES, 7 FACES, 12 EDGES, 13 SURFEDGES, 26 DISPINFO,
 -- 33 DISP_VERTS. Grid = bilinear interpolation of the face corners (starting at
 -- startPosition) + per-vertex offset (vec * dist).
+-- Also returns, per displacement kept (in order), its material name and triangle count:
+-- face texinfo -> 6 TEXINFO (72 bytes, texdata at +68) -> 2 TEXDATA (32 bytes, nameStringTableID at
+-- +12) -> 44 TEXDATA_STRING_TABLE (int offsets) -> 43 TEXDATA_STRING_DATA (zero-terminated names).
+-- Same layouts in BSP versions 19, 20 and 21.
 function BSP.LoadDisplacements(map, swap)
 	local f = file.Open("maps/" .. map .. ".bsp", "rb", "GAME")
 	if not f then return nil, "cannot open" end
@@ -161,7 +165,7 @@ function BSP.LoadDisplacements(map, swap)
 		if L[i].unc ~= 0 and L[i].len > 0 then f:Close() return nil, "compressed lump " .. i end
 	end
 	local ndisp = L[26].len / 176
-	if ndisp == 0 then f:Close() return {}, {} end
+	if ndisp == 0 then f:Close() return {}, {}, {}, {} end
 	local function vec() return Vector(f:ReadFloat(), f:ReadFloat(), f:ReadFloat()) end
 	-- dispinfo: startPosition, DispVertStart, power, MapFace
 	local infos = {}
@@ -176,13 +180,19 @@ function BSP.LoadDisplacements(map, swap)
 		local face = f:ReadUShort()
 		infos[#infos + 1] = { start = start, vstart = vstart, power = power, face = face }
 	end
-	local verts, idx = {}, {}
+	local verts, idx, names, ntris, nameOf = {}, {}, {}, {}, {}
 	for _, d in ipairs(infos) do
 		if BSP.Yield then BSP.Yield() end
 		-- face corners
 		f:Seek(L[7].ofs + d.face * 56 + 4)
 		local firstedge, numedges = f:ReadLong(), f:ReadShort()
+		local texinfo = f:ReadShort()
 		if numedges == 4 then
+			local name = nameOf[texinfo]
+			if name == nil then
+				name = BSP.TexInfoName(f, L, texinfo) or false
+				nameOf[texinfo] = name
+			end
 			local corners = {}
 			for k = 0, 3 do
 				f:Seek(L[13].ofs + (firstedge + k) * 4)
@@ -231,10 +241,35 @@ function BSP.LoadDisplacements(map, swap)
 					idx[#idx + 1], idx[#idx + 2], idx[#idx + 3] = b, c2, d2
 				end
 			end
+			names[#names + 1] = name or ""
+			ntris[#ntris + 1] = 2 * (size - 1) * (size - 1)
 		end
 	end
 	f:Close()
-	return verts, idx
+	return verts, idx, names, ntris
+end
+
+--- Material name of texinfo `ti` (nil when out of range or unreadable). `f` is any reader with
+-- Seek / ReadLong / Read (a GMod File, or a string reader in the pure tests); `L` = lumpInfo.
+function BSP.TexInfoName(f, L, ti)
+	if not ti or ti < 0 or (ti + 1) * 72 > L[6].len then return nil end
+	for _, i in ipairs({ 2, 6, 43, 44 }) do
+		if L[i].unc ~= 0 and L[i].len > 0 then return nil end
+	end
+	f:Seek(L[6].ofs + ti * 72 + 68)
+	local td = f:ReadLong()
+	if td < 0 or (td + 1) * 32 > L[2].len then return nil end
+	f:Seek(L[2].ofs + td * 32 + 12)
+	local sid = f:ReadLong()
+	if sid < 0 or (sid + 1) * 4 > L[44].len then return nil end
+	f:Seek(L[44].ofs + sid * 4)
+	local so = f:ReadLong()
+	local n = math.min(256, L[43].len - so)
+	if so < 0 or n <= 0 then return nil end
+	f:Seek(L[43].ofs + so)
+	local raw = f:Read(n) or ""
+	local z = string.find(raw, "\0", 1, true)
+	return z and string.sub(raw, 1, z - 1) or raw
 end
 
 --- Leaf index containing point p.

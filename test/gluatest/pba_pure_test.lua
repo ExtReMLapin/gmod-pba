@@ -541,6 +541,31 @@ local SUITE = {
 			expect(A.BSP.PointLeaf(b, Vector(150, 0, 0))).to.equal(0)
 			expect(A.BSP.PointArea(b, Vector(50, 0, 0))).to.equal(2)
 		end },
+		{ name = "BSP.TexInfoName: texinfo -> texdata -> string table -> name", func = function()
+			local function i32(v) return string.char(v % 256, math.floor(v / 256) % 256, math.floor(v / 65536) % 256, 0) end
+			-- texinfo 0 -> texdata 1 ("NATURE/BLENDGRASS"), texinfo 1 -> texdata 0 ("DEV/A")
+			local texinfo = string.rep("\1", 68) .. i32(1) .. string.rep("\1", 68) .. i32(0)
+			local texdata = string.rep("\2", 12) .. i32(0) .. string.rep("\2", 16) .. string.rep("\2", 12) .. i32(1) .. string.rep("\2", 16)
+			local strtab, strdat = i32(0) .. i32(6), "DEV/A\0NATURE/BLENDGRASS\0"
+			local blob = "HEAD" .. texinfo .. texdata .. strtab .. strdat
+			local L = { [6] = { ofs = 4, len = #texinfo, unc = 0 }, [2] = { ofs = 4 + #texinfo, len = #texdata, unc = 0 },
+				[44] = { ofs = 4 + #texinfo + #texdata, len = #strtab, unc = 0 },
+				[43] = { ofs = 4 + #texinfo + #texdata + #strtab, len = #strdat, unc = 0 } }
+			local r = { pos = 0 }
+			function r:Seek(p) self.pos = p end
+			function r:Read(n) local s = string.sub(blob, self.pos + 1, self.pos + n) self.pos = self.pos + #s return s end
+			function r:ReadLong()
+				local a, b, c, d = string.byte(blob, self.pos + 1, self.pos + 4)
+				self.pos = self.pos + 4
+				return a + b * 256 + c * 65536 + d * 16777216
+			end
+			expect(A.BSP.TexInfoName(r, L, 0)).to.equal("NATURE/BLENDGRASS")
+			expect(A.BSP.TexInfoName(r, L, 1)).to.equal("DEV/A")
+			expect(A.BSP.TexInfoName(r, L, 2)).to.beNil()
+			expect(A.BSP.TexInfoName(r, L, -1)).to.beNil()
+			L[43].unc = 99 -- compressed lump: no name rather than garbage
+			expect(A.BSP.TexInfoName(r, L, 0)).to.beNil()
+		end },
 		{ name = "Graph.Build: portals deduplicated, links from the entity lump", func = function()
 			local g = G.Build(synthBsp())
 			expect(#g.portals).to.equal(2)
