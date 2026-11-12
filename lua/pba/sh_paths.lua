@@ -1826,6 +1826,10 @@ local function byLevelThenIndex(a, b)
 	if a.lvl ~= b.lvl then return a.lvl > b.lvl end
 	return a.i < b.i
 end
+-- pba_model_soft_cull (continuity review step 2, A9): the paths past the n-th are not cut at their rank but fade
+-- out over SOFT_CULL_DB under the n-th (their loss raised by -10 log10 w): two routes of nearly equal level swapping
+-- ranks at the cut changed nothing at once, the one dropped took its energy away in one step
+local SOFT_CULL_DB = 6
 function P.KeepLoudest(paths, n, sndlvl)
 	if #paths <= n then return paths end
 	local idx = {}
@@ -1833,6 +1837,17 @@ function P.KeepLoudest(paths, n, sndlvl)
 	table.sort(idx, byLevelThenIndex)
 	local out = {}
 	for i = 1, n do out[i] = idx[i].p end
+	if (A.cfg.model_soft_cull or 0) >= 0.5 then
+		local ln = idx[n].lvl
+		for i = n + 1, #idx do
+			local w = 1 - ramp(ln - idx[i].lvl, 0, SOFT_CULL_DB)
+			if w <= 0 then break end
+			local p = idx[i].p
+			p.cullDb = -10 * math.log10(w)
+			p.lossDb = p.lossDb + p.cullDb
+			out[#out + 1] = p
+		end
+	end
 	return out
 end
 
@@ -1988,8 +2003,22 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	table.sort(list, byLevelDesc)
 	local best = list[1] and list[1].level or -math.huge
 	local kept = {}
+	local soft = (cfg.model_soft_cull or 0) >= 0.5
 	for _, p in ipairs(list) do
-		if p.level >= best - cfg.reject_db then kept[#kept + 1] = p end
+		if not soft then
+			if p.level >= best - cfg.reject_db then kept[#kept + 1] = p end
+		else
+			-- pba_model_soft_cull (A10): faded out over SOFT_CULL_DB past reject_db instead of cut there (its loss,
+			-- raw loss included for the native law, raised by -10 log10 w)
+			local w = 1 - ramp(best - p.level, cfg.reject_db, cfg.reject_db + SOFT_CULL_DB)
+			if w > 0 then
+				if w < 1 then
+					local add = -10 * math.log10(w)
+					p.lossDb, p.mixLossDb, p.level = p.lossDb + add, (p.mixLossDb or p.lossDb) + add, p.level - add
+				end
+				kept[#kept + 1] = p
+			end
+		end
 	end
 
 	-- Merging is soft, so that a small change of angle or level gives a small change of what is heard:
@@ -2107,7 +2136,25 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		while j >= 1 and voices[j].level < v.level do voices[j + 1] = voices[j] j = j - 1 end
 		voices[j + 1] = v
 	end
-	while #voices > cfg.max_voices do table.remove(voices) end
+	if (cfg.model_soft_cull or 0) >= 0.5 then
+		-- pba_model_soft_cull (A16): a voice past max_voices gives its energy to the kept voice nearest in direction
+		-- (its gain and raw loss), instead of taking it away: the last voice's level no longer vanishes at once
+		while #voices > cfg.max_voices do
+			local x = table.remove(voices)
+			local dx, best, bd = (x.pos - L):GetNormalized(), nil, -math.huge
+			for _, v in ipairs(voices) do
+				local c = (v.pos - L):GetNormalized():Dot(dx)
+				if c > bd then best, bd = v, c end
+			end
+			if best and (x.gain or 0) > 0 then
+				local g = math.sqrt(best.gain * best.gain + x.gain * x.gain)
+				if best.rawLossDb and best.gain > 0 then best.rawLossDb = best.rawLossDb - 20 * math.log10(g / best.gain) end
+				best.gain, best.level = g, AC.GainToDb(g)
+			end
+		end
+	else
+		while #voices > cfg.max_voices do table.remove(voices) end
+	end
 
 	-- one wavefront: obstacles only take away from the free field. Every route is modelled on its own up
 	-- to the free-field level (edge diffraction 0 dB at the shadow boundary, plus the diffuse leak), so
