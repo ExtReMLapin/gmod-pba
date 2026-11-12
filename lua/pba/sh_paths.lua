@@ -1939,6 +1939,13 @@ local function svGive(v, p, d, e, pull, L, cfg)
 	v.sum:Add(d * (e * pull))
 	v.cont = v.cont and cont
 	v.members[#v.members + 1] = p
+	-- where its energy enters the listener's space (N.EntrySend): a route's at its last corner, through an
+	-- opening; a way through a floor at the floor (P.ThroughRoute: p.entryWall, p.entryLen), by its share
+	if p.entryWall then
+		v.ew = (v.ew or 0) + e * p.entryWall
+		v.thru = true
+	end
+	v.elen = (v.elen or 0) + e * (p.entryLen or math.max(p.length - p.pos:Distance(L), 0))
 end
 local function svApart(ang, A0) -- 0: in a voice's direction .. 1: far enough for a voice of its own
 	if A0 <= 0 then return 1 end
@@ -2047,7 +2054,14 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		v.level = AC.GainToDb(v.gain)
 		v.len = v.len / pw  -- path length (propagation delay, air absorption)
 		v.sh = v.dom.sh     -- Steam Audio baked path field (native rendering)
+		-- a voice holding a way through a floor: its entry (distance from the source, share entering as through
+		-- a wall) energy-weighted over its members, for N.EntrySend; other voices keep the rule of their position
+		if v.thru then
+			v.entryLen = v.elen / pw
+			v.entryWall = math.Clamp(v.ew / pw, 0, 1)
+		end
 		v.e, v.hi, v.df, v.raw, v.dist, v.sum, v.cont, v.s, v.dom = nil, nil, nil, nil, nil, nil, nil, nil
+		v.ew, v.elen, v.thru = nil, nil, nil
 	end
 
 	-- transmission voice
@@ -2552,6 +2566,13 @@ function P.ThroughRoute(S, L, walls, cfg, bound)
 	p.length = S:Distance(best.V) + (q.length or 0)
 	p.direct = S:Distance(L)
 	p.through = true
+	-- what enters the listener's space (N.EntrySend): as long as the way past the walls hardly bends (its corners'
+	-- loss near 0), it is the transmission itself, entering over the wall from just past it (share 1); it turns
+	-- into a route's entry (through its last opening) as its corners cost. Taken as a route's at once, the room
+	-- send fell 16 dB in a 10 u step where the line began to clip a partition (gm_melancholia, owner's retest)
+	local w = 10 ^ (-math.max(q.diffDb or q.lossDb or 0, 0) / 10)
+	p.entryWall = w
+	p.entryLen = w * S:Distance(best.V) + (1 - w) * math.max(p.length - (q.pos or L):Distance(L), 0)
 	-- its bend (the diffuse model's, pba_bend_final) on the taut route, corners on their edges: the clearance
 	-- vertices of two copies of one route zigzag differently (diffuse share 0 / 0.42 / 0 in 2 u steps)
 	local taut = { best.V }

@@ -712,10 +712,12 @@ function N.OpeningShare(v)
 	-- a transmission enters over its wall (1), but the part of it that went over the wall's edge (P.AddEdge:
 	-- edgeShare) through the opening beside it, like a route
 	if v.kind == "transmission" then return 1 - (v.edgeShare or 0) * (1 - o) end
+	-- a voice holding a way through a floor (P.ThroughRoute): the share of it still entering over the wall
+	if v.entryWall then return v.entryWall + (1 - v.entryWall) * o end
 	return o
 end
 function N.EntrySend(law, v, L, lossLin)
-	local entry = math.max((v.len or 0) - (v.pos and v.pos:Distance(L) or 0), N.REF_UNITS)
+	local entry = math.max(v.entryLen or ((v.len or 0) - (v.pos and v.pos:Distance(L) or 0)), N.REF_UNITS)
 	-- the loss of the whole set of arrivals (v.shadowDb, P.ShadowOf) when the voice comes from a result, else
 	-- this arrival's own
 	local l = math.Clamp(lossLin or 1, 0, 1)
