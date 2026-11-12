@@ -8,6 +8,9 @@
 --   speakers: no ITD (|lag| <= 1 sample);
 --   delay: nothing during the first 0.5 s of a voice started 0.8 s late (first < 0.05 x after);
 --   pathfx: a path field arriving from the right is louder on the right (R > L);
+--   loopstart: a WAV's loop marker is kept (the jeep's start sound: starter once, then the engine
+--     running from sample 80897 at 44.1 kHz = 1.834 s; whole-file loop otherwise = the engine heard
+--     restarting every 6 s), and a WAV without one loops from its top (nil);
 --   bake: the cache file is deleted first, so bake 1 is a real bake and bake 2 loads it back from the
 --     disk cache (fromCache) in under a fifth of the bake time.
 local N = pba.Native
@@ -115,6 +118,12 @@ do
 	res.file = file.Size("pba/" .. game.GetMap() .. "_sa.dat", "DATA")
 	cvar("pba_native_paths", 0)
 end
+-- loop markers (smpl chunk), read straight from the module's loader
+local function loopOf(p)
+	local _, ls = NA.LoadSound("pba_test_loop:" .. p, file.Read("sound/" .. p, "GAME"))
+	return ls
+end
+res.loopStart = { start = loopOf("vehicles/v8/v8_start_loop1.wav"), idle = loopOf("vehicles/v8/v8_idle_loop1.wav") }
 for n, v in pairs(saved) do if GetConVar("pba_" .. n):GetString() ~= v then RunConsoleCommand("pba_" .. n, v) end end
 local h, s, d, pf, b1, b2 = res.headphones, res.speakers, res.delay, res.pathfx, res.bake1, res.bake2
 local function num(x) return tonumber(x) or 0 end
@@ -123,6 +132,7 @@ res.checks = {
 	speakers = s.lag ~= nil and math.abs(s.lag) <= 1,
 	delay = num(d.after) > 0 and num(d.first) < 0.05 * num(d.after),
 	pathfx = num(pf.R) > num(pf.L),
+	loopstart = math.abs(num(res.loopStart.start) - 80897 / 44100) < 1e-3 and res.loopStart.idle == nil,
 	bake = b1.ready == true and b2.ready == true and b1.fromCache ~= true and b2.fromCache == true
 		and num(b1.ms) > 0 and num(b2.ms) < 0.2 * num(b1.ms),
 }

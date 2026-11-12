@@ -1792,21 +1792,23 @@ LUA_FUNCTION(SoundPending) {
 	return 1;
 }
 
-// LoadSound(name, bytes) -> seconds | nil, err
+// LoadSound(name, bytes) -> seconds, loopStart (seconds, nil without a loop marker) | nil, err
 LUA_FUNCTION(LoadSound) {
 	const char* name = LUA->CheckString(1);
 	unsigned int len = 0;
 	const char* data = LUA->GetString(2, &len);
 	if (!data || len == 0) LUA->ThrowError("LoadSound: no data");
-	double secs = 0;
-	std::string err = render::LoadSound(name, data, len, &secs);
+	double secs = 0, loopStart = 0;
+	std::string err = render::LoadSound(name, data, len, &secs, &loopStart);
 	if (!err.empty()) {
 		LUA->PushNil();
 		LUA->PushString(err.c_str());
 		return 2;
 	}
 	LUA->PushNumber(secs);
-	return 1;
+	if (loopStart <= 0) return 1;
+	LUA->PushNumber(loopStart);
+	return 2;
 }
 
 // Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send [, offset]]]]]]])

@@ -105,7 +105,8 @@ void RoomTailEq(float eq[3]);
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir);
 void TestBinaural(IPLVector3 dir, double* eL, double* eR);
 bool HasSound(const std::string& name);
-std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds);
+// loopStart: where a loop restarts (seconds; 0 without a loop marker in the WAV)
+std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart = nullptr);
 // decodes on a worker thread (large files); HasSound() turns true when ready. false if already pending.
 bool LoadSoundAsync(const std::string& name, std::string data);
 // Room reverb times (s, 3 bands, air-corrected) replacing the main simulator's estimate; nullptr = off.

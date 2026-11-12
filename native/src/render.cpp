@@ -71,6 +71,9 @@ std::atomic<float> g_roomTailEq[3] = {0, 0, 0};
 
 struct Sound {
 	std::vector<float> pcm; // mono, 48 kHz
+	// where a loop restarts (pcm samples): the WAV's own loop marker, as the engine reads it (a vehicle's
+	// start sound plays its starter once, then loops only the engine running), 0 without one
+	double loopStart = 0;
 	std::atomic<uint64_t> lastUse{0}; // Play counter, for least-recently-used eviction
 };
 
@@ -392,7 +395,10 @@ void RenderBlock() {
 				continue;
 			}
 			if (v.cursor >= len - 1) {
-				if (v.loop && len > 1) v.cursor = std::fmod(v.cursor, len - 1);
+				if (v.loop && len > 1) {
+					const double ls = v.snd->loopStart; // < len - 1 (LoadSound)
+					v.cursor = ls + std::fmod(v.cursor - ls, len - 1 - ls);
+				}
 				else {
 					std::fill(m + i, m + kBlock, 0.0f);
 					v.alive = false;
@@ -1120,7 +1126,31 @@ static bool EvictTo(uint64_t target) {
 	return true;
 }
 
-std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds) {
+// The loop start of a RIFF/WAVE file in its own sample frames, as the engine takes it: the first loop
+// of a "smpl" chunk, else the first point of a "cue " chunk. -1: no marker (or not a WAV).
+static double WavLoopStart(const void* data, size_t size, uint32_t* rate) {
+	const auto* b = static_cast<const uint8_t*>(data);
+	auto u32 = [b](size_t i) { return (uint32_t)b[i] | (uint32_t)b[i + 1] << 8 | (uint32_t)b[i + 2] << 16 | (uint32_t)b[i + 3] << 24; };
+	*rate = 0;
+	if (size < 12 || memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) return -1;
+	double smpl = -1, cue = -1;
+	for (size_t i = 12; i + 8 <= size;) {
+		const uint32_t len = u32(i + 4);
+		const size_t body = i + 8;
+		if (len > size - body) break;
+		if (memcmp(b + i, "fmt ", 4) == 0 && len >= 8) *rate = u32(body + 4);
+		// smpl: 36-byte header (loop count at +28), then 24-byte loops (start at +8)
+		else if (memcmp(b + i, "smpl", 4) == 0 && len >= 36 + 24 && u32(body + 28) > 0) smpl = u32(body + 36 + 8);
+		// cue : count, then 24-byte points (sample offset at +20)
+		else if (memcmp(b + i, "cue ", 4) == 0 && len >= 4 + 24 && u32(body) > 0) cue = u32(body + 4 + 20);
+		i = body + len + (len & 1);
+	}
+	return smpl >= 0 ? smpl : cue;
+}
+
+std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart) {
+	uint32_t srcRate = 0;
+	const double loopFrames = WavLoopStart(data, size, &srcRate);
 	ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, 1, kRate);
 	ma_decoder dec;
 	if (ma_decoder_init_memory(data, size, &dc, &dec) != MA_SUCCESS) return "cannot decode " + name;
@@ -1139,7 +1169,13 @@ std::string LoadSound(const std::string& name, const void* data, size_t size, do
 	}
 	ma_decoder_uninit(&dec);
 	if (snd->pcm.size() < 2) return "empty sound " + name;
+	// resampled to kRate with the rest; a marker at or past the end loops the whole sound
+	if (loopFrames > 0 && srcRate > 0) {
+		const double ls = loopFrames * kRate / srcRate;
+		if (ls < (double)snd->pcm.size() - 2) snd->loopStart = ls;
+	}
 	if (seconds) *seconds = (double)snd->pcm.size() / kRate;
+	if (loopStart) *loopStart = snd->loopStart / kRate;
 	const uint64_t bytes = snd->pcm.size() * sizeof(float);
 	std::lock_guard<std::mutex> lk(g_mtx);
 	// evict least-recently-played sounds that no voice holds until the new one fits
