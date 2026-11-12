@@ -244,6 +244,45 @@ function LP.IsVehicleSound(e, name, orig)
 	return inSet(set, name, orig)
 end
 
+--- True when loop l is one of the state sounds a vehicle plays through CBaseServerVehicle::PlayLoopingSound
+-- (its script's gear and state sounds), not a loop its class plays itself (VEHICLE_EXTRA: gauss charge...).
+local function isStateSound(e, l)
+	if not l.vehicle then return false end
+	local extra = VEHICLE_EXTRA[e:GetClass()]
+	if not extra then return true end
+	local ck = "vehx:" .. e:GetClass()
+	local set = LP.soundSets[ck]
+	if not set then
+		set = {}
+		for _, n in ipairs(extra) do addSound(set, n) end
+		LP.soundSets[ck] = set
+	end
+	return not inSet(set, l.name, l.orig)
+end
+
+--- A vehicle's state sounds (CBaseServerVehicle::PlayLoopingSound, SDK 2013): it keeps the current one and
+-- the previous one fading out (0.25 s). Each new state sound fades the current one out and DESTROYS the one
+-- still fading, with a StopSound Lua never sees: a quick throttle on / off left that loop playing for good
+-- at whatever volume its fade had reached. Its Play reaches Lua as one SND_CHANGE_VOL + SND_CHANGE_PITCH
+-- update (CSoundControllerImp::Play sets both at once); a fade changes the volume only.
+local VOL_PITCH = SND_CHANGE_VOL + SND_CHANGE_PITCH
+function LP.VehicleStatePlayed(e, l, key)
+	local st = LP.vehState[e]
+	if not st then st = {} LP.vehState[e] = st end
+	local destroyed = st.fade
+	if st.cur == key then
+		st.fade = nil -- the same sound again: re-used at full volume, only the fading one goes
+	else
+		st.fade, st.cur = st.cur, key
+	end
+	-- (a fading sound of the same name is replaced by the new patch: the mirror carries on)
+	if destroyed and destroyed ~= key then
+		local x = LP.active[destroyed]
+		if x then LP.Stop(x.idx, x.name) end
+	end
+end
+LP.vehState = LP.vehState or setmetatable({}, { __mode = "k" })
+
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
 local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
 
@@ -345,6 +384,9 @@ function LP.Handle(data)
 			return false
 		end
 		LP.active[key] = l
+	end
+	if l.vehicle and IsValid(e) and bit.band(flags, VOL_PITCH) == VOL_PITCH and isStateSound(e, l) then
+		LP.VehicleStatePlayed(e, l, key)
 	end
 	-- a volume / pitch change of a long one-shot goes to its listeners only: to anyone else it would
 	-- start the mirror from the top, midway through the speech
