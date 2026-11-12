@@ -1,13 +1,25 @@
 """Model-level continuity (first level of the two-level tests): dense walks computed in one client lua_job
-per map (model_sweep.lua), no sound played, no waiting. Checks every step for a jump of the level, the
+per map (model_sweep.lua), no sound played, no waiting. Checks every step for a change of the level, the
 listener-room send, the diffuse share, the low-pass loss or the apparent direction, scaled to an 8 u step.
 Steps whose moving point is in a solid or crossed one are left out (a real change, not the model's).
 The rendering is checked separately at a few points (native_send_continuity, doorway_lateral,
 native_output_walk with few steps).
+
+Jump or slope (continuity review, step 0): every step over a limit is walked again at REFINE u (one more
+job per map). A JUMP does not shrink with the step: its largest REFINE u change is more than half the step's
+and above JUMP_MIN. It always fails. A SLOPE shrinks with the step: it is a physical gradient (close to an
+edge), judged against SLOPE_LIM, looser than LIM for the level and the low-pass (the review's bound K:
+8.7 dB per unit of Fresnel parameter, 0.4 dB/u at 52 u from an edge, 3.2 dB per 8 u).
+--random=N adds N random walks per map (fixed seed, Python's own generator): the source and the walk's start
+on random probes (lifted 16 u: about ear height), a 64 u walk in a random horizontal direction.
+--recip also computes every point with source and listener swapped and reports the largest level difference
+(reciprocity: one model whichever end is the listener; reported, not judged yet).
 Usage: python -I -u model_sweep.py <mcp.py> [--maps=rp_downtown_v4c_v2,gm_melancholia,pba_demo] [--step=4]
-       [--show=N]  (N worst steps per case)
-Exit 1 when a case has a step over a limit.
+       [--show=N]  (N worst steps per case) [--no-refine] (the old verdict: every step over LIM fails)
+       [--random=N] [--recip] [--named=0] (random walks only) [--cached] (caches kept: the real path, T1-T2)
+Exit 1 when a case has a jump, or a slope over SLOPE_LIM.
 """
+import random
 import json
 import math
 import os
@@ -23,6 +35,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # limits per 8 u (scaled to the step): level 2 dB (about two JNDs), room send 3 dB, diffuse share 0.1,
 # low-pass loss 3 dB, direction 30 degrees (only while the sound is within 40 dB of its loudest point)
 LIM = {"level": 2.0, "send": 3.0, "diffuse": 0.1, "lp": 3.0, "dir": 30.0}
+REFINE = 0.25
+JUMP_MIN = {"level": 0.3, "send": 0.3, "diffuse": 0.02, "lp": 0.3, "dir": 3.0}
+SLOPE_LIM = {"level": 3.2, "send": 3.0, "diffuse": 0.1, "lp": 3.2, "dir": 30.0}
+NO_REFINE = "no-refine" in OPT
+RANDOM = int(OPT.get("random", 0))
+RECIP = "recip" in OPT
+CACHED = "cached" in OPT
+# the caches expire (cache_ttl 0.25 s): a second walk computes afresh and cannot tell a cell's jump from a slope
+NO_REFINE = NO_REFINE or CACHED
+NAMED = OPT.get("named", "1") != "0"
+PICK = """local g = pba.Probes.current
+local out = {}
+for i = 1, #g.nodes do local p = g.nodes[i].pos out[i] = { math.Round(p.x, 1), math.Round(p.y, 1), math.Round(p.z, 1) } end
+return util.TableToJSON(out)"""
 
 R = math.radians
 _r = (math.sin(R(162.5)), -math.cos(R(162.5)))
@@ -77,6 +103,25 @@ def ang(a, b):
 
 
 code = open(os.path.join(HERE, "model_sweep.lua"), encoding="utf-8").read()
+
+
+def run_job(sweep):
+    res = call("lua_job", {"realm": "client", "code": "SWEEP = util.JSONToTable(job.args.sweep)\n" + code,
+                           "args": {"sweep": json.dumps(sweep)}, "timeout_s": 600}, timeout=900)
+    vals = res.get("values") or res.get("result", {}).get("values")
+    return json.loads(vals[0]) if vals else None, res
+
+
+def deltas(a, b, top):
+    return {"level": abs(b[1] - a[1]), "send": abs(b[2] - a[2]) if min(a[2], b[2]) > -150 else 0,
+            "diffuse": abs(b[3] - a[3]), "lp": abs(b[4] - a[4]),
+            "dir": ang(a[5:8], b[5:8]) if min(a[1], b[1]) > top - 40 else 0}
+
+
+def lerp(p, q, t):
+    return [p[k] + (q[k] - p[k]) * t for k in range(3)]
+
+
 maps = OPT.get("maps", ",".join(CASES)).split(",")
 ok_all, t0 = True, time.time()
 for m in maps:
@@ -88,34 +133,86 @@ for m in maps:
         if lua("client", "return pba and pba.Probes ~= nil and pba.Probes.current ~= nil and not pba.Probes.building"):
             break
         time.sleep(1)
-    cases = CASES[m]
-    sweep = [dict(c, step=STEP) for _, c in cases]
-    res = call("lua_job", {"realm": "client", "code": "SWEEP = util.JSONToTable(job.args.sweep)\n" + code,
-                           "args": {"sweep": json.dumps(sweep)}, "timeout_s": 300})
-    vals = res.get("values") or res.get("result", {}).get("values")
-    if not vals:
+    cases = list(CASES.get(m, [])) if NAMED else []
+    if RANDOM:
+        nodes = json.loads(lua("client", PICK) or "[]")
+        rng = random.Random(1)
+        for k in range(RANDOM):
+            s, a = rng.choice(nodes), rng.choice(nodes)
+            th = rng.uniform(0, 2 * math.pi)
+            A = [a[0], a[1], a[2] + 16 - 64]  # feet: the walk adds 64
+            B = [A[0] + 64 * math.cos(th), A[1] + 64 * math.sin(th), A[2]]
+            cases.append((f"random {k}", dict(S=[s[0], s[1], s[2] + 16], A=A, B=B)))
+    if not cases:
+        continue
+    sweep = [dict(c, step=STEP, recip=RECIP, cached=CACHED) for _, c in cases]
+    data, res = run_job(sweep)
+    if not data:
         print(m, "no result:", json.dumps(res)[:500])
         ok_all = False
         continue
-    data = json.loads(vals[0])
-    for (name, _), rows in zip(cases, data):
-        scale = 8.0 / STEP
+    scale = 8.0 / STEP
+    per = []  # per case: rows, top, steps over LIM [(step index, deltas, over)]
+    refine = []  # (case index, step index, sub-walk)
+    for ci, ((name, c), rows) in enumerate(zip(cases, data)):
         top = max(r[1] for r in rows)
-        fails, worst = [], []
+        over_steps, worst = [], []
+        n = len(rows) - 1
         for a, b in zip(rows, rows[1:]):
             if a[8] or b[8]:
                 continue
-            d = {"level": abs(b[1] - a[1]), "send": abs(b[2] - a[2]) if min(a[2], b[2]) > -150 else 0,
-                 "diffuse": abs(b[3] - a[3]), "lp": abs(b[4] - a[4]),
-                 "dir": ang(a[5:8], b[5:8]) if min(a[1], b[1]) > top - 40 else 0}
+            d = deltas(a, b, top)
             over = {k: round(v * scale, 2) for k, v in d.items() if v * scale > LIM[k]}
             worst.append((max(v * scale / LIM[k] for k, v in d.items()), b[0], {k: round(v, 2) for k, v in d.items()}))
             if over:
-                fails.append((b[0], over))
+                over_steps.append((b[0], d, over))
+                if not NO_REFINE:
+                    sub = dict(c, A=lerp(c["A"], c["B"], a[0] / n), B=lerp(c["A"], c["B"], b[0] / n), step=REFINE, cached=CACHED)
+                    refine.append((ci, b[0], sub))
         worst.sort(reverse=True)
-        verdict = "PASS" if not fails else "FAIL"
-        ok_all = ok_all and not fails
-        print(f"{m} / {name}: {verdict} {len(fails)} steps over / {len(rows) - 1}; worst "
-              + "; ".join(f"step {i}: {d}" for _, i, d in worst[:SHOW]), flush=True)
+        per.append((name, rows, top, over_steps, worst))
+    # the steps over LIM walked again at REFINE u: jump or slope
+    fine = {}
+    if refine:
+        fdata, fres = run_job([s for _, _, s in refine])
+        if not fdata:
+            print(m, "refine: no result:", json.dumps(fres)[:300])
+            ok_all = False
+        else:
+            for (ci, si, _), frows in zip(refine, fdata):
+                fine[(ci, si)] = frows
+    for ci, (name, rows, top, over_steps, worst) in enumerate(per):
+        jumps, slopes, unknown = [], [], []
+        for si, d, over in over_steps:
+            frows = fine.get((ci, si))
+            if frows is None:
+                unknown.append((si, over))
+                continue
+            dmax = {k: 0.0 for k in d}
+            for a, b in zip(frows, frows[1:]):
+                if a[8] or b[8]:
+                    continue
+                for k, v in deltas(a, b, top).items():
+                    dmax[k] = max(dmax[k], v)
+            for k in over:
+                if dmax[k] > 0.5 * d[k] and dmax[k] > JUMP_MIN[k]:
+                    jumps.append((si, k, round(d[k], 2), round(dmax[k], 2)))
+                elif d[k] * scale > SLOPE_LIM[k]:
+                    slopes.append((si, k, round(d[k] * scale, 2)))
+        bad = jumps or slopes or (unknown if not NO_REFINE else over_steps)
+        if NO_REFINE:
+            bad = over_steps
+        verdict = "PASS" if not bad else "FAIL"
+        ok_all = ok_all and not bad
+        print(f"{m} / {name}: {verdict} {len(over_steps)} steps over / {len(rows) - 1}"
+              + ("" if NO_REFINE else f", {len(jumps)} jumps, {len(slopes)} slopes over K")
+              + "; worst " + "; ".join(f"step {i}: {d}" for _, i, d in worst[:SHOW]), flush=True)
+        for si, k, dv, df in jumps[:SHOW]:
+            print(f"    JUMP step {si} {k}: {dv} over the step, {df} within {REFINE} u", flush=True)
+        for si, k, dv in slopes[:SHOW]:
+            print(f"    SLOPE step {si} {k}: {dv} per 8 u (limit {SLOPE_LIM[k]})", flush=True)
+        if RECIP:
+            rd = max(((abs(r[1] - r[9]), r[0]) for r in rows if not r[8] and len(r) > 9), default=(0, -1))
+            print(f"    RECIP largest |level(S->L) - level(L->S)| = {rd[0]:.2f} dB at point {rd[1]}", flush=True)
 print(f"{'PASS' if ok_all else 'FAIL'} ({time.time() - t0:.0f} s)")
 sys.exit(0 if ok_all else 1)

@@ -6,7 +6,7 @@
 -- window per step is one P.Compute per point. The rendering itself is checked at a few points by the
 -- end-to-end tests (native_send_continuity, doorway_lateral, native_output_walk).
 -- Run as a client lua_job (it yields a frame every 10 points: the job's 2 s resume budget).
--- Input: SWEEP = { { S = {x,y,z}, A = {x,y,z}, B = {x,y,z}, step = u, moveS = bool, lift = z }, ... }
+-- Input: SWEEP = { { S = {x,y,z}, A = {x,y,z}, B = {x,y,z}, step = u, moveS = bool, lift = z, recip = bool, cached = bool }, ... }
 -- (A -> B: the listener's feet, or the source when moveS; lift: eye height added to the listener).
 local P, N = pba.Paths, pba.Native
 local out = {}
@@ -21,7 +21,8 @@ for ci, c in ipairs(SWEEP) do
 		local Q = LerpVector(i / n, A, B)
 		local S, L = S0, Q + lift
 		if c.moveS then S, L = Q, S0 + lift end
-		P.cache, P.timeMemo = {}, {}
+		-- c.cached: the real path, its caches kept (32 u cells, pba_group_time): what a moving listener gets
+		if not c.cached then P.cache, P.timeMemo = {}, {} end
 		local r = P.Compute(S, L, 75)
 		local gain, send, df, lpDb, dir = 0, 0, 0, 0, S - L
 		if r.clear or not r.voices or #r.voices == 0 then
@@ -35,9 +36,18 @@ for ci, c in ipairs(SWEEP) do
 		dir:Normalize()
 		local moved = c.moveS and S or L
 		local cross = prev and util.TraceLine({ start = prev, endpos = moved, mask = MASK_SOLID_BRUSHONLY }).Hit or false
+		-- c.recip: the level with source and listener swapped (column 10), for the reciprocity check
+		local back = 0
+		if c.recip then
+			P.cache, P.timeMemo = {}, {}
+			local r2 = P.Compute(L, S, 75)
+			local g2 = N.PhysClear(75, S:Distance(L))
+			if not (r2.clear or not r2.voices or #r2.voices == 0) then g2 = N.MixVoices(r2.voices, S, 75, N.Law(75)).gain end
+			back = math.Round(20 * math.log10(math.max(g2, 1e-9)), 2)
+		end
 		rows[#rows + 1] = { i, math.Round(20 * math.log10(math.max(gain, 1e-9)), 2), math.Round(20 * math.log10(math.max(send, 1e-9)), 2),
 			math.Round(df, 3), math.Round(lpDb, 2), math.Round(dir.x, 3), math.Round(dir.y, 3), math.Round(dir.z, 3),
-			(solid(moved) or cross) and 1 or 0 }
+			(solid(moved) or cross) and 1 or 0, back }
 		prev = moved
 		if job and i % 10 == 9 then job:frames(1) end
 	end
