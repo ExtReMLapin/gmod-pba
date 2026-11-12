@@ -238,6 +238,8 @@ steps = [
     ("caption_check", lambda: py("caption_check.py")),
     # a parked vehicle between source and listener stands in the way like a big prop (was ignored)
     ("vehicle_obstacle", lambda: seq(lambda: load(TW), lambda: job("server", "vehicle_obstacle.lua", 15))),
+    # singleplayer: the player's own gunfire gets its native echoes (no prediction: only the server sees it)
+    ("sp_own_echo", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "sp_own_echo.lua"))),
     # a quick throttle on / off: the vehicle state sound the next one destroys is no longer mirrored
     ("vehicle_state_sounds", lambda: seq(lambda: load(TW), lambda: job("server", "vehicle_state_sounds.lua"))),
     ("loop_removed", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_removed.lua"))),
@@ -496,7 +498,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "loop_removed", "loop_reenable", "vehicle_state_sounds",
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "loop_removed", "loop_reenable", "vehicle_state_sounds", "sp_own_echo",
          "client_loop", "native_doors", "native_features", "path_hysteresis twodoors", "continuous_ramp twodoors",
          "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed"}
 if "--quick" in opts:
