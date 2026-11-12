@@ -12,6 +12,8 @@ if not (N and N.render) then return { pass = false, err = "native renderer not r
 if not game.SinglePlayer() then return { pass = false, err = "singleplayer only" } end
 local savedAll = GetConVar("pba_native_all"):GetString()
 local savedOwn = GetConVar("pba_native_echo_own"):GetString()
+local savedEcho = GetConVar("pba_native_echo"):GetString()
+RunConsoleCommand("pba_native_echo", "0.25") -- (the default: the player may have turned echoes off)
 RunConsoleCommand("pba_echo_want", "1") -- (normally set by cl_native when echoes are on)
 RunConsoleCommand("give", "weapon_smg1") -- (the singleplayer host may)
 job:sleep(0.3)
@@ -32,5 +34,6 @@ for _, run in ipairs({ { 0, 1 }, { 1, 1 }, { 1, 0 } }) do
 end
 RunConsoleCommand("pba_native_all", savedAll)
 RunConsoleCommand("pba_native_echo_own", savedOwn)
+RunConsoleCommand("pba_native_echo", savedEcho)
 res.pass = res.all0own1 > 0 and res.all1own1 > 0 and res.all1own0 == 0
 return res
