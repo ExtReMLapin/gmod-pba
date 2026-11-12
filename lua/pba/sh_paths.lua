@@ -1392,7 +1392,8 @@ function P.RefineCorners(pts, cfg)
 	if (cfg.corner_refine or 1) < 0.5 then return refineCorners(pts, false) end
 	local n, TL = #pts, util.TraceLine
 	local m = refineMemo[pts]
-	if m and m.n == n and m.TL == TL and m.gen == P.worldGen then
+	local rp = (cfg.corner_relax or 0) >= 0.5
+	if m and m.n == n and m.TL == TL and m.gen == P.worldGen and m.rp == rp then
 		local c, k = m.c, 0
 		for i = 1, n do
 			local x, y, z = pts[i]:Unpack()
@@ -1410,7 +1411,7 @@ function P.RefineCorners(pts, cfg)
 	local out = refineCorners(pts, true)
 	local keep = {}
 	for i = 1, #out do keep[i] = out[i] end
-	refineMemo[pts] = { n = n, TL = TL, gen = P.worldGen, c = c, out = keep }
+	refineMemo[pts] = { n = n, TL = TL, gen = P.worldGen, c = c, out = keep, rp = rp }
 	return out
 end
 function refineCorners(pts, on)
@@ -1433,6 +1434,19 @@ function refineCorners(pts, on)
 		for x = 2, #pts - 1 do
 			sliceCheck()
 			out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1])
+		end
+		-- pba_corner_relax: one more pass, each corner (now on its edge) between its neighbours as refined. The
+		-- first pass keeps the clearance neighbours (from refined ones, two vertices on the two jambs of one
+		-- doorway chased each other), and a corner refined towards a clearance vertex far below an opening
+		-- stopped at the opening's sill, where the taut string between the refined corners bends at its lintel:
+		-- 14 u of detour, 4.6 dB, where the string only grazed the lintel and touched the far jamb
+		-- (gm_melancholia, under the radio's floor: 4.7 dB in 2 u as the jamb's shadow began)
+		if (A.cfg.corner_relax or 0) >= 0.5 and #pts > 3 then
+			out[#pts] = pts[#pts]
+			for x = 2, #pts - 1 do
+				sliceCheck()
+				out[x] = cornerKept(out[x - 1], out[x], out[x + 1])
+			end
 		end
 	else
 		for i = 2, #pts - 1 do out[i] = pts[i] end
@@ -2478,6 +2492,78 @@ function P.FreeSource(S)
 	return best or S
 end
 
+--- pba_trans_route: the way through the first walls of the straight line, then round the others. The sound that
+-- crosses a floor (or a wall) fills the space behind it and goes on from there like any sound, round the next
+-- obstacles: not only along the straight line through all of them. Without it, a radio on a carpeted floor above
+-- was heard through the floor (10 dB) from one spot, and one step aside, where the line also cut a partition's
+-- jamb (+27 dB), only by the long way down the stairs (17 dB), 6 dB lost in 2 u (gm_melancholia, owner's report).
+-- For each world wall k of the line (but the last: through all of them is the transmission itself), a virtual
+-- source just past it, paying walls 1..k (P.EvalWalls, as the line pays them), routed to L over the listener's
+-- field (PR.FieldRoutes: the field is L's, so a read costs no search). The loudest such way is returned as a
+-- route (points from the virtual source), or nil. Known limit: from the source's side only (walls nearest L
+-- crossed after a way round those nearest S need the source's field).
+local THROUGH_MAX = 3 -- walls tried as the last one crossed
+local THROUGH_SKIP_DB = 10 -- walls this much above the loudest way known are not tried (bound)
+function P.ThroughRoute(S, L, walls, cfg, bound)
+	if not (A.Probes and A.Probes.FieldRoutes) or #walls < 2 then return nil end
+	local dir = (L - S):GetNormalized()
+	local best, bestDb
+	local n = 0
+	for k = 1, #walls - 1 do
+		local w, nx = walls[k], walls[k + 1]
+		if not w.ent and not w.water and w.exit and nx.entry then
+			n = n + 1
+			if n > THROUGH_MAX then break end
+			-- just past the wall, before the next one starts (two walls touching are one thick wall: skipped)
+			local gap = (nx.entry - w.exit):Dot(dir)
+			if gap > 4 then
+				local V = w.exit + dir * math.min(2, gap * 0.5)
+				if bit.band(util.PointContents(V), CONTENTS_SOLID) == 0 then
+					local pre = {}
+					for i = 1, k do pre[i] = walls[i] end
+					local wl, wlp = P.EvalWalls(pre, cfg)
+					-- the walls alone already THROUGH_SKIP_DB under the loudest way known: whatever comes after them adds
+					-- under 0.4 dB to it, and more walls only lose more (the cost is a field read and its routes'
+					-- evaluation per wall: ~5 ms cold for three)
+					if bound and wl > bound + THROUGH_SKIP_DB then break end
+					local tilt = 0
+					for i = 1, k do tilt = tilt + (pre[i].tiltDb or 0) end
+					sliceCheck()
+					for _, q in ipairs(A.Probes.FieldRoutes(V, L, 1, cfg, nil) or {}) do
+						if q.lossDb and not q.native and (not bestDb or q.lossDb + wl < bestDb) then
+							best, bestDb = { q = q, V = V, wl = wl, wlp = wlp, k = k, tilt = tilt }, q.lossDb + wl
+						end
+					end
+				end
+			end
+		end
+	end
+	if not best then return nil end
+	local q, p = best.q, {}
+	for key, v in pairs(q) do p[key] = v end
+	local pts = { best.V }
+	for _, v in ipairs(q.points or {}) do pts[#pts + 1] = v end
+	p.points = pts
+	p.lossDb = q.lossDb + best.wl
+	p.throughDb, p.throughWalls = best.wl, best.k
+	p.lp = math.max(q.lp or 0, best.wlp or 0)
+	-- the walls' muffling in series with the route's own: their tilts (P.EvalWalls sets each wall's) add in dB
+	if q.lpDb then p.lpDb = q.lpDb + best.tilt end
+	p.length = S:Distance(best.V) + (q.length or 0)
+	p.direct = S:Distance(L)
+	p.through = true
+	-- its bend (the diffuse model's, pba_bend_final) on the taut route, corners on their edges: the clearance
+	-- vertices of two copies of one route zigzag differently (diffuse share 0 / 0.42 / 0 in 2 u steps)
+	local taut = { best.V }
+	for _, v in ipairs(q.points or {}) do taut[#taut + 1] = v end
+	taut[#taut + 1] = L
+	taut = P.RefineCorners(taut, cfg)
+	local inner = {}
+	for i = 2, #taut - 1 do inner[#inner + 1] = taut[i] end
+	p.bendPts = inner
+	return p
+end
+
 local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (pba_trans_leaf_fade)
 local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a same-way route at its own loss (pba_edge_dup_mix)
 local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
@@ -2792,6 +2878,18 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			for _, p in ipairs(r.paths) do if p.lossDb and (not best or p.lossDb < best.lossDb) then best = p end end
 			if best then P.BoundBeside(r.trans, best, cfg) end
 		end
+		-- pba_trans_route: through the walls nearest the source, then round the others (after the edges' and the
+		-- bounds' bookkeeping, which compare routes clear from S: this one is not)
+		if field and worldBlocked and (cfg.trans_route or 0) >= 0.5 and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+			local bound = r.trans and r.trans.lossDb or nil
+			for _, q in ipairs(r.paths) do if q.lossDb and (not bound or q.lossDb < bound) then bound = q.lossDb end end
+			local p = P.ThroughRoute(S, L, tw, cfg, bound)
+			if p then
+				if (cfg.path_props or 1) >= 0.5 then pathProps(p, S, L, cfg, srcEnt) end
+				r.paths[#r.paths + 1] = p
+				r.throughRoute = p
+			end
+		end
 		-- pba_bend_final: the diffuse model reads the bend of the route as heard (its final points, corners on the
 		-- real edges), not the bend of the coarse polyline the route was evaluated on (probe positions, before the
 		-- corners are refined): that one jumped by 90-120 deg in 8 u while the route did not change (rp_downtown
@@ -2799,7 +2897,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		local bendFinal = (cfg.bend_final or 0) >= 0.5
 		for _, p in ipairs(r.paths or {}) do
 			if bendFinal and p.points then
-				local _, b = P.PathShape(S, p.points, L)
+				local _, b = P.PathShape(S, p.bendPts or p.points, L)
 				p.bendUse = b
 			else
 				p.bendUse = nil

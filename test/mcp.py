@@ -3,12 +3,18 @@ Reads the server URL and headers from Claude Code's config (~/.claude.json, or C
 Usage: python -I test/mcp.py list
        python -I test/mcp.py call <tool> '<json args>' [maxchars]     ('@file' = JSON args read from a file)
 MCP_INSTANCE=<id> targets one game when several run (instances_list).
-MCP_PROJECT=<folder> picks the Claude Code project whose "gmod" MCP server is used."""
+MCP_PROJECT=<folder> picks the Claude Code project whose "gmod" MCP server is used.
+Without such an entry (gmod-mcp installed as a plugin, a stdio bridge): the game's own HTTP server, at MCP_URL
+(default http://127.0.0.1:27080/mcp, the base port) with the token of %APPDATA%/gmod-mcp/token."""
 import json
 import os, sys, urllib.request
 
 CFG = json.load(open(os.environ.get("CLAUDE_JSON") or os.path.expanduser("~/.claude.json"), encoding="utf-8"))
-SRV = CFG["projects"][os.environ.get("MCP_PROJECT", "D:/SteamLibrary/steamapps/common/GarrysMod")]["mcpServers"]["gmod"]
+SRV = CFG["projects"].get(os.environ.get("MCP_PROJECT", "D:/SteamLibrary/steamapps/common/GarrysMod"), {}).get("mcpServers", {}).get("gmod")
+if not SRV:
+    _tok = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~/.config"), "gmod-mcp", "token")
+    SRV = {"url": os.environ.get("MCP_URL", "http://127.0.0.1:27080/mcp"),
+           "headers": {"Authorization": "Bearer " + open(_tok, encoding="utf-8").read().strip()}}
 URL = SRV["url"]
 HDR = dict(SRV.get("headers", {}))
 HDR.update({"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})

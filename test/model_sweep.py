@@ -40,6 +40,15 @@ CASES = {
         (f"stairs {w}", dict(S=[-255.3, 2.1, 168.5], A=[58.5 - 32 * _r[0], -119.8 - 32 * _r[1], 87.5 + dz],
                              B=[58.5 + 32 * _r[0], -119.8 + 32 * _r[1], 87.5 + dz]))
         for w, dz in (("eye", 0), ("up", 16), ("down", -16))
+    ] + [
+        # the owner's radio upstairs (a boombox on the carpeted floor), the listener downstairs: the line goes
+        # through the floor, then (one step aside) through a partition too. Reported: a few cm aside, the sound
+        # much quieter (the way through the floor into the room below lost, only the long way down the stairs)
+        ("radio doorway", dict(S=[-326.05, 26.35, 168.54], A=[-5.9, -325.07, 24.03], B=[8.81, -323.25, 24.03])),
+        ("radio hall", dict(S=[-326.05, 26.35, 168.54], A=[253.51, -22.41, 24.03], B=[250.92, -39.97, 24.03])),
+        ("radio hall->back", dict(S=[-326.05, 26.35, 168.54], A=[250.92, -39.97, 24.03], B=[258.95, -145.95, 24.03])),
+        # on the roof: a few cm aside, the way swaps from in front to the right
+        ("radio roof", dict(S=[-326.05, 26.35, 168.54], A=[151.13, -127.66, 207.94], B=[155.99, -114.65, 207.37])),
     ],
     "pba_demo": [
         # path_perceptual's worst source walk (28 dB in 16 u before pba_edge_leg_doors)
