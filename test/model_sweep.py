@@ -47,7 +47,8 @@ NO_REFINE = NO_REFINE or CACHED
 NAMED = OPT.get("named", "1") != "0"
 PICK = """local g = pba.Probes.current
 local out = {}
-for i = 1, #g.nodes do local p = g.nodes[i].pos out[i] = { math.Round(p.x, 1), math.Round(p.y, 1), math.Round(p.z, 1) } end
+local k = math.max(math.floor(#g.nodes / 300), 1) -- (a sample: long strings come back truncated)
+for i = 1, #g.nodes, k do local p = g.nodes[i].pos out[#out + 1] = { math.Round(p.x), math.Round(p.y), math.Round(p.z) } end
 return util.TableToJSON(out)"""
 
 R = math.radians
