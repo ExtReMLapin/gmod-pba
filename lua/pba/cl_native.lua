@@ -54,6 +54,10 @@ local ABSORB = {
 	[MAT_CONCRETE] = { 0.05, 0.07, 0.08 }, [MAT_TILE] = { 0.01, 0.02, 0.02 }, [MAT_WOOD] = { 0.11, 0.07, 0.06 },
 	[MAT_METAL] = { 0.20, 0.07, 0.06 }, [MAT_GLASS] = { 0.06, 0.03, 0.02 }, [MAT_DIRT] = { 0.15, 0.25, 0.35 },
 	[MAT_GRASS] = { 0.11, 0.26, 0.60 }, [MAT_SAND] = { 0.15, 0.30, 0.45 }, [MAT_PLASTIC] = { 0.10, 0.10, 0.10 },
+	-- snow: porous, among the most absorbing outdoor grounds (fresh snow ~0.5-0.9 above 500 Hz in
+	-- field measurements, packed snow less); a middle estimate. It fell back to 0.10 everywhere (an
+	-- echoing snowfield, gm_snowhimsy)
+	[MAT_SNOW] = { 0.30, 0.65, 0.85 },
 }
 
 -- Absorption by surfaceprop NAME (finer than MAT_*: GMod has no "fabric" or "foam" MAT_ type).
