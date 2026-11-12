@@ -2335,7 +2335,26 @@ function P.FollowAssign(L, olds, voices)
 			local p = 0
 			for _, j in ipairs(g) do p = p + voices[j].gain * voices[j].gain end
 			local v = voices[g[1]]
-			out[i] = { pos = v.pos, gain = math.sqrt(p), lp = v.lp or 0, len = v.len, sh = v.sh }
+			-- src: the voice it was built from (cl_render's enrich), its position no longer the key
+			out[i] = { pos = v.pos, gain = math.sqrt(p), lp = v.lp or 0, len = v.len, sh = v.sh, src = v }
+			-- pba_native_voice_mix (continuity review C6): a group's position, spectrum and length mixed by
+			-- energy over its voices, as one native voice's (N.MixVoices), not its first voice's
+			if #g > 1 and p > 0 and (A.cfg.native_voice_mix or 0) >= 0.5 then
+				local sum, dist, len, tilts = Vector(0, 0, 0), 0, 0, {}
+				for _, j in ipairs(g) do
+					local w = voices[j]
+					local e, dv = w.gain * w.gain, w.pos - L
+					local dl = dv:Length()
+					if dl > 1e-3 then sum:Add(dv * (e / dl)) dist = dist + dl * e end
+					len = len + (w.len or 0) * e
+					tilts[#tilts + 1] = e
+					tilts[#tilts + 1] = w.lpDb or AC.LevelDb(w.lp or 0)
+				end
+				local t = out[i]
+				if sum:LengthSqr() > 1e-12 then t.pos = L + sum:GetNormalized() * (dist / p) end
+				t.lpDb = AC.MixTiltList(tilts)
+				t.lp, t.len = AC.LowpassLevel(t.lpDb), len / p
+			end
 		end
 	end
 	return out

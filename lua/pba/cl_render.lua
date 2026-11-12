@@ -542,10 +542,11 @@ end
 -- (targetValues read t.lpDb / t.rawLossDb and always got nil: the native EQ stepped between levels and a
 -- loud source's loss was recovered from a gain that the headroom had absorbed, see N.PhysPath).
 local function enrich(t, vs)
-	local sv
-	for _, v in ipairs(vs) do if rawequal(v.pos, t.pos) then sv = v break end end
+	local sv = t.src
+	if not sv then for _, v in ipairs(vs) do if rawequal(v.pos, t.pos) then sv = v break end end end
 	if not sv then return nil end
-	t.lpDb, t.diffuse, t.kind = sv.lpDb, sv.diffuse, sv.kind
+	-- (a group's spectrum mixed by energy, P.FollowAssign, is kept)
+	t.lpDb, t.diffuse, t.kind = t.lpDb or sv.lpDb, sv.diffuse, sv.kind
 	-- the merged paths' extra power (t.gain is the group's) taken off the dominant member's raw loss
 	if sv.rawLossDb and (sv.gain or 0) > 0 and (t.gain or 0) > 0 then
 		t.rawLossDb = sv.rawLossDb - 20 * math.log10(t.gain / sv.gain)

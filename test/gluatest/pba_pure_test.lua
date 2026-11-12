@@ -1326,7 +1326,10 @@ local SUITE = {
 				{ { pos = front, gain = 0.4, lp = 2 }, { pos = left, gain = 0.3 }, { pos = back, gain = 0.2 } })
 			expect(#t1).to.equal(1)
 			expect(near(t1[1].gain, math.sqrt(0.16 + 0.09 + 0.04))).to.beTrue()
-			expect(t1[1].lp).to.equal(2)
+			-- its spectrum: the three mixed by energy (pba_native_voice_mix, continuity review C6), else the dominant's
+			local AC = pba.AC
+			local mixed = AC.LowpassLevel(AC.MixTiltList({ 0.16, AC.LevelDb(2), 0.09, 0, 0.04, 0 }))
+			expect(t1[1].lp).to.equal((pba.cfg.native_voice_mix or 0) >= 0.5 and mixed or 2)
 			-- two heard, three new: the third adds to the voice closest in direction (left), power kept
 			local t2 = P.FollowAssign(L, { front, left },
 				{ { pos = front, gain = 0.4 }, { pos = left, gain = 0.3 }, { pos = Vector(-10, 200, 0), gain = 0.2 } })

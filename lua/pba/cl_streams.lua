@@ -116,9 +116,7 @@ local function streamSend(ch, r, L, g, pos)
 		local law = function(d) return bassGain(ch, d, r) end
 		r.srcBound = N.BindSource(r.nativeId, r.pos, srcVol(ch, r) * N.SlotSend(law, r.pos:Distance(L)) * A.cfg.native_gain)
 	end
-	if not r.srcBound then return g end
-	if r.entryG then return srcVol(ch, r) * r.entryG * A.cfg.native_gain end
-	return 0
+	return N.SlotFadeSend(r, r.srcBound, r.entryG and srcVol(ch, r) * r.entryG * A.cfg.native_gain or 0, g)
 end
 
 --- Native voice of a stream: position, gain (owner volume x BASS distance law x path), EQ.

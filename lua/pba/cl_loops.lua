@@ -118,12 +118,19 @@ local function muffle(m, S, L)
 	if r.clear or not r.voices or #r.voices == 0 then m.tunnel = false return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
 	local p, best, dp = 0, r.voices[1], 0
-	for _, v in ipairs(r.voices) do p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain end
+	-- pba_native_voice_mix (continuity review C2): the preset from the voices' spectrum mixed by energy, as a
+	-- native voice's (N.MixVoices), not the first voice's level: two voices swapping order switched the preset
+	local mix, tilts = (A.cfg.native_voice_mix or 0) >= 0.5 and #r.voices > 1, {}
+	for _, v in ipairs(r.voices) do
+		p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain
+		if mix then tilts[#tilts + 1] = v.gain * v.gain tilts[#tilts + 1] = v.lpDb or AC.LevelDb(v.lp or 0) end
+	end
+	local lp = mix and AC.LowpassLevel(AC.MixTiltList(tilts)) or best.lp
 	local tunnel = holdTunnel(m, dp / math.max(p, 1e-12))
 	local g = math.sqrt(p) / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6)
 	-- the sound's own preset (radio, speaker) is kept (pba_keep_dsp): muffled by volume only
 	if (A.cfg.keep_dsp or 1) >= 0.5 and (m.dsp or 0) ~= 0 then return math.min(g, 1), m.dsp end
-	return math.min(g, 1), presetFor(best.lp, tunnel)
+	return math.min(g, 1), presetFor(lp, tunnel)
 end
 
 --- Native rendering of a loop: the module plays it (HRTF + EQ) at its apparent position
@@ -161,7 +168,7 @@ local function applyNative(m, S, L)
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
 	end
 	gain = gain * m.vol * A.cfg.native_gain
-	local send = m.srcBound and (trans or 0) * m.vol * A.cfg.native_gain or gain
+	local send = N.SlotFadeSend(m, m.srcBound, (trans or 0) * m.vol * A.cfg.native_gain, gain)
 	m.roomSend = send
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L), lpDb)
 	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end

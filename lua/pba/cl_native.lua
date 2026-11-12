@@ -757,6 +757,23 @@ function N.MixVoices(voices, L, lvl, law, gainOf)
 	end
 	return m
 end
+--- The listener-room send of a voice whose source reverb slot comes and goes (continuity review C9): the
+-- entering part when the voice has its slot, its whole gain when it has none (the room bus stands in for the
+-- slot), faded over SLOT_FADE_S instead of switched (a slot is a resource: getting or losing one is an event in
+-- time, not a step in space). o: the voice's record (o.slotW, o.slotT kept on it). pba_native_slot_fade 0: switched.
+local SLOT_FADE_S = 0.3
+function N.SlotFadeSend(o, bound, entry, gain)
+	local target = bound and 0 or 1
+	if (A.cfg.native_slot_fade or 1) < 0.5 or not o.slotW then
+		o.slotW, o.slotT = target, RealTime()
+	else
+		local now = RealTime()
+		local step = (now - (o.slotT or now)) / SLOT_FADE_S
+		o.slotT = now
+		if o.slotW < target then o.slotW = math.min(o.slotW + step, target) else o.slotW = math.max(o.slotW - step, target) end
+	end
+	return (1 - o.slotW) * (entry or 0) + o.slotW * (gain or 0)
+end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
 -- the voice has a slot (then the room bus must only get the transmission part).
 function N.BindSource(id, S, srcSend)
