@@ -2522,6 +2522,7 @@ function P.ThroughRoute(S, L, walls, cfg, bound)
 	if not (A.Probes and A.Probes.FieldRoutes) or #walls < 2 then return nil end
 	local dir = (L - S):GetNormalized()
 	local best, bestDb
+	local found = {} -- every way tried, by wall: the routes of the best wall are kept (P.ThroughRoutes)
 	local n = 0
 	for k = 1, #walls - 1 do
 		local w, nx = walls[k], walls[k + 1]
@@ -2543,16 +2544,33 @@ function P.ThroughRoute(S, L, walls, cfg, bound)
 					local tilt = 0
 					for i = 1, k do tilt = tilt + (pre[i].tiltDb or 0) end
 					sliceCheck()
+					local list = {}
 					for _, q in ipairs(A.Probes.FieldRoutes(V, L, 1, cfg, nil) or {}) do
-						if q.lossDb and not q.native and (not bestDb or q.lossDb + wl < bestDb) then
-							best, bestDb = { q = q, V = V, wl = wl, wlp = wlp, k = k, tilt = tilt }, q.lossDb + wl
+						if q.lossDb and not q.native then
+							local c = { q = q, V = V, wl = wl, wlp = wlp, k = k, tilt = tilt }
+							list[#list + 1] = c
+							if not bestDb or q.lossDb + wl < bestDb then best, bestDb = c, q.lossDb + wl end
 						end
 					end
+					found[k] = list
 				end
 			end
 		end
 	end
 	if not best then return nil end
+	-- the loudest way, and the next distinct one past the same walls (PR.FieldRoutes keeps one per physical route):
+	-- a room with doorways on both sides is reached by both, mixed by energy (P.SelectVoices). One alone swung
+	-- from one ear to the other where the other became the louder (gm_melancholia's bathroom, 14 u)
+	local out = { P.ThroughPath(S, L, best, cfg) }
+	local second
+	for _, c in ipairs(found[best.k] or {}) do
+		if c ~= best and (not second or c.q.lossDb < second.q.lossDb) then second = c end
+	end
+	if second then out[2] = P.ThroughPath(S, L, second, cfg) end
+	return out
+end
+--- One way through the walls then round (P.ThroughRoute's candidate c) as a route of S to L.
+function P.ThroughPath(S, L, best, cfg)
 	local q, p = best.q, {}
 	for key, v in pairs(q) do p[key] = v end
 	local pts = { best.V }
@@ -2904,11 +2922,10 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if field and worldBlocked and (cfg.trans_route or 0) >= 0.5 and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
 			local bound = r.trans and r.trans.lossDb or nil
 			for _, q in ipairs(r.paths) do if q.lossDb and (not bound or q.lossDb < bound) then bound = q.lossDb end end
-			local p = P.ThroughRoute(S, L, tw, cfg, bound)
-			if p then
+			for x, p in ipairs(P.ThroughRoute(S, L, tw, cfg, bound) or {}) do
 				if (cfg.path_props or 1) >= 0.5 then pathProps(p, S, L, cfg, srcEnt) end
 				r.paths[#r.paths + 1] = p
-				r.throughRoute = p
+				if x == 1 then r.throughRoute = p end
 			end
 		end
 		-- pba_bend_final: the diffuse model reads the bend of the route as heard (its final points, corners on the

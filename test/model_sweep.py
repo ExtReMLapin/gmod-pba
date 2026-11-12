@@ -47,6 +47,9 @@ CASES = {
         ("radio doorway", dict(S=[-326.05, 26.35, 168.54], A=[-5.9, -325.07, 24.03], B=[8.81, -323.25, 24.03])),
         ("radio hall", dict(S=[-326.05, 26.35, 168.54], A=[253.51, -22.41, 24.03], B=[250.92, -39.97, 24.03])),
         ("radio hall->back", dict(S=[-326.05, 26.35, 168.54], A=[250.92, -39.97, 24.03], B=[258.95, -145.95, 24.03])),
+        # the bathroom (openings left and right, the radio through its far wall): reported in the left ear,
+        # then in the right one 14 u to the right (the right doorway was not in the probe graph)
+        ("radio bathroom", dict(S=[-332.90, 24.83, 168.54], A=[269.41, -123.28, 24.03], B=[269.78, -108.84, 24.03])),
         # on the roof: a few cm aside, the way swaps from in front to the right
         ("radio roof", dict(S=[-326.05, 26.35, 168.54], A=[151.13, -127.66, 207.94], B=[155.99, -114.65, 207.37])),
     ],

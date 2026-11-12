@@ -26,7 +26,7 @@ A.Probes = PR
 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways; 9: probes kept off
 -- floors; 10: probes follow the floors (one per storey and column, explicit positions), map seeds only;
 -- 12: a displacement's underside adds no empty segments (floors below it no longer hidden)
-local CACHE_VERSION = 13 -- 13: links over a column whose probe left its centre (pba_probe_skip_links)
+local CACHE_VERSION = 15 -- 13: links over a column whose probe left its centre (pba_probe_skip_links); 15: and over a column whose probes give no way through (a nook beside a doorway), where the graph has no way within twice the distance
 local MAX_PROBES = 30000
 -- a build that reaches MAX_PROBES is redone at a wider spacing, up to this one, instead of keeping the
 -- part of the map flood-filled first (the far side of a big map had no probe at all)
@@ -505,7 +505,8 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 	-- a pair already found blocked (no link, no gap) is not searched again from the other side
 	local failed = {}
 	local function pairKey(i, j, k) return colKey(i, j) * 64 + k end
-	local function tryLink(n, i, j, k, q, gap, drop)
+	-- gs: the width of the face searched for a gap (gapPoint), s between neighbours, 2 s over a column
+	local function tryLink(n, i, j, k, q, gap, drop, gs)
 		local _, ids = column(i, j)
 		local id = ids[k]
 		if id and n.nb[id] then return end
@@ -513,7 +514,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		if pa > pb then pa, pb = pb, pa end
 		local fk = failed[pa]
 		if fk and fk[pb] then return end
-		local via = clearSeg(n.pos, q) and true or (gap and gapPoint(n.pos, q, s)) or (drop and dropPoint(n.pos, q))
+		local via = clearSeg(n.pos, q) and true or (gap and gapPoint(n.pos, q, gs or s)) or (drop and dropPoint(n.pos, q))
 		if via then
 			local m = node(i, j, k)
 			if m then n.nb[m.id], m.nb[n.id] = via, via end
@@ -582,6 +583,56 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 			end
 		end
 		if budgetFn then budgetFn(#nodes, qh) end
+	end
+	-- and over a column whose probe stands at its centre but on the wrong side of a wall (a nook): two probes
+	-- two columns apart with no way through the middle column's probes (none linked to both) are linked by a
+	-- gap point searched over both cells' width. gm_melancholia's bathroom: its doorway to the hall lies
+	-- between the columns, the middle probe in a nook beside it; with no link through it the radio came by the
+	-- far side of the house (left ear), then by the hall 14 u to the right (right ear). Existing probes only.
+	if skipLinks and not truncated then
+		-- whether the graph already joins a and b within `limit` (a bounded Dijkstra over the links): a link over
+		-- the middle column is only wanted where the graph has no reasonable way between them (a real detour),
+		-- not as a shortcut beside one (pba_twodoors: the shortest routes of every start then went by the one
+		-- door, and the other door's route was lost on one side of the axis between them)
+		local function joined(a, b, limit)
+			local dist, done = { [a.id] = 0 }, {}
+			while true do
+				local u, du
+				for id, dv in pairs(dist) do if not done[id] and (not du or dv < du) then u, du = id, dv end end
+				if not u then return false end
+				if u == b.id then return true end
+				done[u] = true
+				local pu = nodes[u].pos
+				for v in pairs(nodes[u].nb) do
+					local dv = du + pu:Distance(nodes[v].pos)
+					if dv <= limit and (not dist[v] or dv < dist[v]) then dist[v] = dv end
+				end
+			end
+		end
+		for x = 1, #nodes do
+			local n = nodes[x]
+			for _, d in ipairs(DIRS) do
+				local i1, j1 = n.i + d[1], n.j + d[2]
+				local i2, j2 = i1 + d[1], j1 + d[2]
+				local far = colIds[colKey(i2, j2)]
+				if far then
+					local c2 = cols[colKey(i2, j2)]
+					local mid = colIds[colKey(i1, j1)] or {}
+					for k, id in pairs(far) do
+						local q = c2[k]
+						if not n.nb[id] and abs(q.z - n.pos.z) < s then
+							local through = false
+							for _, mid2 in pairs(mid) do
+								local m = nodes[mid2]
+								if m.nb[n.id] and m.nb[id] then through = true break end
+							end
+							if not through and not joined(n, nodes[id], 2 * n.pos:Distance(q)) then tryLink(n, i2, j2, k, q, true, false, 2 * s) end
+						end
+					end
+				end
+			end
+			if budgetFn and x % 64 == 0 then budgetFn(#nodes) end
+		end
 	end
 	return { spacing = s, nodes = nodes, index = index, truncated = truncated, skip = skipLinks }
 end
