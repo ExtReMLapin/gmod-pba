@@ -100,6 +100,7 @@ A.CONFIG = {
 
 	-- level of detail
 	lod_dist        = { 6000, 500, 30000, "sv", "Beyond this distance sounds are left untouched." },
+	quiet_db        = { -40, -100, 0, "cl", "Sounds the engine would play quieter than this (dB, clear line, their volume included) get no path search: one-shots are left to the engine, loops keep their last values. -100 = off." },
 	probe_dist      = { 3000, 0, 30000, "sv", "Beyond this distance no probe path search (transmission only)." },
 	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_pba is installed." },
 	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },

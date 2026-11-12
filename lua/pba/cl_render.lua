@@ -826,6 +826,15 @@ end
 
 local finish
 
+--- pba_quiet_db: true when the engine would play a sound of level lvl and volume vol at distance d
+-- below that level (dB re full scale, clear line). Such a sound is left to the engine without any
+-- path search (a soundscape's water lapping 50 m away, -42 dB, searched routes over 2600 u).
+function A.TooQuiet(lvl, vol, d)
+	local q = A.cfg.quiet_db or -40
+	if q <= -100 then return false end
+	return (vol or 1) * AC.EngineGain(math.max(d, 1), lvl) < 10 ^ (q / 20)
+end
+
 --- Processes one sound. Returns true when pba took charge of it (the original must
 -- not be played), even if every voice ended up inaudible; false = play it as vanilla.
 function A.Process(data, relayed)
@@ -839,6 +848,10 @@ function A.Process(data, relayed)
 	local copies = beginCopies(data, idx)
 	local lvl = data.SoundLevel or 75
 	if S:Distance(L) > A.cfg.lod_dist then return false end
+	if A.TooQuiet(lvl, data.Volume, S:Distance(L)) then
+		A.stats.quiet = (A.stats.quiet or 0) + 1
+		return false
+	end
 	local t0 = SysTime()
 	local src = data.Entity
 	if not IsValid(src) and data.EntIndex and data.EntIndex > 0 then src = Entity(data.EntIndex) end

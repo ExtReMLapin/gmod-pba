@@ -239,6 +239,12 @@ function apply(m, fade)
 		if m.patch and m.once and not m.patch:IsPlaying() then m.done = true end
 		return
 	end
+	-- far and quiet (pba_quiet_db): a playing mirror keeps its last values, no new path search (handing
+	-- it to the engine's clear law would jump by the loss of its last routes)
+	if (m.patch or m.nativeId) and not sj and A.TooQuiet and A.TooQuiet(m.lvl, m.vol, S:Distance(L)) then
+		if m.patch and m.once and not m.patch:IsPlaying() then m.done = true end
+		return
+	end
 	if nativeOn and not m.patch then
 		if applyNative(m, S, L) ~= false then return end
 	end
