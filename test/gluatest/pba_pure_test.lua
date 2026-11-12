@@ -643,6 +643,36 @@ local SUITE = {
 			expect(#m).to.equal(1)
 			expect(near(m[1].pos.y, 0, 1)).to.beTrue()
 		end },
+		{ name = "Soft cull (continuity review step 2): a path just past reject_db or past max_paths fades out by its level, a voice past max_voices gives its energy", func = function()
+			local L = Vector(0, 0, 0)
+			local mk = function(pos, len, loss) return { pos = pos, length = len, lossDb = loss, lp = 0 } end
+			local on, off = table.Copy(CFG), table.Copy(CFG)
+			on.model_soft_cull, off.model_soft_cull = 1, 0
+			on.diffuse, off.diffuse = 0, 0
+			local rej = on.reject_db
+			-- half-way through the fade (smoothstep 0.5): the second path keeps half its energy
+			local function two(cfg) return P.SelectVoices(L, { mk(Vector(100, 100, 0), 500, 5), mk(Vector(100, -100, 0), 500, 5 + rej + 3) }, nil, 75, cfg) end
+			-- (a path that much weaker joins the other's voice: the energy of the set is what is judged)
+			local function energy(v) local e = 0 for _, x in ipairs(v) do e = e + x.gain ^ 2 end return e end
+			local e1 = AC.EngineGain(500, 75) ^ 2 * 10 ^ (-5 / 10)
+			local full = AC.EngineGain(500, 75) ^ 2 * 10 ^ (-(5 + rej + 3) / 10)
+			local a, b = energy(two(off)), energy(two(on))
+			expect(near(a / e1, 1, 1e-6)).to.beTrue()
+			if not near((b - e1) / full, 0.5, 1e-6) then error(string.format("faded energy share %.4f, want 0.5", (b - e1) / full)) end
+			-- the fade is continuous: at its two ends it matches the cut
+			local function e2(loss) return energy(P.SelectVoices(L, { mk(Vector(100, 100, 0), 500, 5), mk(Vector(100, -100, 0), 500, loss) }, nil, 75, on)) - e1 end
+			expect(near(e2(5 + rej + 6.001), 0, 1e-12)).to.beTrue()
+			expect(near(e2(5 + rej + 0.001) / (AC.EngineGain(500, 75) ^ 2 * 10 ^ (-(5 + rej + 0.001) / 10)), 1, 1e-4)).to.beTrue()
+			-- max_paths: the 4th of 3 at 3 dB under the 3rd keeps part of its energy (its loss raised), at 7 dB none
+			local old = A.cfg.model_soft_cull
+			A.cfg.model_soft_cull = 1
+			local k = P.KeepLoudest({ mk(Vector(1, 0, 0), 500, 1), mk(Vector(1, 0, 0), 500, 2), mk(Vector(1, 0, 0), 500, 3), mk(Vector(1, 0, 0), 500, 6) }, 3, 75)
+			local k7 = P.KeepLoudest({ mk(Vector(1, 0, 0), 500, 1), mk(Vector(1, 0, 0), 500, 2), mk(Vector(1, 0, 0), 500, 3), mk(Vector(1, 0, 0), 500, 10) }, 3, 75)
+			A.cfg.model_soft_cull = old
+			expect(#k).to.equal(4)
+			expect(near(k[4].cullDb, -10 * math.log10(0.5), 1e-6)).to.beTrue()
+			expect(#k7).to.equal(3)
+		end },
 		{ name = "DetourDelta: a can barely shadows, a container does", func = function()
 			local S, L = Vector(0, 0, 40), Vector(400, 0, 40)
 			local can = P.DetourDelta(S, L, Vector(196, -3, 34), Vector(204, 3, 46))
