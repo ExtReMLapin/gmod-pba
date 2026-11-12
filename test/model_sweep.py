@@ -113,7 +113,14 @@ def run_job(sweep):
     return json.loads(vals[0]) if vals else None, res
 
 
+# below this level (dB, the native law's gain) the sound is inaudible (under a 16-bit signal's noise floor):
+# only its level is judged there (a voice past trans_max, 117 dB down, changed its low-pass by 5 dB)
+FLOOR_DB = -90
+
+
 def deltas(a, b, top):
+    if max(a[1], b[1]) < FLOOR_DB:
+        return {"level": abs(b[1] - a[1]), "send": 0, "diffuse": 0, "lp": 0, "dir": 0}
     return {"level": abs(b[1] - a[1]), "send": abs(b[2] - a[2]) if min(a[2], b[2]) > -150 else 0,
             "diffuse": abs(b[3] - a[3]), "lp": abs(b[4] - a[4]),
             "dir": ang(a[5:8], b[5:8]) if min(a[1], b[1]) > top - 40 else 0}

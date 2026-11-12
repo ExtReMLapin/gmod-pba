@@ -1223,11 +1223,12 @@ function P.AddEdge(t, e, L, cfg)
 	local eD = e.weight * 10 ^ (-e.db / 10)
 	if eD <= 0 then return t end
 	local eT = 10 ^ (-t.lossDb / 10)
-	local tilt = AC.MixTilt2(eT, AC.LevelDb(t.lp or 0, cfg), eD, e.tilt or e.db)
+	local tilt = AC.MixTilt2(eT, t.lpDb or AC.LevelDb(t.lp or 0, cfg), eD, e.tilt or e.db)
 	t.lossDb = math.max(-10 * math.log10(eT + eD), 0)
 	if t.midDb then t.midDb = math.max(-10 * math.log10(10 ^ (-t.midDb / 10) + eD), 0) end
 	t.lp = math.min(t.lp or 0, AC.LowpassLevel(tilt, cfg))
 	t.edgeDb, t.edgeApex, t.tilt = e.db, e.apex, tilt
+	if t.lpDb then t.lpDb = tilt end -- (pba_trans_tilt: kept continuous)
 	t.edgeShare = eD / (eT + eD) -- (the share of its energy that goes over the edge: an opening, N.OpeningShare)
 	if t.pos and L then
 		local a, b = t.pos - L, e.apex - L
@@ -1625,12 +1626,15 @@ local function bundleDoor(w) return w.ent and OPENABLE[w.ent:GetClass()] end
 -- holds (karg: the native module read displacements). Module-level: no closure per call (LuaJIT NYI FNEW).
 function P.KeepWorldWall(w) return not w.ent and not w.water end
 function P.KeepNativeWorldWall(w, nativeDisp) return not w.ent and not w.water and not P.NativeLacks(w, nativeDisp) end
-function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg)
-	if (cfg.trans_bundle or 0) < 0.5 then return loss, lp, mid end
+-- tilt (optional): the centre line's muffling (P.EvalWalls' 4th); returned 4th as the bundle's, each line's weighted
+-- by its energy like the loss (pba_trans_tilt: a wall entering the line moved the muffling by a whole wall's at once
+-- where the loss moved by fifths)
+function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
+	if (cfg.trans_bundle or 0) < 0.5 then return loss, lp, mid, tilt end
 	local d = S:Distance(L)
 	local lambda = 343 / (cfg.diff_freq or 1000) / 0.01905 -- units
 	local r = math.min(cfg.trans_bundle_r or 24, 0.5 * math.sqrt(lambda * d))
-	if r < 0.5 then return loss, lp, mid end
+	if r < 0.5 then return loss, lp, mid, tilt end
 	local dir = (L - S):GetNormalized()
 	local u = dir:Cross(math.abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
 	u:Normalize()
@@ -1641,19 +1645,22 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg)
 	-- centre's leaves itself, so they are taken off the mean again.
 	local cDoors = {}
 	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)) do if bundleDoor(w) then cDoors[#cDoors + 1] = w end end
-	local dl, dm = 0, 0
-	if #cDoors > 0 then dl, _, dm = P.EvalWalls(cDoors, cfg, true, true) end
+	local dl, dm, dt = 0, 0, 0
+	if #cDoors > 0 then dl, _, dm, dt = P.EvalWalls(cDoors, cfg, true, true) end
 	local gl, gm, n = 10 ^ (-(loss + dl) / 10), 10 ^ (-(mid + dm) / 10), 1
+	local gt = gl * ((tilt or 0) + dt)
 	for _, o in ipairs({ u * r, u * -r, v * r, v * -r }) do
 		local m, sel = M + o, {}
 		for _, half in ipairs({ P.Walls(S, m, cfg.trans_max_walls, srcEnt, true), P.Walls(L, m, cfg.trans_max_walls, srcEnt, true) }) do
 			for _, w in ipairs(half) do if keep(w, karg) or bundleDoor(w) then sel[#sel + 1] = w end end
 		end
-		local l2, _, m2 = 0, 0, 0
-		if #sel > 0 then l2, _, m2 = P.EvalWalls(sel, cfg, true, true) end
-		gl, gm, n = gl + 10 ^ (-l2 / 10), gm + 10 ^ (-m2 / 10), n + 1
+		local l2, _, m2, t2 = 0, 0, 0, 0
+		if #sel > 0 then l2, _, m2, t2 = P.EvalWalls(sel, cfg, true, true) end
+		local e2 = 10 ^ (-l2 / 10)
+		gl, gm, n, gt = gl + e2, gm + 10 ^ (-m2 / 10), n + 1, gt + e2 * t2
 	end
-	return math.max(-10 * math.log10(gl / n) - dl, 0), lp, math.max(-10 * math.log10(gm / n) - dm, 0)
+	local bt = tilt and math.max(gt / math.max(gl, 1e-300) - dt, 0) or nil
+	return math.max(-10 * math.log10(gl / n) - dl, 0), lp, math.max(-10 * math.log10(gm / n) - dm, 0), bt
 end
 
 --- How far inside the world the straight line runs (pba_trans_bundle_edge), as a fraction of the first Fresnel
@@ -1713,7 +1720,7 @@ end
 
 function P.EvalWalls(walls, cfg, noCap, noDetour)
 	cfg = cfg or A.cfg
-	local loss, mid, lp = 0, 0, 0
+	local loss, mid, lp, tilt = 0, 0, 0, 0
 	local cap = cfg.prop_max_db or 18
 	for _, w in ipairs(walls) do
 		local db, l
@@ -1798,8 +1805,11 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 		loss = loss + through
 		mid = mid + midDb
 		lp = math.max(lp, l)
+		tilt = tilt + (w.tiltDb or 0)
 	end
-	return math.min(loss, cfg.trans_max), lp, math.min(mid, cfg.trans_max)
+	-- 4th: the walls' muffling in series, continuous (dB: their tilts added), where lp is the loudest wall's level;
+	-- capped like the loss (past trans_max the voice is gone: six walls' 86 dB against five walls' 81 jumped)
+	return math.min(loss, cfg.trans_max), lp, math.min(mid, cfg.trans_max), math.min(tilt, cfg.trans_max)
 end
 
 -- ------------------------------------------------------------------ selection
@@ -2085,7 +2095,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		end
 		if keep then
 			voices[#voices + 1] = { kind = "transmission", pos = trans.pos, gain = g, level = lvl, lp = trans.lp, members = {},
-				len = trans.length, rawLossDb = raw, edgeShare = trans.edgeShare }
+				len = trans.length, rawLossDb = raw, edgeShare = trans.edgeShare, lpDb = trans.lpDb }
 		end
 	end
 	-- loudest first: a sound played on one channel (a loop mirror, another addon's radio stream) takes
@@ -2683,17 +2693,18 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			r.leafByPortal = #tw < #walls
 		end
 		if #tw > 0 then
-			local loss, lp, mid = P.EvalWalls(tw, cfg)
+			local loss, lp, mid, tilt = P.EvalWalls(tw, cfg)
 			-- Lua backend: the world walls' part over a bundle of parallel lines (P.BundleWalls)
 			if (cfg.trans_bundle or 0) >= 0.5 and not (CLIENT and A.Native and A.Native.ready) then
 				local world, rest = {}, {}
 				for _, w in ipairs(tw) do if w.ent or w.water then rest[#rest + 1] = w else world[#world + 1] = w end end
 				if #world > 0 then
-					local wl, wlp, wm = P.EvalWalls(world, cfg, true)
-					wl, wlp, wm = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepWorldWall)
-					local el, elp, em = 0, 0, 0
-					if #rest > 0 then el, elp, em = P.EvalWalls(rest, cfg, true) end
+					local wl, wlp, wm, wt = P.EvalWalls(world, cfg, true)
+					wl, wlp, wm, wt = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepWorldWall, nil, wt)
+					local el, elp, em, et = 0, 0, 0, 0
+					if #rest > 0 then el, elp, em, et = P.EvalWalls(rest, cfg, true) end
 					loss, mid, lp = math.min(wl + el, cfg.trans_max), math.min(wm + em, cfg.trans_max), math.max(wlp, elp)
+					tilt = math.min(wt + et, cfg.trans_max)
 				end
 			end
 			-- native backend: volumetric occlusion of the direct line by the WORLD (Steam Audio
@@ -2721,14 +2732,18 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 						end
 						if #known > 0 then
 							for _, w in ipairs(entWalls) do other[#other + 1] = w end
-							local wl, wlp, wm = P.EvalWalls(known, cfg, true)
-							wl, wlp, wm = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepNativeWorldWall, nativeDisp)
-							local el, elp, em = 0, 0, 0
-							if #other > 0 then el, elp, em = P.EvalWalls(other, cfg, true) end
+							local wl, wlp, wm, wt = P.EvalWalls(known, cfg, true)
+							wl, wlp, wm, wt = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepNativeWorldWall, nativeDisp, wt)
+							local el, elp, em, et = 0, 0, 0, 0
+							if #other > 0 then el, elp, em, et = P.EvalWalls(other, cfg, true) end
 							local bl, blp, bm = P.NativeBlend(d.occlusion, wl, wlp, wm)
 							loss = math.min(bl + el, cfg.trans_max)
 							mid = math.min(bm + em, cfg.trans_max)
 							lp = math.max(blp, elp)
+							-- the continuous muffling (pba_trans_tilt): the part Steam Audio sees unmuffled, the rest
+							-- through the walls it holds, mixed by energy; then the walls it lacks, in series
+							local o = math.Clamp(d.occlusion, 0, 1)
+							tilt = math.min(AC.MixTilt2(o * o, 0, ((1 - o) * 10 ^ (-wl / 20)) ^ 2, wt) + et, cfg.trans_max)
 						end
 					end
 					r.nativeOcclusion = d and d.occlusion
@@ -2744,6 +2759,11 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
 			end
 			r.trans = { walls = tw, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
+			-- pba_trans_tilt: the transmission's muffling is its walls' in series, continuous (dB), not the level of its
+			-- most muffling wall read back as a step: a voice through three walls was mixed as one through a single one
+			-- (it seemed to carry the highs), and its own level steps moved the one-voice low-pass by 3.9 dB in 0.25 u
+			-- (pba_demo's source walk)
+			if (cfg.trans_tilt or 0) >= 0.5 then r.trans.lpDb = tilt end
 			-- pba_trans_leaf_fade: a line through the world AND through leaves a route owns (the route through
 			-- those doorways) is that route's way plus the world it grazes. Where the world part thins out (the
 			-- line clipping a wall's end or a door's jamb) the line becomes the route's own way, which the route
