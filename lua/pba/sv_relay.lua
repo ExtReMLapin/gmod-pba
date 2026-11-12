@@ -216,6 +216,9 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	local radius = audibleRadius(lvl)
 	local lod = A.cfg.lod_dist
 	local predicted = GetPredictionPlayer()
+	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
+	-- client never sees them (no echoes on his own gunfire). They are his own: clear, as on the client
+	local sp = game.SinglePlayer()
 	-- clear: original re-emitted unchanged; blocked: relayed; muffled: blocked but over the relay
 	-- budget, re-emitted muffled by the engine; far: beyond lod_dist, too far to process (unchanged)
 	local clear, blocked, muffled, far = {}, {}, {}, {}
@@ -224,7 +227,9 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	-- clients rendering every sound natively (userinfo pba_native_all_want) get the relay
 	-- even with a clear line: their module plays the sound instead of the engine
 	for _, ply in ipairs(player.GetHumans()) do
-		if ply ~= predicted then
+		if sp and ply == predicted and data.Entity == ply then
+			clear[#clear + 1] = ply
+		elseif sp or ply ~= predicted then
 			local eye = A.PlayerEar(ply)
 			local d2 = eye:DistToSqr(pos)
 			if d2 <= radius * radius then
