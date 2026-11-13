@@ -42,6 +42,7 @@ METAL_WALL = "metal/metalwall021a"
 TILE_WALL = "tile/tilewall009b"
 TILE_FLOOR = "tile/tilefloor001a"
 WATER = "nature/water_canals_water2"
+SLIME = "nature/toxicslime002a"     # %compileSlime: CONTENTS_SLIME, as in the canals
 ACOUSTIC = "props/acousticceiling002a"
 DESK = "dev/dev_measuregeneric01"
 
@@ -429,7 +430,79 @@ def build():
                (C, (LTOP + LBOT) / 2, 0), 270, sources={"music": "pba_detour_src"},
                stream_pos=[C, (SBOT + STOP) / 2, 40])
 
-    # ---------------------------------------------------------------- 15 exit
+    # ---------------------------------------------------------------- 15 sentences (Combine radio, words assembled)
+    # Listening room; north, behind a plaster wall with a door on the west, the radio room: a speaker
+    # playing a sentence (sentences.txt: words, beeps, pauses, pitch changes) and a spot where an
+    # "addon" plays a sentence on the world (EmitSentence with a position). A citizen in plain sight
+    # reads a sentence too (lip sync).
+    m.space(X, 0, 0, X + 768, 512, 192, wall=PLASTER_FLAT, walls={"y1": None})
+    m.space(X, 528, 0, X + 768, 912, 192, wall=CONC, walls={"y0": PLASTER}, light=False)
+    m.light(X + 384, 720, 168, "200 220 255", 120)
+    m.ydoor("pba_sentences_door", X + 64, 512)
+    m.pedestal(X + 560, 800)
+    m.prop("pba_sentences_src", SPEAKER, X + 560, 800, 40, yaw=270, solid=0)
+    m.marker("pba_sentences_world", X + 220, 820, 64)
+    m.add_room("sentences", [(X, 0, 0, X + 768, 512, 192)], (X + 256, 256, 0), 90,
+               sources={"radio": "pba_sentences_src"}, doors={"door": "pba_sentences_door"},
+               world_pos=[X + 220, 820, 64], citizen=[X + 400, 420, 0, 225])
+    X = next_room(X + 768)
+
+    # ---------------------------------------------------------------- 16 near or far (stereo ^ files), open air
+    # A long courtyard under the sky: the same shot or explosion 200 u away, then 2 000 u away. Files
+    # with "^" carry the near sound on the left channel and the far one on the right.
+    FL = 2304
+    m.space(X, 0, 0, X + FL, 768, 512, wall=BRICK, ceil=SKY, light=False, lms=32)
+    lx, ly = X + 128, 384
+    m.pedestal(lx + 200, ly)
+    m.prop("pba_farnear_near", SPEAKER, lx + 200, ly, 40, yaw=180, solid=0)
+    m.pedestal(lx + 2000, ly)
+    m.prop("pba_farnear_far", SPEAKER, lx + 2000, ly, 40, yaw=180, solid=0)
+    m.prop("pba_farnear_shooter", SOLDIER, lx + 300, ly + 110, 0, yaw=180)
+    m.prop("pba_farnear_buddy", SOLDIER, lx + 40, ly - 90, 0, yaw=90)
+    m.add_room("farnear", [(X, 0, 0, X + FL, 768, 512)], (lx, ly, 0), 0,
+               sources={"near": "pba_farnear_near", "far": "pba_farnear_far", "shooter": "pba_farnear_shooter",
+                        "buddy": "pba_farnear_buddy"})
+    X = next_room(X + FL)
+
+    # ---------------------------------------------------------------- 17 loops that must stop
+    # Listening room with a visible speaker; north, behind a solid concrete wall (no opening), a hidden
+    # speaker whose loop is faded to silence by its entity. The Lua side adds a crate for the gravity
+    # gun and a crate on a slide constraint (travel sound).
+    m.space(X, 0, 0, X + 768, 512, 192, wall=CONC, walls={"y1": None})
+    m.space(X, 528, 0, X + 768, 912, 192, wall=CONC, walls={"y0": CONC}, light=False)
+    m.light(X + 384, 720, 168, bright=100)
+    m.pedestal(X + 384, 800)
+    m.prop("pba_loops_hidden", SPEAKER, X + 384, 800, 40, yaw=270, solid=0)
+    m.pedestal(X + 600, 420)
+    m.prop("pba_loops_spk", SPEAKER, X + 600, 420, 40, yaw=225, solid=0)
+    m.add_room("loops", [(X, 0, 0, X + 768, 512, 192)], (X + 256, 256, 0), 90,
+               sources={"hidden": "pba_loops_hidden", "speaker": "pba_loops_spk"},
+               slider=[X + 420, 110, 0], crate=[X + 330, 150, 0])
+    X = next_room(X + 768)
+
+    # ---------------------------------------------------------------- 18 water and slime
+    # Two basins side by side, a radio at the bottom of each: water on the west, toxic slime
+    # (CONTENTS_SLIME, as in the canals) on the east. Listening spot on the north deck.
+    m.space(X, 0, -160, X + 768, 640, 224, wall=TILE_WALL, floor=TILE_FLOOR, ceil=DEV, light=False)
+    m.light(X + 192, 320, 200, "220 255 220", 200)
+    m.light(X + 576, 320, 200, "220 255 220", 200)
+    by0, by1 = 160, 400
+    basins = ((X + 96, X + 336, WATER), (X + 432, X + 672, SLIME))
+    for b in ((X, 0, -160, X + 768, by0, 0), (X, by1, -160, X + 768, 640, 0),
+              (X, by0, -160, X + 96, by1, 0), (X + 336, by0, -160, X + 432, by1, 0),
+              (X + 672, by0, -160, X + 768, by1, 0)):
+        m.wbox(b, deck)
+    for bx0, bx1, liquid in basins:
+        for k in range(9):   # stairs out of the basin (west end, 16 u steps)
+            m.wbox((bx0 + 16 * k, by0, -160, bx0 + 16 * (k + 1), by0 + 64, -16 - 16 * k), deck)
+        m.wbox((bx0, by0, -160, bx1, by1, -16), {"top": liquid, "*": NODRAW})
+    m.prop("pba_slime_water", RADIO, X + 236, 320, -160, yaw=90)
+    m.prop("pba_slime_slime", RADIO, X + 572, 320, -160, yaw=90)
+    m.add_room("slime", [(X, 0, -160, X + 768, 640, 224)], (X + 384, 520, 0), 270, panel=(X + 300, 590),
+               sources={"water": "pba_slime_water", "slime": "pba_slime_slime"})
+    X = next_room(X + 768)
+
+    # ---------------------------------------------------------------- 19 exit
     m.space(X, 0, 0, X + 512, 512, 192, wall=DEV, floor=CONC_FLOOR, ceil=DEV)
     m.add_room("exit", [(X, 0, 0, X + 512, 512, 192)], (X + 128, 256, 0), 0)
 
