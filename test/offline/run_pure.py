@@ -61,6 +61,58 @@ ok_static = len(raw) == 1 and raw[0].startswith("lua/pba/sh_core.lua:") and len(
 print("%s static: SoundDuration only via A.SoundDuration, prefix pattern only in A.SoundFile (raw calls %s, patterns %s)"
       % ("PASS" if ok_static else "FAIL", raw, pat))
 
+# Static lock (offline only): no Lua file writes the global `_` (a placeholder in a multiple assignment with no
+# `local _` in scope: d1, l1, _, e1 = f()). Found in the bytecode (GSET of the constant "_"), every function
+# of every file; the GSET opcode is read from a probe function, not hard-coded.
+gset_code = r"""
+local ju, band, rshift = require("jit.util"), bit.band, bit.rshift
+local function gsets(f, name, out)
+	local pc = 1
+	while true do
+		local ins = ju.funcbc(f, pc)
+		if not ins then break end
+		out[#out + 1] = { op = band(ins, 0xff), d = rshift(ins, 16), pc = pc }
+		pc = pc + 1
+	end
+	return out
+end
+local probe = loadstring("pba_probe_global_ = 1")
+local GSET
+for _, i in ipairs(gsets(probe, nil, {})) do
+	if ju.funck(probe, -(i.d + 1)) == "pba_probe_global_" then GSET = i.op end
+end
+local hits = {}
+local function scan(f, file)
+	local info = ju.funcinfo(f)
+	for _, i in ipairs(gsets(f, nil, {})) do
+		if i.op == GSET and ju.funck(f, -(i.d + 1)) == "_" then
+			local li = ju.funcinfo(f, i.pc)
+			hits[#hits + 1] = file .. ":" .. tostring(li.currentline)
+		end
+	end
+	local k = -1
+	while true do
+		local c = ju.funck(f, k)
+		if c == nil then break end
+		if type(c) == "proto" then scan(c, file) end
+		k = k - 1
+	end
+end
+local files = ...
+for name, src in pairs(files) do scan(assert(loadstring(src, name)), name) end
+table.sort(hits)
+return tostring(GSET ~= nil), table.concat(hits, " ")
+"""
+srcs = {}
+for root, _, names in os.walk(os.path.join(repo, "lua")):
+    for n in names:
+        if n.endswith(".lua"):
+            pth = os.path.join(root, n)
+            srcs[os.path.relpath(pth, repo).replace(os.sep, "/")] = open(pth, encoding="utf-8", errors="replace").read()
+probe_ok, gset_hits = L.execute(gset_code, L.table_from(srcs))
+ok_gset = probe_ok == "true" and gset_hits == ""
+print("%s static: no write to the global `_` (GSET opcode found %s; writes at %s)" % ("PASS" if ok_gset else "FAIL", probe_ok, gset_hits or "none"))
+
 # The native helpers (cl_native.lua: distance law, sends, directivity, EQ) and their suite. Loaded last:
 # the suite above runs without pba.Native, as before.
 L.execute("timer.Remove = timer.Remove or function() end")

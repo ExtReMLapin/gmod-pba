@@ -1305,7 +1305,7 @@ function P.WorldEdge(S, L, walls, cfg)
 	-- the way over the edge crosses the doors on its two legs like any route segment (P.SegmentDoorLoss):
 	-- the thin traces see the world only, so a closed door's doorway is an edge for them, its leaf the loss
 	-- behind it (without it the edge gave 2 dB through a shut door beside the probes' 16)
-	local d1, l1, e1, d2, l2, e2 = 0, 0, nil, 0, 0, nil
+	local d1, l1, e1, d2, l2, e2, _ = 0, 0, nil, 0, 0, nil, nil
 	d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
 	d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
 	if e2 and e2 == e1 then
@@ -1762,7 +1762,7 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
 	-- centre's leaves itself, so they are taken off the mean again.
 	local cDoors = {}
 	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)) do if bundleDoor(w) then cDoors[#cDoors + 1] = w end end
-	local dl, dm, dt = 0, 0, 0
+	local dl, dm, dt, _ = 0, 0, 0, nil
 	if #cDoors > 0 then dl, _, dm, dt = P.EvalWalls(cDoors, cfg, true, true) end
 	local gl, gm, n = 10 ^ (-(loss + dl) / 10), 10 ^ (-(mid + dm) / 10), 1
 	local gt = gl * ((tilt or 0) + dt)
