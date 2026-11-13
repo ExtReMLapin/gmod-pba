@@ -47,6 +47,17 @@ end)
 -- see the filter from EntityEmitSound and must not widen their audience).
 local ENT = FindMetaTable("Entity")
 A.orig = A.orig or { EntEmitSound = ENT.EmitSound, EmitSound = EmitSound }
+
+-- EmitSentence(name, pos, ent...) of an addon on the world reaches EntityEmitSound without its position (Pos
+-- nil, the entity the world): pba could not place it and the line crossed every wall. The position it was
+-- given is kept for the hook it calls (synchronously). The original is kept as the engine's C function.
+A.orig.EmitSentence = A.orig.EmitSentence or EmitSentence
+function EmitSentence(name, pos, ...)
+	A.sentencePos = pos
+	local ok, err = pcall(A.orig.EmitSentence, name, pos, ...)
+	A.sentencePos = nil
+	if not ok then error(err, 2) end
+end
 A.orig.EntStopSound = A.orig.EntStopSound or ENT.StopSound
 A.explicitFilter = false
 
@@ -203,6 +214,9 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 		local d = {}
 		for k, v in pairs(data) do d[k] = v end
 		d.SoundName = "!" .. data.OriginalSoundName
+		-- (on the world: where EmitSentence was told to play it)
+		local e = d.Entity
+		if not d.Pos and isvector(A.sentencePos) and not (IsValid(e) and not e:IsWorld()) then d.Pos = A.sentencePos end
 		data = d
 	end
 	if not A.Eligible(data) then return end
