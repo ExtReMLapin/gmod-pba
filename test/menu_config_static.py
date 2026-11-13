@@ -23,7 +23,6 @@ EXPECT = os.path.join(ROOT, "test", "option_sweep_expect.json")
 # "GAP" marks a behaviour switch that should have a checkbox: listed so the gap stays visible.
 EXEMPT = {
     "report": "developer: publishes paths on the mcpagent channel",
-    "compat_auto": "GAP: switch of the other-addon shutdown (no checkbox yet)",
     "water_planes": "GAP: behaviour switch (water between source and listener), no checkbox yet",
     "split_db": "model constant of the voice split (with split_angle)",
     "split_angle": "model constant of the voice split",
@@ -156,6 +155,20 @@ if table is not None:
         check(n in cfg, f"option_sweep_expect.json: {n} is not an option")
         check(isinstance(row, dict) and row.get("pos0") in ("differs", "same", "hook") and bool(row.get("why")),
               f"option_sweep_expect.json: {n}: needs pos0 in differs/same/hook and a why")
+
+# 5. each control on the page of its realm: a server option (sv) on the Server page (admin only: a player's
+# checkbox would do nothing), a client option (cl) on the Player or Native page (on the Server page an
+# admin would only set his own client)
+page_of = {}
+for name, body in re.findall(r"function Build\.(\w+)\(panel\)(.*?)\nend", menu, re.S):
+    for r in menu_refs(body):
+        page_of[r] = name
+check(len(page_of) >= 100, f"only {len(page_of)} controls placed on a page (the page parser lost some)")
+for r, page in sorted(page_of.items()):
+    if r in cfg:
+        want = "server" if cfg[r]["scope"] == "sv" else "player/native"
+        check((page == "server") == (cfg[r]["scope"] == "sv"),
+              f"{r}: {cfg[r]['scope']} option on the {page} page (belongs on the {want} page)")
 
 print(f"{total - len(fails)}/{total} passed" + ("" if not fails else f"; {len(fails)} FAIL"))
 sys.exit(1 if fails else 0)

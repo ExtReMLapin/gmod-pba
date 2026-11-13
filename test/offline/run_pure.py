@@ -127,13 +127,16 @@ for f in ("cl_render.lua", "cl_loops.lua", "cl_streams.lua", "cl_native.lua"):
 print("%s static: one evaluation entry, P.Evaluate (direct route computations in the sound paths: %s)"
       % ("PASS" if not eval_calls else "FAIL", eval_calls or "none"))
 
-# Static lock (offline only): every option of A.CONFIG is read somewhere (cfg.<name>, or its name quoted
-# outside sh_config.lua); the low-pass tables are read by a built name (cfg["dsp_lp" .. level], "lp" .. n .. "_db").
+# Static lock (offline only): every option of A.CONFIG is read somewhere: `.<name>` (cfg.<name>,
+# (cfg or A.cfg).<name>) or its name quoted, "pba_" prefix or not, in the code of lua/ outside sh_config.lua and
+# cl_menu.lua (a menu control is not a read: an option only the menu names is dead) and outside comments;
+# the low-pass tables are read by a built name (cfg["dsp_lp" .. level], "lp" .. n .. "_db").
 cfg_src = open(os.path.join(repo, "lua", "pba", "sh_config.lua"), encoding="utf-8").read()
 opt_names = re.findall(r"^\t(\w+)\s*=\s*\{\s*[-\d.]", cfg_src, re.M)
-other_src = "".join(v for k, v in srcs.items() if not k.endswith("/sh_config.lua"))
+other_src = "\n".join(ln.split("--", 1)[0] for k, v in srcs.items()
+                      if not k.endswith(("/sh_config.lua", "/cl_menu.lua")) for ln in v.splitlines())
 unread = [n for n in opt_names if not re.match(r"^(dsp_lp\d|lp\d_db)$", n)
-          and not re.search(r"(cfg\.%s\b|[\"']%s[\"'])" % (n, n), other_src)]
+          and not re.search(r"(\.%s\b|[\"'](pba_)?%s[\"'])" % (n, n), other_src)]
 print("%s static: every option is read somewhere (%d options; read nowhere: %s)"
       % ("PASS" if opt_names and not unread else "FAIL", len(opt_names), unread or "none"))
 
