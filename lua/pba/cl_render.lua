@@ -1232,10 +1232,13 @@ A.dict = A.dict or {}
 local pendingAcks = {}
 -- the server relays sounds to this player only once his pba client runs (sv_relay clientReady): told now
 -- (this file loads after the player entity exists: on join, and again on a Lua refresh)
+-- (with whether pba is off on this client, pba_cl_enable 0: the server then leaves his sounds to the engine)
 local function sayReady()
 	net.Start("pba_ready")
+	net.WriteBool(not A.Enabled())
 	net.SendToServer()
 end
+A.SayReady = sayReady
 if IsValid(LocalPlayer()) then sayReady() end
 hook.Add("InitPostEntity", "pba_ready", sayReady)
 timer.Create("pba_ack", 0.2, 0, function()

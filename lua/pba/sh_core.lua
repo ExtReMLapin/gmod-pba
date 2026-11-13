@@ -252,6 +252,8 @@ end
 
 function A.OnConfigChanged(name)
 	if name == "enable" or name == "cl_enable" then A.Refresh() end
+	-- the server learns that this client switched pba off or on (sv_relay pba_relay_cl_enable)
+	if (name == "enable" or name == "cl_enable") and CLIENT and A.SayReady then A.SayReady() end
 	-- loops switched off: their mirrors go back to the engine; on again: taken over again
 	if name == "loops" and SERVER and A.Loops and A.hooksInstalled then
 		if (A.cfg.loops or 0) < 0.5 then A.Loops.Release() else timer.Simple(0, A.Loops.AdoptAmbients) end
