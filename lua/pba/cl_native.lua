@@ -1025,7 +1025,8 @@ function N.Echo(data, pos, enginePlays, own)
 	local w = A.cfg.native_dir or 0
 	local aim = nil
 	if w > 0 then local _, a = N.WeaponAim(e, data.Channel) aim = a end
-	local id = pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, 0, aim, aim and w or 0)
+	-- (a relayed sound's own start time, A.SoundTimeDelay: its echoes start with it)
+	local id = pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, math.max(data.Delay or 0, 0), aim, aim and w or 0)
 	-- reflections arrive from afar: the far variant of a "^" sound
 	if id and id > 0 then N.ApplyStereo(id, data.SoundName, DV_MAX, e, pos, A.ListenerPos()) end
 	N.echoes = (N.echoes or 0) + 1

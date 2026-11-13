@@ -398,9 +398,11 @@ function A.Eligible(data)
 	if lvl <= 0 or lvl < A.cfg.min_level or lvl >= 256 then return false end
 	if data.SoundName == "invalid.wav" then return false end -- sentences: vanilla in v1
 	-- SoundTime: predicted weapons (every player's gunfire) stamp their sounds with the current
-	-- time; only sounds scheduled away from "now" are left alone (re-emission plays immediately)
+	-- time; sounds scheduled away from "now" were left alone (re-emission played them immediately). On the
+	-- server with pba_soundtime their stamp goes with the relay (the client schedules them as the engine
+	-- would, A.SoundTimeDelay) and with the re-emission (sv_relay reemit): taken like any other
 	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+	if st ~= 0 and math.abs(st - CurTime()) > 0.25 and not (SERVER and (A.cfg.soundtime or 1) >= 0.5) then return false end
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
 	if A.IsLooping(data.SoundName) then return false end
