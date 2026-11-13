@@ -252,6 +252,7 @@ function Build.server(panel)
 	sld(panel, "Long sound from (s)", "max_duration", 1)
 	sld(panel, "Max distance (units)", "lod_dist")
 	sld(panel, "Skip sounds quieter than (dB)", "quiet_db")
+	sld(panel, "Speech never quieter than (dB)", "speech_floor_db")
 
 	panel:Help("Limits (what goes beyond is left to the engine):")
 	sld(panel, "Relayed sounds per second per player", "relay_rate")

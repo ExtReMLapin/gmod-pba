@@ -390,7 +390,28 @@ function A.OwnDSP(dsp)
 	return (dsp or 0) ~= 0 and (A.cfg.keep_dsp or 1) >= 0.5
 end
 
+--- The speech floor's gain for a line of volume vol and level lvl from S heard at L (pba_speech_floor_db).
+local function speechFloorAt(vol, S, L, lvl)
+	return (vol or 1) * AC.EngineGain(math.max(S:Distance(L), 1), lvl or 75) * 10 ^ ((A.cfg.speech_floor_db or -20) / 20)
+end
+
+--- pba_speech_floor_db: a line on a face (a voice channel of an entity with flexes) is never rendered quieter than
+-- this many dB under the engine's clear law for it: the gain floor (linear, absolute) of its loudest voice, or nil.
+-- Alyx's lines behind the lab walls of d1_trainstation_05 (one transmission, -37 dB under the clear law, absolute
+-- -50 dB) got no engine copy at all in Light mode (a copy below volume 0.01 is dropped; the engine plays nothing
+-- below about -38 dB anyway): taken from the engine, captioned, never heard. Vanilla plays them at the clear law.
+local function speechFloor(data, src, L)
+	local fdb = A.cfg.speech_floor_db or -20
+	if fdb <= -80 or not data.Pos or A.IsSentence(data.SoundName) then return nil end
+	local ch = data.Channel
+	local face = data.Face or ((ch == CHAN_VOICE or ch == CHAN_VOICE2) and IsValid(src) and not src:IsWorld()
+		and (src.GetFlexNum and src:GetFlexNum() or 0) > 0)
+	if not face then return nil end
+	return speechFloorAt(data.Volume, data.Pos, L, data.SoundLevel)
+end
+
 local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited)
+	local floor = slot == 1 and speechFloor(data, src, L) or nil
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
 	-- (a sentence: by the module when its words are rendered into one sound, cl_sentences; else by the
@@ -401,6 +422,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		-- a weapon's dipole: the aim taken now, at emission (N.Directivity)
 		local dirK = A.Native.Directivity(src, L, data.Channel)
 		local g = (data.Volume or 1) * A.Native.PhysPath(v.gain, v.len, data.SoundLevel or 75, v.rawLossDb) * dirK
+		if floor then g = math.max(g, floor) end
 		if g < 0.001 then return false end
 		local delay = math.max(voiceDelay(v, L) - (waited or 0), 0)
 		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
@@ -431,6 +453,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 	v.epos = A.DistVariantPos(data.SoundName, v.pos, L, data.Pos)
 	local d = v.epos:Distance(L)
 	local vol = (data.Volume or 1) * v.gain / AC.EngineGain(math.max(d, 1), lvl)
+	if floor then vol = math.max(vol, floor / AC.EngineGain(math.max(d, 1), lvl)) end
 	vol = math.min(vol, 1)
 	if vol < 0.01 then return false end
 	local tunnel = heldTunnel(idx and (idx .. ":" .. (slot or 1)), v.diffuse, RealTime())
@@ -545,11 +568,16 @@ local function targetValues(rec, fv, t, L)
 		local el, em, eh = N.VoiceEQ(t.lp, t.len, t.lpDb)
 		-- Doppler of a moving source or listener, as loops and clear voices (N.UpdateFollowers) have it
 		local k = N.Doppler and N.Doppler(rec.S, N.VelocityOf(rec.ent), L, N.ListenerVelocity()) or 1
-		return rec.vol * N.PhysPath(t.gain, t.len, rec.lvl, t.rawLossDb) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain, el, em, eh, t.pos, rec.pitch * k
+		local g = rec.vol * N.PhysPath(t.gain, t.len, rec.lvl, t.rawLossDb) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim)
+		-- a speaking face's loudest voice keeps its floor while followed (pba_speech_floor_db)
+		if rec.speech and fv == rec.voices[1] then g = math.max(g, speechFloorAt(rec.vol, rec.S, L, rec.lvl)) end
+		return g * A.cfg.native_gain, el, em, eh, t.pos, rec.pitch * k
 	end
 	local pos = A.DistVariantPos(rec.name, t.pos, L, rec.S)
 	local d = pos:Distance(L)
-	return math.min(rec.vol * t.gain / AC.EngineGain(math.max(d, 1), rec.lvl), 1), 1, 1, 1, pos, rec.pitch
+	local vol = rec.vol * t.gain / AC.EngineGain(math.max(d, 1), rec.lvl)
+	if rec.speech and fv == rec.voices[1] then vol = math.max(vol, speechFloorAt(rec.vol, rec.S, L, rec.lvl) / AC.EngineGain(math.max(d, 1), rec.lvl)) end
+	return math.min(vol, 1), 1, 1, 1, pos, rec.pitch
 end
 
 --- The voice of the new selection that target t was built from (P.FollowAssign keeps its pos): the
@@ -765,7 +793,8 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 		vol = data.Volume or 1, pitch = data.Pitch or 100, tEnd = tEnd, tNext = now + followInterval(), hyst = {},
 		clearPath = r.clear or not r.voices or #r.voices == 0, ukey = ukey,
 		-- volume changes need a trusted end (see MIN_LEFT): never for a sound of unknown length
-		wav = not ukey and string.lower(string.GetExtensionFromFilename(name) or "") == "wav", voices = {} }
+		wav = not ukey and string.lower(string.GetExtensionFromFilename(name) or "") == "wav", voices = {},
+		speech = speechFloor(data, src, L) ~= nil or nil } -- (pba_speech_floor_db: its loudest voice kept above the floor)
 	A.Paths.Stable(rec.hyst, r) -- the hysteresis starts from what was emitted
 	local N = A.Native
 	for _, e in ipairs(list) do
