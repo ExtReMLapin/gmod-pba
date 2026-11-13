@@ -353,14 +353,15 @@ end
 
 local relayedTo -- the players the current sound was relayed to (relay, below)
 
--- Brief sounds pba took over (relayed, re-emitted): entindex -> { [file] = time the sound ends }. A later
--- SND_CHANGE_VOL / PITCH for one of them (non-looped ambient_generic with a preset or Pitch / Volume
--- inputs, func_rotating / func_tracktrain with a non-looped move sound) is not a new sound: the engine
--- would start a vanilla copy midway at the players who got pba's (no channel matches), sv_loops a second
--- copy from the top. It is dropped (audit B-8, pba_brief_updates).
+-- Brief sounds started on an entity: entindex -> { [file] = { t = time the sound ends, took = pba took it
+-- over (relayed, re-emitted) } }. A later SND_CHANGE_VOL / PITCH for one of them (non-looped
+-- ambient_generic with a preset or Pitch / Volume inputs, func_rotating / func_tracktrain with a non-looped
+-- move sound) is not a new sound (audit B-8, pba_brief_updates). Taken over: dropped (the engine would start
+-- a vanilla copy midway at the players who got pba's, no channel matching; sv_loops a second copy from the
+-- top). Left to the engine: the change is the engine's too (sv_loops must not take it as a patch start).
 A.recentBrief = A.recentBrief or {}
 local function briefKey(name) return string.lower(A.SoundFile(name or "")) end
-function A.NoteBrief(data)
+function A.NoteBrief(data, took)
 	if bit.band(data.Flags or 0, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return end
 	local e = data.Entity
 	if not IsValid(e) or e:IsWorld() or not isstring(data.SoundName) then return end
@@ -370,17 +371,19 @@ function A.NoteBrief(data)
 	local r = A.recentBrief[idx]
 	if not r then r = {} A.recentBrief[idx] = r end
 	local now = CurTime()
-	for k, t in pairs(r) do if t < now then r[k] = nil end end
-	r[briefKey(data.SoundName)] = now + dur * 100 / math.max(data.Pitch or 100, 1) + 0.1
+	for k, x in pairs(r) do if x.t < now then r[k] = nil end end
+	r[briefKey(data.SoundName)] = { t = now + dur * 100 / math.max(data.Pitch or 100, 1) + 0.1, took = took and true or false }
 end
---- True when data is a volume / pitch change of a brief sound pba took over and that still plays.
+--- True when data is a volume / pitch change of a brief sound that still plays; second value: pba took it
+-- over (else the engine plays it).
 function A.BriefPlaying(data)
 	if (A.cfg.brief_updates or 1) < 0.5 then return false end
 	if bit.band(data.Flags or 0, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(data.Flags or 0, SND_STOP) ~= 0 then return false end
 	local e = data.Entity
 	local r = IsValid(e) and A.recentBrief[e:EntIndex()]
-	local t = r and r[briefKey(data.SoundName)]
-	return t ~= nil and t >= CurTime()
+	local x = r and r[briefKey(data.SoundName)]
+	if not x or x.t < CurTime() then return false end
+	return true, x.took
 end
 local function relay(data)
 	A.stats.seen = A.stats.seen + 1
@@ -568,7 +571,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	relayedTo = nil
 	local ret = relay(data)
 	relayChannelCut(data, relayedTo)
-	if ret == false then A.NoteBrief(data) end
+	A.NoteBrief(data, ret == false)
 	return ret
 end))
 
