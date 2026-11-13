@@ -25,7 +25,8 @@ for x = -16000, 16000, 128 do
 	job:step()
 end
 if not slime then return { pass = false, err = "no slime with air above found" } end
-local S = Vector(slime.p.x, slime.p.y, slime.top.z - 16)
+-- deeper than water_margin: a source just under the surface counts as out of it (D5, test/water_rules.lua)
+local S = Vector(slime.p.x, slime.p.y, slime.top.z - math.max(16, (A.cfg.water_margin or 0) + 16))
 local L = Vector(slime.p.x + 32, slime.p.y, slime.top.z + 48)
 res.S, res.L = S, L
 local function hasWater(walls) for _, w in ipairs(walls) do if w.water then return true end end return false end

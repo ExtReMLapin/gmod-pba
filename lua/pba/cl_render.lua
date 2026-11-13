@@ -638,8 +638,12 @@ function evaluate(rec, now, L)
 	if ent then rec.S = A.SoundPos({ Entity = ent }) end
 	local S = rec.S
 	-- a far sound's evaluation may run in slices (cl_slicer): its voices keep their course until it is ready
+	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
+	if rec.waterDry == nil then rec.waterDry = A.WaterMuffledFile(rec.name) end
+	local cfg = rec.waterDry and P.DRY_SOURCE_CFG or nil
+	rec.pbaCfg = cfg
 	local raw
-	if A.Slicer then raw = A.Slicer.Held(rec, S, L, rec.lvl, ent, followReady) else raw = P.Compute(S, L, rec.lvl, nil, ent) end
+	if A.Slicer then raw = A.Slicer.Held(rec, S, L, rec.lvl, ent, followReady) else raw = P.Compute(S, L, rec.lvl, cfg, ent) end
 	if not raw then return end
 	local r = P.Stable(rec.hyst, raw)
 	A.DebugNote("os:" .. rec.key, S, L, r, rec.name, "oneshot")
@@ -892,8 +896,10 @@ function A.Process(data, relayed)
 	if not IsValid(src) and data.EntIndex and data.EntIndex > 0 then src = Entity(data.EntIndex) end
 	local tReq = RealTime()
 	local r, job
-	if A.Slicer then r, job = A.Slicer.Compute(S, L, lvl, IsValid(src) and src or nil)
-	else r = A.Paths.Compute(S, L, lvl, nil, IsValid(src) and src or nil) end
+	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
+	local cfg = A.WaterMuffledFile(data.SoundName) and A.Paths.DRY_SOURCE_CFG or nil
+	if A.Slicer then r, job = A.Slicer.Compute(S, L, lvl, IsValid(src) and src or nil, cfg)
+	else r = A.Paths.Compute(S, L, lvl, cfg, IsValid(src) and src or nil) end
 	if not r and job then
 		-- a far sound whose routes are computed in slices (cl_slicer): taken now (the original is not
 		-- played), emitted once they are ready, by the time the sound would reach the listener at the

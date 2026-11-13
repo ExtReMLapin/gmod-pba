@@ -413,23 +413,55 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy)
 	end
 	walls.detours = detours
 	if not lazy then P.WallDetours(walls) end
-	-- water surface between source and listener: the air / water interface reflects most of the
-	-- sound (one fixed, heavily low-passed "wall"; no detour through the air exists)
-	if A.cfg.water >= 0.5 then
-		local wS = A.InWater(S)
-		local wL = A.InWater(L)
-		if wS ~= wL then
-			local dry, wet = wS and L or S, wS and S or L
-			local tr = util.TraceLine({ start = dry, endpos = wet, mask = MASK_WATER })
-			local p = tr.Hit and tr.HitPos or (S + L) * 0.5
-			local ws = { entry = p, exit = p, thickness = 0, mat = MAT_SLOSH, surf = "pba_water", water = true }
-			-- keep the walls ordered from S
-			local dS = p:DistToSqr(S)
-			local at = #walls + 1
-			for i, w in ipairs(walls) do if w.entry:DistToSqr(S) > dS then at = i break end end
-			insertAt(walls, at, ws)
-		end
-	end
+	return walls
+end
+
+--- The listener's water is the module's: its master water filter is on (cl_native: SetUnderwater, set
+-- from the listener's head each frame), as the engine's dsp_water on its whole mix.
+function P.ListenerWaterFiltered()
+	if not CLIENT then return false end
+	local N = A.Native
+	return N and N.render and N.underwater and pba_native and pba_native.SetUnderwater and true or false
+end
+
+local UP = Vector(0, 0, 1)
+--- The water surface between source S and listener L as a wall: wall, crossed (the line crosses a surface,
+-- one end in a liquid, the other not). The engine never muffles a sound by water: it puts dsp_water on its
+-- whole mix while the listener's head is under water, and plays files already muffled for deep explosions.
+-- pba's interface wall is ours, kept where it adds what the engine misses, not on top of what it does:
+-- * listener under water with the module's water filter on (native_water_listener): the filter alone;
+-- * a source within water_margin units of the surface counts as dry: the engine places footsteps in
+--   shallow water (feet), floating objects (their centre) and splashes there;
+-- * cfg.water_skip (P.DRY_SOURCE_CFG: a file already muffled, A.WaterMuffledFile): no wall.
+function P.WaterWall(S, L, cfg)
+	cfg = cfg or A.cfg
+	if cfg.water < 0.5 then return false, false end
+	local wS, wL = A.InWater(S), A.InWater(L)
+	if wS == wL then return false, false end
+	if cfg.water_skip then return false, true end
+	if wL and (cfg.native_water_listener or 1) >= 0.5 and P.ListenerWaterFiltered() then return false, true end
+	local m = cfg.water_margin or 0
+	if wS and m > 0 and not A.InWater(S + UP * m) then return false, true end
+	return true, true
+end
+
+--- cfg of a sound whose file is already muffled by water (P.Compute(S, L, lvl, P.DRY_SOURCE_CFG, ent)).
+P.DRY_SOURCE_CFG = setmetatable({ water_skip = true }, { __index = function(_, k) return A.cfg[k] end })
+
+-- water surface between source and listener: the air / water interface reflects most of the sound
+-- (one fixed, heavily low-passed "wall"; no detour through the air exists)
+local function addWater(walls, S, L, cfg)
+	if not P.WaterWall(S, L, cfg) then return walls end
+	local wS = A.InWater(S)
+	local dry, wet = wS and L or S, wS and S or L
+	local tr = util.TraceLine({ start = dry, endpos = wet, mask = MASK_WATER })
+	local p = tr.Hit and tr.HitPos or (S + L) * 0.5
+	local ws = { entry = p, exit = p, thickness = 0, mat = MAT_SLOSH, surf = "pba_water", water = true }
+	-- keep the walls ordered from S
+	local dS = p:DistToSqr(S)
+	local at = #walls + 1
+	for i, w in ipairs(walls) do if w.entry:DistToSqr(S) > dS then at = i break end end
+	insertAt(walls, at, ws)
 	return walls
 end
 
@@ -455,12 +487,12 @@ P.HasDisplacements = mapHasDisplacements
 
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
 -- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
-function P.Walls(S, L, maxWalls, srcEnt, lazy)
+function P.Walls(S, L, maxWalls, srcEnt, lazy, cfg)
 	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy)
 	-- a trace crosses a displacement only going up through it (its face looks up): from below
-	if #w >= (maxWalls or 6) or S.z >= L.z or not mapHasDisplacements() then return w end
+	if #w >= (maxWalls or 6) or S.z >= L.z or not mapHasDisplacements() then return addWater(w, S, L, cfg) end
 	local r = wallsOneWay(L, S, maxWalls, srcEnt, true)
-	if #r <= #w then return w end
+	if #r <= #w then return addWater(w, S, L, cfg) end
 	-- reversed: ordered from S, entry and exit swapped
 	local out = { detours = r.detours }
 	for i = #r, 1, -1 do
@@ -469,7 +501,7 @@ function P.Walls(S, L, maxWalls, srcEnt, lazy)
 		out[#out + 1] = x
 	end
 	if not lazy then P.WallDetours(out) end
-	return out
+	return addWater(out, S, L, cfg)
 end
 --- The ways round the objects of a P.Walls list not computed yet (each from its own pass's S and L).
 function P.WallDetours(walls)
@@ -1644,14 +1676,14 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
 	-- the centre cuts was paid nothing (door_sweep closed: 12.0 -> 6.2 dB in 2 u). The caller pays the
 	-- centre's leaves itself, so they are taken off the mean again.
 	local cDoors = {}
-	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)) do if bundleDoor(w) then cDoors[#cDoors + 1] = w end end
+	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)) do if bundleDoor(w) then cDoors[#cDoors + 1] = w end end
 	local dl, dm, dt = 0, 0, 0
 	if #cDoors > 0 then dl, _, dm, dt = P.EvalWalls(cDoors, cfg, true, true) end
 	local gl, gm, n = 10 ^ (-(loss + dl) / 10), 10 ^ (-(mid + dm) / 10), 1
 	local gt = gl * ((tilt or 0) + dt)
 	for _, o in ipairs({ u * r, u * -r, v * r, v * -r }) do
 		local m, sel = M + o, {}
-		for _, half in ipairs({ P.Walls(S, m, cfg.trans_max_walls, srcEnt, true), P.Walls(L, m, cfg.trans_max_walls, srcEnt, true) }) do
+		for _, half in ipairs({ P.Walls(S, m, cfg.trans_max_walls, srcEnt, true, cfg), P.Walls(L, m, cfg.trans_max_walls, srcEnt, true, cfg) }) do
 			for _, w in ipairs(half) do if keep(w, karg) or bundleDoor(w) then sel[#sel + 1] = w end end
 		end
 		local l2, _, m2, t2 = 0, 0, 0, 0
@@ -1671,7 +1703,7 @@ end
 -- a wall's square end (16 u, then nothing in one step).
 local BEDGE_STEPS, BEDGE_BISECT = 4, 4
 local function bundleCross(o, S, L, cfg, srcEnt, dir, spans, keep, karg)
-	for _, w in ipairs(P.Walls(S + o, L + o, cfg.trans_max_walls, srcEnt, true)) do
+	for _, w in ipairs(P.Walls(S + o, L + o, cfg.trans_max_walls, srcEnt, true, cfg)) do
 		if keep(w, karg) then
 			local x = (w.entry - S):Dot(dir)
 			for _, sp in ipairs(spans) do if x >= sp[1] and x <= sp[2] then return true end end
@@ -1686,7 +1718,7 @@ function P.BundleEdge(S, L, srcEnt, cfg, keep, karg)
 	-- the stretches of the line its own world walls take (widened by r): an offset line crossing the world
 	-- elsewhere (the far jamb of another doorway on a long line) has not stayed in these walls
 	local spans = {}
-	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)) do
+	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)) do
 		if keep(w, karg) then
 			local a, b = (w.entry - S):Dot(dir), (w.exit - S):Dot(dir)
 			spans[#spans + 1] = { math.min(a, b) - r, math.max(a, b) + r }
@@ -2476,7 +2508,7 @@ local lineOut = {}
 local lineTr = { mask = bit.band(MASK_SOLID, NO_GRATE), filter = traceFilter, output = lineOut }
 --- State of the straight line S -> L for the cache key: "c" clear, "w" the world first, "e<id>" that
 -- entity first; then the water side of each end ("0" dry, "1" wet).
-function P.LineState(S, L, srcEnt)
+function P.LineState(S, L, srcEnt, cfg)
 	local a, b = S, L
 	if S.z < L.z then a, b = L, S end
 	ignoreEnt = srcEnt
@@ -2489,15 +2521,12 @@ function P.LineState(S, L, srcEnt)
 		local e = lineOut.Entity
 		st = (IsValid(e) and not e:IsWorld()) and "e" .. entKey(e) or "w"
 	end
-	if A.cfg.water >= 0.5 then
-		local wS = A.InWater(S)
-		local wL = A.InWater(L)
-		st = st .. (wS and "1" or "0") .. (wL and "1" or "0")
-	end
+	local wall, crossed = P.WaterWall(S, L, cfg)
+	st = st .. (wall and "1" or "0") .. (crossed and "1" or "0")
 	return st
 end
-function P.CacheKey(S, L, sndlvl, srcEnt)
-	local st = P.LineState(S, L, srcEnt)
+function P.CacheKey(S, L, sndlvl, srcEnt, cfg)
+	local st = P.LineState(S, L, srcEnt, cfg)
 	return q(S) .. "|" .. q(L) .. "|" .. sndlvl .. "|" .. entKey(srcEnt) .. "|" .. st, st
 end
 
@@ -2543,7 +2572,7 @@ end
 -- P.EvalWalls: detour around the object, capped by prop_max_db); doors are left to the portal state,
 -- the emitter never obstructs its own sound.
 local function objectsOn(a, b, srcEnt, cfg, out)
-	for _, w in ipairs(P.Walls(a, b, cfg.trans_max_walls, srcEnt)) do
+	for _, w in ipairs(P.Walls(a, b, cfg.trans_max_walls, srcEnt, false, cfg)) do
 		if w.ent and not OPENABLE[w.ent:GetClass()] then out[#out + 1] = w end
 	end
 	return out
@@ -2685,7 +2714,7 @@ local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge acros
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
 	S = P.FreeSource(S)
-	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt)
+	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	local now = RealTime()
 	local c = P.cache[key]
 	if c and now - c.t < cfg.cache_ttl then return c.r end
@@ -2712,7 +2741,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	end
 
 	local r = { S = S, L = L }
-	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true)
+	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
 	if (cfg.door_3d or 0) >= 0.5 then
 		P.WallDetours(walls)
 		P.LineLeaves(S, L, walls, cfg)
@@ -2783,7 +2812,9 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 					water = water or w.water
 				end
 				-- a water surface on the line: Steam Audio's scene has it too (pba_native_water) and
-				-- would count it in its occlusion; the interface keeps pba's own model only
+				-- would count it in its occlusion; the interface keeps pba's own model only (also when
+				-- that model puts no wall there, P.WaterWall: the listener's water filter, a shallow source)
+				if #worldWalls > 0 and not water then water = select(2, P.WaterWall(S, L, cfg)) end
 				if #worldWalls > 0 and not water then
 					local d = A.Native.Direct(S, L)
 					-- its occlusion is trusted fully, for the world walls its scene holds; those it
@@ -2977,10 +3008,8 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- one end under water: every path crosses the surface, like the transmission voice (which has
 		-- it as a wall). Paths ignored it: a dry point heard an underwater one 44 dB louder one way than
 		-- the other (gm_construct, perceptual bench reciprocity)
-		if cfg.water >= 0.5 and #r.paths > 0 then
-			local wS = A.InWater(S)
-			local wL = A.InWater(L)
-			if wS ~= wL then
+		if #r.paths > 0 then
+			if P.WaterWall(S, L, cfg) then
 				local add, lpAdd = AC.WallLoss(nil, "pba_water", 0)
 				for _, p in ipairs(r.paths) do
 					if not p.waterDb then p.lossDb, p.waterDb, p.lp = p.lossDb + add, add, math.max(p.lp or 0, lpAdd) end

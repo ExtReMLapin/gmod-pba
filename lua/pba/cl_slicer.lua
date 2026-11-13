@@ -297,7 +297,7 @@ function SL.Held(owner, S, L, sndlvl, srcEnt, onReady)
 	end
 	-- after its first answer, an update may wait up to update_interval (see SL.Compute's minReach)
 	local lag = owner.pbaSliceSeen and (A.cfg.update_interval or 0.25) or nil
-	local r, job = SL.Compute(S, L, sndlvl, srcEnt, nil, lag)
+	local r, job = SL.Compute(S, L, sndlvl, srcEnt, owner.pbaCfg, lag)
 	owner.pbaSliceSeen = true
 	if not job then return r end
 	owner.pbaSlice = job
