@@ -1129,6 +1129,12 @@ net.Receive(NET, function()
 	end
 	-- the engine already plays this one for us (clear line of sight): only the echoes were wanted
 	if echoOnly then return end
+	-- multiplayer: a sound of my own the server relayed all the same (a sentence: EmitSentence takes no
+	-- filter, every listener gets the relay when one is blocked) is played by the engine on me, attached
+	if (A.cfg.mp_own or 1) >= 0.5 and not game.SinglePlayer() then
+		local lp = LocalPlayer()
+		if IsValid(lp) and data.EntIndex == lp:EntIndex() then vanilla(data) return end
+	end
 	A.stats.relayedIn = A.stats.relayedIn + 1
 	if A.Enabled() and A.Process(data, true) then return end
 	-- not processed (disabled client, clear path...): play it as the engine would have

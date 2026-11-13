@@ -158,6 +158,7 @@ A.CONFIG = {
 	hysteresis      = { 0.3, 0, 2, "sv", "Seconds before the voice layout of a repeating source may change." },
 	max_duration    = { 8, 0.5, 60, "sv", "Sounds longer than this (s) are left untouched." },
 	sentences       = { 1, 0, 1, "sv", "Sentences (Combine and metrocop radio, HL2 NPC lines from sentences.txt): relayed and muffled like other sounds instead of crossing every wall." },
+	mp_own          = { 1, 0, 1, "sv", "Multiplayer: the sounds the server plays on a player outside his own commands (pain, fall damage, the suit's HEV lines) are his own, as in singleplayer: the engine plays them on him, never relayed and placed in the room (0: relayed like any sound, rendered at his position with the room's reverb, a HEV line left behind where it started)." },
 	soundtime       = { 1, 0, 1, "sv", "Sounds stamped with their own start time (a weapon firing several shots between two network updates: SoundTime) keep it when relayed or re-emitted: the shots keep their rhythm, as the engine spaces them on the client. 0 = every relayed shot starts on arrival (two shots of one update played together, doubled)." },
 	long_sounds     = { 1, 0, 1, "sv", "Follow long sounds (music, speeches: longer than max_duration) like loops: their path is updated while they play." },
 	allow_debug     = { 0, 0, 1, "sv", "Let every player use the debug overlay (it shows where sounds come from through walls: a wallhack). Admins can always use it." },

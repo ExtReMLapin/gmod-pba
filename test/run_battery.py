@@ -264,6 +264,7 @@ steps = [
     ("bot_gunfire", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "bot_gunfire.lua"))),
     ("soundtime_relay", lambda: soundtime(False)),
     ("soundtime_reemit", lambda: soundtime(True)),
+    ("mp_own_sounds", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "mp_own_sounds.lua"))),
     ("bot_footsteps", lambda: seq(lambda: load(TW), lambda: job("server", "bot_footsteps.lua"))),
     # special sounds: a sentence (metrocop radio) behind a wall is relayed and played muffled by the
     # client (EmitSentence), not left to the engine through the wall; pba_sentences 0: not relayed
@@ -565,7 +566,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "soundtime_relay", "soundtime_reemit", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos",
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos",
          "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors",
          "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed"}
 if "--quick" in opts:

@@ -334,6 +334,9 @@ local function relay(data)
 	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
 	-- client never sees them (no echoes on his own gunfire). They are his own: clear, as on the client
 	local sp = game.SinglePlayer()
+	-- multiplayer: the sounds the server plays on a player outside his command (pain, fall damage, his
+	-- suit) are his own too; those of his command go to nobody (his client predicts them, below)
+	local ownMP = not sp and (A.cfg.mp_own or 1) >= 0.5
 	local step = not sp and stepper(data)
 	-- clear: original re-emitted unchanged; blocked: relayed; muffled: blocked but over the relay
 	-- budget, re-emitted muffled by the engine; far: beyond lod_dist, too far to process (unchanged)
@@ -343,7 +346,7 @@ local function relay(data)
 	-- clients rendering every sound natively (userinfo pba_native_all_want) get the relay
 	-- even with a clear line: their module plays the sound instead of the engine
 	for _, ply in ipairs(player.GetHumans()) do
-		if sp and ply == predicted and data.Entity == ply then
+		if (sp and ply == predicted or ownMP and ply ~= predicted) and data.Entity == ply then
 			clear[#clear + 1] = ply
 		elseif (sp or ply ~= predicted) and not (step and ply ~= step and ply:TestPVS(step)) then
 			local eye = A.PlayerEar(ply)
