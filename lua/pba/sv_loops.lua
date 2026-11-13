@@ -441,6 +441,8 @@ function LP.Handle(data)
 			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then return false end
 		else
 			once, dur = LP.IsLong(data)
+			-- a change of a brief sound the relay took over: not a new patch (dropped, audit B-8)
+			if not once and A.BriefPlaying and A.BriefPlaying(data) then return true end
 			if not once then once, dur = LP.IsPatchStart(data) end
 			if not once then return false end
 		end

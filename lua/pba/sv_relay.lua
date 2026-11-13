@@ -352,6 +352,36 @@ local function predictedBy(e, predicted)
 end
 
 local relayedTo -- the players the current sound was relayed to (relay, below)
+
+-- Brief sounds pba took over (relayed, re-emitted): entindex -> { [file] = time the sound ends }. A later
+-- SND_CHANGE_VOL / PITCH for one of them (non-looped ambient_generic with a preset or Pitch / Volume
+-- inputs, func_rotating / func_tracktrain with a non-looped move sound) is not a new sound: the engine
+-- would start a vanilla copy midway at the players who got pba's (no channel matches), sv_loops a second
+-- copy from the top. It is dropped (audit B-8, pba_brief_updates).
+A.recentBrief = A.recentBrief or {}
+local function briefKey(name) return string.lower(A.SoundFile(name or "")) end
+function A.NoteBrief(data)
+	if bit.band(data.Flags or 0, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return end
+	local e = data.Entity
+	if not IsValid(e) or e:IsWorld() or not isstring(data.SoundName) then return end
+	local dur = A.SoundDuration(data.SoundName) or 0
+	if dur <= 0 then return end
+	local idx = e:EntIndex()
+	local r = A.recentBrief[idx]
+	if not r then r = {} A.recentBrief[idx] = r end
+	local now = CurTime()
+	for k, t in pairs(r) do if t < now then r[k] = nil end end
+	r[briefKey(data.SoundName)] = now + dur * 100 / math.max(data.Pitch or 100, 1) + 0.1
+end
+--- True when data is a volume / pitch change of a brief sound pba took over and that still plays.
+function A.BriefPlaying(data)
+	if (A.cfg.brief_updates or 1) < 0.5 then return false end
+	if bit.band(data.Flags or 0, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(data.Flags or 0, SND_STOP) ~= 0 then return false end
+	local e = data.Entity
+	local r = IsValid(e) and A.recentBrief[e:EntIndex()]
+	local t = r and r[briefKey(data.SoundName)]
+	return t ~= nil and t >= CurTime()
+end
 local function relay(data)
 	A.stats.seen = A.stats.seen + 1
 	if A.Loops and A.Loops.Handle(data) then return false end
@@ -538,6 +568,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	relayedTo = nil
 	local ret = relay(data)
 	relayChannelCut(data, relayedTo)
+	if ret == false then A.NoteBrief(data) end
 	return ret
 end))
 
