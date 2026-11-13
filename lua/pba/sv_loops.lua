@@ -549,6 +549,10 @@ function LP.Handle(data)
 		end
 	end
 	send(update and OP_UPDATE or OP_START, l, plys)
+	-- a long line taken over (a scene's speech longer than max_duration): the engine captions the original it
+	-- emits, suppressed here, so its listeners got no subtitle while the short lines around it had theirs
+	-- (Barney's first conversation line on d1_trainstation_06). Sent like a relayed sound's (sv_relay)
+	if not update and l.once and (A.cfg.long_captions or 1) >= 0.5 and A.SendCaption then A.SendCaption(data, plys) end
 	return true
 end
 

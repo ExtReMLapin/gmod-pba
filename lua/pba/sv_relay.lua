@@ -48,6 +48,7 @@ local function sendCaption(data, plys)
 	net.WriteFloat(A.SoundDuration(data.SoundName) or 0)
 	net.Send(plys)
 end
+A.SendCaption = sendCaption -- (the long lines sv_loops takes over: pba_long_captions)
 
 -- who received relayed copies of an entity's sounds recently: they must hear its StopSound too
 A.recentTo = A.recentTo or {} -- entindex -> { [ply] = time }
