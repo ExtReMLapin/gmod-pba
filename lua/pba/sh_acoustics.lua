@@ -107,36 +107,17 @@ end
 
 --- Amplitude through the free part of an opening, relative to the whole opening (paraxial
 -- Fresnel-Kirchhoff; a rectangle separates into width x height). The free part is either free
--- intervals along the width over the whole height (a door leaf: ap = { w0, w1, intervals }), or
--- height bands, each with its own free intervals (an object masking part of the opening:
--- ap = { w0, w1, h0, h1, rows = { { va, vb, intervals = { { ua, ub }, ... } }, ... } }).
--- u, v: where the straight ray crosses the plane (same coordinates); d1, d2: distances (units)
--- from the source side and to the listener side; freq in Hz. 0..1.
+-- intervals along the width over the whole height (a door leaf: ap = { w0, w1, intervals }).
+-- u: where the straight ray crosses the plane (v, the height, is unused: kept for the callers); d1, d2:
+-- distances (units) from the source side and to the listener side; freq in Hz. 0..1.
 function AC.ApertureRatio(ap, u, v, d1, d2, freq)
 	local lambda = SPEED / freq / UNIT_M -- units
 	local k = math.sqrt(2 * (d1 + d2) / (lambda * math.max(d1, 1) * math.max(d2, 1)))
-	local re, im
 	local fr, fi = span(ap.w0, ap.w1, u, k)
 	local full = math.sqrt(fr * fr + fi * fi)
-	if ap.rows then
-		re, im = 0, 0
-		for _, row in ipairs(ap.rows) do
-			local a, b = spans(row.intervals, u, k)
-			local c, d = span(row[1], row[2], v, k)
-			re, im = re + a * c - b * d, im + a * d + b * c
-		end
-		local hr, hi = span(ap.h0, ap.h1, v, k)
-		full = full * math.sqrt(hr * hr + hi * hi)
-	else
-		re, im = spans(ap.intervals, u, k)
-	end
+	local re, im = spans(ap.intervals, u, k)
 	if full < 1e-6 then return 0 end
 	return math.min(math.sqrt(re * re + im * im) / full, 1)
-end
-
---- One dimension only: free intervals of the doorway [w0, w1] (see AC.ApertureRatio).
-function AC.SlitRatio(intervals, w0, w1, u0, d1, d2, freq)
-	return AC.ApertureRatio({ w0 = w0, w1 = w1, intervals = intervals }, u0, 0, d1, d2, freq)
 end
 
 --- ApertureRatio averaged in power over a third-octave-ish band around freq (one frequency alone
@@ -187,20 +168,8 @@ end
 -- scale). The low band gets sum(e), the high band sum(e 10^(-t / 10)). A clear part and a muffled part
 -- of equal power give ~3 dB (level 1): the clear part carries the treble. The former rule (the louder
 -- part sets the level) jumped from 0 to the leaf's 3 at the crossover of an ajar door, while the gap
--- still carried half the energy. 0 without energy.
-function AC.MixTilt(...)
-	local lo, hi = 0, 0
-	for i = 1, select("#", ...), 2 do
-		local e, t = select(i, ...)
-		if e and e > 0 then
-			lo = lo + e
-			hi = hi + e * 10 ^ (-(t or 0) / 10)
-		end
-	end
-	if lo <= 0 or hi <= 0 then return 0 end
-	return max(10 * log10(lo / hi), 0)
-end
--- The same without varargs (select / unpack are LuaJIT NYI): two components, or a list e1, t1, e2, t2, ...
+-- still carried half the energy. 0 without energy. Two components (AC.MixTilt2), or a list e1, t1, e2, t2, ...
+-- (AC.MixTiltList); no varargs (select / unpack are LuaJIT NYI).
 local function mixTiltAdd(lo, hi, e, t)
 	if e and e > 0 then
 		lo = lo + e

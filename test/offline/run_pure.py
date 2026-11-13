@@ -125,6 +125,53 @@ unread = [n for n in opt_names if not re.match(r"^(dsp_lp\d|lp\d_db)$", n)
 print("%s static: every option is read somewhere (%d options; read nowhere: %s)"
       % ("PASS" if opt_names and not unread else "FAIL", len(opt_names), unread or "none"))
 
+# Static lock (offline only): a fallback `cfg.x or v` gives the option's default (A.CONFIG), so a partial cfg
+# (benches, DRY_SOURCE_CFG) behaves like the full one. FALLBACK_KNOWN lists the fallbacks that differ today
+# (file:option=value): a new one fails, and so does an entry no longer found (the list only shrinks).
+FALLBACK_KNOWN = set("""
+cl_loops.lua:continuous_ramp=0 cl_loops.lua:far_muffle=0 cl_loops.lua:long_sounds=0 cl_loops.lua:loops=0
+cl_loops.lua:loops_client=0 cl_loops.lua:loops_cpp_client=0 cl_loops.lua:native_quiet_law=0
+cl_loops.lua:native_voice_mix=0 cl_loops.lua:patch_oneshots=0 cl_native.lua:lp_hyst_db=0 cl_native.lua:native_air=0
+cl_native.lua:native_all=0 cl_native.lua:native_dir=0 cl_native.lua:native_doors=0 cl_native.lua:native_doppler=0
+cl_native.lua:native_echo=0 cl_native.lua:native_loud_dry=0 cl_native.lua:native_path_fx=0 cl_native.lua:native_props=0
+cl_native.lua:native_render=0 cl_native.lua:native_reverb_window=0 cl_native.lua:native_room_open_area=0
+cl_native.lua:native_stereo_width=0 cl_native.lua:native_voice_mix=0 cl_probes.lua:group_angle=2
+cl_probes.lua:native_traces=0 cl_probes.lua:probe_skip_links=0 cl_probes.lua:route_pos_straight=0
+cl_render.lua:continuous_ramp=0 cl_render.lua:far_muffle=0 cl_render.lua:max_duration=10 cl_render.lua:native_all=0
+cl_render.lua:native_path_fx=0 cl_render.lua:oneshot_follow=0 cl_slicer.lua:far_sliced=0
+cl_streams.lua:continuous_ramp=0 cl_streams.lua:native_gain=0 cl_streams.lua:native_voice_mix=0 cl_streams.lua:streams=0
+cl_streams.lua:streams_filter=0 cl_streams.lua:streams_native=0 cl_demo.lua:native_render=0 sh_acoustics.lua:diffuse=0
+sh_acoustics.lua:trans_lf_bonus=0 sh_config.lua:enable=0 sh_core.lua:loops=0 sh_paths.lua:bend_final=0
+sh_paths.lua:corner_relax=0 sh_paths.lua:diff_freq=1000 sh_paths.lua:diffuse=0 sh_paths.lua:edge_dup_mix=0
+sh_paths.lua:edge_leg_doors=0 sh_paths.lua:group_time=0 sh_paths.lua:lp_hyst_db=0 sh_paths.lua:model_soft_cull=0
+sh_paths.lua:portal_diffuse_db=60 sh_paths.lua:portal_diffuse_lp=4 sh_paths.lua:reeval_adaptive=0
+sh_paths.lua:trans_bundle=0 sh_paths.lua:trans_bundle_edge=0 sh_paths.lua:trans_leaf_fade=0
+sh_paths.lua:trans_pos_clamp=0 sh_paths.lua:trans_route=0 sh_paths.lua:trans_tilt=0 sh_paths.lua:trans_window_soft=0
+sh_paths.lua:wall_merge_graze=0 sh_paths.lua:water_margin=0 sv_loops.lua:long_lipsync=0 sv_loops.lua:long_sounds=0
+sv_loops.lua:loops=0 sv_loops.lua:patch_oneshots=0 sv_loops.lua:phys_loops_muffle=0 sv_relay.lua:far_muffle=0
+sv_relay.lua:sentences=0
+""".split())
+cfg_defaults = {n: float(v) for n, v in re.findall(r"^\t(\w+)\s*=\s*\{\s*(-?[\d.]+)", cfg_src, re.M)}
+fb_seen = set()
+for k, v in srcs.items():
+    for name, val in re.findall(r"\bcfg\.(\w+)\s+or\s+(-?[\d.]+)", v):
+        if cfg_defaults.get(name) != float(val):
+            fb_seen.add("%s:%s=%s" % (k.rsplit("/", 1)[-1], name, val))
+fb_new, fb_stale = sorted(fb_seen - FALLBACK_KNOWN), sorted(FALLBACK_KNOWN - fb_seen)
+print("%s static: cfg fallbacks = the option's default (%d known exceptions; new: %s; gone from the code, drop from the list: %s)"
+      % ("PASS" if not fb_new and not fb_stale else "FAIL", len(FALLBACK_KNOWN), fb_new or "none", fb_stale or "none"))
+
+# Static lock (offline only): the upper bound of a long sound (1800 s) is written in one place only:
+# A.LongDuration (sh_core.lua).
+LONG_KNOWN = {"sh_core.lua": 1}
+long_seen = {}
+for k, v in srcs.items():
+    n = len(re.findall(r"(?<![\w.])1800(?![\w.])", v))
+    if n:
+        long_seen[k.rsplit("/", 1)[-1]] = n
+print("%s static: the long-sound bound 1800 in one place (expected %s, found %s)"
+      % ("PASS" if long_seen == LONG_KNOWN else "FAIL", LONG_KNOWN, long_seen))
+
 # The native helpers (cl_native.lua: distance law, sends, directivity, EQ) and their suite. Loaded last:
 # the suite above runs without pba.Native, as before.
 L.execute("timer.Remove = timer.Remove or function() end")

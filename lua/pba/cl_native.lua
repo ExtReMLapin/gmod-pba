@@ -877,7 +877,6 @@ function N.BindSource(id, S, srcSend)
 	local slot = pba_native.SourceReflect(id, S, srcSend)
 	return slot ~= nil and slot >= 0
 end
-timer.Remove("pba_native_enclosure") -- the former one-trace enclosure guess (autorefresh of a running game)
 
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
 -- srcPos, srcSend = the source's true position and its slot send (N.PhysSrcSend x volume, before

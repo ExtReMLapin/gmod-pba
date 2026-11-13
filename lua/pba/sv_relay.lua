@@ -189,7 +189,7 @@ function A.RelayStop(e, name, chan, except)
 	net.Send(plys)
 end
 
-local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+local replacing = A.ReplacingChannel
 local NEW_ONLY = SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH
 
 --- Engine channel rule for the relayed copies (audit A-P1-1, D7): a new sound on an entity's replacing

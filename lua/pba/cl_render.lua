@@ -57,7 +57,7 @@ end
 -- a pool anchor or natively played on after the server stopped it, and after the entity was removed.
 A.copies = A.copies or {} -- "idx:chan" -> { idx, chan, anchors = { slot -> ent }, t }: anchors of a replacing channel
 A.emitted = A.emitted or {} -- idx -> { handle, ... }: every copy re-emitted for that entity (handles: see emitVoice)
-local function replaces(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+local replaces = A.ReplacingChannel
 
 -- one-shots followed while they play (see below): records, the pool of anchors of the copies that
 -- have no copy set (unassigned channels), native voice id -> followed voice
@@ -902,7 +902,7 @@ end
 -- areaportal) gets its copy all the same, by entity index, when the server says the line is on a face
 -- (data.Face): the engine keeps the channel under that index as it keeps the original's in vanilla, and the
 -- face that comes into view during the line moves its mouth (pba_lipsync_unseen).
-local MOUTH_VOL = 0.001
+local MOUTH_VOL = A.MOUTH_VOL
 local function mouthCopy(data, src)
 	if (A.cfg.lipsync or 1) < 0.5 then return end
 	local ch = data.Channel
@@ -1088,14 +1088,12 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 		end
 		local ps = {}
 		for _, p in ipairs(r.paths or {}) do
-			local keys = {}
-			for _, c in ipairs(p.chain) do keys[#keys + 1] = c.key end
-			ps[#ps + 1] = { portals = keys, length = math.Round(p.length), diff_db = math.Round(p.diffDb, 1),
+			ps[#ps + 1] = { length = math.Round(p.length), diff_db = math.Round(p.diffDb, 1),
 				door_db = math.Round(p.doorDb, 1), level_db = math.Round(p.level or 0, 1),
 				absorb_db = math.Round(p.absorbDb or 0, 1), diffuse = math.Round(p.diffuse or 0, 2), ratio = p.direct and math.Round(p.length / math.max(p.direct, 1), 2),
 				bend = p.bendDeg and math.Round(p.bendDeg), az = math.Round(A.Azimuth(L, ang.y, p.pos), 1) }
 		end
-		A.Report("paths", { name = data.SoundName, relayed = relayed, aS = r.aS, aL = r.aL, voices = vs, paths = ps,
+		A.Report("paths", { name = data.SoundName, relayed = relayed, voices = vs, paths = ps,
 			trans = r.trans and { loss_db = math.Round(r.trans.lossDb, 1), raw_db = math.Round(r.trans.rawLossDb or r.trans.lossDb, 1),
 				mid_db = math.Round(r.trans.midDb or 0, 1), walls = #r.trans.walls, lp = r.trans.lp },
 			ms = math.Round(rec.ms, 3) })
@@ -1390,4 +1388,3 @@ end)
 -- entity removed: its copies play on to their end where they were, as the engine's own sounds do
 -- (sv_relay "pba_relay_removed"). They stay registered under the index: a new entity taking it over
 -- replaces them on their channel, as the engine's channels (keyed by the index) would.
-hook.Remove("EntityRemoved", "pba_copies_removed")

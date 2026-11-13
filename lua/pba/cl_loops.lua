@@ -509,7 +509,7 @@ end
 -- radio:EmitSound of a 5-minute mp3 in a net receiver). Too long for A.Process, and the server
 -- never sees them: without this they play through every wall. Same mirror as a relayed long
 -- sound, keyed "cl:<entindex>:<channel>:<name>".
-local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+local replacing = A.ReplacingChannel
 
 --- Stops the client-side long-sound mirrors of entity idx (channel chan, or any channel when nil;
 -- name, or any name when nil).
@@ -567,14 +567,14 @@ function LP.HandleClient(data)
 			local st = data.SoundTime or 0
 			if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 			local dur = A.SoundDuration(name) or 0
-			if dur <= 0 or dur > 1800 then return false end
+			if not A.LongDuration(dur, 0) then return false end
 		end
 	else
 		if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 or A.IsLooping(name) then return false end
 		local st = data.SoundTime or 0
 		if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 		local dur = A.SoundDuration(name) or 0
-		if dur <= A.cfg.max_duration or dur > 1800 then return false end
+		if not A.LongDuration(dur) then return false end
 	end
 	local n = 0
 	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end
@@ -748,7 +748,6 @@ end
 -- Every mirror is re-evaluated each update_interval. loops_stagger spreads them over the frames:
 -- each frame takes its share in turn, instead of all of them in one frame (20 hidden loops on
 -- gm_construct: one 15-55 ms frame every 0.25 s). Same update rate per loop.
-timer.Remove("pba_loops_cl") -- former timer (autorefresh)
 local order, nextIdx, quota, acc, lastT = {}, 1, 0, 0, nil
 hook.Add("Think", "pba_loops_cl", A.PerfTimed("loops", function()
 	if not IsValid(LocalPlayer()) then return false end

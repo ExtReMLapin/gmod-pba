@@ -14,9 +14,8 @@ util.AddNetworkString(NET)
 LP.active = LP.active or {} -- key -> { ent, idx, chan, name, vol, pitch, lvl, flags, dsp, pos, subs = {ply=true} }
 LP.released = LP.released or {} -- loops handed back to the engine while pba is off: taken again when it comes back
 -- loops left to the engine by the pba_loops_max cap (their later changes too), same fields as an
--- active loop: taken over by the timer once slots free up. An older file stored `true` here.
+-- active loop: taken over by the timer once slots free up.
 LP.capped = LP.capped or {}
-for k, v in pairs(LP.capped) do if not istable(v) then LP.capped[k] = nil end end
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 
@@ -66,13 +65,7 @@ LP.soundSets = LP.soundSets or {}
 local function addSound(set, s)
 	if not isstring(s) or s == "" then return end
 	set[string.lower(A.SoundFile(s))] = true
-	local props = sound.GetProperties(s)
-	local w = props and props.sound
-	if isstring(w) then
-		set[string.lower(A.SoundFile(w))] = true
-	elseif istable(w) then
-		for _, x in ipairs(w) do if isstring(x) then set[string.lower(A.SoundFile(x))] = true end end
-	end
+	for _, x in ipairs(A.Waves(s) or {}) do if isstring(x) then set[string.lower(A.SoundFile(x))] = true end end
 end
 
 --- True when the sound (its wave, or the script it came from) belongs to the set.
@@ -237,7 +230,7 @@ function LP.IsLong(data)
 	local st = data.SoundTime or 0
 	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 	local dur = A.SoundDuration(data.SoundName) or 0
-	return dur > A.cfg.max_duration and dur <= 1800, dur
+	return A.LongDuration(dur), dur
 end
 
 --- A CSoundPatch on a file without loop points (CreateSound of addons, C++ envelopes): its Play reaches the
@@ -253,7 +246,7 @@ function LP.IsPatchStart(data)
 	local st = data.SoundTime or 0
 	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 	local dur = A.SoundDuration(name) or 0
-	return dur > 0 and dur <= 1800, dur
+	return A.LongDuration(dur, 0), dur
 end
 
 --- Loops counted against loops_max. C++ code starts many patches at volume 0 and raises them later
@@ -307,13 +300,7 @@ function LP.IsMoveSound(e, name)
 	for _, k in ipairs(MOVE_KEYS) do
 		local v = e:GetInternalVariable(k)
 		if isstring(v) and v ~= "" then
-			local props = sound.GetProperties(v)
-			local w = props and props.sound or v
-			if istable(w) then
-				for _, x in ipairs(w) do if string.lower(A.SoundFile(x)) == f then return true end end
-			elseif string.lower(A.SoundFile(w)) == f then
-				return true
-			end
+			for _, x in ipairs(A.Waves(v) or { v }) do if string.lower(A.SoundFile(x)) == f then return true end end
 		end
 	end
 	return false
@@ -393,7 +380,7 @@ end
 -- the face stayed still (Breen on the station's screens, 4000 u away). The same line plays on the speaker at a
 -- volume nobody hears (-60 dB, as cl_render's mouth copy), on its channel, for everyone: the engine's mouth,
 -- with the engine's timing (no propagation delay), as in vanilla.
-local MOUTH_VOL = 0.001
+local MOUTH_VOL = A.MOUTH_VOL
 function LP.MouthStart(l, data)
 	if (A.cfg.long_lipsync or 0) < 0.5 or not l.once then return end
 	local e, ch = l.ent, l.chan
@@ -418,7 +405,7 @@ function LP.MouthStop(l)
 end
 
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
-local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+local replacing = A.ReplacingChannel
 
 function LP.Handle(data)
 	if A.cfg.loops < 0.5 then return false end
@@ -709,10 +696,8 @@ end)
 
 --- Wave of a sound name (a sound script: its first wave).
 local function waveOf(name)
-	local props = name ~= "" and name:sub(1, 1) ~= "!" and sound.GetProperties(name)
-	if not props then return name end
-	local w = props.sound
-	return istable(w) and (w[1] or "") or w or name
+	local w = A.Waves(name)
+	return w and (w[1] or "") or name
 end
 
 --- Looping ambient_generic already playing when pba's hooks went in: started in Activate() at

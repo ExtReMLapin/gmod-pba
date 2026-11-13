@@ -209,7 +209,7 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	local direct, bend = P.PathShape(pts[1], inner, pts[#pts])
 	local lp = AC.LowpassLevel(diff + doorTilt, cfg)
 	if door <= 0 then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
-	return { chain = {}, points = inner, length = len, diffDb = diff, doorDb = door, lossDb = diff + door,
+	return { points = inner, length = len, diffDb = diff, doorDb = door, lossDb = diff + door,
 		pos = pts[#pts - 1], lp = lp, lpDb = diff + doorTilt, direct = direct, bendDeg = bend, leaves = leaves }
 end
 
@@ -247,9 +247,6 @@ local function closureWeight(ent, cfg)
 	if ((cfg or A.cfg).door_3d or 0) >= 0.5 then return (st.frac or 0) <= CLOSURE_FRAC0 and 1 or 0 end
 	return 1 - ramp(st.frac or 0, CLOSURE_FRAC0, CLOSURE_FRAC1)
 end
-local function isClosure(ent) return closureWeight(ent) >= 1 end
-P.IsClosure = isClosure
-P.ClosureWeight = closureWeight
 
 --- True when one of the paths goes through the doorway that door entity `ent` fills: with routeLeaves (the
 -- line crossing no world wall: the routes are the doorways' one model), a probe route that crosses that leaf (P.EvalPolyline: it pays the leaf, open or shut). Not when
@@ -617,9 +614,6 @@ local DOORS_ONLY = { prop_door_rotating = true, func_door = true, func_door_rota
 local DOOR_HULL = 4
 P.DOOR_HULL = DOOR_HULL
 local doorOut = {}
-local function doorsOnly(e) return DOORS_ONLY[e:GetClass()] or false end
-local doorTr = { mask = MASK_SOLID, filter = doorsOnly, output = doorOut, ignoreworld = true,
-	mins = Vector(-DOOR_HULL, -DOOR_HULL, -DOOR_HULL), maxs = Vector(DOOR_HULL, DOOR_HULL, DOOR_HULL) }
 local doorWalls = { false }
 
 -- ------------------------------------------------------------------ a door leaf in 3-D (pba_door_3d)
@@ -1022,7 +1016,6 @@ function P.DoorSpanLoss(ent, a, b, cfg, hitPos, startSolid, V, d0, d9)
 	end
 	doorWalls[1] = w
 	local loss, lp = P.EvalWalls(doorWalls, cfg)
-	P.lastDoorWall = w -- diagnostics (w.lossDb, w.diffDb, w.detour)
 	return loss, lp, w.tiltDb, h
 end
 --- pba_door_3d: the leaves ajar beside a straight line S -> L that the world leaves clear (the line's walls
@@ -3005,7 +2998,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 				dir:Normalize()
 				local dist = math.min(S:Distance(L), 192)
 				local loss = -AC.GainToDb(math.max(np.em, 1e-4))
-				r.paths[1] = { chain = {}, points = {}, length = S:Distance(L) * 1.2, diffDb = loss, doorDb = 0,
+				r.paths[1] = { points = {}, length = S:Distance(L) * 1.2, diffDb = loss, doorDb = 0,
 					lossDb = loss, pos = L + dir * dist, lp = AC.LowpassLevel(-AC.GainToDb(math.max(np.eh, 1e-4)), cfg),
 					lpDb = -AC.GainToDb(math.max(np.eh, 1e-4)),
 					native = true }
