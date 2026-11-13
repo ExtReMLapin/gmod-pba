@@ -113,6 +113,16 @@ probe_ok, gset_hits = L.execute(gset_code, L.table_from(srcs))
 ok_gset = probe_ok == "true" and gset_hits == ""
 print("%s static: no write to the global `_` (GSET opcode found %s; writes at %s)" % ("PASS" if ok_gset else "FAIL", probe_ok, gset_hits or "none"))
 
+# Static lock (offline only): every option of A.CONFIG is read somewhere (cfg.<name>, or its name quoted
+# outside sh_config.lua); the low-pass tables are read by a built name (cfg["dsp_lp" .. level], "lp" .. n .. "_db").
+cfg_src = open(os.path.join(repo, "lua", "pba", "sh_config.lua"), encoding="utf-8").read()
+opt_names = re.findall(r"^\t(\w+)\s*=\s*\{\s*[-\d.]", cfg_src, re.M)
+other_src = "".join(v for k, v in srcs.items() if not k.endswith("/sh_config.lua"))
+unread = [n for n in opt_names if not re.match(r"^(dsp_lp\d|lp\d_db)$", n)
+          and not re.search(r"(cfg\.%s\b|[\"']%s[\"'])" % (n, n), other_src)]
+print("%s static: every option is read somewhere (%d options; read nowhere: %s)"
+      % ("PASS" if opt_names and not unread else "FAIL", len(opt_names), unread or "none"))
+
 # The native helpers (cl_native.lua: distance law, sends, directivity, EQ) and their suite. Loaded last:
 # the suite above runs without pba.Native, as before.
 L.execute("timer.Remove = timer.Remove or function() end")
