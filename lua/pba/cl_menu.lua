@@ -179,6 +179,7 @@ function Build.server(panel)
 	chk(panel, "Impacts come from their object", "source_object")
 	chk(panel, "Listener inside an object hears out", "listener_object")
 	chk(panel, "Far sounds muffled behind walls", "far_muffle")
+	chk(panel, "Players without a working pba client hear the engine's sounds", "relay_ready")
 	chk(panel, "Merge paths", "merge")
 	chk(panel, "Debug overlay for all", "allow_debug")
 

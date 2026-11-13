@@ -11,6 +11,16 @@ util.AddNetworkString(NET_ACK)
 util.AddNetworkString("pba_snd_stop")
 util.AddNetworkString("pba_caption")
 util.AddNetworkString("pba_stopall")
+util.AddNetworkString("pba_ready")
+
+-- A player whose pba client runs says so (cl_render, "pba_ready"). One who has not (still joining, or
+-- pba's client Lua broken on his side) would lose every relayed sound: nothing would play it. He is
+-- treated as a player too far for a path search (the engine plays the original for him, muffled by one
+-- trace behind a wall). pba_relay_ready 0: every player gets relays (before).
+net.Receive("pba_ready", function(_, ply) ply.pba_ready = true end)
+local function clientReady(ply)
+	return ply.pba_ready == true or (A.cfg.relay_ready or 1) < 0.5
+end
 
 -- Player:ConCommand("stopsound") from the server (a common way addons silence a player): it runs in his
 -- engine, never in his Lua; he is told so his client stops pba's sounds as well
@@ -43,11 +53,15 @@ end
 A.recentTo = A.recentTo or {} -- entindex -> { [ply] = time }
 
 -- Sound-name dictionary: a name travels in full until the client acknowledges its id,
--- then as a 16-bit id (~20-byte messages instead of ~50).
+-- then as a 16-bit id (~20-byte messages instead of ~50). Ids 1..65535; once they are all given (a
+-- long-running server), a new name gets id 0: sent in full every time, never stored by the client (an id
+-- past 65535 wrapped on the wire onto an old one, and the client then played the new sound for the old).
 A.dict = A.dict or { ids = {}, names = {}, n = 0 }
+local MAX_ID = 65535
 local function nameId(name)
 	local id = A.dict.ids[name]
 	if not id then
+		if A.dict.n >= MAX_ID then return 0 end
 		A.dict.n = A.dict.n + 1
 		id = A.dict.n
 		A.dict.ids[name], A.dict.names[id] = id, name
@@ -57,7 +71,10 @@ end
 
 net.Receive(NET_ACK, function(_, ply)
 	ply.pba_known = ply.pba_known or {}
-	for _ = 1, math.min(net.ReadUInt(8), 64) do ply.pba_known[net.ReadUInt(16)] = true end
+	for _ = 1, math.min(net.ReadUInt(8), 64) do
+		local id = net.ReadUInt(16)
+		if id > 0 then ply.pba_known[id] = true end
+	end
 end)
 
 -- Lua callers passing an explicit recipient filter: leave those sounds alone (we cannot
@@ -392,7 +409,7 @@ local function relay(data)
 			local eye = A.PlayerEar(ply)
 			local d2 = eye:DistToSqr(pos)
 			if d2 <= radius * radius then
-				if d2 > lod * lod then
+				if d2 > lod * lod or not clientReady(ply) then
 					-- too far for a path search: the cheap muffle of an over-budget player when the line is
 					-- blocked (pba_far_muffle; it was heard through the wall as in plain sight)
 					local walls = (A.cfg.far_muffle or 0) >= 0.5 and A.Paths.Walls(pos, eye, 1, srcObj) or nil
@@ -433,7 +450,7 @@ local function relay(data)
 			local id = nameId(data.SoundName)
 			local full = false
 			for _, ply in ipairs(want) do
-				if not (ply.pba_known and ply.pba_known[id]) then full = true break end
+				if id == 0 or not (ply.pba_known and ply.pba_known[id]) then full = true break end
 			end
 			net.Start(NET, true)
 			writeSound(data, pos, id, full, true)
@@ -493,7 +510,7 @@ local function relay(data)
 	local id = nameId(data.SoundName)
 	local full = false
 	for _, ply in ipairs(blocked) do
-		if not (ply.pba_known and ply.pba_known[id]) then full = true break end
+		if id == 0 or not (ply.pba_known and ply.pba_known[id]) then full = true break end
 	end
 	local e = data.Entity
 	if IsValid(e) and not e:IsWorld() then

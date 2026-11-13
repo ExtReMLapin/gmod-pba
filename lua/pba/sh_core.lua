@@ -53,10 +53,19 @@ local function stopEngineSound(e, name)
 	end
 end
 
+local NO_OVERWRITE = SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL or 1024
+
+--- True when a new sound's flags keep what already plays on its channel
+-- (SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine plays both; parity plan P3-1).
+function A.KeepsChannel(flags)
+	return bit.band(flags or 0, NO_OVERWRITE) ~= 0
+end
+
 --- Entity index and channel of a new sound the channel rule applies to (nil otherwise).
 local function ruleSlot(data)
 	local chan, e = data.Channel, data.Entity
 	if not chan or chan == CHAN_AUTO or chan == CHAN_STATIC or chan <= 0 then return nil end
+	if A.KeepsChannel(data.Flags) then return nil end
 	if not IsValid(e) or e:IsWorld() or bit.band(data.Flags or 0, NOT_NEW) ~= 0 then return nil end
 	local idx = e:EntIndex()
 	if idx <= 0 then return nil end

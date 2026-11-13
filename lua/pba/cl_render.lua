@@ -172,7 +172,8 @@ local function beginCopies(data, idx)
 	local chan = data.Channel or CHAN_AUTO
 	if not idx or not replaces(chan) then return nil end
 	local list = A.emitted[idx]
-	if list then
+	-- SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps what plays on the channel (both play)
+	if list and not A.KeepsChannel(data.Flags) then
 		for i = #list, 1, -1 do
 			if list[i].srcChan == chan then stopCopy(list[i]) table.remove(list, i) end
 		end
@@ -382,12 +383,20 @@ end
 -- { id = native voice } or { a = anchor, seq = emission number on it, chan } (both followable), or
 -- { pos } (a copy at a fixed position); each with t0 / tEnd (start, expected end), name (as played),
 -- orig (as asked), srcChan (the sound's own channel).
+--- True when a sound carries its own DSP preset that pba keeps (pba_keep_dsp): a radio or loudspeaker
+-- effect (EmitSound's dsp argument, a scene's special DSP). The module has no DSP presets, a voice it
+-- plays would lose the effect (parity plan P1-9): such a sound stays with the engine.
+function A.OwnDSP(dsp)
+	return (dsp or 0) ~= 0 and (A.cfg.keep_dsp or 1) >= 0.5
+end
+
 local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited)
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
 	-- (a sentence: by the module when its words are rendered into one sound, cl_sentences; else by the
 	-- engine, PlayVoice failing below)
-	if A.Native and A.Native.render and (not A.IsSentence(data.SoundName) or A.Sentences.On()) then
+	-- (a sound with its own DSP preset, pba_keep_dsp: the engine's, the module has no presets: A.OwnDSP)
+	if A.Native and A.Native.render and (not A.IsSentence(data.SoundName) or A.Sentences.On()) and not A.OwnDSP(data.DSP) then
 		-- the full version's distance law (N.PhysPath): real spreading instead of the engine's law
 		-- a weapon's dipole: the aim taken now, at emission (N.Directivity)
 		local dirK = A.Native.Directivity(src, L, data.Channel)
@@ -952,7 +961,8 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 	A.DebugNote(nil, S, L, r, data.SoundName, A.Native and A.Native.render and "native" or "sound")
 	if r.clear or not r.voices or #r.voices == 0 then
 		-- "everything native": a clear sound is played by the module at its real position
-		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 and (not A.IsSentence(data.SoundName) or A.Sentences.On()) then
+		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 and (not A.IsSentence(data.SoundName) or A.Sentences.On())
+			and not A.OwnDSP(data.DSP) then
 			local d = S:Distance(L)
 			local dir = A.Native.Directivity(IsValid(src) and src or nil, L, data.Channel)
 			local g = (data.Volume or 1) * A.Native.PhysClear(lvl, d) * dir
@@ -1118,6 +1128,14 @@ end
 -- relayed server sounds: always played by us (the server suppressed the original)
 A.dict = A.dict or {}
 local pendingAcks = {}
+-- the server relays sounds to this player only once his pba client runs (sv_relay clientReady): told now
+-- (this file loads after the player entity exists: on join, and again on a Lua refresh)
+local function sayReady()
+	net.Start("pba_ready")
+	net.SendToServer()
+end
+if IsValid(LocalPlayer()) then sayReady() end
+hook.Add("InitPostEntity", "pba_ready", sayReady)
 timer.Create("pba_ack", 0.2, 0, function()
 	if #pendingAcks == 0 then return end
 	net.Start("pba_snd_ack")
@@ -1132,7 +1150,8 @@ net.Receive(NET, function()
 	local name
 	if full then
 		name = net.ReadString()
-		if A.dict[id] ~= name then
+		-- (id 0: the server's dictionary is full, the name always comes in full and is not kept)
+		if id ~= 0 and A.dict[id] ~= name then
 			A.dict[id] = name
 			pendingAcks[#pendingAcks + 1] = id
 		end

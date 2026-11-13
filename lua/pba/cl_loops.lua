@@ -300,8 +300,9 @@ function apply(m, fade)
 	if not L then return end
 	local S = ent == m.anchor and m.pos or ent:WorldSpaceCenter()
 	local nativeOn = A.Native and A.Native.render and A.Enabled()
-	if m.nativeId and not nativeOn then
-		-- mode or native rendering switched off: hand the loop back to the engine without a double
+	if m.nativeId and (not nativeOn or A.OwnDSP(m.dsp)) then
+		-- mode or native rendering switched off (or pba_keep_dsp switched on for a loop with its own preset):
+		-- hand the loop back to the engine without a double
 		pba_native.StopVoice(m.nativeId)
 		m.nativeId = nil
 		if m.once then m.done = true return end -- a long one-shot cannot resume midway
@@ -324,7 +325,8 @@ function apply(m, fade)
 		if m.patch and m.once and not m.patch:IsPlaying() then m.done = true end
 		return
 	end
-	if nativeOn and not m.patch then
+	-- (a loop with its own DSP preset stays an engine patch: the module has no presets, A.OwnDSP)
+	if nativeOn and not m.patch and not A.OwnDSP(m.dsp) then
 		if applyNative(m, S, L) ~= false then return end
 	end
 	local g, dsp = muffle(m, S, L)
@@ -406,7 +408,7 @@ function LP.HandleClient(data)
 		if m.nativeId and m.reeval then m.reeval.force = true end -- applied at its next turn
 		return true
 	end
-	if replacing(chan) then LP.StopClient(idx, chan) end
+	if replacing(chan) and not A.KeepsChannel(flags) then LP.StopClient(idx, chan) end
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl >= 256 then return false end
 	if src or cpp then

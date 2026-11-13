@@ -338,6 +338,9 @@ steps = [
     ("stopsound_console", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "stopsound_setup.lua"), lambda: job("client", "stopsound_console.lua"))),
     # a new sound the engine plays on a line's channel (player now in plain sight) cuts its relayed copy
     ("channel_cut", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "channel_cut_setup.lua"), lambda: job("client", "channel_cut_mid.lua"), lambda: job("server", "channel_cut_next.lua"), lambda: job("client", "channel_cut.lua"))),
+    ("relay_dict_overflow", lambda: seq(lambda: load(TW), lambda: job("client", "relay_dict_capture.lua"), lambda: job("server", "relay_dict_overflow.lua", 30), lambda: job("client", "relay_dict_check.lua"))),
+    ("channel_no_overwrite", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(False), lambda: job("client", "channel_no_overwrite.lua", 30))),
+    ("relay_client_ready", lambda: seq(lambda: load(TW), lambda: job("server", "relay_client_ready.lua", 30))),
     # StopSound by sound-script name reaches the relayed copies and the loop mirrors of its waves
     ("stop_script", lambda: seq(lambda: load(TW), lambda: job("server", "stop_script_setup.lua"), lambda: job("client", "stop_script_mid.lua"), lambda: job("server", "stop_script_next.lua"), lambda: job("client", "stop_script.lua"))),
     # a cancelled choreographed scene stops its line with a C++ StopSound: its relayed copy stops too
@@ -354,6 +357,8 @@ steps = [
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                     lambda: job("client", "native_features.lua"))),
     ("native_stereo", lambda: seq(lambda: native_on(True), lambda: job("client", "native_stereo.lua"))),
+    ("native_own_dsp", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
+                                   lambda: job("client", "native_own_dsp.lua", 60))),
     ("native_volume_sfx", lambda: volume_sfx_step()),
     ("native_law", lambda: job("client", "native_law.lua")),
     # a source reverb slot reused after a pause, after walking away, after stepping across the anchor radius
@@ -623,7 +628,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state
