@@ -119,12 +119,19 @@ function EmitSound(name, pos, ent, chan, vol, lvl, flags, pitch, dsp, filter)
 	return A.orig.EmitSound(name, pos, ent, chan, vol, lvl, flags, pitch, dsp, filter)
 end
 
+--- THE stop path of the server: the engine stopped `name` (every name when ""/nil) of entity e on channel chan
+-- (any when nil): its relayed copies stop on the clients that got them (pba_snd_stop: copies, native voices,
+-- mouth copies, client mirrors; cl_render A.StopSource), and so do the long sounds and loops sv_loops
+-- follows (their mirrors, their mouth copy).
+function A.StopSource(e, name, chan)
+	if A.RelayStop then pcall(A.RelayStop, e, name, chan) end
+	if A.Loops and A.Loops.Stop and IsValid(e) and not e:IsWorld() then pcall(A.Loops.Stop, e:EntIndex(), name, chan) end
+end
+
 -- StopSound never reaches EntityEmitSound: relay it to the players who got copies (transparent)
 function ENT:StopSound(name)
 	A.orig.EntStopSound(self, name)
-	if A.RelayStop then pcall(A.RelayStop, self, name) end
-	-- loops and long sounds followed by sv_loops: their client mirrors stop too
-	if A.Loops and A.Loops.Stop and IsValid(self) and not self:IsWorld() then pcall(A.Loops.Stop, self:EntIndex(), name) end
+	A.StopSource(self, name)
 end
 
 local function audibleRadius(lvl)
@@ -604,14 +611,7 @@ end
 --- The actor's relayed voice copies stop (and a long line followed by sv_loops).
 local function stopActorVoice(actor)
 	if not IsValid(actor) then return end
-	A.RelayStop(actor, "", CHAN_VOICE)
-	local LP = A.Loops
-	if LP and LP.active then
-		local idx = actor:EntIndex()
-		for _, x in pairs(LP.active) do
-			if x.idx == idx and x.chan == CHAN_VOICE then LP.Stop(idx, x.name) end
-		end
-	end
+	A.StopSource(actor, "", CHAN_VOICE)
 	A.stats.sceneCancels = (A.stats.sceneCancels or 0) + 1
 end
 
