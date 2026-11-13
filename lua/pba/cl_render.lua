@@ -1164,6 +1164,36 @@ do
 end
 net.Receive("pba_stopall", function() A.StopAllSounds() end)
 
+-- Typed in the console or bound to a key, stopsound (and snd_restart) never reaches Lua. Measured
+-- (2026-11-13): a client sound patch (CreateSound) reads IsPlaying() false right after the engine
+-- stopped every sound, and true otherwise, even long after its file ended (StopSound on its entity, 80
+-- sounds at once: unchanged). A patch on a silent file is the sentinel, checked every 0.1 s and played
+-- again after each stop-all.
+do
+	local watch = A.stopWatch or { nextT = 0 }
+	A.stopWatch = watch
+	hook.Add("Think", "pba_stopsound_watch", function()
+		local now = RealTime()
+		if now < watch.nextT then return end
+		watch.nextT = now + 0.1
+		local p = watch.patch
+		if (A.cfg.stopsound_watch or 1) < 0.5 then
+			if p then p:Stop() watch.patch = nil end
+			return
+		end
+		if not p then
+			-- (pba's own patch: the original CreateSound, never tracked as a client loop)
+			p = (A.Loops and A.Loops.origCreateSound or CreateSound)(game.GetWorld(), "common/null.wav")
+			if not p then return end
+			p:PlayEx(0, 100)
+			watch.patch = p
+		elseif not p:IsPlaying() then
+			A.StopAllSounds()
+			p:PlayEx(0, 100)
+		end
+	end)
+end
+
 -- server-side StopSound on a relayed sound, or a new sound on its channel the engine played without
 -- us (sv_relay relayChannelCut): stop our copies
 net.Receive("pba_snd_stop", function()
