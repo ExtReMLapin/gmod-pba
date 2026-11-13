@@ -927,6 +927,18 @@ end
 -- (data.Face): the engine keeps the channel under that index as it keeps the original's in vanilla, and the
 -- face that comes into view during the line moves its mouth (pba_lipsync_unseen).
 local MOUTH_VOL = A.MOUTH_VOL
+
+--- Tells the server this player's lip sync choice: it also picks the long lines' mouth copy, which the
+-- server plays (sv_loops MouthStart), as pba_lipsync picks the short lines' one below.
+function A.SendLipsyncPref()
+	if not IsValid(LocalPlayer()) then return end
+	net.Start("pba_lipsync_pref")
+	net.WriteBool((A.cfg.lipsync or 1) >= 0.5)
+	net.SendToServer()
+end
+hook.Add("InitPostEntity", "pba_lipsync_pref", A.SendLipsyncPref)
+timer.Simple(0, A.SendLipsyncPref) -- (a reload after InitPostEntity)
+
 local function mouthCopy(data, src)
 	if (A.cfg.lipsync or 1) < 0.5 then return end
 	local ch = data.Channel

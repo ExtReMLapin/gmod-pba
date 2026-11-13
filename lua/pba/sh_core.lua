@@ -257,6 +257,8 @@ function A.OnConfigChanged(name)
 		if (A.cfg.loops or 0) < 0.5 then A.Loops.Release() else timer.Simple(0, A.Loops.AdoptAmbients) end
 	end
 	-- pba_compat_auto switched: Sound Muffling Effect is turned off, or given back its value
+	-- the player's lip sync choice reaches the server (sv_loops MouthStart, the long lines' mouth copy)
+	if name == "lipsync" and CLIENT and A.SendLipsyncPref then A.SendLipsyncPref() end
 	if name == "compat_auto" and A.Compat and A.Compat.Check then A.Compat.Check() end
 	if name == "update_interval" and CLIENT then
 		for _, t in ipairs({ "pba_streams" }) do

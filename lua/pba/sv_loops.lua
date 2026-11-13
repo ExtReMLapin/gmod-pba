@@ -10,6 +10,9 @@ A.Loops = A.Loops or {}
 local LP = A.Loops
 local NET = "pba_loop"
 util.AddNetworkString(NET)
+-- each player's lip sync choice (pba_lipsync, cl): it also chooses for the long lines' mouth copy (MouthStart)
+util.AddNetworkString("pba_lipsync_pref")
+net.Receive("pba_lipsync_pref", function(_, ply) if IsValid(ply) then ply.pbaLipsyncOff = not net.ReadBool() end end)
 
 LP.active = LP.active or {} -- key -> { ent, idx, chan, name, vol, pitch, lvl, flags, dsp, pos, subs = {ply=true} }
 LP.released = LP.released or {} -- loops handed back to the engine while pba is off: taken again when it comes back
@@ -381,8 +384,17 @@ function LP.MouthStart(l, data)
 	local e, ch = l.ent, l.chan
 	if not IsValid(e) or (ch ~= CHAN_VOICE and ch ~= CHAN_VOICE2) then return end
 	if (e.GetFlexNum and e:GetFlexNum() or 0) == 0 then return end
+	-- one lip sync choice for short and long lines (refactor step 8, pba_long_lipsync_choice): the server
+	-- allows (pba_long_lipsync), each player's pba_lipsync chooses, as for the mouth copies of short lines his
+	-- client makes; 0 = every player gets it
+	local rf
+	if (A.cfg.long_lipsync_choice or 1) >= 0.5 then
+		rf = RecipientFilter()
+		for _, p in ipairs(player.GetHumans()) do if not p.pbaLipsyncOff then rf:AddPlayer(p) end end
+		if rf:GetCount() == 0 then return end
+	end
 	A.reemitting = true
-	e:EmitSound(data.SoundName, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch)
+	e:EmitSound(data.SoundName, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch, 0, 0, rf)
 	A.reemitting = false
 	l.mouth = true
 	A.stats.mouthLong = (A.stats.mouthLong or 0) + 1

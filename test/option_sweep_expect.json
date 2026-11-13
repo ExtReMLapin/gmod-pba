@@ -99,6 +99,10 @@
   "pos0": "hook",
   "why": "ducking by the engine mixer rules, short and long sounds (render time)"
  },
+ "long_lipsync_choice": {
+  "pos0": "hook",
+  "why": "who gets the long lines' mouth copy (server emission)"
+ },
  "long_lipsync": {
   "pos0": "hook",
   "why": "lip sync of long lines (cl/sv loops)"
