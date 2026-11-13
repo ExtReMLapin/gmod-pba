@@ -186,6 +186,9 @@ IPLVector3 g_lastDir{};                // last binaural direction computed (debu
 double g_dbgIn = 0, g_dbgL = 0, g_dbgR = 0; int g_dbgVoices = 0;
 constexpr int kMaxLag = 48;           // +-1 ms at 48 kHz
 double g_xc[kMaxLag * 2 + 1] = {};    // L/R cross-correlation of the mix (ITD meter)
+// the debug meters (g_xc, g_dbgIn/L/R) run only once Debug() was called (a test reads them): the ITD
+// cross-correlation alone is ~40 000 multiply-adds per block on the audio thread
+bool g_debugOn = false;
 double g_loadSum = 0, g_loadMax = 0; int g_loadN = 0;
 
 // audio-thread scratch buffers
@@ -639,7 +642,8 @@ void RenderBlock() {
 			} else {
 				spatialise(v.slot, dir, bin_in, &g_stereo);
 			}
-			for (int i = 0; i < kBlock; ++i) g_dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
+			if (g_debugOn)
+				for (int i = 0; i < kBlock; ++i) g_dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
 		}
 		g_dbgVoices++;
 		for (int i = 0; i < kBlock; ++i) {
@@ -655,8 +659,10 @@ void RenderBlock() {
 			}
 			l *= directGain;
 			r *= directGain;
-			g_dbgL += (double)l * l;
-			g_dbgR += (double)r * r;
+			if (g_debugOn) {
+				g_dbgL += (double)l * l;
+				g_dbgR += (double)r * r;
+			}
 			g_mix[i * 2] += l;
 			g_mix[i * 2 + 1] += r;
 		}
@@ -725,7 +731,7 @@ void RenderBlock() {
 	}
 	// cross-correlation: xc[lag] = sum L[i] * R[i + lag]; R lagging behind L (lag > 0) means the
 	// sound reaches the left ear first
-	for (int lag = -kMaxLag; lag <= kMaxLag; ++lag) {
+	for (int lag = -kMaxLag; g_debugOn && lag <= kMaxLag; ++lag) {
 		double acc = 0;
 		for (int i = kMaxLag; i < kBlock - kMaxLag; ++i) acc += (double)g_mix[i * 2] * g_mix[(i + lag) * 2 + 1];
 		g_xc[lag + kMaxLag] += acc;
@@ -1126,6 +1132,7 @@ void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
 	*lastDir = g_lastDir;
 	g_dbgIn = g_dbgL = g_dbgR = 0;
 	g_dbgVoices = 0;
+	g_debugOn = true;
 }
 
 void Load(double* avgMs, double* maxMs, int* blocks) {
