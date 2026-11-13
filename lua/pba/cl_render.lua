@@ -26,11 +26,9 @@ local function activeCount(now)
 	return n
 end
 
---- True once this frame's path-search budget is spent (cheaper fallback for the rest).
-function A.FrameBudgetExceeded()
-	local pf = A.perf
-	return pf.frame == FrameNumber() and pf.cur >= (A.cfg.frame_budget_ms or 1)
-end
+--- True once this frame's path-search budget is spent (cheaper fallback for the rest): the one budget of
+-- every sound kind (cl_sched.lua).
+function A.FrameBudgetExceeded() return A.Sched.BudgetExceeded() end
 
 --- Azimuth of `pos` seen from L with view yaw, degrees, positive = to the RIGHT.
 function A.Azimuth(L, viewYaw, pos)
@@ -551,9 +549,10 @@ end
 -- Not followed in their last MIN_LEFT seconds, and no volume change then: a SND_CHANGE_VOL that no
 -- longer finds its sound starts it again (engine rule), so the margin covers a duration slightly off;
 -- only .wav durations are trusted for it (SoundDuration of compressed files can be off).
-local MIN_LEFT = 0.5
+-- (one margin and one interval for every followed sound: cl_sched.lua)
+local MIN_LEFT = A.Sched.MIN_LEFT
 
-local function followInterval() return math.max(A.cfg.update_interval or 0.25, 0.05) end
+local followInterval = A.Sched.Interval
 
 --- True when a one-shot playing `play` seconds is worth following.
 function OS.Wanted(play)
@@ -840,9 +839,11 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 	return rec
 end
 
---- Every frame: re-evaluates each followed one-shot once per update_interval (each on its own
--- clock, from its emission: spread over the frames), glides its voices, drops it when it ends.
-hook.Add("Think", "pba_oneshots", A.PerfTimed("oneshots", function()
+--- Every frame (the scheduler's tick, cl_sched.lua): re-evaluates each followed one-shot by the cadence
+-- rule of every sound (A.Sched.Due: at most once per update_interval, each on its own clock from its
+-- emission, and only when it, the listener or the world moved: reeval_adaptive), glides its voices, drops it
+-- when it ends.
+function OS.Tick()
 	local recs = OS.recs
 	if #recs == 0 then return false end
 	local now = RealTime()
@@ -875,9 +876,12 @@ hook.Add("Think", "pba_oneshots", A.PerfTimed("oneshots", function()
 			dropRec(rec)
 			table.remove(recs, i)
 		else
-			if now >= rec.tNext and not A.FrameBudgetExceeded() then
-				rec.tNext = now + followInterval()
-				evaluate(rec, now, L)
+			if now >= rec.tNext then
+				local S = IsValid(rec.ent) and A.SoundPos({ Entity = rec.ent }) or rec.S
+				if A.Sched.Due(rec, S, L, now, rec.tEnd) then
+					rec.tNext = now + followInterval()
+					evaluate(rec, now, L)
+				end
 			end
 			followClear(rec, L)
 			for _, fv in ipairs(rec.voices) do
@@ -886,7 +890,7 @@ hook.Add("Think", "pba_oneshots", A.PerfTimed("oneshots", function()
 			end
 		end
 	end
-end))
+end
 
 --- Plays a sound as the engine would have (pba does not take it: relayed and not processed, or a held one
 -- whose evaluation found nothing to play).
