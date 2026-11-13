@@ -51,7 +51,6 @@ EXEMPT = {
     "native_probe_spacing": "pathing bake constant",
     "min_level": "model constant: lowest SNDLVL processed",
     "cache_ttl": "performance constant: result cache lifetime",
-    "hysteresis": "model constant: voice layout stability time",
 }
 
 # pba_* names the menu uses that are not entries of A.CONFIG: name -> file (under lua/pba) that creates it
