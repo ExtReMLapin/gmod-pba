@@ -8,6 +8,7 @@ Usage: python -I -u run_battery.py <path to mcp.py> [--smoke | --quick | --speci
   --quick      the fast checks only (about 3 minutes, three maps), to run before each commit
   --special    the special-sound scenarios only
   --only=a,b   just these steps (exact labels, comma separated), in battery order
+  --force-load every step reloads its map, even the current one (injected code, map-start state)
 Needs ffmpeg on PATH (water_ogg).
 
 Every step sets the state it needs itself (map, demo mode, door, player position, pba_native_render),
@@ -72,10 +73,15 @@ def wait_lua(realm, code, timeout=15.0):
 
 # ------------------------------------------------------------------ state setters (one per kind of state)
 
+# --force-load: every load() reloads its map, even the current one (code injected after a map load,
+# or a map-start state, is then really in place)
+FORCE_LOAD = "--force-load" in sys.argv
+
+
 def load(m, mp=4):
     """Map m (maxplayers mp) loaded and pba's client ready; raises when the map is not there."""
     st = call("status", {})
-    if st.get("map") != m or st.get("maxplayers") != mp:
+    if FORCE_LOAD or st.get("map") != m or st.get("maxplayers") != mp:
         call("map_load", {"map": m, "maxplayers": mp}, timeout=300)
         time.sleep(4)
     for _ in range(60):
@@ -863,7 +869,9 @@ if ONLY:
     known = {s_[0] for s_ in steps}
     unknown = [n for n in ONLY if n not in known]
     if unknown:
-        print("unknown step(s): " + ", ".join(unknown) + "\nknown steps:\n  " + "\n  ".join(s_[0] for s_ in steps))
+        import difflib
+        hints = ["%s -> %s" % (n, ", ".join(difflib.get_close_matches(n, list(known), 3, 0.5)) or "?") for n in unknown]
+        print("unknown step(s): " + "; ".join(hints) + " (" + str(len(known)) + " known steps)")
         sys.exit(3)
     steps = [s_ for s_ in steps if s_[0] in ONLY]
 
