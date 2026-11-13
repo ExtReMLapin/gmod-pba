@@ -607,6 +607,7 @@ local function switchNative(rec, fv, t, L, now, dominant)
 		fv.switchFails = (fv.switchFails or 0) + 1
 		return false
 	end
+	A.NoteRendered(rec.name, g)
 	-- reverb as at emission (emitVoice / N.PlayVoice): the dominant voice feeds its source slot unless a
 	-- loud sound is already echoed; without a slot, a voice that is not a transmission feeds the room
 	local echoed = (A.cfg.native_all or 0) < 0.5 and rec.lvl >= (A.cfg.native_echo_lvl or 95)
@@ -957,6 +958,7 @@ function A.Process(data, relayed)
 		for k, v in pairs(data) do d[k] = v end
 		local h = { job = job, t0 = tReq, tEnd = job.deadline + 1, name = d.SoundName, orig = d.SoundName, srcChan = d.Channel or CHAN_AUTO }
 		register(idx, h)
+		data.heldUntil = job.deadline -- (pba_silent_handback waits for it)
 		A.stats.held = (A.stats.held or 0) + 1
 		job.onDone = function(res)
 			unregister(idx, h)
@@ -1101,7 +1103,11 @@ end
 
 -- (fallback: a partial autorefresh may reload this file before sh_core)
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
-	if A.reemitting then return end
+	if A.reemitting then
+		-- pba's own engine emission (a copy, its vanilla fallback, a mirror's patch): the line is heard
+		if bit.band(data.Flags or 0, SND_STOP) == 0 and A.NoteRendered then A.NoteRendered(data.SoundName, data.Volume or 1) end
+		return
+	end
 	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
 		-- a client-side StopSound: our copies of that sound stop too (the engine stops its own)
 		local idx = sourceIndex(data)
@@ -1206,7 +1212,17 @@ net.Receive(NET, function()
 		if IsValid(lp) and data.EntIndex == lp:EntIndex() then vanilla(data) return end
 	end
 	A.stats.relayedIn = A.stats.relayedIn + 1
-	if A.Enabled() and A.Process(data, true) then return end
+	if A.Enabled() and A.Process(data, true) then
+		-- a line on a face taken from the engine: heard within 0.2 s (+ its delays), else the engine plays it
+		-- (pba_silent_handback)
+		if A.WatchLine and (data.Face or data.Channel == CHAN_VOICE or data.Channel == CHAN_VOICE2) and not A.IsSentence(name) then
+			local L = A.ListenerPos()
+			local lag = (data.Delay or 0) + ((A.cfg.delay or 0) >= 0.5 and L and data.Pos and data.Pos:Distance(L) * 0.01905 / 343 or 0)
+			if data.heldUntil then lag = math.max(lag, data.heldUntil - RealTime()) end -- (routes computed in slices)
+			A.WatchLine(name, lag, "relayed line", function() vanilla(data) end)
+		end
+		return
+	end
 	-- not processed (disabled client, clear path...): play it as the engine would have
 	if data.Delay then timer.Simple(data.Delay, function() vanilla(data) end) else vanilla(data) end
 end)

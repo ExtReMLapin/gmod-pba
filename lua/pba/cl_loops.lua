@@ -11,6 +11,37 @@ LP.mirrors = LP.mirrors or {}
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 local AC = A.AC
 
+-- ------------------------------------------------------------------ silent lines handed back (pba_silent_handback)
+-- A line pba takes from the engine (a relayed line on a face, a long line mirrored from sv_loops) must be heard
+-- somewhere: a module voice above -60 dB, an engine emission from pba's Lua, a mirror's engine patch. Every
+-- rendering notes its file (A.NoteRendered); a watched line with no rendering of its file HANDBACK_S after it was
+-- due goes back to the engine, with one console line. (d1_trainstation_05, user report 2026-11-14: Kleiner's
+-- and Barney's lines captioned, never heard, not reproduced: whatever the cause, the line is not lost.)
+local HANDBACK_S, AUDIBLE = 0.2, 1e-3
+A.renderedT = A.renderedT or {} -- file (lower case, no sound chars) -> RealTime() of its last audible rendering
+A.handedBack = A.handedBack or {} -- the lines handed back, last 16 (tests, pba_status)
+local function lineKey(name) return string.lower((string.gsub(A.SoundFile(name or ""), "\\", "/"))) end
+--- A rendering of `name` at linear gain / volume `g` (module voice, engine emission, mirror patch).
+function A.NoteRendered(name, g)
+	if name and (g or 1) > AUDIBLE then A.renderedT[lineKey(name)] = RealTime() end
+end
+--- Watches a line pba took from the engine: `handback()` (the engine plays it) when nothing rendered its file
+-- within HANDBACK_S (+ `lag`, its start delay) of now. `why` names the path, for the console line.
+function A.WatchLine(name, lag, why, handback)
+	if (A.cfg.silent_handback or 1) < 0.5 or not name then return end
+	local t0, key = RealTime(), lineKey(name)
+	timer.Simple(HANDBACK_S + (lag or 0), function()
+		local t = A.renderedT[key]
+		if t and t >= t0 - 0.05 then return end
+		if (A.cfg.silent_handback or 1) < 0.5 then return end
+		local ok = handback()
+		if ok == false then return end -- (stopped meanwhile: nothing to give back)
+		MsgN("[PBA] silent line handed back to the engine: ", name, " (", why, ")")
+		if #A.handedBack >= 16 then table.remove(A.handedBack, 1) end
+		A.handedBack[#A.handedBack + 1] = { name = name, why = why, t = RealTime() }
+	end)
+end
+
 -- Loops born on this client (CreateSound of an addon: vehicle engines...). The hook sees their start
 -- (with SND_CHANGE_VOL), pitch and volume changes, but neither CSoundPatch:Stop / FadeOut nor the
 -- patch being collected: the patches are registered here (weak keys) and those two methods detoured,
@@ -307,8 +338,11 @@ local function applyNative(m, S, L)
 	if A.Mix and not m.mixG then m.mixG = A.Mix.GroupsOf(m.name, m.ent, m.chan, m.lvl) end
 	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
 		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
-	m.started = true
-	m.nativeId = id > 0 and id or nil
+	-- (pba_loops_native_fail: a voice the module could not start leaves the line to the engine patch below;
+	-- marked started, a long line was then dropped there as "already played": captioned, never heard)
+	if (id or 0) > 0 or (A.cfg.loops_native_fail or 1) < 0.5 then m.started = true end
+	m.nativeId = (id or 0) > 0 and id or nil
+	if m.nativeId then A.NoteRendered(m.name, gain) end
 	m.stSel, m.stW = nil, nil
 	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
 	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_native_end or 1) >= 0.5 then
@@ -357,7 +391,7 @@ function apply(m, fade)
 	if not IsValid(ent) then
 		-- not networked (yet?): after a grace period, fall back to an anchor at the position
 		m.waited = (m.waited or 0) + 1
-		if m.waited < 3 and m.idx ~= 0 then return end
+		if m.waited < 3 and m.idx ~= 0 and not m.handBack then return end
 		ent = anchorFor(m)
 		if not ent then return end
 	end
@@ -395,14 +429,14 @@ function apply(m, fade)
 		return
 	end
 	-- (a loop with its own DSP preset stays an engine patch: the module has no presets, A.OwnDSP)
-	if nativeOn and not m.patch and not A.OwnDSP(m.dsp) then
+	if nativeOn and not m.patch and not m.handBack and not A.OwnDSP(m.dsp) then
 		if applyNative(m, S, L) ~= false then return end
 	end
 	local g, dsp = muffle(m, S, L)
 	if g == nil then return end
 	if onceEnded(m) then m.done = true return end
 	if not m.patch then
-		if m.once and m.started then m.done = true return end
+		if m.once and m.started and not m.handBack then m.done = true return end
 		m.started = true
 		m.patch = LP.origCreateSound(ent, m.name)
 		A.reemitting = true
@@ -410,6 +444,7 @@ function apply(m, fade)
 		m.patch:SetDSP(dsp)
 		m.patch:PlayEx(m.vol * g, m.pitch)
 		A.reemitting = false
+		A.NoteRendered(m.name, m.vol * g)
 		m.g, m.curDsp = g, dsp
 		return
 	end
@@ -543,6 +578,7 @@ net.Receive("pba_loop", function()
 	-- a change of a long one-shot whose mirror already ended here: it must not start it again from its top
 	-- (the server keeps the line until its own end time, a little later)
 	if not m and once and op == OP_UPDATE and (A.cfg.loops_once_end or 1) >= 0.5 then return end
+	local new = not m
 	if not m then
 		m = { key = key, name = name, idx = idx, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
 		-- its end: the file's length at its start pitch (onceEnded). Without it a server long one-shot's
@@ -563,6 +599,10 @@ net.Receive("pba_loop", function()
 		A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, EntIndex = idx }, A.ListenerPos(),
 			(A.SoundDuration(name) or 0) * 100 / math.max(pitch, 1))
 	end
+	-- a long line taken from the engine: heard within HANDBACK_S, else its engine patch plays it (pba_silent_handback)
+	if new and once and op == OP_START then
+		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end)
+	end
 	if m.nativeId and op == OP_UPDATE then
 		if m.reeval then m.reeval.force = true end
 		return -- applied at the next tick
@@ -577,6 +617,18 @@ net.Receive("pba_loop", function()
 		apply(m, 0)
 	end
 end)
+
+--- A long line mirror nothing renders: its module voice (if any, inaudible) stopped, the engine patch plays it
+-- from its top (apply's patch path). False when the line was stopped meanwhile (stopMirror ran: not in the list).
+function LP.HandBack(m)
+	if LP.mirrors[m.key] ~= m and not m.done then return false end
+	if m.endT and RealTime() > m.endT then return false end
+	if m.nativeId then pba_native.StopVoice(m.nativeId) m.nativeId = nil end
+	m.done, m.handBack = nil, true
+	LP.mirrors[m.key] = m
+	apply(m, 0)
+	return true
+end
 
 --- Every frame: natively rendered loops in clear sight follow their (moving) entity, and the
 -- others glide towards their last re-evaluation (continuous_ramp); the path itself is
