@@ -434,12 +434,16 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt)
 	return walls
 end
 
---- The listener's water is the module's: its master water filter is on (cl_native: SetUnderwater, set
--- from the listener's head each frame), as the engine's dsp_water on its whole mix.
+--- The listener's water is already filtered by what plays the sound (asked with the listener's head under
+-- water). The engine puts dsp_water on every channel it mixes, the copies pba muffles with their own DSP
+-- preset included (measured, test/water_light.lua): true on the server (its decisions are for engine
+-- voices) and on a client the module does not render for (Light). A client the module renders for: its
+-- master water filter must be on (cl_native: SetUnderwater, set from the listener's head each frame).
 function P.ListenerWaterFiltered()
-	if not CLIENT then return false end
+	if not CLIENT then return true end
 	local N = A.Native
-	return N and N.render and N.underwater and pba_native and pba_native.SetUnderwater and true or false
+	if not (N and N.render) then return true end
+	return N.underwater and pba_native and pba_native.SetUnderwater and true or false
 end
 
 local UP = Vector(0, 0, 1)
@@ -447,20 +451,41 @@ local UP = Vector(0, 0, 1)
 -- one end in a liquid, the other not). The engine never muffles a sound by water: it puts dsp_water on its
 -- whole mix while the listener's head is under water, and plays files already muffled for deep explosions.
 -- pba's interface wall is ours, kept where it adds what the engine misses, not on top of what it does:
--- * listener under water with the module's water filter on (native_water_listener): the filter alone;
+-- * listener under water, its water filter on (native_water_listener; the module's, or the engine's
+--   dsp_water, P.ListenerWaterFiltered): the filter alone;
 -- * a source within water_margin units of the surface counts as dry: the engine places footsteps in
 --   shallow water (feet), floating objects (their centre) and splashes there;
--- * cfg.water_skip (P.DRY_SOURCE_CFG: a file already muffled, A.WaterMuffledFile): no wall.
+-- * cfg.water_skip (P.DRY_SOURCE_CFG: a file already muffled, A.WaterMuffledFile): no wall;
+-- * both ends under water, in two water bodies with air between them (P.WaterGap; water_planes): the
+--   source's surface is the wall, as for a submerged source heard from the air (the listener's own surface
+--   is left to the module's water filter; without it, Light, one wall stands for both).
 function P.WaterWall(S, L, cfg)
 	cfg = cfg or A.cfg
 	if cfg.water < 0.5 then return false, false end
 	local wS, wL = A.InWater(S), A.InWater(L)
-	if wS == wL then return false, false end
+	if wS == wL and (not wS or (cfg.water_planes or 1) < 0.5 or not P.WaterGap(S, L)) then return false, false end
 	if cfg.water_skip then return false, true end
-	if wL and (cfg.native_water_listener or 1) >= 0.5 and P.ListenerWaterFiltered() then return false, true end
+	local filtered = wL and (cfg.native_water_listener or 1) >= 0.5 and P.ListenerWaterFiltered()
 	local m = cfg.water_margin or 0
-	if wS and m > 0 and not A.InWater(S + UP * m) then return false, true end
+	local shallow = wS and m > 0 and not A.InWater(S + UP * m)
+	-- two water bodies: the source's surface stays, unless the source counts as dry (shallow) and the
+	-- listener's surface is the module's filter
+	if wS and wL then return not (shallow and filtered), true end
+	if filtered or shallow then return false, true end
 	return true, true
+end
+
+local LIQUID_OR_SOLID = bit.bor(CONTENTS_WATER, CONTENTS_SLIME, CONTENTS_SOLID, CONTENTS_WINDOW, CONTENTS_GRATE)
+--- First point of air (no liquid, no solid) on the line S -> L, sampled every 32 u (64 samples at most), or
+-- nil: two submerged points in one water body (or parted by a wall only) see none.
+function P.WaterGap(S, L)
+	local d = L - S
+	local n = math.Clamp(math.ceil(d:Length() / 32), 1, 64)
+	for i = 1, n - 1 do
+		local p = S + d * (i / n)
+		if bit.band(util.PointContents(p), LIQUID_OR_SOLID) == 0 then return p end
+	end
+	return nil
 end
 
 --- cfg of a sound whose file is already muffled by water (P.Compute(S, L, lvl, P.DRY_SOURCE_CFG, ent)).
@@ -471,9 +496,15 @@ P.DRY_SOURCE_CFG = setmetatable({ water_skip = true }, { __index = function(_, k
 local function addWater(walls, S, L, cfg)
 	if not P.WaterWall(S, L, cfg) then return walls end
 	local wS = A.InWater(S)
-	local dry, wet = wS and L or S, wS and S or L
-	local tr = util.TraceLine({ start = dry, endpos = wet, mask = MASK_WATER })
-	local p = tr.Hit and tr.HitPos or (S + L) * 0.5
+	local p
+	if wS and A.InWater(L) then
+		-- two water bodies: at the air between them
+		p = P.WaterGap(S, L) or (S + L) * 0.5
+	else
+		local dry, wet = wS and L or S, wS and S or L
+		local tr = util.TraceLine({ start = dry, endpos = wet, mask = MASK_WATER })
+		p = tr.Hit and tr.HitPos or (S + L) * 0.5
+	end
 	local ws = { entry = p, exit = p, thickness = 0, mat = MAT_SLOSH, surf = "pba_water", water = true }
 	-- keep the walls ordered from S
 	local dS = p:DistToSqr(S)
