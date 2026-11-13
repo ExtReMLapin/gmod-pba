@@ -24,7 +24,10 @@ local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 -- fire's range would otherwise get STOP / START every 0.5 s, the loop restarting from its top each time.
 local LEAVE_SCALE = 1.1
 
-local function radiusFor(lvl) return math.min(lvl > 50 and 100 * (lvl - 50) or 500, A.cfg.lod_dist) end
+-- The engine's attenuated PAS radius, NOT capped by lod_dist: the hook suppresses a loop for everyone, so a
+-- player beyond lod_dist must get the mirror too (130-150 dB rotors and sirens, still loud at 7000-10000 u,
+-- went silent there). His client renders it clear, without any path search (cl_loops pathOf).
+local function radiusFor(lvl) return lvl > 50 and 100 * (lvl - 50) or 500 end
 
 local function send(op, l, plys)
 	if #plys == 0 then return end
@@ -178,6 +181,44 @@ local function chargerSounds(class)
 	return set
 end
 
+-- Physics constraints with a travel sound (SDK physconstraint.cpp ConstraintSoundInfo): the loop starts on
+-- the moving object when the attached objects move relative to each other and is DESTROYED (invisible
+-- StopSound) once that speed falls under minSoundThreshold, or with the constraint.
+local TRAVEL_CONSTRAINTS = { "phys_slideconstraint", "phys_hinge" }
+
+--- The constraint whose travel sound `name` plays on physics object e: { c = constraint, other = the other
+-- attached entity (nil: the world), min = minSoundThreshold }, or nil.
+function LP.ConstraintOf(e, name, orig)
+	local own = e:GetName()
+	if own == "" then return nil end
+	for _, class in ipairs(TRAVEL_CONSTRAINTS) do
+		for _, c in ipairs(ents.FindByClass(class)) do
+			local n1, n2 = c:GetInternalVariable("m_nameAttach1"), c:GetInternalVariable("m_nameAttach2")
+			if n1 == own or n2 == own then
+				local set = {}
+				addSound(set, c:GetInternalVariable("m_soundInfo.m_iszTravelSoundFwd"))
+				addSound(set, c:GetInternalVariable("m_soundInfo.m_iszTravelSoundBack"))
+				if inSet(set, name, orig) then
+					local otherName = n1 == own and n2 or n1
+					local other = isstring(otherName) and otherName ~= "" and ents.FindByName(otherName)[1] or nil
+					return { c = c, other = other, min = tonumber(c:GetInternalVariable("minSoundThreshold")) or 0 }
+				end
+			end
+		end
+	end
+end
+
+--- Relative speed of a constrained object (linear u/s, or angular deg/s for a hinge, the larger).
+local function relSpeed(e, other)
+	local p = e:GetPhysicsObject()
+	if not IsValid(p) then return 0 end
+	local v, w = p:GetVelocity(), p:GetAngleVelocity()
+	local q = IsValid(other) and other:GetPhysicsObject() or nil
+	if IsValid(q) then v, w = v - q:GetVelocity(), w - q:GetAngleVelocity() end
+	if not p:IsMotionEnabled() and not (IsValid(q) and q:IsMotionEnabled()) then return 0 end
+	return math.max(v:Length(), w:Length())
+end
+
 --- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
 function LP.IsLong(data)
 	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
@@ -283,6 +324,26 @@ function LP.VehicleStatePlayed(e, l, key)
 end
 LP.vehState = LP.vehState or setmetatable({}, { __mode = "k" })
 
+--- A C++ fade to silence (CSoundPatch FadeOut / SoundFadeOut: the jeep's gauss charge, SDK
+-- soundenvelope.cpp) stops its sound when the time is up, tested BEFORE the ramp's last update: the last
+-- volume emitted is one step above 0, then an invisible StopSound. The mirror stayed at that step (the
+-- gauss charge whistling at 10 %, pitch 160, until the next charge). When a falling ramp stops with less
+-- than one step left, the next update would have reached 0: the mirror goes to 0 (silent in both cases:
+-- stopped or at 0). A ramp still running sends its next step within a tick and pushes the check back.
+local FADE_WAIT = 0.2
+function LP.WatchFade(l, step)
+	if l.vol > step * 1.01 then return end
+	local key, vol = l.key, l.vol
+	timer.Create("pba_loopfade:" .. key, FADE_WAIT, 1, function()
+		local x = LP.active[key]
+		if x ~= l or x.vol ~= vol or CurTime() - x.t < FADE_WAIT * 0.9 then return end
+		x.vol = 0
+		local plys = {}
+		for p in pairs(x.subs) do if IsValid(p) then plys[#plys + 1] = p end end
+		send(OP_UPDATE, x, plys)
+	end)
+end
+
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
 local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
 
@@ -292,6 +353,13 @@ function LP.Handle(data)
 	-- players' own loops (underwater ambience...) are started and stopped by the engine's C++
 	-- code: that StopSound never reaches Lua, a mirror would play forever. Left to the engine.
 	if IsValid(e) and e:IsPlayer() then return false end
+	-- same for the loops of a weapon a player holds: the gravity gun's hold loop is a CSoundPatch on the
+	-- weapon, faded and destroyed by its C++ (weapon_physcannon); a mirror rendered it to its holder as
+	-- a foreign source and could outlive the destroy
+	if IsValid(e) and e:IsWeapon() then
+		local o = e:GetOwner()
+		if IsValid(o) and o:IsPlayer() then return false end
+	end
 	local idx = IsValid(e) and e:EntIndex() or 0
 	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
 	local l = LP.active[key]
@@ -359,9 +427,13 @@ function LP.Handle(data)
 		l.charger = IsValid(e) and CHARGERS[e:GetClass()] and inSet(chargerSounds(e:GetClass()), data.SoundName, l.orig) or nil
 		-- vehicles: their engine loops end in C++ when it is switched off; only their own sounds
 		l.vehicle = IsValid(e) and e:IsVehicle() and LP.IsVehicleSound(e, data.SoundName, l.orig) or nil
+		-- a constraint's travel sound: ends in C++ when the objects stop moving relative to each other
+		l.constraint = IsValid(e) and e:GetMoveType() == MOVETYPE_VPHYSICS and LP.ConstraintOf(e, data.SoundName, l.orig) or nil
 	end
 	l.t = CurTime()
+	local prevVol = l.vol
 	if not update or bit.band(flags, SND_CHANGE_VOL) ~= 0 then l.vol = data.Volume or 1 end
+	if update and prevVol and l.vol < prevVol and l.vol > 0 then LP.WatchFade(l, prevVol - l.vol) end
 	if not update or bit.band(flags, SND_CHANGE_PITCH) ~= 0 then l.pitch = data.Pitch or 100 end
 	if not update then
 		l.lvl, l.dsp = data.SoundLevel or 75, data.DSP or 0
@@ -486,6 +558,8 @@ local function endedInCpp(l)
 	if l.mover then return age > 0.4 and LP.MoverStill(e) end
 	if l.charger and age > 0.5 and e:GetInternalVariable("m_iOn") == 0 then return true end
 	if l.vehicle and age > 1 and e.IsEngineStarted and not e:IsEngineStarted() then return true end
+	local ct = l.constraint
+	if ct and (not IsValid(ct.c) or (age > 0.4 and relSpeed(e, ct.other) < math.max(ct.min, 1))) then return true end
 	return false
 end
 
