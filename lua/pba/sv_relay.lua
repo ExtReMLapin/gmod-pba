@@ -176,55 +176,45 @@ function A.RelayStop(e, name, chan, except)
 	net.Send(plys)
 end
 
-local replacing = A.ReplacingChannel
-local NEW_ONLY = SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH
-
---- Engine channel rule for the relayed copies (audit A-P1-1, D7): a new sound on an entity's replacing
--- channel cuts what that channel played, and the engine does it for its own sounds only. When the new
--- sound is not relayed to a player (left untouched once nobody is blocked any more, re-emitted to the
--- clear or muffled players, taken by sv_loops, refused), his client never sees it: the copies of an
--- earlier line relayed to him play on over it (an NPC's line through a wall over its death cry, after
--- the player walked round the corner). The players it is relayed to apply the rule themselves
--- (cl_render beginCopies), in order with the new copy: they are left out.
--- Only players holding a copy on that channel are told (A.recentChan, filled by the relay; once told,
--- they hold none): an NPC firing CHAN_WEAPON at a player in plain sight sends nothing per shot.
+-- Players holding relayed copies per entity and replacing channel (A.recentChan): the channel rule reaches
+-- them only (an NPC firing CHAN_WEAPON at a player in plain sight sends nothing per shot).
 A.recentChan = A.recentChan or {} -- entindex -> { [chan] = { [ply] = time relayed } }
-local function relayChannelCut(data, relayedTo)
-	local chan = data.Channel
-	if not replacing(chan) or bit.band(data.Flags or 0, NEW_ONLY) ~= 0 then return end
-	local e = data.Entity
-	if not IsValid(e) or e:IsWorld() then return end
+local relayedTo -- the players the sound being handled was relayed to (relay)
+
+local function holdCopies(data, plys)
+	local e, chan = data.Entity, data.Channel
+	if not plys or #plys == 0 or not A.ReplacingChannel(chan) or not IsValid(e) or e:IsWorld() then return end
 	local idx = e:EntIndex()
 	local rc = A.recentChan[idx]
+	if not rc then rc = {} A.recentChan[idx] = rc end
+	local held = rc[chan]
+	if not held then held = {} rc[chan] = held end
+	local now = CurTime()
+	for _, p in ipairs(plys) do held[p] = now end
+end
+
+--- The channel rule on the server (sh_core A.CutsChannel, called by A.WithChannelRule once the hook handled
+-- the new sound; the engine sounds are cut there): the long sounds and loops sv_loops follows on that
+-- channel stop (a capped one is over), and so do the copies relayed earlier to players this sound was not
+-- relayed to (audit A-P1-1, D7: left untouched, re-emitted clear or muffled, taken by sv_loops or refused,
+-- the new sound never reaches their client, and an NPC's line through a wall played on over its death
+-- cry). The players it is relayed to cut theirs themselves (cl_render A.CutChannel), in order with the new copy.
+function A.CutChannel(data, idx, chan)
+	if A.Loops and A.Loops.CutChannel then A.Loops.CutChannel(idx, chan, data.SoundName) end
+	local rc = A.recentChan[idx]
 	local held = rc and rc[chan]
+	if not held then return end
+	local keep = {}
+	for _, p in ipairs(relayedTo or {}) do keep[p] = true end
 	local plys, now = {}, CurTime()
-	-- SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps what plays on the channel (A.KeepsChannel,
-	-- as sh_core / cl_render / cl_loops): nothing cut, the new copies held besides the earlier ones
-	if A.KeepsChannel(data.Flags) then
-		if relayedTo and #relayedTo > 0 then
-			if not rc then rc = {} A.recentChan[idx] = rc end
-			held = held or {}
-			for _, p in ipairs(relayedTo) do held[p] = now end
-			rc[chan] = held
-		end
-		return
-	end
-	if held then
-		if relayedTo then
-			for _, p in ipairs(relayedTo) do held[p] = nil end
-		end
-		-- (a copy is never longer than max_duration; 30 s as for recentTo)
-		for p, t in pairs(held) do
+	for p, t in pairs(held) do
+		if not keep[p] then
+			held[p] = nil
+			-- (a copy is never longer than max_duration; 30 s as for recentTo)
 			if IsValid(p) and now - t < 30 then plys[#plys + 1] = p end
 		end
-		rc[chan] = nil
 	end
-	if relayedTo and #relayedTo > 0 then
-		if not rc then rc = {} A.recentChan[idx] = rc end
-		local h = {}
-		for _, p in ipairs(relayedTo) do h[p] = now end
-		rc[chan] = h
-	end
+	if next(held) == nil then rc[chan] = nil end
 	if #plys == 0 then return end
 	net.Start("pba_snd_stop")
 	net.WriteUInt(idx, 16)
@@ -354,8 +344,6 @@ local function predictedBy(e, predicted)
 	if not IsValid(e) then return false end
 	return e == predicted or e:GetOwner() == predicted
 end
-
-local relayedTo -- the players the current sound was relayed to (relay, below)
 
 -- Brief sounds started on an entity: entindex -> { [file] = { t = time the sound ends, took = pba took it
 -- over (relayed, re-emitted) } }. A later SND_CHANGE_VOL / PITCH for one of them (non-looped
@@ -571,10 +559,10 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 		if A.reemitTime then data.SoundTime = A.reemitTime return true end
 		return
 	end
-	if A.explicitFilter then return end
 	relayedTo = nil
+	if A.explicitFilter then return end
 	local ret = relay(data)
-	relayChannelCut(data, relayedTo)
+	holdCopies(data, relayedTo)
 	A.NoteBrief(data, ret == false)
 	return ret
 end))

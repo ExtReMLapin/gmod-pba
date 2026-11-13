@@ -166,18 +166,28 @@ local function sourceIndex(data)
 	return (idx and idx > 0) and idx or nil
 end
 
---- Copy set of a sound's source on a replacing channel: a new sound there cuts every earlier copy of
--- that channel (anchors, native voices, and those at a fixed position past the anchor cap).
-local function beginCopies(data, idx)
-	local chan = data.Channel or CHAN_AUTO
-	if not idx or not replaces(chan) then return nil end
+--- The channel rule on the client (sh_core A.CutsChannel; called by A.WithChannelRule for the client's own
+-- sounds, by beginCopies for relayed ones, by the client long sounds of cl_loops): what entity idx plays
+-- on channel chan stops, every copy (anchors, native voices, those at a fixed position past the anchor
+-- cap, mouth copies) and every client-side long sound mirror (whichever started it: a long line cut the
+-- brief copies of its channel, a brief one the long mirror).
+function A.CutChannel(idx, chan)
 	local list = A.emitted[idx]
-	-- SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps what plays on the channel (both play)
-	if list and not A.KeepsChannel(data.Flags) then
+	if list then
 		for i = #list, 1, -1 do
 			if list[i].srcChan == chan then stopCopy(list[i]) table.remove(list, i) end
 		end
+		if #list == 0 then A.emitted[idx] = nil end
 	end
+	if A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
+end
+
+--- Copy set of a sound's source on a replacing channel; a new sound there cuts every earlier copy of
+-- that channel (A.CutChannel).
+local function beginCopies(data, idx)
+	local chan = data.Channel or CHAN_AUTO
+	if not idx or not replaces(chan) then return nil end
+	if A.CutsChannel(chan, data.Flags) then A.CutChannel(idx, chan) end
 	local key = idx .. ":" .. chan
 	local c = A.copies[key]
 	if not c then

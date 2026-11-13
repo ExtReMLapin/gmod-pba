@@ -399,9 +399,18 @@ function LP.MouthStop(l)
 	A.reemitting = false
 end
 
---- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
-local replacing = A.ReplacingChannel
+--- The channel rule (sv_relay A.CutChannel): a new sound `name` on entity idx's replacing channel cuts the long
+-- lines and loops followed there under another name (the engine replaces them; a capped one is over).
+function LP.CutChannel(idx, chan, name)
+	for _, x in pairs(LP.active) do
+		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name) end
+	end
+	for k, x in pairs(LP.capped) do
+		if x.idx == idx and x.chan == chan and x.name ~= name then LP.capped[k] = nil end
+	end
+end
 
+--- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
 function LP.Handle(data)
 	if A.cfg.loops < 0.5 then return false end
 	local e = data.Entity
@@ -423,18 +432,6 @@ function LP.Handle(data)
 	if bit.band(flags, SND_STOP_LOOPING or 32) ~= 0 and idx ~= 0 then
 		LP.Stop(idx, nil)
 		return false
-	end
-	-- a new sound on a replacing channel (CHAN_VOICE...) cuts what that channel played, a followed long
-	-- line included (the engine replaces it; the mirror must go too, and a capped one is over)
-	-- (not with SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps both, A.KeepsChannel)
-	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 and replacing(data.Channel)
-		and not A.KeepsChannel(flags) then
-		for k, x in pairs(LP.active) do
-			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.Stop(idx, x.name) end
-		end
-		for k, x in pairs(LP.capped) do
-			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.capped[k] = nil end
-		end
 	end
 	-- left to the engine by the cap: its changes stay the engine's too (else a mirror doubles it);
 	-- they are kept so a later take-over (timer) starts at the current volume / pitch
