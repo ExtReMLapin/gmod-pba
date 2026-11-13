@@ -266,21 +266,23 @@ local function leafOfPaths(ent, paths, routeLeaves)
 end
 P.LeafOfPaths = leafOfPaths
 
--- current source entity (never obstructs its own sound); the object holding the listener (P.Walls)
-local ignoreEnt, ignoreLis
+-- current source entity (never obstructs its own sound); the object holding the listener (P.Walls); the
+-- settings of the current P.Walls call (its cfg, not A.cfg: a P.Compute with its own settings)
+local ignoreEnt, ignoreLis, traceCfg
 local function traceFilter(ent)
 	if ent == ignoreEnt or ent == ignoreLis then return false end
 	local cls = ent:GetClass()
 	if DOOR_CLASSES[cls] then return true end
-	if PROP_CLASSES[cls] and A.cfg.trans_props >= 0.5 then
-		return ent:BoundingRadius() >= A.cfg.trans_prop_min
+	local cfg = traceCfg or A.cfg
+	if PROP_CLASSES[cls] and cfg.trans_props >= 0.5 then
+		return ent:BoundingRadius() >= cfg.trans_prop_min
 	end
 	-- a parked vehicle stands in the way like a big prop; not seats (prisoner pods, addon car seats)
 	-- nor the listener's own vehicle (an open jeep or airboat would muffle everything around him;
 	-- in a closed addon car GetVehicle is the seat, so the body still muffles the outside)
-	if A.cfg.trans_props >= 0.5 and ent:IsVehicle() and cls ~= "prop_vehicle_prisoner_pod" then
+	if cfg.trans_props >= 0.5 and ent:IsVehicle() and cls ~= "prop_vehicle_prisoner_pod" then
 		if CLIENT and ent == LocalPlayer():GetVehicle() then return false end
-		return ent:BoundingRadius() >= A.cfg.trans_prop_min
+		return ent:BoundingRadius() >= cfg.trans_prop_min
 	end
 	return false
 end
@@ -338,12 +340,13 @@ end
 --- Walls crossed by the straight line S -> L, traced from S only (see P.Walls). lisAt: the listener's end of
 -- the line, S or L (pba_listener_object: the object holding it is no wall; the line's other end is the
 -- source's, P.SourceObject).
-local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt)
+local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
+	cfg = cfg or A.cfg
 	local walls, detours = {}, nil
 	local dir = (L - S):GetNormalized()
 	local start = S
-	ignoreEnt, ignoreLis = srcEnt, nil
-	local lisObj = lisAt and (A.cfg.listener_object or 1) >= 0.5
+	ignoreEnt, ignoreLis, traceCfg = srcEnt, nil, cfg
+	local lisObj = lisAt and (cfg.listener_object or 1) >= 0.5
 	for i = 1, maxWalls or 6 do
 		wallTr.start, wallTr.endpos = start, L
 		util.TraceLine(wallTr)
@@ -397,7 +400,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt)
 			w.minExtent = math.min(ext.x, ext.y, ext.z) -- panel or closed volume (P.EvalWalls)
 			w.fromInside = tr.StartSolid or nil -- the ray starts inside it: one sheet crossed
 		end
-		if hitEnt and OPENABLE[hitEnt:GetClass()] and (A.cfg.door_3d or 0) >= 0.5 then
+		if hitEnt and OPENABLE[hitEnt:GetClass()] and (cfg.door_3d or 0) >= 0.5 then
 			-- a leaf in 3-D (P.LeafWay): the straight line is a route of two points, the leaf's one model
 			-- The world this line crosses is its transmission, paid as such: a leg of a way round the leaf is
 			-- charged only for the world it cuts beyond what the line cuts on that side (blockedChunk). Charged
@@ -405,10 +408,10 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt)
 			-- line reached it, and one leg slipping past a jamb at one position (rp_downtown, open door behind
 			-- plaster: 32.6 -> 22.0 -> 33.4 dB in 2 u steps). A stretch of the line between walls instead jumped
 			-- where the line grazed a corner.
-			if closureWeight(hitEnt) < 1 then
-				w.detour, w.gapDb = P.LeafWay(hitEnt, { S, L }, A.cfg, 0, 0, false, P.BlockedChunk(S, entry), P.BlockedChunk(entry, L))
+			if closureWeight(hitEnt, cfg) < 1 then
+				w.detour, w.gapDb = P.LeafWay(hitEnt, { S, L }, cfg, 0, 0, false, P.BlockedChunk(S, entry), P.BlockedChunk(entry, L))
 			end
-		elseif hitEnt and closureWeight(hitEnt) < 1 then
+		elseif hitEnt and closureWeight(hitEnt, cfg) < 1 then
 			-- its way round once the line is traced: it reads the world only (its own traces), and a far
 			-- sound's slice may pause in it while wallOut and ignoreEnt are no longer needed
 			detours = detours or {}
@@ -417,7 +420,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt)
 		local prev = walls[#walls]
 		if not hitEnt and prev and not prev.ent and not prev.water and prev.surfIdx == w.surfIdx
 			and (prev.thickness < 0.01 or w.thickness < 0.01) and prev.exit:DistToSqr(w.entry) <= 4
-			and (A.cfg.wall_merge_graze or 0) >= 0.5 then
+			and (cfg.wall_merge_graze or 0) >= 0.5 then
 			-- the same world surface met twice within 2 u, one of the two hits a zero-thickness face: a line
 			-- grazing a brush's face (a floor's top at a wall's foot) left the 0.5 u probe out of the solid and
 			-- counted the face as a wall of its own, then the brush behind it again (rp_downtown: 18 dB in 8 u
@@ -540,9 +543,9 @@ P.HasDisplacements = mapHasDisplacements
 -- its own wall (in plain sight, 20 to 70 dB and a relay for every impact). One point trace, entities only.
 local srcObjOut = {}
 local srcObjTr = { mask = MASK_SOLID, ignoreworld = true, output = srcObjOut }
-function P.SourceObject(S, srcEnt)
+function P.SourceObject(S, srcEnt, cfg)
 	if IsValid(srcEnt) and not srcEnt:IsWorld() then return srcEnt end
-	if (A.cfg.source_object or 1) < 0.5 or not S then return srcEnt end
+	if ((cfg or A.cfg).source_object or 1) < 0.5 or not S then return srcEnt end
 	srcObjTr.start, srcObjTr.endpos = S, S
 	util.TraceLine(srcObjTr)
 	local e = srcObjOut.Entity
@@ -573,10 +576,10 @@ end
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
 -- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
 function P.Walls(S, L, maxWalls, srcEnt, lazy, cfg)
-	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy, L)
+	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy, L, cfg)
 	-- a trace crosses a displacement only going up through it (its face looks up): from below
 	if #w >= (maxWalls or 6) or S.z >= L.z or not mapHasDisplacements() then return addWater(w, S, L, cfg) end
-	local r = wallsOneWay(L, S, maxWalls, srcEnt, true, L)
+	local r = wallsOneWay(L, S, maxWalls, srcEnt, true, L, cfg)
 	if #r <= #w then return addWater(w, S, L, cfg) end
 	-- reversed: ordered from S, entry and exit swapped
 	local out = { detours = r.detours }
@@ -1410,7 +1413,7 @@ local cornerClear = detClear
 --- The point the sound bends round between a and b, starting from clearance vertex v (game state: traces).
 -- y: slice checks between its traces (P.RefineCorners' calls only: P.LeafWay calls it while the door
 -- traces' shared tables are live).
-function P.CornerPoint(a, v, b, y)
+function P.CornerPoint(a, v, b, y, cfg)
 	local ab = b - a
 	local len2 = ab:LengthSqr()
 	local t = len2 > 0 and math.Clamp((v - a):Dot(ab) / len2, 0, 1) or 0
@@ -1434,7 +1437,7 @@ function P.CornerPoint(a, v, b, y)
 	-- sees it: the leg it slides on stays clear (part of it), the other one is traced, the route only
 	-- shortens, and the vertex ends on the edge. Only from a vertex whose legs are both clear.
 	if cornerClear(a, q) and cornerClear(q, b) then
-		local stepFirst = (A.cfg.corner_step_first or 0) >= 0.5
+		local stepFirst = ((cfg or A.cfg).corner_step_first or 0) >= 0.5
 		for _ = 1, CORNER_SWEEPS do
 			local moved = false
 			for side = 1, 2 do
@@ -1471,17 +1474,19 @@ end
 -- kept as a copy (the answer may be v itself, a caller's Vector); a NaN coordinate is not kept.
 local CORNER_KEEP = 4096
 local cornerKept
-local cornerT, cornerN, cornerGen, cornerTL = {}, 0, nil, nil
-function cornerKept(a, v, b)
+-- (and by corner_step_first: P.CornerPoint's answer depends on it)
+local cornerT, cornerN, cornerGen, cornerTL, cornerSF = {}, 0, nil, nil, nil
+function cornerKept(a, v, b, cfg)
 	local TL = util.TraceLine
-	if cornerGen ~= P.worldGen or cornerTL ~= TL or cornerN >= CORNER_KEEP then
-		cornerT, cornerN, cornerGen, cornerTL = {}, 0, P.worldGen, TL
+	local sf = ((cfg or A.cfg).corner_step_first or 0) >= 0.5
+	if cornerGen ~= P.worldGen or cornerTL ~= TL or cornerN >= CORNER_KEEP or cornerSF ~= sf then
+		cornerT, cornerN, cornerGen, cornerTL, cornerSF = {}, 0, P.worldGen, TL, sf
 	end
 	local ax, ay, az = a:Unpack()
 	local vx, vy, vz = v:Unpack()
 	local bx, by, bz = b:Unpack()
 	local h = ax + ay * 1.7 + az * 2.9 + vx * 4.3 + vy * 6.1 + vz * 8.7 + bx * 10.3 + by * 12.7 + bz * 14.9
-	if h ~= h then return P.CornerPoint(a, v, b, true) end
+	if h ~= h then return P.CornerPoint(a, v, b, true, cfg) end
 	local e = cornerT[h]
 	while e do
 		if same(e[1], ax) and same(e[2], ay) and same(e[3], az) and same(e[4], vx) and same(e[5], vy) and same(e[6], vz)
@@ -1490,7 +1495,7 @@ function cornerKept(a, v, b)
 		end
 		e = e[11]
 	end
-	local q = P.CornerPoint(a, v, b, true)
+	local q = P.CornerPoint(a, v, b, true, cfg)
 	cornerT[h] = { ax, ay, az, vx, vy, vz, bx, by, bz, Vector(q), cornerT[h] }
 	cornerN = cornerN + 1
 	return q
@@ -1507,7 +1512,7 @@ local refineCorners
 -- two vertices on the two jambs of one doorway would otherwise chase each other).
 function P.RefineCorners(pts, cfg)
 	cfg = cfg or A.cfg
-	if (cfg.corner_refine or 1) < 0.5 then return refineCorners(pts, false) end
+	if (cfg.corner_refine or 1) < 0.5 then return refineCorners(pts, false, cfg) end
 	local n, TL = #pts, util.TraceLine
 	local m = refineMemo[pts]
 	local rp = (cfg.corner_relax or 0) >= 0.5
@@ -1526,13 +1531,13 @@ function P.RefineCorners(pts, cfg)
 	end
 	local c = {}
 	for i = 1, n do c[3 * i - 2], c[3 * i - 1], c[3 * i] = pts[i]:Unpack() end
-	local out = refineCorners(pts, true)
+	local out = refineCorners(pts, true, cfg)
 	local keep = {}
 	for i = 1, #out do keep[i] = out[i] end
 	refineMemo[pts] = { n = n, TL = TL, gen = P.worldGen, c = c, out = keep, rp = rp }
 	return out
 end
-function refineCorners(pts, on)
+function refineCorners(pts, on, cfg)
 	local out = { pts[1] }
 	if on then
 		-- first the vertices that are no corner at all: kept by the tightening because its hull grazes a
@@ -1551,7 +1556,7 @@ function refineCorners(pts, on)
 		pts = kept
 		for x = 2, #pts - 1 do
 			sliceCheck()
-			out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1])
+			out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1], cfg)
 		end
 		-- pba_corner_relax: one more pass, each corner (now on its edge) between its neighbours as refined. The
 		-- first pass keeps the clearance neighbours (from refined ones, two vertices on the two jambs of one
@@ -1559,11 +1564,11 @@ function refineCorners(pts, on)
 		-- stopped at the opening's sill, where the taut string between the refined corners bends at its lintel:
 		-- 14 u of detour, 4.6 dB, where the string only grazed the lintel and touched the far jamb
 		-- (gm_melancholia, under the radio's floor: 4.7 dB in 2 u as the jamb's shadow began)
-		if (A.cfg.corner_relax or 0) >= 0.5 and #pts > 3 then
+		if (cfg.corner_relax or 0) >= 0.5 and #pts > 3 then
 			out[#pts] = pts[#pts]
 			for x = 2, #pts - 1 do
 				sliceCheck()
-				out[x] = cornerKept(out[x - 1], out[x], out[x + 1])
+				out[x] = cornerKept(out[x - 1], out[x], out[x + 1], cfg)
 			end
 		end
 	else
@@ -1947,14 +1952,14 @@ end
 -- out over SOFT_CULL_DB under the n-th (their loss raised by -10 log10 w): two routes of nearly equal level swapping
 -- ranks at the cut changed nothing at once, the one dropped took its energy away in one step
 local SOFT_CULL_DB = 6
-function P.KeepLoudest(paths, n, sndlvl)
+function P.KeepLoudest(paths, n, sndlvl, cfg)
 	if #paths <= n then return paths end
 	local idx = {}
 	for i, p in ipairs(paths) do idx[i] = { p = p, i = i, lvl = pathLevel(p.length, p.lossDb, sndlvl) } end
 	table.sort(idx, byLevelThenIndex)
 	local out = {}
 	for i = 1, n do out[i] = idx[i].p end
-	if (A.cfg.model_soft_cull or 0) >= 0.5 then
+	if ((cfg or A.cfg).model_soft_cull or 0) >= 0.5 then
 		local ln = idx[n].lvl
 		for i = n + 1, #idx do
 			local w = 1 - ramp(ln - idx[i].lvl, 0, SOFT_CULL_DB)
@@ -2462,7 +2467,7 @@ local function unitFrom(p, L)
 	local l = d:Length()
 	return l > 1e-6 and d * (1 / l) or d
 end
-function P.FollowAssign(L, olds, voices)
+function P.FollowAssign(L, olds, voices, cfg)
 	local out, n, k = {}, #olds, #voices
 	if n == 0 then return out end
 	local groups, used = {}, {}
@@ -2503,7 +2508,7 @@ function P.FollowAssign(L, olds, voices)
 			out[i] = { pos = v.pos, gain = math.sqrt(p), lp = v.lp or 0, len = v.len, sh = v.sh, src = v }
 			-- pba_native_voice_mix (continuity review C6): a group's position, spectrum and length mixed by
 			-- energy over its voices, as one native voice's (N.MixVoices), not its first voice's
-			if #g > 1 and p > 0 and (A.cfg.native_voice_mix or 0) >= 0.5 then
+			if #g > 1 and p > 0 and ((cfg or A.cfg).native_voice_mix or 0) >= 0.5 then
 				local sum, dist, len, tilts = Vector(0, 0, 0), 0, 0, {}
 				for _, j in ipairs(g) do
 					local w = voices[j]
@@ -2799,7 +2804,7 @@ local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a s
 local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
-	srcEnt = P.SourceObject(S, srcEnt)
+	srcEnt = P.SourceObject(S, srcEnt, cfg)
 	S = P.FreeSource(S)
 	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	local now = RealTime()
@@ -2854,7 +2859,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- sounds evaluated before)
 		local field = CLIENT and A.Probes and A.Probes.FieldRoutes and true or false
 		if field and (worldBlocked or leafBlocked) and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
-			r.paths = P.KeepLoudest(A.Probes.FieldRoutes(S, L, cfg.max_paths, cfg, srcEnt), cfg.max_paths, sndlvl)
+			r.paths = P.KeepLoudest(A.Probes.FieldRoutes(S, L, cfg.max_paths, cfg, srcEnt), cfg.max_paths, sndlvl, cfg)
 			r.viaProbes = #r.paths > 0
 		end
 		SLICE.hold = false -- (no listener field read from here on: cl_slicer may take the frame back)

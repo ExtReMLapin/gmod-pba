@@ -1344,6 +1344,51 @@ local SUITE = {
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
 		end },
+		{ name = "A cfg given to the path model is used whole: corners, walls and their trace filter, source object, path cut and follow groups read nothing from A.cfg", func = function()
+			-- a complete cfg of its own (P.Compute(..., cfg): benches, P.DRY_SOURCE_CFG), A.cfg replaced by a recorder
+			local full = table.Copy(A.cfg)
+			full.corner_relax, full.corner_step_first, full.model_soft_cull, full.native_voice_mix = 1, 1, 1, 1
+			full.trans_props, full.listener_object, full.source_object = 1, 1, 1
+			local box = { Vector(140, -50, -50), Vector(160, 50, 50) }
+			local prop = { GetClass = function() return "prop_physics" end, BoundingRadius = function() return 100 end,
+				IsVehicle = function() return false end }
+			local savedCfg, savedTL, savedGSP = A.cfg, util.TraceLine, util.GetSurfacePropName
+			util.GetSurfacePropName = function() return "concrete" end
+			util.TraceLine = function(t)
+				local o = traceOut(t)
+				if type(t.filter) == "function" then t.filter(prop) end
+				local f = segBox(t.start, t.endpos, box[1], box[2])
+				if t.ignoreworld then f = nil end
+				o.Hit, o.HitWorld, o.Fraction, o.StartSolid, o.AllSolid = f ~= nil, f ~= nil, f or 1, false, false
+				o.FractionLeftSolid, o.Entity, o.MatType, o.SurfaceProps, o.HitTexture = 0, nil, MAT_CONCRETE, 0, "concrete"
+				o.HitPos = t.start + (t.endpos - t.start) * (f or 1)
+				return o
+			end
+			local reads = {}
+			A.cfg = setmetatable({}, { __index = function(_, k) reads[k] = true return full[k] end })
+			local ok, err = pcall(function()
+				P.ForgetWorld()
+				local S, L = Vector(0, 0, 0), Vector(300, 0, 0)
+				P.Walls(S, L, 6, nil, true, full)
+				P.SourceObject(S, nil, full)
+				-- S sees v1 only, v1 sees v2 only, v2 sees L: four kept vertices (corner_relax's pass)
+				P.RefineCorners({ S, Vector(100, -60, 0), Vector(200, -60, 0), L }, full)
+				local paths = {}
+				for i = 1, 5 do paths[i] = { length = 500, lossDb = i } end
+				P.KeepLoudest(paths, 3, 75, full)
+				P.FollowAssign(L, { Vector(0, 0, 0) }, { { pos = Vector(0, 10, 0), gain = 0.5, lp = 0, len = 300 },
+					{ pos = Vector(0, -10, 0), gain = 0.5, lp = 0, len = 300 } }, full)
+			end)
+			A.cfg, util.TraceLine, util.GetSurfacePropName = savedCfg, savedTL, savedGSP
+			P.ForgetWorld()
+			if not ok then error(err, 0) end
+			local mixed = {}
+			for _, k in ipairs({ "trans_props", "trans_prop_min", "listener_object", "wall_merge_graze", "door_3d", "source_object",
+				"corner_relax", "corner_step_first", "model_soft_cull", "native_voice_mix" }) do
+				if reads[k] then mixed[#mixed + 1] = k end
+			end
+			expect(table.concat(mixed, " ")).to.equal("")
+		end },
 		{ name = "Follow: a one-shot is followed when it still plays min_left after its first update", func = function()
 			expect(P.FollowWorth(3.4, 0.25, 0.5)).to.beTrue()       -- the courtyard radio line
 			expect(P.FollowWorth(0.6, 0.25, 0.5)).to.equal(false)   -- a gunshot: over before it would matter
