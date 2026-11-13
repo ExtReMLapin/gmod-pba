@@ -21,8 +21,18 @@ local M = 52.49 -- units per metre
 local function slotGen(slot)
 	for _, s in ipairs(pba_native.SrcSlotStats()) do if s.slot == slot then return s.gen end end
 end
-local function run(distM, frac)
+-- the option through its convar: cl_native's settings timer pushes pba.cfg.native_src_near to the module every
+-- 0.5 s (N.ApplySettings), so a value set on the module alone was undone within the measure
+local function setFrac(frac)
+	RunConsoleCommand("pba_native_src_near", tostring(frac))
+	for i = 1, 50 do
+		if math.abs((pba.cfg.native_src_near or -1) - frac) < 1e-6 then break end
+		job:sleep(0.05)
+	end
 	setNear(frac)
+end
+local function run(distM, frac)
+	setFrac(frac)
 	local L = LocalPlayer():EyePos()
 	local dir = Angle(0, LocalPlayer():EyeAngles().y, 0)
 	local base = L + dir:Forward() * distM * M + Vector(0, 0, 2 * M)
@@ -50,7 +60,8 @@ res.farOff = run(90, 0)
 res.farOn = run(90, 0.1)
 res.nearOff = run(8, 0)
 res.nearOn = run(8, 0.1)
-setNear(saved)
+setFrac(saved)
+res.checks.cfgFollowed = math.abs((pba.cfg.native_src_near or -1) - saved) < 1e-6
 res.checks.api = pba_native.SetSourceNear ~= nil
 res.checks.farFewer = res.farOn.gens >= 1 and res.farOn.gens <= 5
 res.checks.farOffMany = res.farOff.gens >= 10 -- the fixed 1.5 m (proves the measure sees the restarts)
