@@ -1,0 +1,16 @@
+{
+ "map": "d1_trainstation_03",
+ "tag": "vanilla",
+ "sets": [
+  [
+   "pba_enable",
+   "0"
+  ]
+ ],
+ "secs": 154,
+ "triggers": 41,
+ "visited": 28,
+ "scenes": 28,
+ "speech": 39,
+ "anomalies": {}
+}

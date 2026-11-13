@@ -1,0 +1,12 @@
+{
+ "map": "d1_trainstation_03",
+ "tag": "still",
+ "sets": [],
+ "secs": 123,
+ "triggers": 0,
+ "visited": 0,
+ "scenes": null,
+ "speech": 0,
+ "anomalies": {},
+ "loud_census": {}
+}
