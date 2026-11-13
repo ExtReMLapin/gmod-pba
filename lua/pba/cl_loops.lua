@@ -392,8 +392,23 @@ function LP.HandleClient(data)
 	return true
 end
 
+-- server loops silenced by stopsound: the engine stopped their channel, later volume / pitch updates
+-- do not bring it back (a new start or a stop of the loop on the server ends the silence)
+LP.silenced = LP.silenced or {}
+
+--- stopsound / snd_restart: every mirror stops.
+function LP.StopAll()
+	for key, m in pairs(LP.mirrors) do
+		stopMirror(m)
+		if not m.client then LP.silenced[key] = true end
+		LP.mirrors[key] = nil
+	end
+end
+
 net.Receive("pba_loop", function()
 	local op, key = net.ReadUInt(2), net.ReadString()
+	if op == OP_START or op == OP_STOP then LP.silenced[key] = nil
+	elseif LP.silenced[key] then return end
 	if op == OP_STOP then
 		local m = LP.mirrors[key]
 		if m then stopMirror(m) LP.mirrors[key] = nil end

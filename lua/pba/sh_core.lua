@@ -323,3 +323,14 @@ concommand.Add("pba_status", function(ply)
 		SERVER and "server" or "client", A.VERSION, tostring(A.Enabled()), tostring(A.hooksInstalled),
 		game.GetMap(), g and g.numAreas or "-", g and #g.portals or "-", g and (g.buildTime or 0) * 1000 or 0))
 end)
+
+--- True when the console command line `cmd` runs stopsound or snd_restart (the engine then stops every
+-- channel; pba's own copies, mirrors and native voices must stop with them).
+function A.StopsAllSounds(cmd)
+	if not isstring(cmd) then return false end
+	for part in string.gmatch(string.lower(cmd), "[^;%c]+") do
+		local w = string.match(part, "^%s*\"?([%w_]+)")
+		if w == "stopsound" or w == "snd_restart" then return true end
+	end
+	return false
+end

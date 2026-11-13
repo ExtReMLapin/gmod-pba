@@ -10,6 +10,23 @@ util.AddNetworkString(NET)
 util.AddNetworkString(NET_ACK)
 util.AddNetworkString("pba_snd_stop")
 util.AddNetworkString("pba_caption")
+util.AddNetworkString("pba_stopall")
+
+-- Player:ConCommand("stopsound") from the server (a common way addons silence a player): it runs in his
+-- engine, never in his Lua; he is told so his client stops pba's sounds as well
+do
+	local PLY = FindMetaTable("Player")
+	A.origPlyCmd = A.origPlyCmd or (debug.getinfo(PLY.ConCommand, "S").what == "C" and PLY.ConCommand or nil)
+	if A.origPlyCmd then
+		function PLY:ConCommand(cmd, ...)
+			A.origPlyCmd(self, cmd, ...)
+			if A.StopsAllSounds(cmd) and IsValid(self) and not self:IsBot() then
+				net.Start("pba_stopall")
+				net.Send(self)
+			end
+		end
+	end
+end
 
 -- The engine captions a sound script when it emits the ORIGINAL; suppressed (relayed, or the .wav
 -- re-emitted for clear listeners, which has no caption token), its caption is sent on its own.
