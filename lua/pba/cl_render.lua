@@ -1108,7 +1108,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos, own, own) end
 	if own then
 		if A.Mix then A.Mix.NoteSound({ SoundName = data.SoundName, Pos = pos, SoundLevel = data.SoundLevel, Volume = data.Volume,
-			Channel = data.Channel, Entity = data.Entity }, A.ListenerPos()) end -- the mixer's ducker (cl_mix)
+			Channel = data.Channel, Entity = data.Entity }, (A.ListenerPos())) end -- the mixer's ducker (cl_mix)
 		return -- own sounds: always clear (the engine plays them)
 	end
 	data.Pos = pos
