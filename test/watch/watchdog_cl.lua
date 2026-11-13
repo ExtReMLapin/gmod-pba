@@ -7,7 +7,8 @@
 --   overlap_channel two pba mirrors of different lines alive at once on one entity's voice channel
 --   mirror_step     a mirror's gain jumps > STEP_DB between two samples with no ramp (audible step)
 --   voice_step      a module voice's gain jumps > STEP_DB between two Update calls < 0.5 s apart
---   louder_vanilla  a module loop at the listener > LOUD_DB above the engine's own law for its level
+--   louder_vanilla  a module loop's sent gain > LOUD_DB above the engine's own law for its level (vanilla audible)
+--   audible_vanilla_silent  same where vanilla plays nothing (law below ENGINE_CUT_DB): > LOUD_DB above that cut
 --   voices_spike    the module plays more than VOICES_MAX voices
 -- Mouth copies: pba drives a face's lip sync with a copy of the line at volume 0.001 on the face (cl_render
 -- mouthCopy; the engine reads visemes from the voice channels it plays on an entity, Lua cannot read them:
@@ -21,6 +22,8 @@ W.voices = W.voices or {}       -- module voice id -> { n, g, t, steps }
 W.seen = W.seen or {}           -- mirror key -> first seen CurTime()
 W.mg = W.mg or {}               -- mirror key -> last gain
 local STEP_DB, LOUD_DB, VOICES_MAX, ONCE_MARGIN = 3, 6, 96, 3
+local ENGINE_CUT_DB = -36 -- the engine's own law below this: vanilla plays nothing (startmovie wav, gm_flatgrass, levels 60-100:
+-- audible down to -35.0 dB, digital silence from -38.4 dB, at volume 0.16 and 1 alike; the quietest steps are coarse: -29.4, -31.9, -35.4)
 local JUMP_UNITS, JUMP_QUIET = 200, 1.5 -- a listener teleport (the sweeper's) changes paths for real: no step check right after
 local SAMPLES = 6
 
@@ -145,14 +148,30 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 			c.dmax = math.max(c.dmax or d, d)
 			c.native = m.nativeId ~= nil
 		end
-		-- louder than the engine's law (module loops only)
-		if m.nativeId and m.pos and m.lvl and A.Native and A.Native.Law and A.AC and L then
-			local d = math.max(m.pos:Distance(L), 1)
-			local ours = A.Native.Law(m.lvl)(d) * (m.g or 1) * (m.vol or 1)
+		-- louder than vanilla (module loops only). Compared: the gain last SENT to the module voice (the outermost
+		-- Update wrap above: path losses, volume and pba_native_gain included, before the mix groups that the
+		-- engine applies alike), not the law recomputed at the current distance (that hid a voice frozen at its
+		-- near level while quiet: pba_native_quiet_law). Vanilla: AC.EngineGain x volume, which matches the real
+		-- engine's output (startmovie recordings, gm_flatgrass, +-2 dB) while audible; below ENGINE_CUT_DB the
+		-- engine plays nothing at all (recorded digital silence), where AC.EngineGain still says -40..-60 dB.
+		-- Samples carry lawDb (the module's own law at that distance: the 1/r choice, pba_native_law_engine)
+		-- and sentOverLawDb (> 0: the voice is louder than its own law, a bug, not the law choice).
+		-- The source is the entity's centre (m.pos is where the sound started: a manhack 2000 u away from it), and
+		-- nothing is judged right after a listener teleport (the voice still carries the old place's values).
+		local v = m.nativeId and W.voices[m.nativeId]
+		local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
+		if v and v.g and S and m.lvl and not quiet and A.Native and A.Native.Law and A.AC and L then
+			local d = math.max(S:Distance(L), 1)
+			local ng = math.max(A.cfg.native_gain or 1, 1e-6)
+			local sent = v.g / ng
+			local law = A.Native.Law(m.lvl)(d) * (m.g or 1) * (m.vol or 1)
 			local eng = A.AC.EngineGain(d, m.lvl) * (m.vol or 1)
-			local over = db(ours) - db(eng)
+			local silent = db(eng) < ENGINE_CUT_DB
+			local over = db(sent) - (silent and ENGINE_CUT_DB or db(eng))
 			if over > LOUD_DB then
-				note("louder_vanilla", name, { sound = name, lvl = m.lvl, dist = math.floor(d), overDb = math.Round(over, 1), g = m.g })
+				note(silent and "audible_vanilla_silent" or "louder_vanilla", name, { sound = name, lvl = m.lvl, dist = math.floor(d),
+					overDb = math.Round(over, 1), sentDb = math.Round(db(sent), 1), lawDb = math.Round(db(law), 1),
+					engDb = math.Round(db(eng), 1), sentOverLawDb = math.Round(db(sent) - db(law), 1), g = m.g })
 			end
 		end
 	end

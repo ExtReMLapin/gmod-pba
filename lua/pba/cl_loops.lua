@@ -130,6 +130,40 @@ local function anchorFor(m)
 end
 
 local apply
+
+--- pba_quiet_db for a mirror at distance d. pba_native_quiet_law: a native voice is judged by the law it is
+-- heard with (N.PhysClear: 1/r by default), not the engine's, whose fast fall far away (-60 dB beyond
+-- ~2.4k u at level 60, where 1/r is still at -35 dB) stopped the path search of loops still well heard.
+local function quietFor(m, d)
+	local N = A.Native
+	if m.nativeId and N and (A.cfg.native_quiet_law or 0) >= 0.5 then
+		local q = A.cfg.quiet_db or -40
+		if q <= -100 then return false end
+		return (m.vol or 1) * N.PhysClear(m.lvl, math.max(d, 1)) < 10 ^ (q / 20)
+	end
+	return A.TooQuiet and A.TooQuiet(m.lvl, m.vol, d)
+end
+
+--- A quiet native loop (no path search: quietFor) keeps following its distance law from its last
+-- evaluation (pba_native_quiet_law): its gain and listener-room send scaled by law(d) / law(d then),
+-- the route (apparent position, spectrum) kept. Before, the voice was frozen at its last values: a loop
+-- heard from the next room stayed at that level wherever the listener went (a teleport, a fast vehicle,
+-- or walking away past the quiet threshold), up to +20 dB over its law at 5000 u (sweep louder_vanilla).
+local function followQuiet(m, S, L)
+	local N, e = A.Native, m.lastEval
+	if not (e and N and (A.cfg.native_quiet_law or 0) >= 0.5) then return end
+	if m.clearPath and IsValid(m.ent) then return end -- in clear sight: LP.FollowNative moves it every frame
+	local k = N.PhysClear(m.lvl, S:Distance(L)) / math.max(N.PhysClear(m.lvl, e.d), 1e-9)
+	local gain, send = e.gain * k, e.send * k
+	local el, em, eh, pos, pitch = e.el, e.em, e.eh, e.pos, e.pitch
+	if m.ramp and (A.cfg.continuous_ramp or 0) >= 0.5 then
+		local P, now = A.Paths, RealTime()
+		P.RampTo(m.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, gain, el, em, eh, pos, pitch)
+		gain, el, em, eh, pos, pitch = P.RampAt(m.ramp, now, L)
+	end
+	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil end
+end
+
 -- a mirror's far evaluation is ready (cl_slicer): applied at once
 local function sliceReady(m) if not m.done then apply(m) end end
 
@@ -238,6 +272,8 @@ local function applyNative(m, S, L)
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L), lpDb)
 	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
 	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
+	-- what this evaluation decided, for a quiet far loop to keep following its law (followQuiet)
+	m.lastEval = { d = d, gain = gain, el = el, em = em, eh = eh, pos = pos, pitch = m.pitch, send = send }
 	if m.nativeId then
 		if (A.cfg.continuous_ramp or 0) >= 0.5 then
 			-- glide to the new values over one interval (LP.FollowNative, every frame); the update
@@ -331,7 +367,8 @@ function apply(m, fade)
 	-- the new volume reads as "quiet" and the voice stayed at its old level for good. (A patch mirror gets
 	-- volume changes at once, from the update itself.)
 	if (m.patch or m.nativeId) and not sj and (not m.nativeId or m.appliedVol == m.vol)
-		and A.TooQuiet and A.TooQuiet(m.lvl, m.vol, S:Distance(L)) then
+		and quietFor(m, S:Distance(L)) then
+		if m.nativeId then followQuiet(m, S, L) end
 		if onceEnded(m) then m.done = true end
 		return
 	end
