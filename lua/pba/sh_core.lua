@@ -517,6 +517,17 @@ function A.IsLooping(name)
 	return loop
 end
 
+--- One SoundTime rule for short and long sounds (refactor step 8): a sound stamped away from "now" (more than
+-- 0.25 s) was left to the engine; on the server with pba_soundtime its stamp goes with the relay and the
+-- re-emission (short), and a long line is taken over as well (started at once: a long line's start within a
+-- few tenths is not heard, crossing every wall is), pba_long_soundtime. long: asked for a long sound.
+function A.SoundTimeTaken(data, long)
+	local st = data.SoundTime or 0
+	if st == 0 or math.abs(st - CurTime()) <= 0.25 then return true end
+	if not SERVER or (A.cfg.soundtime or 1) < 0.5 then return false end
+	return not long or (A.cfg.long_soundtime or 1) >= 0.5
+end
+
 --- Common eligibility rules for an EntityEmitSound table. Returns true when pba may
 -- process the sound.
 function A.Eligible(data)
@@ -527,8 +538,7 @@ function A.Eligible(data)
 	-- time; sounds scheduled away from "now" were left alone (re-emission played them immediately). On the
 	-- server with pba_soundtime their stamp goes with the relay (the client schedules them as the engine
 	-- would, A.SoundTimeDelay) and with the re-emission (sv_relay reemit): taken like any other
-	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 and not (SERVER and (A.cfg.soundtime or 1) >= 0.5) then return false end
+	if not A.SoundTimeTaken(data) then return false end
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
 	if A.IsLooping(data.SoundName) then return false end

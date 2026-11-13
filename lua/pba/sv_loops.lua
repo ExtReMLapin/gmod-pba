@@ -225,8 +225,7 @@ end
 --- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
 function LP.IsLong(data)
 	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
-	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+	if not A.SoundTimeTaken(data, true) then return false end
 	local dur = A.SoundDuration(data.SoundName) or 0
 	return A.LongDuration(dur), dur
 end
@@ -241,8 +240,7 @@ function LP.IsPatchStart(data)
 	if bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(flags, SND_STOP) ~= 0 then return false end
 	local name = data.SoundName or ""
 	if name == "invalid.wav" or A.IsSentence(name) then return false end
-	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+	if not A.SoundTimeTaken(data, true) then return false end
 	local dur = A.SoundDuration(name) or 0
 	return A.LongDuration(dur, 0), dur
 end

@@ -103,6 +103,10 @@
   "pos0": "hook",
   "why": "who gets the long lines' mouth copy (server emission)"
  },
+ "long_soundtime": {
+  "pos0": "hook",
+  "why": "long sounds stamped with a start time (server take-over)"
+ },
  "long_lipsync": {
   "pos0": "hook",
   "why": "lip sync of long lines (cl/sv loops)"
