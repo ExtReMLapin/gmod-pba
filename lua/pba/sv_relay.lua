@@ -17,9 +17,17 @@ util.AddNetworkString("pba_ready")
 -- pba's client Lua broken on his side) would lose every relayed sound: nothing would play it. He is
 -- treated as a player too far for a path search (the engine plays the original for him, muffled by one
 -- trace behind a wall). pba_relay_ready 0: every player gets relays (before).
-net.Receive("pba_ready", function(_, ply) ply.pba_ready = true end)
+-- With it, whether he switched pba off on his side (pba_cl_enable 0): he then hears the engine's own
+-- sounds, nothing relayed nor muffled for him (pba_relay_cl_enable). (An older client sends no flag: on.)
+net.Receive("pba_ready", function(_, ply)
+	ply.pba_ready = true
+	ply.pba_off = net.BytesLeft() and net.BytesLeft() > 0 and net.ReadBool() or false
+end)
 function A.ClientReady(ply) -- (the audience rule, sv_sound)
 	return ply.pba_ready == true or (A.cfg.relay_ready or 1) < 0.5
+end
+function A.ClientOff(ply) -- (the audience rule, sv_sound)
+	return ply.pba_off == true and (A.cfg.relay_cl_enable or 1) >= 0.5
 end
 
 -- Player:ConCommand("stopsound") from the server (a common way addons silence a player): it runs in his

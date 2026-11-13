@@ -252,6 +252,7 @@ function S.Audience(snd, ply, scale)
 		local eye = A.PlayerEar(ply)
 		local d2 = eye:DistToSqr(pos)
 		if d2 > snd.r2 then return nil end
+		if A.ClientOff and A.ClientOff(ply) then return "clear" end -- (pba off on his side: untouched)
 		local walls = d2 <= snd.lod2 and A.Paths.Walls(pos, eye, 1, snd.srcObj) or nil
 		if walls and #walls > 0 then
 			local dsp, gain = muffleFor(walls)
@@ -267,6 +268,8 @@ function S.Audience(snd, ply, scale)
 	local eye = A.PlayerEar(ply)
 	local d2 = eye:DistToSqr(pos)
 	if d2 > snd.r2 then return nil end
+	-- pba off on his side (pba_cl_enable 0, pba_relay_cl_enable): the engine's sound, untouched
+	if A.ClientOff and A.ClientOff(ply) then return "far" end
 	if d2 > snd.lod2 or not clientReady(ply) then
 		-- too far for a path search (or his pba client not running): the cheap muffle of an over-budget
 		-- player when the line is blocked (pba_far_muffle; it was heard through the wall as in plain sight)

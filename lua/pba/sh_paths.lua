@@ -1095,6 +1095,40 @@ local doorTrN = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ig
 -- the leaves near a segment (pba_door_3d: a leaf beside a route narrows its passage, P.LeafWay)
 local doorTrR = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ignoreworld = true,
 	mins = Vector(-LEAF_REACH, -LEAF_REACH, -LEAF_REACH), maxs = Vector(LEAF_REACH, LEAF_REACH, LEAF_REACH) }
+-- A shut door that closes its areaportal is often not sent to the client any more (dormant: the area
+-- behind it is cut off), and a dormant entity has no collision: the traces above never meet it, and the
+-- routes through its doorway paid nothing (pba_twodoors with both doors shut: as if open). Such a door
+-- is found by its box (kept from its last update) and its state replicated by the server (sh_doors
+-- D.byEnt), within the same hull (pba_door_dormant).
+local function dormantDoors(a, b, reach, list)
+	local D = A.Doors
+	local idxs = D and D.entIdx
+	if not idxs or #idxs == 0 or (A.cfg.door_dormant or 1) < 0.5 then return list end
+	local K = A.ProbeKernels
+	if not (K and K.SegBoxHit) then return list end
+	local pad = reach and LEAF_REACH or DOOR_HULL
+	for i = 1, #idxs do
+		local e = Entity(idxs[i])
+		local st = D.byEnt[idxs[i]]
+		if st and IsValid(e) and e:IsDormant() and DOORS_ONLY[e:GetClass()] then
+			local mn, mx = e:WorldSpaceAABB()
+			if K.SegBoxHit(a.x, a.y, a.z, b.x, b.y, b.z, mn.x, mn.y, mn.z, mx.x, mx.y, mx.z, pad) then
+				-- where the segment passes the leaf: its point nearest the box's centre
+				local ab = b - a
+				local l2 = ab:LengthSqr()
+				local c = (mn + mx) * 0.5
+				local t = l2 > 0 and math.Clamp((c - a):Dot(ab) / l2, 0, 1) or 0
+				local hit = a + ab * t
+				list = list or {}
+				local at = #list + 1
+				local d = hit:DistToSqr(a)
+				for j = 1, #list do if list[j][2]:DistToSqr(a) > d then at = j break end end
+				table.insert(list, at, { e, hit, false })
+			end
+		end
+	end
+	return list
+end
 --- reach: true for the leaves within LEAF_REACH of the segment instead of DOOR_HULL.
 function P.SegmentDoors(a, b, reach)
 	local list
@@ -1112,6 +1146,7 @@ function P.SegmentDoors(a, b, reach)
 		doorSkipKeys[doorSkipN] = tr.Entity
 	end
 	clearDoorSkip()
+	if CLIENT then list = dormantDoors(a, b, reach, list) end
 	return list
 end
 --- Door loss (dB), lowpass level, tilt (dB) and the first door entity of segment a -> b: every leaf it

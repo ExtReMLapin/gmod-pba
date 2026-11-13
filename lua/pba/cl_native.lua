@@ -923,6 +923,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100
 		opt.follow.name = name
+		opt.follow.eq = opt.eq -- a speaker's EQ, kept at every update (pba_native_speaker_follow)
 		-- a weapon emission keeps the aim it was fired with (N.Directivity) while it follows the shooter
 		if opt.follow.aim == nil then
 			local _, aim = N.WeaponAim(opt.follow.ent, opt.follow.chan)
@@ -1008,6 +1009,7 @@ function N.UpdateFollowers(L)
 			local d = S:Distance(L)
 			local g = f.vol * N.PhysClear(f.lvl, d) * N.Directivity(e, L, f.chan, f.aim or nil) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)
+			if f.eq and (A.cfg.native_speaker_follow or 1) >= 0.5 then l, m, h = l * f.eq[1], m * f.eq[2], h * f.eq[3] end
 			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
 			-- clear line: the reverb is the source slot's (bound at Play), kept alive while the voice lives
 			if not pba_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil

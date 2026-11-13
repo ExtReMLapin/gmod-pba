@@ -375,6 +375,11 @@ else
 			D.byEnt[idx] = { frac = q / 255, closedDb = closedDb, closedLp = closedLp }
 		end
 		for _ = 1, net.ReadUInt(12) do D.byEnt[net.ReadUInt(16)] = nil end
+		-- the door entities as an array (P.SegmentDoors reads it per segment: no pairs in hot code)
+		local list = {}
+		for idx in pairs(D.byEnt) do list[#list + 1] = idx end
+		table.sort(list)
+		D.entIdx = list
 		D.Apply()
 	end)
 
