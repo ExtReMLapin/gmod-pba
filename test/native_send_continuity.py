@@ -82,6 +82,12 @@ if call("status", {}).get("map") != MAP:
     call("map_load", {"map": MAP, "maxplayers": 4}, mx=5_000_000)
     time.sleep(4)
 call("console_exec", {"realm": "client", "cmd": "pba_native_render 1"})
+# every step re-evaluated (pba_reeval_move below the step): the analysis compares adjacent steps against MAX_DB,
+# but with the default reeval_move (8 u, re-evaluated only past it: strictly more) a 4 u walk re-evaluates every
+# third step or at reeval_max_s, so one "step" held 8 to 12 u of real change, and the verdict hung on the timing
+# (2026-11-13: 1.5-2.0 dB steps on main and on older Lua alike, 1 run in 4 green). The adaptive cadence is not
+# what this test checks (reeval_adaptive has its own steps).
+call("console_exec", {"realm": "client", "cmd": f"pba_reeval_move {STEP / 2:g}"})
 for _ in range(60):
     if lua("client", "return pba.Native.ready == true and pba.Native.render == true and not pba.Native.building"):
         break
