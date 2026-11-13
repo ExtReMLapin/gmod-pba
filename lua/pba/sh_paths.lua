@@ -567,7 +567,7 @@ function P.MuffleFor(walls)
 	if not ok or not loss then loss, lp = FALLBACK_DEFAULT_DB, 4 end
 	-- the strongest preset when the model gives none (a grate is lp 0: its loss is ~0 dB too)
 	local dsp = A.AC.DSPForLevel(lp or 4)
-	return dsp, A.AC.DbToGain(-math.min(loss, FALLBACK_MAX_DB))
+	return dsp, A.AC.DbToGain(-math.min(loss, FALLBACK_MAX_DB)), lp or 4
 end
 
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field

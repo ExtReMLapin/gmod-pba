@@ -178,10 +178,23 @@ local function sliceReady(m) if not m.done then apply(m) end end
 --- Path result of a mirror (direction / low-pass hysteresis). nil while a far sound's evaluation runs
 -- in slices (cl_slicer): the mirror keeps its values, and is applied again once it is ready (sliceReady).
 local FAR_CLEAR = { clear = true, voices = {} }
+--- Beyond lod_dist: no path search. Behind a wall on the straight line (pba_far_muffle) the cheap muffle of
+-- the short sounds (P.MuffleFor: DSP preset, the walls' loss), as sv_relay and cl_render A.FarMuffle do: a
+-- loop was heard clear through the wall there, muffled on the near side of the lod_dist boundary.
+-- { far = true, dsp, gain, lp }, or FAR_CLEAR.
+local function farPath(m, S, L)
+	if (A.cfg.far_muffle or 0) < 0.5 then return FAR_CLEAR end
+	local P = A.Paths
+	local ent = IsValid(m.ent) and m.ent ~= m.anchor and m.ent or nil
+	local walls = P.Walls(S, L, 1, P.SourceObject(S, ent))
+	if #walls == 0 then return FAR_CLEAR end
+	local dsp, gain, lp = P.MuffleFor(walls)
+	return { far = true, dsp = dsp, gain = gain, lp = lp }
+end
 local function pathOf(m, S, L)
-	-- beyond lod_dist sounds are left untouched: heard as the original, no path search (a 130 dB rotor
-	-- 7000 u away is subscribed since the server suppresses it for everyone)
-	if S:DistToSqr(L) > A.cfg.lod_dist * A.cfg.lod_dist then return FAR_CLEAR end
+	-- beyond lod_dist no path search (a 130 dB rotor 7000 u away is subscribed since the server suppresses
+	-- it for everyone): heard as the original, or muffled when a wall stands in the straight line (farPath)
+	if S:DistToSqr(L) > A.cfg.lod_dist * A.cfg.lod_dist then return farPath(m, S, L) end
 	m.hyst = m.hyst or {}
 	local raw
 	if A.Slicer then raw = A.Slicer.Held(m, S, L, m.lvl, m.ent, sliceReady) else raw = A.Paths.Compute(S, L, m.lvl, nil, m.ent) end
@@ -219,6 +232,11 @@ local function muffle(m, S, L)
 	if not A.Enabled() then m.tunnel = nil return 1, m.dsp end
 	local r = pathOf(m, S, L)
 	if not r then return nil end
+	if r.far then
+		m.tunnel = false
+		if (A.cfg.keep_dsp or 1) >= 0.5 and (m.dsp or 0) ~= 0 then return r.gain, m.dsp end
+		return r.gain, r.dsp
+	end
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	if r.clear or not r.voices or #r.voices == 0 then m.tunnel = false return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
@@ -244,11 +262,15 @@ local function applyNative(m, S, L)
 	local N = A.Native
 	local r = pathOf(m, S, L)
 	if not r then return nil end -- (its evaluation still running: values kept)
-	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
+	if not r.far then A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop") end
 	local pos, gain, lp, trans, lpDb
-	m.clearPath = r.clear or not r.voices or #r.voices == 0
+	m.clearPath = not r.far and (r.clear or not r.voices or #r.voices == 0)
 	-- the full version's distance law (N.PhysClear / N.PhysPath): real spreading
-	if m.clearPath then
+	if r.far then
+		-- far, behind a wall (farPath): at the source, the walls' loss and muffling level
+		pos, gain, lp = S, N.PhysClear(m.lvl, S:Distance(L)) * r.gain, r.lp
+		m.diffuse, m.tunnel = 0, false
+	elseif m.clearPath then
 		pos, gain, lp = S, N.PhysClear(m.lvl, S:Distance(L)), 0
 		m.diffuse, m.tunnel = 0, false
 	else
