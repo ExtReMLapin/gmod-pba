@@ -683,7 +683,8 @@ timer.Create("pba_loops", 0.5, 0, function()
 	end
 	-- capped loops: drop the ended ones; take the others over while slots are free (a loop capped
 	-- during a 70-loop battle no longer stays through every wall once the battle is over)
-	local free = (A.cfg.loops_max or 64) - table.Count(LP.active)
+	-- (counted as LP.Handle caps: with loops_cap_audible, silent patches take no slot)
+	local free = (A.cfg.loops_max or 64) - LP.CapCount()
 	local adopt = {}
 	for key, c in pairs(LP.capped) do
 		if (c.idx ~= 0 and not IsValid(c.ent)) or (c.once and RealTime() > c.endT) or endedInCpp(c) then
