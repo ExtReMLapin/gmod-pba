@@ -349,7 +349,9 @@ steps = [
     ("native_doors", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_doors.lua"))),
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                     lambda: job("client", "native_features.lua"))),
-    ("native_stereo", lambda: seq(lambda: native_on(True), lambda: job("client", "native_stereo.lua"))),
+    ("native_stereo", "native_own_dsp", lambda: seq(lambda: native_on(True), lambda: job("client", "native_stereo.lua"))),
+    ("native_own_dsp", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
+                                   lambda: job("client", "native_own_dsp.lua", 60))),
     ("native_volume_sfx", lambda: volume_sfx_step()),
     ("native_law", lambda: job("client", "native_law.lua")),
     # sentences (scripts/sentences.txt, HL2 mounted): the line parser, then the words rendered by the module

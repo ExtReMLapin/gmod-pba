@@ -179,7 +179,7 @@ A.CONFIG = {
 	loops_max       = { 64, 4, 512, "sv", "Max loops / long sounds followed by the server at once. Beyond it new ones are left to the engine." },
 	soundscape_engine = { 1, 0, 1, "cl", "Soundscape ambience played around the ear (random positions within 64 u) is left to the engine: not muffled nor echoed." },
 	stopsound_watch = { 1, 0, 1, "cl", "stopsound typed in the console or bound to a key (and snd_restart) also stops pba's copies, loop mirrors and native voices: no Lua function sees that command, a silent sound patch reports it (the engine marks it stopped). 0 = only the commands run from Lua (RunConsoleCommand, ConCommand) are caught." },
-	keep_dsp        = { 1, 0, 1, "cl", "A sound with its own DSP preset (radio, loudspeaker effect) keeps it when muffled (then muffled by volume only); 0 = pba's muffling preset replaces it." },
+	keep_dsp        = { 1, 0, 1, "cl", "A sound with its own DSP preset (radio, loudspeaker effect) keeps it when muffled (then muffled by volume only), and is left to the engine under native rendering (the module has no DSP presets); 0 = pba's muffling preset replaces it, the module may play it." },
 	loops_cpp_client = { 1, 0, 1, "cl", "Take over the loops game entities play from their own client code (manhack engine and blades) and muffle them in place." },
 	loops_client    = { 1, 0, 1, "cl", "Take over looping sounds born on this client (CreateSound of addons: vehicle engines, client-side machines) and muffle them in place." },
 	loops_max_cl    = { 32, 4, 256, "cl", "Max long sounds born on this client (client-side radios) followed at once. Beyond it they are left to the engine." },
