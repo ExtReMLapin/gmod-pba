@@ -1,0 +1,57 @@
+{
+ "map": "d3_c17_02",
+ "tag": "",
+ "sets": [],
+ "secs": 71,
+ "triggers": 7,
+ "visited": 7,
+ "scenes": 6,
+ "speech": 0,
+ "anomalies": {
+  "voice_step": {
+   "count": 3,
+   "distinct": 3,
+   "samples": [
+    {
+     "db": -20,
+     "pos": "-10542.278320 -5308.995605 22.138988",
+     "toG": 0.0482,
+     "t": 30.57,
+     "sound": "npc/dog/dog_pneumatic2.wav",
+     "fromG": 0.4835,
+     "key": "npc/dog/dog_pneumatic2.wav",
+     "map": "d3_c17_02"
+    },
+    {
+     "db": -20,
+     "pos": "-10542.278320 -5308.995605 22.138988",
+     "toG": 0.0482,
+     "t": 30.57,
+     "sound": "npc/dog/dog_pneumatic1.wav",
+     "fromG": 0.4835,
+     "key": "npc/dog/dog_pneumatic1.wav",
+     "map": "d3_c17_02"
+    },
+    {
+     "db": -12.3,
+     "pos": "-10543.559570 -5308.989258 21.012255",
+     "toG": 0.2175,
+     "t": 30.57,
+     "sound": "npc/dog/dog_straining2.wav",
+     "fromG": 0.8999,
+     "key": "npc/dog/dog_straining2.wav",
+     "map": "d3_c17_02"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "music/HL2_ambient_1.wav": {
+   "lvl": 100,
+   "dmin": 575,
+   "dmax": 3702,
+   "n": 50,
+   "native": true
+  }
+ }
+}

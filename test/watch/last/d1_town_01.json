@@ -1,0 +1,135 @@
+{
+ "map": "d1_town_01",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 68,
+ "visited": 25,
+ "scenes": 7,
+ "speech": 0,
+ "anomalies": {
+  "stuck_once": {
+   "count": 408,
+   "distinct": 5,
+   "samples": [
+    {
+     "t": 46.99,
+     "pos": "3816.812500 -1349.375000 -3816.218750",
+     "dur": 7.2,
+     "map": "d1_town_01",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.2,
+     "key": "286:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.38628541607367384
+    },
+    {
+     "t": 47.31,
+     "pos": "3706.656250 -1555.031250 -3791.250000",
+     "dur": 7.2,
+     "map": "d1_town_01",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.2,
+     "key": "287:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.8766418341940557
+    },
+    {
+     "t": 47.31,
+     "pos": "2969.312500 -1732.125000 -3746.000000",
+     "dur": 7.2,
+     "map": "d1_town_01",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.2,
+     "key": "289:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.0014861826592338888
+    },
+    {
+     "t": 61.68,
+     "pos": "2059.531250 -1806.625000 -3765.500000",
+     "dur": 7.2,
+     "map": "d1_town_01",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.4,
+     "key": "295:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.28296383962091803
+    },
+    {
+     "t": 88.86,
+     "pos": "1032.031250 -1188.593750 -3730.562500",
+     "dur": 7.2,
+     "map": "d1_town_01",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.3,
+     "key": "302:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.2398520500343273
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 64,
+   "distinct": 21,
+   "samples": [
+    {
+     "db": 3.7,
+     "pos": "4348.924805 -1926.523682 -3653.544434",
+     "toG": 0.076,
+     "t": 34.29,
+     "sound": "npc/crow/flap2.wav",
+     "fromG": 0.0499,
+     "key": "npc/crow/flap2.wav",
+     "map": "d1_town_01"
+    },
+    {
+     "db": 5.1,
+     "pos": "4060.574951 -1274.443115 -3835.906250",
+     "toG": 0.0852,
+     "t": 34.29,
+     "sound": "npc/crow/alert1.wav",
+     "fromG": 0.0475,
+     "key": "npc/crow/alert1.wav",
+     "map": "d1_town_01"
+    },
+    {
+     "db": -13,
+     "pos": "3586.024414 -1344.148071 -3759.906250",
+     "toG": 0.078,
+     "t": 50.94,
+     "sound": "npc/zombie/foot3.wav",
+     "fromG": 0.3491,
+     "key": "npc/zombie/foot3.wav",
+     "map": "d1_town_01"
+    },
+    {
+     "db": -12.9,
+     "pos": "3586.024414 -1344.148071 -3759.906250",
+     "toG": 0.078,
+     "t": 50.94,
+     "sound": "npc/zombie/foot1.wav",
+     "fromG": 0.3436,
+     "key": "npc/zombie/foot1.wav",
+     "map": "d1_town_01"
+    },
+    {
+     "db": -4.5,
+     "pos": "2969.382568 -1424.952271 -3733.915283",
+     "toG": 0.0018,
+     "t": 53.79,
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "fromG": 0.0031,
+     "key": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "map": "d1_town_01"
+    },
+    {
+     "db": 3.6,
+     "pos": "2845.005371 -1422.995117 -3775.218262",
+     "toG": 0.0576,
+     "t": 53.96,
+     "sound": "ambient/machines/spin_loop.wav",
+     "fromG": 0.0381,
+     "key": "ambient/machines/spin_loop.wav",
+     "map": "d1_town_01"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

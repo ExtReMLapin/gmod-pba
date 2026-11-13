@@ -1,0 +1,27 @@
+{
+ "map": "d1_canals_10",
+ "tag": "",
+ "sets": [],
+ "secs": 104,
+ "triggers": 28,
+ "visited": 25,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {},
+ "loud_census": {
+  "^npc/attack_helicopter/aheli_rotor_loop1.wav": {
+   "lvl": 130,
+   "dmin": 4638,
+   "dmax": 11376,
+   "n": 87,
+   "native": false
+  },
+  "npc/attack_helicopter/aheli_weapon_fire_loop3.wav": {
+   "lvl": 140,
+   "dmin": 4638,
+   "dmax": 11376,
+   "n": 87,
+   "native": false
+  }
+ }
+}

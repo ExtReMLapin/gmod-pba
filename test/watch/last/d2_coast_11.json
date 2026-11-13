@@ -1,0 +1,66 @@
+{
+ "map": "d2_coast_11",
+ "tag": "",
+ "sets": [],
+ "secs": 107,
+ "triggers": 38,
+ "visited": 19,
+ "scenes": 26,
+ "speech": 7,
+ "anomalies": {
+  "voice_step": {
+   "count": 8,
+   "distinct": 2,
+   "samples": [
+    {
+     "db": 4.7,
+     "pos": "4761.526367 3745.265869 539.111267",
+     "toG": 0.1348,
+     "t": 63.24,
+     "sound": "npc/antlion/fly1.wav",
+     "fromG": 0.0781,
+     "key": "npc/antlion/fly1.wav",
+     "map": "d2_coast_11"
+    },
+    {
+     "db": -7.3,
+     "pos": "4979.233887 3431.391357 499.924042",
+     "toG": 0.0093,
+     "t": 63.52,
+     "sound": "npc/antlion/foot4.wav",
+     "fromG": 0.0215,
+     "key": "npc/antlion/foot4.wav",
+     "map": "d2_coast_11"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 3,
+   "distinct": 3,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "*vo/coast/bugbait/sandy_dontmove.wav",
+     "dist": 1490,
+     "lagMs": 83,
+     "t": 37.08
+    },
+    {
+     "class": "npc_citizen",
+     "name": "common/null.wav",
+     "dist": 3752,
+     "lagMs": 208,
+     "t": 41.35
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/pain02.wav",
+     "dist": 3752,
+     "lagMs": 208,
+     "t": 41.35
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

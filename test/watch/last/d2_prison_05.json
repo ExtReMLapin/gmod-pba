@@ -1,0 +1,99 @@
+{
+ "map": "d2_prison_05",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 30,
+ "visited": 17,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "overlap_channel": {
+   "count": 8,
+   "distinct": 1,
+   "samples": [
+    {
+     "names": "npc/antlion_guard/near_foot_heavy2.wav + npc/antlion_guard/near_foot_light1.wav",
+     "t": 52.71,
+     "key": "324:6",
+     "map": "d2_prison_05"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 22,
+   "distinct": 13,
+   "samples": [
+    {
+     "db": -5,
+     "pos": "-398.399109 1871.688965 416.474365",
+     "toG": 0.0156,
+     "t": 35.14,
+     "sound": "npc/turret_wall/turret_loop1.wav",
+     "fromG": 0.0276,
+     "key": "npc/turret_wall/turret_loop1.wav",
+     "map": "d2_prison_05"
+    },
+    {
+     "db": -3.1,
+     "pos": "-363.592072 2048.888184 468.611145",
+     "toG": 0.0021,
+     "t": 39.19,
+     "sound": "npc/antlion/digdown1.wav",
+     "fromG": 0.0029,
+     "key": "npc/antlion/digdown1.wav",
+     "map": "d2_prison_05"
+    },
+    {
+     "db": -5,
+     "pos": "-40.000092 1063.999878 578.031189",
+     "toG": 0.0381,
+     "t": 42.16,
+     "sound": "!combine_alert5#4039705881",
+     "fromG": 0.0674,
+     "key": "!combine_alert5#4039705881",
+     "map": "d2_prison_05"
+    },
+    {
+     "db": 5.9,
+     "pos": "-1379.813965 672.275208 430.373840",
+     "toG": 0.0039,
+     "t": 46.52,
+     "sound": "npc/zombie_poison/pz_breathe_loop1.wav",
+     "fromG": 0.002,
+     "key": "npc/zombie_poison/pz_breathe_loop1.wav",
+     "map": "d2_prison_05"
+    },
+    {
+     "db": 4.2,
+     "pos": "-2209.575928 480.429688 814.779114",
+     "toG": 0.0114,
+     "t": 53.4,
+     "sound": "npc/antlion_guard/near_foot_heavy1.wav",
+     "fromG": 0.007,
+     "key": "npc/antlion_guard/near_foot_heavy1.wav",
+     "map": "d2_prison_05"
+    },
+    {
+     "db": -3.8,
+     "pos": "-2127.352539 813.689270 706.992554",
+     "toG": 0.0077,
+     "t": 53.98,
+     "sound": "physics/glass/glass_sheet_impact_hard1.wav",
+     "fromG": 0.0119,
+     "key": "physics/glass/glass_sheet_impact_hard1.wav",
+     "map": "d2_prison_05"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "npc/antlion_guard/growl_high.wav": {
+   "lvl": 100,
+   "dmin": 1054,
+   "dmax": 1054,
+   "n": 4,
+   "native": true
+  }
+ }
+}

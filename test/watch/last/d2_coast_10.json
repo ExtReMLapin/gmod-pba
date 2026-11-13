@@ -1,0 +1,95 @@
+{
+ "map": "d2_coast_10",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 22,
+ "visited": 18,
+ "scenes": 35,
+ "speech": 6,
+ "anomalies": {
+  "voice_step": {
+   "count": 32,
+   "distinct": 2,
+   "samples": [
+    {
+     "db": 5,
+     "pos": "7143.249023 1819.610840 1087.676270",
+     "toG": 0.1788,
+     "t": 52.45,
+     "sound": "npc/combine_gunship/dropship_engine_distant_loop1.wav",
+     "fromG": 0.101,
+     "key": "npc/combine_gunship/dropship_engine_distant_loop1.wav",
+     "map": "d2_coast_10"
+    },
+    {
+     "db": 19.8,
+     "pos": "8038.197754 1589.934692 1003.289307",
+     "toG": 0.0167,
+     "t": 61.48,
+     "sound": "npc/combine_gunship/dropship_engine_near_loop1.wav",
+     "fromG": 0.0017,
+     "key": "npc/combine_gunship/dropship_engine_near_loop1.wav",
+     "map": "d2_coast_10"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/overhere01.wav",
+     "dist": 3214,
+     "lagMs": 179,
+     "t": 43.86
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/overhere01.wav",
+     "dist": 2723,
+     "lagMs": 151,
+     "t": 48.07
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "npc/combine_gunship/dropship_onground_loop1.wav": {
+   "lvl": 130,
+   "dmin": 2885,
+   "dmax": 3088,
+   "n": 74,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_engine_near_loop1.wav": {
+   "lvl": 130,
+   "dmin": 2885,
+   "dmax": 3088,
+   "n": 74,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_fire_loop1.wav": {
+   "lvl": 130,
+   "dmin": 2885,
+   "dmax": 3088,
+   "n": 74,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_dropping_pod_loop1.wav": {
+   "lvl": 140,
+   "dmin": 2885,
+   "dmax": 3088,
+   "n": 74,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_engine_distant_loop1.wav": {
+   "lvl": 140,
+   "dmin": 2885,
+   "dmax": 3088,
+   "n": 74,
+   "native": true
+  }
+ }
+}

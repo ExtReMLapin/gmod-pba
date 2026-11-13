@@ -1,0 +1,156 @@
+{
+ "map": "d3_c17_08",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 29,
+ "visited": 25,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "mirror_step": {
+   "count": 36,
+   "distinct": 3,
+   "samples": [
+    {
+     "t": 21.06,
+     "pos": "-1504.000000 -1468.000000 172.000015",
+     "toG": 0.082,
+     "sound": "npc/manhack/mh_engine_loop1.wav",
+     "fromG": 0.056,
+     "key": "npc/manhack/mh_engine_loop1.wav",
+     "map": "d3_c17_08"
+    },
+    {
+     "t": 21.06,
+     "pos": "-1504.000000 -1468.000000 172.000015",
+     "toG": 0.082,
+     "sound": "npc/manhack/mh_blade_loop1.wav",
+     "fromG": 0.052,
+     "key": "npc/manhack/mh_blade_loop1.wav",
+     "map": "d3_c17_08"
+    },
+    {
+     "t": 36.63,
+     "pos": "-1504.000000 -1468.000000 172.000015",
+     "toG": 0.587,
+     "sound": "npc/manhack/mh_engine_loop2.wav",
+     "fromG": 1,
+     "key": "npc/manhack/mh_engine_loop2.wav",
+     "map": "d3_c17_08"
+    }
+   ]
+  },
+  "stuck_once": {
+   "count": 191,
+   "distinct": 3,
+   "samples": [
+    {
+     "t": 45.96,
+     "pos": "-174.125000 -1685.468750 -282.750000",
+     "dur": 7.2,
+     "map": "d3_c17_08",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.2,
+     "key": "559:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.00031622776601683794
+    },
+    {
+     "t": 73.93,
+     "pos": "219.093750 -1894.968750 -277.375000",
+     "dur": 7.2,
+     "map": "d3_c17_08",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.2,
+     "key": "331:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.00031622776601683794
+    },
+    {
+     "t": 76.5,
+     "pos": "232.375000 -1670.625000 -43.562500",
+     "dur": 7.2,
+     "map": "d3_c17_08",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.4,
+     "key": "37:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.04470773256617187
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 63,
+   "distinct": 22,
+   "samples": [
+    {
+     "db": -5.5,
+     "pos": "-1491.538208 -2623.913818 243.452408",
+     "toG": 0.3022,
+     "t": 35.62,
+     "sound": "npc/roller/mine/rmine_blades_in1.wav",
+     "fromG": 0.5687,
+     "key": "npc/roller/mine/rmine_blades_in1.wav",
+     "map": "d3_c17_08"
+    },
+    {
+     "db": -3.2,
+     "pos": "-1491.538208 -2623.913818 243.452408",
+     "toG": 0.4929,
+     "t": 35.62,
+     "sound": "npc/manhack/grind_flesh1.wav",
+     "fromG": 0.7143,
+     "key": "npc/manhack/grind_flesh1.wav",
+     "map": "d3_c17_08"
+    },
+    {
+     "db": 4,
+     "pos": "-1435.289917 -2483.035645 246.013489",
+     "toG": 0.0022,
+     "t": 36.26,
+     "sound": "npc/manhack/mh_blade_loop1.wav",
+     "fromG": 0.0014,
+     "key": "npc/manhack/mh_blade_loop1.wav",
+     "map": "d3_c17_08"
+    },
+    {
+     "db": 4,
+     "pos": "-1435.289917 -2483.035645 246.013489",
+     "toG": 0.0021,
+     "t": 36.26,
+     "sound": "npc/manhack/mh_engine_loop2.wav",
+     "fromG": 0.0013,
+     "key": "npc/manhack/mh_engine_loop2.wav",
+     "map": "d3_c17_08"
+    },
+    {
+     "db": 4,
+     "pos": "-1435.289917 -2483.035645 246.013489",
+     "toG": 0.0021,
+     "t": 36.26,
+     "sound": "npc/manhack/mh_engine_loop1.wav",
+     "fromG": 0.0013,
+     "key": "npc/manhack/mh_engine_loop1.wav",
+     "map": "d3_c17_08"
+    },
+    {
+     "db": -13.2,
+     "pos": "-1537.877075 -2687.409180 291.959381",
+     "toG": 0.0717,
+     "t": 37.98,
+     "sound": "npc/roller/mine/rmine_blades_in2.wav",
+     "fromG": 0.3293,
+     "key": "npc/roller/mine/rmine_blades_in2.wav",
+     "map": "d3_c17_08"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "doors/drawbridge_move1.wav": {
+   "lvl": 110,
+   "dmin": 376,
+   "dmax": 1073,
+   "n": 11,
+   "native": true
+  }
+ }
+}

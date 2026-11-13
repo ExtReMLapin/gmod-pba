@@ -1,0 +1,115 @@
+{
+ "map": "d1_canals_05",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 45,
+ "visited": 22,
+ "scenes": 13,
+ "speech": 14,
+ "anomalies": {
+  "stuck_once": {
+   "count": 14,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 80.73,
+     "pos": "4401.187500 1151.687500 -445.656250",
+     "dur": 7.2,
+     "map": "d1_canals_05",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.4,
+     "key": "182:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.9900664553129604
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 35,
+   "distinct": 13,
+   "samples": [
+    {
+     "db": 11.9,
+     "pos": "3362.179199 5527.825195 -195.893631",
+     "toG": 0.0084,
+     "t": 35.24,
+     "sound": "npc/manhack/mh_engine_loop1.wav",
+     "fromG": 0.0021,
+     "key": "npc/manhack/mh_engine_loop1.wav",
+     "map": "d1_canals_05"
+    },
+    {
+     "db": 12.3,
+     "pos": "3362.068848 5548.735352 -204.412720",
+     "toG": 0.0091,
+     "t": 35.29,
+     "sound": "npc/manhack/mh_blade_loop1.wav",
+     "fromG": 0.0022,
+     "key": "npc/manhack/mh_blade_loop1.wav",
+     "map": "d1_canals_05"
+    },
+    {
+     "db": 12.2,
+     "pos": "3362.287598 5550.647461 -213.948410",
+     "toG": 0.0095,
+     "t": 35.41,
+     "sound": "npc/manhack/mh_engine_loop2.wav",
+     "fromG": 0.0023,
+     "key": "npc/manhack/mh_engine_loop2.wav",
+     "map": "d1_canals_05"
+    },
+    {
+     "db": -8.9,
+     "pos": "3393.495361 6078.756348 -342.579041",
+     "toG": 0.3499,
+     "t": 38.22,
+     "sound": "npc/manhack/grind_flesh2.wav",
+     "fromG": 0.9737,
+     "key": "npc/manhack/grind_flesh2.wav",
+     "map": "d1_canals_05"
+    },
+    {
+     "db": -26.8,
+     "pos": "3395.733398 6075.873535 -342.041748",
+     "toG": 0.0425,
+     "t": 38.22,
+     "sound": "npc/roller/mine/rmine_blades_in2.wav",
+     "fromG": 0.9309,
+     "key": "npc/roller/mine/rmine_blades_in2.wav",
+     "map": "d1_canals_05"
+    },
+    {
+     "db": -8.4,
+     "pos": "3762.241943 5463.081055 -196.486313",
+     "toG": 0.0598,
+     "t": 40.56,
+     "sound": "npc/scanner/cbot_fly_loop.wav",
+     "fromG": 0.1574,
+     "key": "npc/scanner/cbot_fly_loop.wav",
+     "map": "d1_canals_05"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 2,
+   "distinct": 2,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "*vo/canals/shanty_gotsomeammo.wav",
+     "dist": 2151,
+     "lagMs": 119,
+     "t": 75.45
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/canals/shanty_helpyourself.wav",
+     "dist": 2208,
+     "lagMs": 123,
+     "t": 78.01
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

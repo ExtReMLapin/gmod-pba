@@ -1,0 +1,79 @@
+{
+ "map": "d2_prison_02",
+ "tag": "",
+ "sets": [],
+ "secs": 93,
+ "triggers": 17,
+ "visited": 17,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "voice_step": {
+   "count": 18,
+   "distinct": 6,
+   "samples": [
+    {
+     "db": 3.5,
+     "pos": "-1939.632935 2798.197021 575.710693",
+     "toG": 0.686,
+     "t": 50.46,
+     "sound": "npc/headcrab_fast/attack2.wav",
+     "fromG": 0.4564,
+     "key": "npc/headcrab_fast/attack2.wav",
+     "map": "d2_prison_02"
+    },
+    {
+     "db": -10.4,
+     "pos": "-1920.635254 3053.968750 463.969360",
+     "toG": 0.2308,
+     "t": 54.99,
+     "sound": "npc/headcrab_fast/pain1.wav",
+     "fromG": 0.7614,
+     "key": "npc/headcrab_fast/pain1.wav",
+     "map": "d2_prison_02"
+    },
+    {
+     "db": -3.3,
+     "pos": "-1958.555298 3134.381592 512.886780",
+     "toG": 0.0086,
+     "t": 55.31,
+     "sound": "npc/turret_wall/turret_loop1.wav",
+     "fromG": 0.0125,
+     "key": "npc/turret_wall/turret_loop1.wav",
+     "map": "d2_prison_02"
+    },
+    {
+     "db": -3.7,
+     "pos": "-1981.389038 2989.718750 512.554260",
+     "toG": 0.0021,
+     "t": 55.45,
+     "sound": "npc/turret_floor/die.wav",
+     "fromG": 0.0032,
+     "key": "npc/turret_floor/die.wav",
+     "map": "d2_prison_02"
+    },
+    {
+     "db": -20.1,
+     "pos": "-2021.968750 3130.547119 444.920715",
+     "toG": 0.059,
+     "t": 57.36,
+     "sound": "npc/headcrab_fast/headbite.wav",
+     "fromG": 0.5948,
+     "key": "npc/headcrab_fast/headbite.wav",
+     "map": "d2_prison_02"
+    },
+    {
+     "db": -18.9,
+     "pos": "-1998.769531 3375.960449 570.905823",
+     "toG": 0.0126,
+     "t": 60.12,
+     "sound": "physics/concrete/concrete_impact_bullet1.wav",
+     "fromG": 0.1102,
+     "key": "physics/concrete/concrete_impact_bullet1.wav",
+     "map": "d2_prison_02"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

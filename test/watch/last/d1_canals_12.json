@@ -1,0 +1,151 @@
+{
+ "map": "d1_canals_12",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 24,
+ "visited": 20,
+ "scenes": 1,
+ "speech": 2,
+ "anomalies": {
+  "louder_vanilla": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "dist": 10783,
+     "lvl": 75,
+     "overDb": 13.7,
+     "t": 39.09,
+     "sound": "vehicles/apc/apc_idle1.wav",
+     "map": "d1_canals_12",
+     "key": "vehicles/apc/apc_idle1.wav",
+     "g": 1
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 29,
+   "distinct": 8,
+   "samples": [
+    {
+     "db": 5.3,
+     "pos": "7218.249023 4933.395508 639.056152",
+     "toG": 0.0055,
+     "t": 31.45,
+     "sound": "npc/combine_gunship/dropship_engine_distant_loop1.wav",
+     "fromG": 0.003,
+     "key": "npc/combine_gunship/dropship_engine_distant_loop1.wav",
+     "map": "d1_canals_12"
+    },
+    {
+     "db": 9.9,
+     "pos": "6584.584473 4895.301270 800.399048",
+     "toG": 0.0032,
+     "t": 32.09,
+     "sound": "npc/combine_gunship/dropship_onground_loop1.wav",
+     "fromG": 0.001,
+     "key": "npc/combine_gunship/dropship_onground_loop1.wav",
+     "map": "d1_canals_12"
+    },
+    {
+     "db": 12,
+     "pos": "2878.861084 4779.668945 938.328186",
+     "toG": 0.0125,
+     "t": 38.91,
+     "sound": "npc/combine_gunship/dropship_engine_near_loop1.wav",
+     "fromG": 0.0031,
+     "key": "npc/combine_gunship/dropship_engine_near_loop1.wav",
+     "map": "d1_canals_12"
+    },
+    {
+     "db": 12.8,
+     "pos": "-5662.735840 4082.178711 392.031250",
+     "toG": 0.0864,
+     "t": 39.41,
+     "sound": "!metropolice_danger1",
+     "fromG": 0.0197,
+     "key": "!metropolice_danger1",
+     "map": "d1_canals_12"
+    },
+    {
+     "db": -6.9,
+     "pos": "-5576.000000 3865.000000 392.031219",
+     "toG": 0.129,
+     "t": 41.7,
+     "sound": "weapons/pistol/pistol_fire3.wav",
+     "fromG": 0.2863,
+     "key": "weapons/pistol/pistol_fire3.wav",
+     "map": "d1_canals_12"
+    },
+    {
+     "db": -4.9,
+     "pos": "-5576.000000 3865.000000 392.031219",
+     "toG": 0.0208,
+     "t": 41.7,
+     "sound": "player/footsteps/concrete4.wav",
+     "fromG": 0.0364,
+     "key": "player/footsteps/concrete4.wav",
+     "map": "d1_canals_12"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2131,
+     "lagMs": 118,
+     "t": 39
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2686,
+     "lagMs": 149,
+     "t": 44.62
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "npc/combine_gunship/dropship_engine_distant_loop1.wav": {
+   "lvl": 140,
+   "dmin": 1693,
+   "dmax": 9793,
+   "n": 29,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_engine_near_loop1.wav": {
+   "lvl": 130,
+   "dmin": 1693,
+   "dmax": 9793,
+   "n": 29,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_dropping_pod_loop1.wav": {
+   "lvl": 140,
+   "dmin": 1693,
+   "dmax": 9793,
+   "n": 29,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_fire_loop1.wav": {
+   "lvl": 130,
+   "dmin": 1693,
+   "dmax": 9793,
+   "n": 29,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_onground_loop1.wav": {
+   "lvl": 130,
+   "dmin": 1693,
+   "dmax": 9793,
+   "n": 29,
+   "native": true
+  }
+ }
+}

@@ -1,0 +1,87 @@
+{
+ "map": "d1_eli_02",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 34,
+ "visited": 25,
+ "scenes": 56,
+ "speech": 6,
+ "anomalies": {
+  "mirror_step": {
+   "count": 6,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 30.96,
+     "pos": "-2452.000000 1476.000000 -2687.000000",
+     "toG": 0.175,
+     "sound": "npc/dog/dog_idlemode_loop1.wav",
+     "fromG": 0.903,
+     "key": "npc/dog/dog_idlemode_loop1.wav",
+     "map": "d1_eli_02"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 5,
+   "distinct": 4,
+   "samples": [
+    {
+     "db": 4.4,
+     "pos": "-652.715637 916.721130 -2622.968506",
+     "toG": 0.2867,
+     "t": 33.07,
+     "sound": "player/footsteps/metal4.wav",
+     "fromG": 0.1718,
+     "key": "player/footsteps/metal4.wav",
+     "map": "d1_eli_02"
+    },
+    {
+     "db": 3.2,
+     "pos": "-651.092041 897.697632 -2622.968506",
+     "toG": 0.4713,
+     "t": 37.13,
+     "sound": "player/footsteps/metal1.wav",
+     "fromG": 0.3259,
+     "key": "player/footsteps/metal1.wav",
+     "map": "d1_eli_02"
+    },
+    {
+     "db": 3.7,
+     "pos": "-652.486084 865.402527 -2622.968506",
+     "toG": 0.4885,
+     "t": 37.56,
+     "sound": "player/footsteps/dirt2.wav",
+     "fromG": 0.3184,
+     "key": "player/footsteps/dirt2.wav",
+     "map": "d1_eli_02"
+    },
+    {
+     "db": 5,
+     "pos": "-655.556946 794.263672 -2622.968506",
+     "toG": 0.383,
+     "t": 38.5,
+     "sound": "player/footsteps/dirt4.wav",
+     "fromG": 0.2146,
+     "key": "player/footsteps/dirt4.wav",
+     "map": "d1_eli_02"
+    }
+   ]
+  },
+  "mouth_missing": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_alyx",
+     "name": "*vo/eli_lab/al_thisisgravgun.wav",
+     "dist": 176,
+     "t": 43.12,
+     "pos": "-570.355042 809.189758 -2687.906250"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

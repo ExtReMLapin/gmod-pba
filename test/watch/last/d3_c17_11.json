@@ -1,0 +1,210 @@
+{
+ "map": "d3_c17_11",
+ "tag": "",
+ "sets": [],
+ "secs": 70,
+ "triggers": 9,
+ "visited": 9,
+ "scenes": 0,
+ "speech": 5,
+ "anomalies": {
+  "louder_vanilla": {
+   "count": 2,
+   "distinct": 2,
+   "samples": [
+    {
+     "dist": 6424,
+     "lvl": 70,
+     "overDb": 14.2,
+     "t": 48.42,
+     "sound": "ambient/fire/fire_small_loop1.wav",
+     "map": "d3_c17_11",
+     "key": "ambient/fire/fire_small_loop1.wav",
+     "g": 0.6370027534777795
+    },
+    {
+     "dist": 6980,
+     "lvl": 70,
+     "overDb": 17.4,
+     "t": 48.42,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d3_c17_11",
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "g": 1
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 32,
+   "distinct": 12,
+   "samples": [
+    {
+     "db": -28.4,
+     "pos": "921.043762 7863.719727 1014.000000",
+     "toG": 0.0265,
+     "t": 31.06,
+     "sound": "doors/handle_pushbar_open1.wav",
+     "fromG": 0.6958,
+     "key": "doors/handle_pushbar_open1.wav",
+     "map": "d3_c17_11"
+    },
+    {
+     "db": -28.4,
+     "pos": "921.043762 7863.719727 1014.000000",
+     "toG": 0.0191,
+     "t": 31.06,
+     "sound": "doors/metal_move1.wav",
+     "fromG": 0.5004,
+     "key": "doors/metal_move1.wav",
+     "map": "d3_c17_11"
+    },
+    {
+     "db": -12.5,
+     "pos": "793.146484 6695.461426 962.031189",
+     "toG": 0.016,
+     "t": 33.41,
+     "sound": "player/footsteps/rubber.wav",
+     "fromG": 0.0673,
+     "key": "player/footsteps/rubber.wav",
+     "map": "d3_c17_11"
+    },
+    {
+     "db": 3.1,
+     "pos": "1493.580444 5255.284668 1053.374512",
+     "toG": 0.3945,
+     "t": 35.93,
+     "sound": "npc/combine_gunship/engine_whine_loop1.wav",
+     "fromG": 0.276,
+     "key": "npc/combine_gunship/engine_whine_loop1.wav",
+     "map": "d3_c17_11"
+    },
+    {
+     "db": 4.5,
+     "pos": "1457.140015 3936.000000 1289.000000",
+     "toG": 0.2647,
+     "t": 36.16,
+     "sound": "weapons/ar1/ar1_dist1.wav",
+     "fromG": 0.1575,
+     "key": "weapons/ar1/ar1_dist1.wav",
+     "map": "d3_c17_11"
+    },
+    {
+     "db": -3.4,
+     "pos": "2286.390381 5494.337891 1817.259277",
+     "toG": 0.4745,
+     "t": 38.68,
+     "sound": "npc/combine_gunship/engine_rotor_loop1.wav",
+     "fromG": 0.698,
+     "key": "npc/combine_gunship/engine_rotor_loop1.wav",
+     "map": "d3_c17_11"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 5,
+   "distinct": 5,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/coverwhilereload02.wav",
+     "dist": 3727,
+     "lagMs": 207,
+     "t": 41.83
+    },
+    {
+     "class": "npc_citizen",
+     "name": "common/null.wav",
+     "dist": 2634,
+     "lagMs": 146,
+     "t": 48.49
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/pain01.wav",
+     "dist": 2634,
+     "lagMs": 146,
+     "t": 48.49
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/getdown02.wav",
+     "dist": 3359,
+     "lagMs": 187,
+     "t": 50.38
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/health05.wav",
+     "dist": 3232,
+     "lagMs": 180,
+     "t": 51.75
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "npc/combine_gunship/dropship_onground_loop1.wav": {
+   "lvl": 130,
+   "dmin": 1675,
+   "dmax": 5678,
+   "n": 133,
+   "native": false
+  },
+  "npc/combine_gunship/engine_rotor_loop1.wav": {
+   "lvl": 120,
+   "dmin": 1387,
+   "dmax": 5661,
+   "n": 70,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_dropping_pod_loop1.wav": {
+   "lvl": 140,
+   "dmin": 1675,
+   "dmax": 5678,
+   "n": 133,
+   "native": false
+  },
+  "npc/combine_gunship/dropship_engine_distant_loop1.wav": {
+   "lvl": 140,
+   "dmin": 1675,
+   "dmax": 5678,
+   "n": 131,
+   "native": false
+  },
+  "npc/combine_gunship/gunship_weapon_fire_loop6.wav": {
+   "lvl": 140,
+   "dmin": 1387,
+   "dmax": 5661,
+   "n": 70,
+   "native": true
+  },
+  "^npc/combine_gunship/engine_whine_loop1.wav": {
+   "lvl": 130,
+   "dmin": 1387,
+   "dmax": 5661,
+   "n": 70,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_engine_loop3.wav": {
+   "lvl": 120,
+   "dmin": 1387,
+   "dmax": 5661,
+   "n": 70,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_fire_loop1.wav": {
+   "lvl": 130,
+   "dmin": 1675,
+   "dmax": 5678,
+   "n": 133,
+   "native": false
+  },
+  "npc/combine_gunship/dropship_engine_near_loop1.wav": {
+   "lvl": 130,
+   "dmin": 1675,
+   "dmax": 5678,
+   "n": 133,
+   "native": false
+  }
+ }
+}

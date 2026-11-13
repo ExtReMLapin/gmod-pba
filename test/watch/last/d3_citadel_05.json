@@ -1,0 +1,53 @@
+{
+ "map": "d3_citadel_05",
+ "tag": "",
+ "sets": [],
+ "secs": 78,
+ "triggers": 15,
+ "visited": 15,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "mirror_step": {
+   "count": 17,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 33.69,
+     "pos": "-1032.000000 1098.000000 -2960.000000",
+     "toG": 0.447,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "fromG": 1,
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d3_citadel_05"
+    },
+    {
+     "t": 35.17,
+     "pos": "-1184.000000 2304.000000 -2992.406250",
+     "toG": 0.017,
+     "sound": "ambient/levels/citadel/field_loop2.wav",
+     "fromG": 1,
+     "key": "ambient/levels/citadel/field_loop2.wav",
+     "map": "d3_citadel_05"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 44,
+   "distinct": 1,
+   "samples": [
+    {
+     "db": 3.3,
+     "pos": "-543.969971 711.121094 -2958.909912",
+     "toG": 0.0051,
+     "t": 34.81,
+     "sound": "plats/skylift_move.wav",
+     "fromG": 0.0035,
+     "key": "plats/skylift_move.wav",
+     "map": "d3_citadel_05"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

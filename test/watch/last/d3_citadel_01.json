@@ -1,0 +1,75 @@
+{
+ "map": "d3_citadel_01",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 33,
+ "visited": 21,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "stuck_once": {
+   "count": 321,
+   "distinct": 3,
+   "samples": [
+    {
+     "t": 47.86,
+     "pos": "7022.218750 4989.093750 -3174.843750",
+     "dur": 0.18,
+     "map": "d3_citadel_01",
+     "sound": "physics/concrete/rock_impact_hard4.wav",
+     "age": 3.3,
+     "key": "380:0:physics/concrete/rock_impact_hard4.wav",
+     "g": 0.8941791370794397
+    },
+    {
+     "t": 50.86,
+     "pos": "6790.812500 5102.218750 -3075.187500",
+     "dur": 0.38,
+     "map": "d3_citadel_01",
+     "sound": "physics/concrete/rock_impact_hard5.wav",
+     "age": 3.6,
+     "key": "286:0:physics/concrete/rock_impact_hard5.wav",
+     "g": 0.7883289746362053
+    },
+    {
+     "t": 51.18,
+     "pos": "6765.968750 5110.468750 -3068.312500",
+     "dur": 0.38,
+     "map": "d3_citadel_01",
+     "sound": "physics/concrete/rock_impact_hard5.wav",
+     "age": 3.6,
+     "key": "391:0:physics/concrete/rock_impact_hard5.wav",
+     "g": 0.7907201108984189
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 7,
+   "distinct": 2,
+   "samples": [
+    {
+     "db": -3.2,
+     "pos": "7545.427734 5357.708496 -1878.431396",
+     "toG": 0.0563,
+     "t": 46.37,
+     "sound": "ambient/machines/wall_move4.wav",
+     "fromG": 0.0818,
+     "key": "ambient/machines/wall_move4.wav",
+     "map": "d3_citadel_01"
+    },
+    {
+     "db": -9.1,
+     "pos": "7105.770508 5288.137207 -1370.416748",
+     "toG": 0.0027,
+     "t": 46.37,
+     "sound": "ambient/machines/floodgate_stop1.wav",
+     "fromG": 0.0076,
+     "key": "ambient/machines/floodgate_stop1.wav",
+     "map": "d3_citadel_01"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

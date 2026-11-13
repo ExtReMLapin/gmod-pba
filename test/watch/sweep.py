@@ -169,11 +169,13 @@ def sweep(m):
     # --set values: pba convars are archived (garrysmod/cfg/*.vdf, shared by every instance and the user's
     # own game): each one is restored to its value before the run at the end of the map (see restore()).
     saved = []
-    for k, v in SETS:
+    for k, v in SETS:  # (every value is read BEFORE any is set: in singleplayer both realms share the convar)
         for realm in ("server", "client"):
             was = lua(realm, f"local c = GetConVar('{k}') return c and c:GetString() or nil")
             if was is not None:
                 saved.append((realm, k, was))
+    for k, v in SETS:
+        for realm in ("server", "client"):
             call("console_exec", {"realm": realm, "cmd": f"{k} {v}"})
     SAVED[:] = saved
     lua_file("server", os.path.join(HERE, "watchdog_sv.lua"))
@@ -181,7 +183,8 @@ def sweep(m):
     if opts.get("precl"):  # validation: a client file run after the watchdog (e.g. re-creating a fixed bug)
         lua_file("client", opts["precl"])
     lua("server", "local p = Entity(1) if IsValid(p) then p:GodEnable() end return true")
-    info = lua("server", TRIGGERS) or {}
+    info = lua("server", TRIGGERS)  # (a Lua table without keys comes back as a list)
+    info = info if isinstance(info, dict) else {}
     trig = order(info.get("trig") or [], info.get("spawn") or (0, 0, 0))
     print(f"##progress label=\"{m}\" msg=\"idle {IDLE:.0f}s, {len(trig)} triggers, {info.get('scenes')} scenes\"", flush=True)
     time.sleep(IDLE)

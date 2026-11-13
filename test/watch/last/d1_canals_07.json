@@ -1,0 +1,148 @@
+{
+ "map": "d1_canals_07",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 38,
+ "visited": 25,
+ "scenes": 1,
+ "speech": 14,
+ "anomalies": {
+  "mirror_step": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 89.26,
+     "pos": "10952.000000 2092.000000 -176.000000",
+     "toG": 0.465,
+     "sound": "*^vo/breencast/br_disruptor01.wav",
+     "fromG": 0.115,
+     "key": "*^vo/breencast/br_disruptor01.wav",
+     "map": "d1_canals_07"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 15,
+   "distinct": 8,
+   "samples": [
+    {
+     "db": -3.8,
+     "pos": "6833.701172 1136.227661 -49.969223",
+     "toG": 0.0206,
+     "t": 45.7,
+     "sound": "npc/crow/flap2.wav",
+     "fromG": 0.0318,
+     "key": "npc/crow/flap2.wav",
+     "map": "d1_canals_07"
+    },
+    {
+     "db": -10.5,
+     "pos": "10012.799805 1543.300049 -183.968750",
+     "toG": 0.1833,
+     "t": 67.15,
+     "sound": "weapons/smg1/npc_smg1_fire1.wav",
+     "fromG": 0.6139,
+     "key": "weapons/smg1/npc_smg1_fire1.wav",
+     "map": "d1_canals_07"
+    },
+    {
+     "db": -6.1,
+     "pos": "9964.000000 2040.500000 -184.000000",
+     "toG": 0.0709,
+     "t": 69.69,
+     "sound": "physics/glass/glass_cup_break1.wav",
+     "fromG": 0.1425,
+     "key": "physics/glass/glass_cup_break1.wav",
+     "map": "d1_canals_07"
+    },
+    {
+     "db": -6.9,
+     "pos": "9856.000000 2112.000000 -84.000000",
+     "toG": 0.0763,
+     "t": 69.69,
+     "sound": "npc/roller/code2.wav",
+     "fromG": 0.1692,
+     "key": "npc/roller/code2.wav",
+     "map": "d1_canals_07"
+    },
+    {
+     "db": -6.9,
+     "pos": "9856.000000 2112.000000 -84.000000",
+     "toG": 0.0571,
+     "t": 69.69,
+     "sound": "npc/turret_floor/ping.wav",
+     "fromG": 0.1267,
+     "key": "npc/turret_floor/ping.wav",
+     "map": "d1_canals_07"
+    },
+    {
+     "db": -6.9,
+     "pos": "9856.000000 2112.000000 -84.000000",
+     "toG": 0.0075,
+     "t": 69.69,
+     "sound": "npc/turret_floor/deploy.wav",
+     "fromG": 0.0166,
+     "key": "npc/turret_floor/deploy.wav",
+     "map": "d1_canals_07"
+    }
+   ]
+  },
+  "mouth_missing": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 538,
+     "t": 30.22,
+     "pos": "7494.000000 1454.000000 -255.906250"
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 830,
+     "t": 33.93,
+     "pos": "7114.000000 1672.000000 -383.906250"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 4,
+   "distinct": 2,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 5446,
+     "lagMs": 302,
+     "t": 49.9
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2403,
+     "lagMs": 133,
+     "t": 59.19
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2201,
+     "lagMs": 122,
+     "t": 63.19
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_disruptor01.wav",
+     "dist": 16110,
+     "lagMs": 895,
+     "t": 87.93
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

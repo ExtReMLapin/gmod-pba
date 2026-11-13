@@ -1,0 +1,156 @@
+{
+ "map": "d3_citadel_04",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 39,
+ "visited": 28,
+ "scenes": 6,
+ "speech": 2,
+ "anomalies": {
+  "louder_vanilla": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "dist": 3898,
+     "lvl": 70,
+     "overDb": 6.6,
+     "t": 55.9,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d3_citadel_04",
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "g": 0.7560958487204809
+    }
+   ]
+  },
+  "mirror_step": {
+   "count": 8,
+   "distinct": 3,
+   "samples": [
+    {
+     "t": 20.25,
+     "pos": "-96.000000 1248.000000 2432.000000",
+     "toG": 0.449,
+     "sound": "ambient/levels/citadel/field_loop2.wav",
+     "fromG": 0.01,
+     "key": "ambient/levels/citadel/field_loop2.wav",
+     "map": "d3_citadel_04"
+    },
+    {
+     "t": 20.25,
+     "pos": "-128.000000 -8.000000 2416.000000",
+     "toG": 0.951,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "fromG": 0.014,
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d3_citadel_04"
+    },
+    {
+     "t": 34.02,
+     "pos": "257.406250 -159.000000 2382.062500",
+     "toG": 0.409,
+     "sound": "*vo/citadel/br_mentors.wav",
+     "fromG": 0.01,
+     "key": "*vo/citadel/br_mentors.wav",
+     "map": "d3_citadel_04"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 61,
+   "distinct": 21,
+   "samples": [
+    {
+     "db": 5.9,
+     "pos": "247.850342 156.960541 2370.031006",
+     "toG": 0.134,
+     "t": 29.92,
+     "sound": "npc/combine_soldier/gear3.wav",
+     "fromG": 0.0678,
+     "key": "npc/combine_soldier/gear3.wav",
+     "map": "d3_citadel_04"
+    },
+    {
+     "db": -4.6,
+     "pos": "395.822205 33.983521 2370.031006",
+     "toG": 0.0753,
+     "t": 29.92,
+     "sound": "player/footsteps/metal1.wav",
+     "fromG": 0.1277,
+     "key": "player/footsteps/metal1.wav",
+     "map": "d3_citadel_04"
+    },
+    {
+     "db": -4.5,
+     "pos": "247.850342 156.960541 2370.031006",
+     "toG": 0.3164,
+     "t": 29.92,
+     "sound": "weapons/ar1/ar1_dist1.wav",
+     "fromG": 0.5336,
+     "key": "weapons/ar1/ar1_dist1.wav",
+     "map": "d3_citadel_04"
+    },
+    {
+     "db": -11.5,
+     "pos": "49.390732 1356.806030 2122.228760",
+     "toG": 0.0031,
+     "t": 34.63,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "fromG": 0.0116,
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d3_citadel_04"
+    },
+    {
+     "db": -3.4,
+     "pos": "479.072906 746.160278 2370.031006",
+     "toG": 0.0184,
+     "t": 43.96,
+     "sound": "npc/combine_soldier/gear1.wav",
+     "fromG": 0.0272,
+     "key": "npc/combine_soldier/gear1.wav",
+     "map": "d3_citadel_04"
+    },
+    {
+     "db": -6.3,
+     "pos": "1207.390259 801.194824 2370.031006",
+     "toG": 0.0129,
+     "t": 48.67,
+     "sound": "npc/combine_soldier/gear2.wav",
+     "fromG": 0.0266,
+     "key": "npc/combine_soldier/gear2.wav",
+     "map": "d3_citadel_04"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 2,
+   "distinct": 2,
+   "samples": [
+    {
+     "class": "npc_breen",
+     "name": "*vo/citadel/br_mentors.wav",
+     "dist": 5797,
+     "lagMs": 322,
+     "t": 30.15
+    },
+    {
+     "class": "npc_breen",
+     "name": "*vo/citadel/br_create.wav",
+     "dist": 7270,
+     "lagMs": 404,
+     "t": 61.06
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "plats/elevator_move_loop1.wav": {
+   "lvl": 100,
+   "dmin": 15,
+   "dmax": 5149,
+   "n": 18,
+   "native": true
+  }
+ }
+}

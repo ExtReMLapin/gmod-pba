@@ -1,0 +1,45 @@
+{
+ "map": "d3_c17_01",
+ "tag": "",
+ "sets": [],
+ "secs": 47,
+ "triggers": 2,
+ "visited": 2,
+ "scenes": 19,
+ "speech": 6,
+ "anomalies": {
+  "stuck_once": {
+   "count": 67,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 15.16,
+     "pos": "-7187.000000 -1177.000000 57.000000",
+     "dur": 0.32,
+     "map": "d3_c17_01",
+     "sound": "common/null.wav",
+     "age": 3.6,
+     "key": "145:4:common/null.wav",
+     "g": 1
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "db": -6.2,
+     "pos": "-7106.643555 -1463.305298 65.031250",
+     "toG": 0.0251,
+     "t": 29.55,
+     "sound": "vo/k_lab2/al_whatswrong.wav",
+     "fromG": 0.0515,
+     "key": "vo/k_lab2/al_whatswrong.wav",
+     "map": "d3_c17_01"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

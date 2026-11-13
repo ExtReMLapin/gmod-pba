@@ -1,0 +1,135 @@
+{
+ "map": "d1_canals_02",
+ "tag": "",
+ "sets": [],
+ "secs": 88,
+ "triggers": 18,
+ "visited": 18,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "mirror_step": {
+   "count": 4,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 14.88,
+     "pos": "3572.000000 -640.000000 -183.468750",
+     "toG": 1,
+     "sound": "^npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "fromG": 0.095,
+     "key": "^npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "map": "d1_canals_02"
+    }
+   ]
+  },
+  "stuck_once": {
+   "count": 47,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 63.54,
+     "pos": "1307.187500 -369.656250 -842.156250",
+     "dur": 7.2,
+     "map": "d1_canals_02",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.4,
+     "key": "248:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.3791314418015088
+    },
+    {
+     "t": 75.72,
+     "pos": "451.031250 286.562500 -767.125000",
+     "dur": 0.31,
+     "map": "d1_canals_02",
+     "sound": "physics/concrete/rock_impact_soft2.wav",
+     "age": 3.4,
+     "key": "172:0:physics/concrete/rock_impact_soft2.wav",
+     "g": 0.10562116615217022
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 33,
+   "distinct": 7,
+   "samples": [
+    {
+     "db": 6.3,
+     "pos": "1474.053833 -233.783386 -508.073242",
+     "toG": 0.0041,
+     "t": 44.4,
+     "sound": "npc/scanner/cbot_fly_loop.wav",
+     "fromG": 0.002,
+     "key": "npc/scanner/cbot_fly_loop.wav",
+     "map": "d1_canals_02"
+    },
+    {
+     "db": -4.9,
+     "pos": "182.863220 -1328.832397 -666.514893",
+     "toG": 0.4517,
+     "t": 50.44,
+     "sound": "npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "fromG": 0.798,
+     "key": "npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "map": "d1_canals_02"
+    },
+    {
+     "db": -7.2,
+     "pos": "190.875320 -1290.093262 -660.086243",
+     "toG": 0.0043,
+     "t": 50.51,
+     "sound": "npc/attack_helicopter/aheli_wash_loop3.wav",
+     "fromG": 0.0097,
+     "key": "npc/attack_helicopter/aheli_wash_loop3.wav",
+     "map": "d1_canals_02"
+    },
+    {
+     "db": -3.9,
+     "pos": "-100.849213 -842.190613 -815.302490",
+     "toG": 0.0019,
+     "t": 54.69,
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "fromG": 0.003,
+     "key": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "map": "d1_canals_02"
+    },
+    {
+     "db": 12,
+     "pos": "128.038544 -732.750793 -769.253540",
+     "toG": 0.0187,
+     "t": 56.94,
+     "sound": "npc/scanner/scanner_blip1.wav",
+     "fromG": 0.0047,
+     "key": "npc/scanner/scanner_blip1.wav",
+     "map": "d1_canals_02"
+    },
+    {
+     "db": -3.1,
+     "pos": "180.497604 -712.205078 -707.299683",
+     "toG": 0.0234,
+     "t": 67.55,
+     "sound": "npc/scanner/scanner_scan1.wav",
+     "fromG": 0.0334,
+     "key": "npc/scanner/scanner_scan1.wav",
+     "map": "d1_canals_02"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "^npc/attack_helicopter/aheli_rotor_loop1.wav": {
+   "lvl": 140,
+   "dmin": 1293,
+   "dmax": 3931,
+   "n": 246,
+   "native": true
+  },
+  "npc/attack_helicopter/aheli_weapon_fire_loop3.wav": {
+   "lvl": 140,
+   "dmin": 1293,
+   "dmax": 3931,
+   "n": 246,
+   "native": true
+  }
+ }
+}

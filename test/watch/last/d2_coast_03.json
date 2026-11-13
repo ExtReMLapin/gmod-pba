@@ -1,0 +1,85 @@
+{
+ "map": "d2_coast_03",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 45,
+ "visited": 20,
+ "scenes": 35,
+ "speech": 0,
+ "anomalies": {
+  "louder_vanilla": {
+   "count": 26,
+   "distinct": 2,
+   "samples": [
+    {
+     "dist": 4931,
+     "lvl": 60,
+     "overDb": 18.2,
+     "t": 28.84,
+     "sound": "npc/crow/flap2.wav",
+     "map": "d2_coast_03",
+     "key": "npc/crow/flap2.wav",
+     "g": 1
+    },
+    {
+     "dist": 8584,
+     "lvl": 80,
+     "overDb": 15.7,
+     "t": 52.02,
+     "sound": "ambient/machines/thumper_amb.wav",
+     "map": "d2_coast_03",
+     "key": "ambient/machines/thumper_amb.wav",
+     "g": 1
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 14,
+   "distinct": 4,
+   "samples": [
+    {
+     "db": -6.9,
+     "pos": "-3201.739014 -10967.898438 1735.605347",
+     "toG": 0.0144,
+     "t": 30.35,
+     "sound": "npc/crow/flap2.wav",
+     "fromG": 0.0318,
+     "key": "npc/crow/flap2.wav",
+     "map": "d2_coast_03"
+    },
+    {
+     "db": 7.1,
+     "pos": "-3466.579834 -6157.821289 478.643402",
+     "toG": 0.0025,
+     "t": 40.33,
+     "sound": "ambient/machines/thumper_hit.wav",
+     "fromG": 0.0011,
+     "key": "ambient/machines/thumper_hit.wav",
+     "map": "d2_coast_03"
+    },
+    {
+     "db": 5.1,
+     "pos": "-3577.360840 -6166.837402 476.307648",
+     "toG": 0.0031,
+     "t": 40.38,
+     "sound": "ambient/machines/thumper_amb.wav",
+     "fromG": 0.0017,
+     "key": "ambient/machines/thumper_amb.wav",
+     "map": "d2_coast_03"
+    },
+    {
+     "db": -3.4,
+     "pos": "-5524.305664 3515.978516 424.714661",
+     "toG": 0.1174,
+     "t": 59.14,
+     "sound": "ambient/machines/thumper_top.wav",
+     "fromG": 0.1746,
+     "key": "ambient/machines/thumper_top.wav",
+     "map": "d2_coast_03"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

@@ -1,0 +1,110 @@
+{
+ "map": "d2_prison_03",
+ "tag": "",
+ "sets": [],
+ "secs": 107,
+ "triggers": 31,
+ "visited": 23,
+ "scenes": 1,
+ "speech": 0,
+ "anomalies": {
+  "mirror_step": {
+   "count": 6,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 42.66,
+     "pos": "-3417.000000 5838.000000 75.000000",
+     "toG": 0.447,
+     "sound": "npc/attack_helicopter/aheli_wash_loop3.wav",
+     "fromG": 0.01,
+     "key": "npc/attack_helicopter/aheli_wash_loop3.wav",
+     "map": "d2_prison_03"
+    }
+   ]
+  },
+  "stuck_once": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 58.57,
+     "pos": "-3217.218750 5751.593750 50.000000",
+     "dur": 0.53,
+     "map": "d2_prison_03",
+     "sound": "physics/glass/glass_bottle_impact_hard2.wav",
+     "age": 3.7,
+     "key": "238:0:physics/glass/glass_bottle_impact_hard2.wav",
+     "g": 1
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 199,
+   "distinct": 19,
+   "samples": [
+    {
+     "db": -5.1,
+     "pos": "-3135.692627 3648.081299 72.372833",
+     "toG": 0.0033,
+     "t": 30.78,
+     "sound": "npc/manhack/mh_blade_loop1.wav",
+     "fromG": 0.0059,
+     "key": "npc/manhack/mh_blade_loop1.wav",
+     "map": "d2_prison_03"
+    },
+    {
+     "db": -5.3,
+     "pos": "-3136.070312 3647.754150 64.630630",
+     "toG": 0.0035,
+     "t": 30.78,
+     "sound": "npc/manhack/mh_engine_loop1.wav",
+     "fromG": 0.0063,
+     "key": "npc/manhack/mh_engine_loop1.wav",
+     "map": "d2_prison_03"
+    },
+    {
+     "db": -5.3,
+     "pos": "-3136.070312 3647.754150 64.630630",
+     "toG": 0.0035,
+     "t": 30.83,
+     "sound": "npc/manhack/mh_engine_loop2.wav",
+     "fromG": 0.0063,
+     "key": "npc/manhack/mh_engine_loop2.wav",
+     "map": "d2_prison_03"
+    },
+    {
+     "db": -21.5,
+     "pos": "-3520.031006 3380.972900 24.093750",
+     "toG": 0.0026,
+     "t": 32,
+     "sound": "npc/antlion/foot4.wav",
+     "fromG": 0.0313,
+     "key": "npc/antlion/foot4.wav",
+     "map": "d2_prison_03"
+    },
+    {
+     "db": -11.6,
+     "pos": "-3576.476562 3486.978760 24.522322",
+     "toG": 0.0038,
+     "t": 32,
+     "sound": "npc/antlion/foot3.wav",
+     "fromG": 0.0144,
+     "key": "npc/antlion/foot3.wav",
+     "map": "d2_prison_03"
+    },
+    {
+     "db": -21.2,
+     "pos": "-3456.109619 3384.031250 24.093750",
+     "toG": 0.0032,
+     "t": 32,
+     "sound": "npc/antlion/foot2.wav",
+     "fromG": 0.0373,
+     "key": "npc/antlion/foot2.wav",
+     "map": "d2_prison_03"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

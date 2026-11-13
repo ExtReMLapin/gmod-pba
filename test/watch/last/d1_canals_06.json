@@ -1,0 +1,126 @@
+{
+ "map": "d1_canals_06",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 31,
+ "visited": 24,
+ "scenes": 3,
+ "speech": 0,
+ "anomalies": {
+  "voice_step": {
+   "count": 23,
+   "distinct": 5,
+   "samples": [
+    {
+     "db": -3.3,
+     "pos": "4490.316406 6042.274414 -117.968735",
+     "toG": 0.1835,
+     "t": 42.25,
+     "sound": "player/footsteps/concrete4.wav",
+     "fromG": 0.2682,
+     "key": "player/footsteps/concrete4.wav",
+     "map": "d1_canals_06"
+    },
+    {
+     "db": 3.2,
+     "pos": "4593.902832 6025.022461 164.489700",
+     "toG": 0.0282,
+     "t": 47.9,
+     "sound": "npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "fromG": 0.0196,
+     "key": "npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "map": "d1_canals_06"
+    },
+    {
+     "db": 16.3,
+     "pos": "6.831916 3263.348633 -230.017044",
+     "toG": 0.0461,
+     "t": 58.67,
+     "sound": "npc/scanner/cbot_fly_loop.wav",
+     "fromG": 0.0071,
+     "key": "npc/scanner/cbot_fly_loop.wav",
+     "map": "d1_canals_06"
+    },
+    {
+     "db": 3.6,
+     "pos": "24.000000 4120.000000 -441.000000",
+     "toG": 0.0024,
+     "t": 62.74,
+     "sound": "npc/scanner/scanner_scan_loop1.wav",
+     "fromG": 0.0016,
+     "key": "npc/scanner/scanner_scan_loop1.wav",
+     "map": "d1_canals_06"
+    },
+    {
+     "db": -4.7,
+     "pos": "-1445.094727 10087.778320 79.493660",
+     "toG": 0.035,
+     "t": 75.29,
+     "sound": "npc/combine_gunship/dropship_engine_distant_loop1.wav",
+     "fromG": 0.0599,
+     "key": "npc/combine_gunship/dropship_engine_distant_loop1.wav",
+     "map": "d1_canals_06"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "npc/combine_gunship/dropship_engine_distant_loop1.wav": {
+   "lvl": 140,
+   "dmin": 3455,
+   "dmax": 11676,
+   "n": 58,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_onground_loop1.wav": {
+   "lvl": 130,
+   "dmin": 3455,
+   "dmax": 11676,
+   "n": 58,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_fire_loop1.wav": {
+   "lvl": 130,
+   "dmin": 3455,
+   "dmax": 11676,
+   "n": 58,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_engine_near_loop1.wav": {
+   "lvl": 130,
+   "dmin": 3455,
+   "dmax": 11676,
+   "n": 58,
+   "native": true
+  },
+  "^npc/attack_helicopter/aheli_rotor_loop1.wav": {
+   "lvl": 140,
+   "dmin": 3684,
+   "dmax": 10307,
+   "n": 81,
+   "native": true
+  },
+  "npc/attack_helicopter/aheli_weapon_fire_loop3.wav": {
+   "lvl": 140,
+   "dmin": 3684,
+   "dmax": 10307,
+   "n": 81,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_dropping_pod_loop1.wav": {
+   "lvl": 140,
+   "dmin": 3455,
+   "dmax": 11676,
+   "n": 58,
+   "native": true
+  },
+  "music/stingers/industrial_suspense1.wav": {
+   "lvl": 140,
+   "dmin": 3060,
+   "dmax": 6564,
+   "n": 45,
+   "native": false
+  }
+ }
+}

@@ -1,0 +1,54 @@
+{
+ "map": "d1_canals_11",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 36,
+ "visited": 20,
+ "scenes": 13,
+ "speech": 0,
+ "anomalies": {
+  "voice_step": {
+   "count": 14,
+   "distinct": 2,
+   "samples": [
+    {
+     "db": 9.5,
+     "pos": "9354.070312 8249.190430 -530.760864",
+     "toG": 0.0034,
+     "t": 33.65,
+     "sound": "npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "fromG": 0.0011,
+     "key": "npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "map": "d1_canals_11"
+    },
+    {
+     "db": -34.5,
+     "pos": "9976.015625 6807.983887 -923.317017",
+     "toG": 0.0179,
+     "t": 43.78,
+     "sound": "npc/zombie/claw_strike1.wav",
+     "fromG": 0.946,
+     "key": "npc/zombie/claw_strike1.wav",
+     "map": "d1_canals_11"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "^npc/attack_helicopter/aheli_rotor_loop1.wav": {
+   "lvl": 130,
+   "dmin": 1530,
+   "dmax": 2993,
+   "n": 35,
+   "native": true
+  },
+  "npc/attack_helicopter/aheli_weapon_fire_loop3.wav": {
+   "lvl": 140,
+   "dmin": 1530,
+   "dmax": 2993,
+   "n": 35,
+   "native": true
+  }
+ }
+}

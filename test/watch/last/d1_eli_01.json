@@ -1,0 +1,121 @@
+{
+ "map": "d1_eli_01",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 29,
+ "visited": 23,
+ "scenes": 31,
+ "speech": 9,
+ "anomalies": {
+  "mirror_step": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 62.46,
+     "pos": "28.000000 2663.000000 -1230.000000",
+     "toG": 0.055,
+     "sound": "ambient/gas/steam2.wav",
+     "fromG": 0.132,
+     "key": "ambient/gas/steam2.wav",
+     "map": "d1_eli_01"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 10,
+   "distinct": 6,
+   "samples": [
+    {
+     "db": 4.9,
+     "pos": "-37.024872 4460.847168 -1368.756348",
+     "toG": 0.0168,
+     "t": 25.38,
+     "sound": "ambient/water/water_splash2.wav",
+     "fromG": 0.0095,
+     "key": "ambient/water/water_splash2.wav",
+     "map": "d1_eli_01"
+    },
+    {
+     "db": -29,
+     "pos": "16.128531 2879.629395 -1227.554443",
+     "toG": 0.0054,
+     "t": 31.84,
+     "sound": "doors/heavy_metal_move1.wav",
+     "fromG": 0.1526,
+     "key": "doors/heavy_metal_move1.wav",
+     "map": "d1_eli_01"
+    },
+    {
+     "db": 7.2,
+     "pos": "39.000000 2760.000000 -1199.611816",
+     "toG": 0.1994,
+     "t": 43.23,
+     "sound": "doors/default_move.wav",
+     "fromG": 0.0872,
+     "key": "doors/default_move.wav",
+     "map": "d1_eli_01"
+    },
+    {
+     "db": 5.5,
+     "pos": "41.747391 2707.257568 -1196.676392",
+     "toG": 0.009,
+     "t": 43.7,
+     "sound": "vo/eli_lab/mo_airlock04.wav",
+     "fromG": 0.0047,
+     "key": "vo/eli_lab/mo_airlock04.wav",
+     "map": "d1_eli_01"
+    },
+    {
+     "db": 7.3,
+     "pos": "28.553852 2761.579102 -1152.628174",
+     "toG": 0.047,
+     "t": 44.23,
+     "sound": "ambient/gas/steam2.wav",
+     "fromG": 0.0203,
+     "key": "ambient/gas/steam2.wav",
+     "map": "d1_eli_01"
+    },
+    {
+     "db": -4.3,
+     "pos": "41.961067 2759.573486 -1201.888184",
+     "toG": 0.0242,
+     "t": 45.5,
+     "sound": "vo/eli_lab/mo_airlock05.wav",
+     "fromG": 0.0396,
+     "key": "vo/eli_lab/mo_airlock05.wav",
+     "map": "d1_eli_01"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 3,
+   "distinct": 3,
+   "samples": [
+    {
+     "class": "npc_mossman",
+     "name": "combined/eli_lab/eli_lab_mo_airlock10_cc.wav",
+     "dist": 1785,
+     "lagMs": 99,
+     "t": 60.82
+    },
+    {
+     "class": "npc_mossman",
+     "name": "combined/eli_lab/eli_lab_mo_airlock12_cc.wav",
+     "dist": 1602,
+     "lagMs": 89,
+     "t": 66.97
+    },
+    {
+     "class": "npc_mossman",
+     "name": "*vo/eli_lab/mo_airlock14.wav",
+     "dist": 1570,
+     "lagMs": 87,
+     "t": 74.37
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

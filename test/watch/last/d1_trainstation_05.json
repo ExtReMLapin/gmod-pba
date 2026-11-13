@@ -1,0 +1,138 @@
+{
+ "map": "d1_trainstation_05",
+ "tag": "",
+ "sets": [],
+ "secs": 98,
+ "triggers": 22,
+ "visited": 22,
+ "scenes": 30,
+ "speech": 15,
+ "anomalies": {
+  "louder_vanilla": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "dist": 4765,
+     "lvl": 60,
+     "overDb": 18.5,
+     "t": 72.42,
+     "sound": "ambient/levels/labs/equipment_printer_loop1.wav",
+     "map": "d1_trainstation_05",
+     "key": "ambient/levels/labs/equipment_printer_loop1.wav",
+     "g": 1
+    }
+   ]
+  },
+  "mirror_step": {
+   "count": 3,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 34.86,
+     "pos": "-6784.062500 -1311.687500 228.000000",
+     "toG": 0.998,
+     "sound": "ambient/machines/lab_loop1.wav",
+     "fromG": 0.049,
+     "key": "ambient/machines/lab_loop1.wav",
+     "map": "d1_trainstation_05"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 16,
+   "distinct": 4,
+   "samples": [
+    {
+     "db": -9.5,
+     "pos": "-6352.023438 -911.988586 49.728378",
+     "toG": 0.0409,
+     "t": 34.86,
+     "sound": "combined/trainyard/trainyard_al_thisday01_cc.wav",
+     "fromG": 0.1226,
+     "key": "combined/trainyard/trainyard_al_thisday01_cc.wav",
+     "map": "d1_trainstation_05"
+    },
+    {
+     "db": 13.1,
+     "pos": "-6460.020020 -1104.022461 61.439980",
+     "toG": 0.0185,
+     "t": 34.86,
+     "sound": "hl1/ambience/techamb2.wav",
+     "fromG": 0.0041,
+     "key": "hl1/ambience/techamb2.wav",
+     "map": "d1_trainstation_05"
+    },
+    {
+     "db": 4.1,
+     "pos": "-6632.085449 -1240.262451 40.992195",
+     "toG": 0.0398,
+     "t": 34.86,
+     "sound": "ambient/levels/labs/equipment_printer_loop1.wav",
+     "fromG": 0.0248,
+     "key": "ambient/levels/labs/equipment_printer_loop1.wav",
+     "map": "d1_trainstation_05"
+    },
+    {
+     "db": 5.1,
+     "pos": "-7053.539551 -1325.765503 59.890301",
+     "toG": 0.0257,
+     "t": 67.46,
+     "sound": "combined/k_lab/k_lab_kl_helloalyx01_cc.wav",
+     "fromG": 0.0144,
+     "key": "combined/k_lab/k_lab_kl_helloalyx01_cc.wav",
+     "map": "d1_trainstation_05"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 9,
+   "distinct": 9,
+   "samples": [
+    {
+     "class": "npc_kleiner",
+     "name": "combined/k_lab/k_lab_kl_mygoodness02_cc.wav",
+     "dist": 4577,
+     "lagMs": 254,
+     "t": 75.19
+    },
+    {
+     "class": "npc_kleiner",
+     "name": "*vo/k_lab/kl_hesnotthere.wav",
+     "dist": 4897,
+     "lagMs": 272,
+     "t": 77.11
+    },
+    {
+     "class": "npc_eli",
+     "name": "*vo/k_lab/eli_didntcomethru.wav",
+     "dist": 4281,
+     "lagMs": 238,
+     "t": 78.58
+    },
+    {
+     "class": "npc_kleiner",
+     "name": "*vo/k_lab/kl_thenwhere.wav",
+     "dist": 5096,
+     "lagMs": 283,
+     "t": 79.86
+    },
+    {
+     "class": "npc_alyx",
+     "name": "*vo/k_lab/al_foundhim.wav",
+     "dist": 5524,
+     "lagMs": 307,
+     "t": 80.13
+    },
+    {
+     "class": "npc_eli",
+     "name": "*vo/k_lab/eli_behindyou.wav",
+     "dist": 7597,
+     "lagMs": 422,
+     "t": 81.91
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}
