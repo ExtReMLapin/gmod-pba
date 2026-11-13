@@ -1289,7 +1289,8 @@ hook.Add("Think", "pba_native_listener", function()
 	if not L then return end
 	ang = vang or ang
 	N.live, eL, eR = pba_native.SetListener(L, ang:Forward(), ang:Up(), master)
-	N.UpdateFollowers(L)
+	-- what follows its entity every frame (clear voices, native mirrors): the scheduler's frame pass
+	if A.Sched then A.Sched.Frame(L) else N.UpdateFollowers(L) end
 	-- single player menu: the engine pauses its sounds; the module's voices freeze too
 	local paused = game.SinglePlayer() and gui.IsGameUIVisible() or false
 	if paused ~= N.paused and pba_native.SetPaused then
@@ -1312,7 +1313,6 @@ hook.Add("Think", "pba_native_listener", function()
 		N.wetScale = k
 		N.ApplySettings()
 	end
-	if A.Loops and A.Loops.FollowNative then A.Loops.FollowNative(L) end
 	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
 end)
 

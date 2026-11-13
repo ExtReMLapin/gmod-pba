@@ -247,8 +247,7 @@ end
 --- Adaptive re-evaluation (reeval_adaptive, P.ReevalDue): a playing mirror whose source, listener
 -- and world did not change since its last evaluation keeps its values.
 local function reevalDue(m, S, L)
-	m.reeval = m.reeval or {}
-	return A.Paths.ReevalDue(m.reeval, S, L, RealTime())
+	return A.Sched.Due(m, S, L, RealTime(), nil) -- the cadence rule of every followed sound (cl_sched.lua)
 end
 
 --- Tunnel-preset choice of a mirror (AC.DSPForVoice switches to the diffuse "tunnel" preset at
@@ -738,9 +737,9 @@ end
 
 -- Every mirror is re-evaluated each update_interval. loops_stagger spreads them over the frames:
 -- each frame takes its share in turn, instead of all of them in one frame (20 hidden loops on
--- gm_construct: one 15-55 ms frame every 0.25 s). Same update rate per loop.
+-- gm_construct: one 15-55 ms frame every 0.25 s). Same update rate per loop. The scheduler's tick (cl_sched.lua).
 local order, nextIdx, quota, acc, lastT = {}, 1, 0, 0, nil
-hook.Add("Think", "pba_loops_cl", A.PerfTimed("loops", function()
+function LP.Tick()
 	if not IsValid(LocalPlayer()) then return false end
 	local now = RealTime()
 	local dt = lastT and math.min(now - lastT, 0.5) or 0
@@ -765,4 +764,4 @@ hook.Add("Think", "pba_loops_cl", A.PerfTimed("loops", function()
 		local m = LP.mirrors[key]
 		if m then step(key, m) end
 	end
-end))
+end

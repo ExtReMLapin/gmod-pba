@@ -314,7 +314,7 @@ function SL.Drop(owner)
 	end
 end
 
-hook.Add("Think", "pba_far_sliced", A.PerfTimed and A.PerfTimed("far_sliced", SL.Run) or SL.Run)
+-- (SL.Run: run every frame by the scheduler, cl_sched.lua)
 
 -- pba_far_sliced_stats: what the slicer did since the last call (in-game measurement), then reset
 if concommand then
