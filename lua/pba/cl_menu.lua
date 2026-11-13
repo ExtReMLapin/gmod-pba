@@ -240,6 +240,7 @@ function Build.server(panel)
 	panel:Help("Limits (what goes beyond is left to the engine):")
 	sld(panel, "Relayed sounds per second per player", "relay_rate")
 	sld(panel, "Max loops followed", "loops_max")
+	chk(panel, "Silent loops do not count", "loops_cap_audible")
 
 	panel:Help("Players' Steam Audio module:")
 	chk(panel, "Allow the module", "allow_native")

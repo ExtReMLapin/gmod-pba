@@ -255,6 +255,16 @@ function LP.IsPatchStart(data)
 	return dur > 0 and dur <= 1800, dur
 end
 
+--- Loops counted against loops_max. C++ code starts many patches at volume 0 and raises them later
+-- (airboat: 6, gravity gun, mounted guns): the engine runs them at 0 at no cost. With loops_cap_audible
+-- only the audible ones count, so silent ones no longer push a new audible loop out to the engine.
+function LP.CapCount()
+	if (A.cfg.loops_cap_audible or 1) < 0.5 then return table.Count(LP.active) end
+	local n = 0
+	for _, l in pairs(LP.active) do if (l.vol or 1) > 0 then n = n + 1 end end
+	return n
+end
+
 local function stopReached(files, x) return A.StopReaches(files, x.name) or A.StopReaches(files, x.orig) end
 
 --- Stops the loops / long sounds `name` of entity idx (any channel: a stop may come on another
@@ -483,7 +493,7 @@ function LP.Handle(data)
 		end
 	end
 	if fresh then
-		if table.Count(LP.active) >= (A.cfg.loops_max or 64) then -- cap: left to the engine for now
+		if LP.CapCount() >= (A.cfg.loops_max or 64) then -- cap: left to the engine for now
 			LP.capped[key] = l
 			return false
 		end
