@@ -286,5 +286,17 @@
  "stop_followers": {
   "pos0": "hook",
   "why": "followers ended by stopsound"
+ },
+ "door_dormant": {
+  "pos0": "same",
+  "why": "only shut doors the client does not receive (dormant, areaportals closed): not met with the sweep's doors"
+ },
+ "relay_cl_enable": {
+  "pos0": "hook",
+  "why": "server relay decision for players with pba_cl_enable 0 (sv_relay), outside P.Compute"
+ },
+ "native_speaker_follow": {
+  "pos0": "hook",
+  "why": "speaker EQ of followed native voices (render time)"
  }
 }
