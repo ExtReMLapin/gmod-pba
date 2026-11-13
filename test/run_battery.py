@@ -245,7 +245,7 @@ steps = [
     ("vehicle_state_sounds", lambda: seq(lambda: load(TW), lambda: job("server", "vehicle_state_sounds.lua"))),
     ("loop_removed", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_removed.lua"))),
     ("looping_sound_stop", lambda: seq(lambda: load(TW), lambda: job("server", "looping_sound_stop.lua"))),
-    ("weapon_loop_owner", "loop_fade_tail", "native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
+    ("weapon_loop_owner", "loop_fade_tail", "loud_loop_far", "native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
     ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: job("client", "native_loop_fade_hidden.lua"))),
     ("looping_sound_stop_client", lambda: seq(lambda: load(TW), lambda: job("client", "looping_sound_stop_client.lua"))),
     ("stopsound", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "stopsound_setup.lua"), lambda: job("client", "stopsound.lua"))),

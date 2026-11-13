@@ -24,7 +24,10 @@ local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 -- fire's range would otherwise get STOP / START every 0.5 s, the loop restarting from its top each time.
 local LEAVE_SCALE = 1.1
 
-local function radiusFor(lvl) return math.min(lvl > 50 and 100 * (lvl - 50) or 500, A.cfg.lod_dist) end
+-- The engine's attenuated PAS radius, NOT capped by lod_dist: the hook suppresses a loop for everyone, so a
+-- player beyond lod_dist must get the mirror too (130-150 dB rotors and sirens, still loud at 7000-10000 u,
+-- went silent there). His client renders it clear, without any path search (cl_loops pathOf).
+local function radiusFor(lvl) return lvl > 50 and 100 * (lvl - 50) or 500 end
 
 local function send(op, l, plys)
 	if #plys == 0 then return end

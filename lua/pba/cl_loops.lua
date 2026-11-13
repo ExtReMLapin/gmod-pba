@@ -118,7 +118,11 @@ local function sliceReady(m) if not m.done then apply(m) end end
 
 --- Path result of a mirror (direction / low-pass hysteresis). nil while a far sound's evaluation runs
 -- in slices (cl_slicer): the mirror keeps its values, and is applied again once it is ready (sliceReady).
+local FAR_CLEAR = { clear = true, voices = {} }
 local function pathOf(m, S, L)
+	-- beyond lod_dist sounds are left untouched: heard as the original, no path search (a 130 dB rotor
+	-- 7000 u away is subscribed since the server suppresses it for everyone)
+	if S:DistToSqr(L) > A.cfg.lod_dist * A.cfg.lod_dist then return FAR_CLEAR end
 	m.hyst = m.hyst or {}
 	local raw
 	if A.Slicer then raw = A.Slicer.Held(m, S, L, m.lvl, m.ent, sliceReady) else raw = A.Paths.Compute(S, L, m.lvl, nil, m.ent) end
