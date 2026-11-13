@@ -284,6 +284,7 @@ function LP.Stop(idx, name)
 		if x.idx == idx and stopReached(files, x) then
 			local plys = {}
 			for p in pairs(x.subs) do if IsValid(p) then plys[#plys + 1] = p end end
+			LP.MouthStop(x)
 			send(OP_STOP, x, plys)
 			LP.active[k] = nil
 			found = true
@@ -383,6 +384,34 @@ function LP.WatchFade(l, step)
 		for p in pairs(x.subs) do if IsValid(p) then plys[#plys + 1] = p end end
 		send(OP_UPDATE, x, plys)
 	end)
+end
+
+-- Lip sync of the long lines pba takes over (a scene's speech, Breencast): the client moves a face from the
+-- voices the ENGINE plays on that entity, on a voice channel (C_BaseFlex::ProcessVisemes). The line is now a
+-- mirror (native module or a CSoundPatch elsewhere), and a listener out of the mirror's range gets nothing:
+-- the face stayed still (Breen on the station's screens, 4000 u away). The same line plays on the speaker at a
+-- volume nobody hears (-60 dB, as cl_render's mouth copy), on its channel, for everyone: the engine's mouth,
+-- with the engine's timing (no propagation delay), as in vanilla.
+local MOUTH_VOL = 0.001
+function LP.MouthStart(l, data)
+	if (A.cfg.long_lipsync or 0) < 0.5 or not l.once then return end
+	local e, ch = l.ent, l.chan
+	if not IsValid(e) or (ch ~= CHAN_VOICE and ch ~= CHAN_VOICE2) then return end
+	if (e.GetFlexNum and e:GetFlexNum() or 0) == 0 then return end
+	A.reemitting = true
+	e:EmitSound(data.SoundName, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch)
+	A.reemitting = false
+	l.mouth = true
+	A.stats.mouthLong = (A.stats.mouthLong or 0) + 1
+end
+
+--- Stops the mouth copy of long line l (its stop never reaches the engine: the hook takes it).
+function LP.MouthStop(l)
+	if not l.mouth or not IsValid(l.ent) then return end
+	l.mouth = nil
+	A.reemitting = true
+	l.ent:StopSound(l.name)
+	A.reemitting = false
 end
 
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
@@ -508,6 +537,7 @@ function LP.Handle(data)
 	if l.vehicle and IsValid(e) and bit.band(flags, VOL_PITCH) == VOL_PITCH and isStateSound(e, l) then
 		LP.VehicleStatePlayed(e, l, key)
 	end
+	if not update then LP.MouthStart(l, data) end
 	-- a volume / pitch change of a long one-shot goes to its listeners only: to anyone else it would
 	-- start the mirror from the top, midway through the speech
 	local joinable = not (l.once and update)
