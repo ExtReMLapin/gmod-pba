@@ -58,10 +58,24 @@ function A.KeepsChannel(flags)
 	return bit.band(flags or 0, NO_OVERWRITE) ~= 0
 end
 
+--- True for a replacing channel (not CHAN_AUTO / CHAN_STATIC, above 0): a new sound there cuts the previous one.
+function A.ReplacingChannel(chan)
+	return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0
+end
+
+--- True when a sound of `dur` seconds is a long one: longer than `min` (pba_max_duration when nil), and
+-- not past 30 minutes (a stream or a broken header, left to the engine).
+function A.LongDuration(dur, min)
+	return dur > (min or A.cfg.max_duration) and dur <= 1800
+end
+
+-- Volume of a mouth copy (lip sync only): -60 dB, nobody hears it.
+A.MOUTH_VOL = 0.001
+
 --- Entity index and channel of a new sound the channel rule applies to (nil otherwise).
 local function ruleSlot(data)
 	local chan, e = data.Channel, data.Entity
-	if not chan or chan == CHAN_AUTO or chan == CHAN_STATIC or chan <= 0 then return nil end
+	if not A.ReplacingChannel(chan) then return nil end
 	if A.KeepsChannel(data.Flags) then return nil end
 	if not IsValid(e) or e:IsWorld() or bit.band(data.Flags or 0, NOT_NEW) ~= 0 then return nil end
 	local idx = e:EntIndex()
@@ -205,22 +219,24 @@ local function fileKey(name) return string.lower(A.SoundFile(name or "")) end
 function A.StopFiles(name)
 	if not name or name == "" then return nil end
 	local set = { [fileKey(name)] = true }
-	local props = not A.IsSentence(name) and sound.GetProperties(name)
-	local w = props and props.sound
-	if isstring(w) then
-		set[fileKey(w)] = true
-	elseif istable(w) then
-		for _, x in ipairs(w) do set[fileKey(x)] = true end
-	end
+	for _, x in ipairs(A.Waves(name) or {}) do set[fileKey(x)] = true end
 	return set
+end
+
+--- The waves of sound script `name` (sound.GetProperties' `sound`, one wave or a list) as a list; nil when
+-- `name` is no script (a file, a sentence, "" or nil).
+function A.Waves(name)
+	local props = name and name ~= "" and not A.IsSentence(name) and sound.GetProperties(name)
+	local w = props and props.sound
+	if isstring(w) then return { w } end
+	if istable(w) then return w end
+	return nil
 end
 
 --- The waves of a sound script (the name itself when it is not one): what a StopSound(name) stops.
 function A.StopWaves(name)
-	local props = name and name ~= "" and not A.IsSentence(name) and sound.GetProperties(name)
-	local w = props and props.sound
-	if isstring(w) then return { w } end
-	if istable(w) and #w > 0 then return w end
+	local w = A.Waves(name)
+	if w and #w > 0 then return w end
 	return { name or "" }
 end
 

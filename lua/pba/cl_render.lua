@@ -57,7 +57,7 @@ end
 -- a pool anchor or natively played on after the server stopped it, and after the entity was removed.
 A.copies = A.copies or {} -- "idx:chan" -> { idx, chan, anchors = { slot -> ent }, t }: anchors of a replacing channel
 A.emitted = A.emitted or {} -- idx -> { handle, ... }: every copy re-emitted for that entity (handles: see emitVoice)
-local function replaces(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+local replaces = A.ReplacingChannel
 
 -- one-shots followed while they play (see below): records, the pool of anchors of the copies that
 -- have no copy set (unassigned channels), native voice id -> followed voice
@@ -902,7 +902,7 @@ end
 -- areaportal) gets its copy all the same, by entity index, when the server says the line is on a face
 -- (data.Face): the engine keeps the channel under that index as it keeps the original's in vanilla, and the
 -- face that comes into view during the line moves its mouth (pba_lipsync_unseen).
-local MOUTH_VOL = 0.001
+local MOUTH_VOL = A.MOUTH_VOL
 local function mouthCopy(data, src)
 	if (A.cfg.lipsync or 1) < 0.5 then return end
 	local ch = data.Channel

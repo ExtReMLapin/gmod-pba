@@ -161,15 +161,15 @@ fb_new, fb_stale = sorted(fb_seen - FALLBACK_KNOWN), sorted(FALLBACK_KNOWN - fb_
 print("%s static: cfg fallbacks = the option's default (%d known exceptions; new: %s; gone from the code, drop from the list: %s)"
       % ("PASS" if not fb_new and not fb_stale else "FAIL", len(FALLBACK_KNOWN), fb_new or "none", fb_stale or "none"))
 
-# Static lock (offline only): the upper bound of a long sound (1800 s) is written in one place only.
-# LONG_KNOWN lists the copies left today (file: count); the list only shrinks.
-LONG_KNOWN = {"cl_loops.lua": 2, "sv_loops.lua": 2}
+# Static lock (offline only): the upper bound of a long sound (1800 s) is written in one place only:
+# A.LongDuration (sh_core.lua).
+LONG_KNOWN = {"sh_core.lua": 1}
 long_seen = {}
 for k, v in srcs.items():
     n = len(re.findall(r"(?<![\w.])1800(?![\w.])", v))
     if n:
         long_seen[k.rsplit("/", 1)[-1]] = n
-print("%s static: the long-sound bound 1800 in one place (known copies %s, found %s)"
+print("%s static: the long-sound bound 1800 in one place (expected %s, found %s)"
       % ("PASS" if long_seen == LONG_KNOWN else "FAIL", LONG_KNOWN, long_seen))
 
 # The native helpers (cl_native.lua: distance law, sends, directivity, EQ) and their suite. Loaded last:
