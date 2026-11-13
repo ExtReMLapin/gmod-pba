@@ -306,6 +306,9 @@ steps = [
                                        lambda: [job("server", "impact_inside_prop.lua", 30), job("client", "impact_inside_prop_client.lua", 10)])),
     # a sound beyond lod_dist behind a wall: the cheap muffle (one trace, DSP preset), server and client
     # (was left to the engine, heard through the wall as in plain sight)
+    ("soundtime_offset", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "soundtime_offset.lua", 20))),
+    ("soundtime_echo", lambda: job("client", "soundtime_echo.lua")),
+    ("listener_inside_prop", lambda: seq(lambda: load(TW), lambda: job("server", "listener_inside_prop.lua", 20))),
     ("far_muffle", lambda: seq(lambda: load(TW), lambda: native_on(False),
                                lambda: [job("server", "far_muffle.lua", 30), job("client", "far_muffle_client.lua", 15)])),
     # a sentence an addon plays on the world (no position in EntityEmitSound): taken behind a wall
@@ -344,6 +347,7 @@ steps = [
     # prop_dynamic, MOVETYPE_PUSH like a door, keeps its loop)
     ("loop_reenable", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_reenable.lua", 20))),
     # loops born on the client (CreateSound of addons: vehicle engines): mirrored, stopped with Stop, GC, removal
+    ("patch_oneshot_client", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("client", "patch_oneshot_client.lua", 20))),
     ("client_loop", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("client", "client_loop.lua", 20))),
     # native block (pba_native_render 1); native_doors closes then opens the door itself
     ("native_doors", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_doors.lua"))),
@@ -358,6 +362,7 @@ steps = [
     # sentences (scripts/sentences.txt, HL2 mounted): the line parser, then the words rendered by the module
     ("sentence_parse", lambda: job("client", "sentence_parse.lua")),
     ("sentence_files", lambda: job("client", "sentence_files.lua")),
+    ("runconsolecommand_blame", lambda: job("client", "runconsolecommand_blame.lua")),
     ("sound_duration", lambda: job("client", "sound_duration.lua")),
     ("sound_duration server", lambda: job("server", "sound_duration.lua")),
     ("sentence_virtual", lambda: job("client", "sentence_virtual.lua")),
@@ -612,7 +617,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state

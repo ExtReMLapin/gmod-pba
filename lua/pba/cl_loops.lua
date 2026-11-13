@@ -388,7 +388,11 @@ function LP.HandleClient(data)
 	local m = LP.mirrors[key]
 	-- a client loop (CSoundPatch:Play arrives as a SND_CHANGE_VOL that starts the sound)
 	local loop = not m and (A.cfg.loops_client or 0) >= 0.5 and (A.cfg.loops or 0) >= 0.5 and A.IsLooping(name)
-	local src = loop and foreignPatch(e, name)
+	-- a client patch on a file without loop points (pba_patch_oneshots): its Play starts it once, for its
+	-- length; neither a loop nor an eligible one-shot (a change flag), it crossed every wall
+	local once = not m and not loop and change and (A.cfg.patch_oneshots or 0) >= 0.5 and (A.cfg.loops or 0) >= 0.5
+		and (A.cfg.loops_client or 0) >= 0.5 and not A.IsLooping(name)
+	local src = (loop or once) and foreignPatch(e, name)
 	local cpp = loop and not src and cppPatch(e, name)
 	if change and not src and not cpp then
 		if not m then return false end
@@ -407,6 +411,12 @@ function LP.HandleClient(data)
 	if lvl <= 0 or lvl >= 256 then return false end
 	if src or cpp then
 		-- client loop: needs its registered patch or a known C++ owner (else nothing would ever stop the mirror)
+		if once then
+			local st = data.SoundTime or 0
+			if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+			local dur = A.SoundDuration(name) or 0
+			if dur <= 0 or dur > 1800 then return false end
+		end
 	else
 		if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 or A.IsLooping(name) then return false end
 		local st = data.SoundTime or 0
@@ -418,7 +428,7 @@ function LP.HandleClient(data)
 	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end
 	if n >= (A.cfg.loops_max_cl or 32) then return false end -- cap: left to the engine
 	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
-		dsp = data.DSP or 0, once = not (src or cpp), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
+		dsp = data.DSP or 0, once = not ((src or cpp) and not once), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
 		src = src and setmetatable({ src }, { __mode = "v" }) or nil }
 	LP.mirrors[key] = m
 	apply(m, 0)
