@@ -550,6 +550,8 @@ steps = [
     ("cl_enable_relay", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: job("server", "cl_enable_relay.lua", 60))),
     # pba_twodoors, both brush doors closed: dormant on the client, still paid by the routes (side bug 39)
     ("twodoors_closed", lambda: seq(lambda: load("pba_twodoors"),
+        lambda: call("lua_exec", {"realm": "server", "code": "for _, n in ipairs({'door_s', 'door_n'}) do for _, d in ipairs(ents.FindByName(n)) do d:Fire('Open') end end return true"}),
+        lambda: time.sleep(4),  # seen open first: the client receives them (never received at all: not covered yet)
         lambda: call("lua_exec", {"realm": "server", "code": "for _, n in ipairs({'door_s', 'door_n'}) do for _, d in ipairs(ents.FindByName(n)) do d:Fire('Close') end end return true"}),
         lambda: time.sleep(4), lambda: job("client", "twodoors_closed.lua", 30))),
     ("native_volume_sfx", lambda: volume_sfx_step()),

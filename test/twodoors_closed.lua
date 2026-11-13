@@ -31,7 +31,7 @@ end
 res.loudest = math.Round(worst, 1)
 -- both doors open: about -19..-21 dB at these points (measured); closed doors cost their leaf (34 dB)
 local why = {}
-if dormant < 2 then why[#why + 1] = "the doors are not dormant: case not exercised (inconclusive)" end
+if dormant < 2 then why[#why + 1] = "the doors are not dormant (never received by this client: not covered yet)" end
 if worst > -19 - 15 then why[#why + 1] = "loudest voice " .. res.loudest .. " dB: the closed doors are not heard" end
 res.pass = #why == 0
 res.why = table.concat(why, "; ")
