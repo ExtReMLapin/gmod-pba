@@ -376,7 +376,13 @@ steps = [
     ("water_ogg gm_construct", water_ogg),
     # slime is water to the engine (MASK_WATER): a source in it heard from the air crosses the interface
     ("underwater_slime d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: job("client", "underwater_slime.lua"))),
-    ("water_rules d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: job("client", "water_rules.lua"))),
+    ("water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: job("client", "water_rules.lua"))),
+    # head under water: the room reverb and echoes fade out (the engine swaps its room DSP for dsp_water)
+    ("water_reverb d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: native_on(True), lambda: job("client", "water_reverb.lua"))),
+    # the engine's dsp_water reaches the copies pba muffles too: no wall on top in Light / server decisions
+    ("water_light d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: [job("client", "water_light.lua"), job("server", "water_light.lua")])),
+    # two water bodies with air between them: the source's surface is a wall
+    ("water_planes d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: job("client", "water_planes.lua"))),
     # door leaf crossed by the line = its doorway (one model): no jump at the leaf / wall boundary
     # continuous sounds: no flip-flop between two equal paths, a real move still switches once
     ("path_hysteresis twodoors", lambda: seq(doors_open, lambda: job("client", "path_hysteresis.lua"))),

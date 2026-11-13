@@ -499,12 +499,21 @@ function N.StartRender()
 	MsgN("[PBA] native rendering on (Steam Audio, HRTF: ", st and st.hrtf or "default", ")")
 end
 
---- Pushes the client options to the module (output mode, reflection levels and quality).
+-- a reflection level times N.wetScale, kept a hair above 0 when on: the reflection thread then keeps
+-- simulating (no gap on surfacing)
+local function wetLevel(v, k)
+	if v <= 0 or k >= 1 then return v end
+	return math.max(v * k, 1e-4)
+end
+
+--- Pushes the client options to the module (output mode, reflection levels and quality). The room reverb and
+-- echo levels are scaled by N.wetScale (0 with the head under water, see the Think below).
 function N.ApplySettings()
 	if not N.render or not pba_native.SetReflections then return end
 	pba_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
-	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays, A.cfg.native_bounces or 16,
-		A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
+	local k = N.wetScale or 1
+	pba_native.SetReflections(wetLevel(A.cfg.native_reverb, k), wetLevel(A.cfg.native_echo, k), A.cfg.native_rays,
+		A.cfg.native_bounces or 16, A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
 end
 
 N.hrtfCvar = N.hrtfCvar or CreateClientConVar("pba_native_hrtf", "", true, false,
@@ -1275,6 +1284,16 @@ hook.Add("Think", "pba_native_listener", function()
 	if uw ~= N.underwater and pba_native.SetUnderwater then
 		N.underwater = uw
 		pba_native.SetUnderwater(uw and 1 or 0)
+	end
+	-- the engine swaps its room DSP for dsp_water while the head is under water: the module's room reverb and
+	-- echoes, simulated in the air, fade out (~0.15 s) and come back on surfacing (native_water_reverb)
+	local wetTo = (uw and (A.cfg.native_water_reverb or 1) >= 0.5) and 0 or 1
+	local k = N.wetScale or 1
+	if k ~= wetTo then
+		local step = FrameTime() / 0.15
+		k = wetTo < k and math.max(wetTo, k - step) or math.min(wetTo, k + step)
+		N.wetScale = k
+		N.ApplySettings()
 	end
 	if A.Loops and A.Loops.FollowNative then A.Loops.FollowNative(L) end
 	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
