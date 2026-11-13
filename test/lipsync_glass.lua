@@ -20,15 +20,14 @@ npc:SetAngles(Angle(0, 270, 0))
 npc:Spawn()
 job:sleep(1)
 ply:SetEyeAngles((npc:EyePos() - ply:EyePos()):Angle())
-ply:SendLua([[pba._lip = { phase = "", max = {} }
+ply:SendLua([[pba._lip = { phase = "", max = {}, base = pba.stats.mouthCopies or 0 }
 hook.Add("Think", "pba_test_lip", function()
 	local L = pba._lip
 	if L.phase == "" then return end
-	local n = pba.stats.mouthCopies or 0
-	L.mc0 = L.mc0 or {}
-	L.mc0[L.phase] = L.mc0[L.phase] or n
-	L.mc = L.mc or {}
-	L.mc[L.phase] = n - L.mc0[L.phase]
+	-- copies counted up to the end of each phase (the relayed line and the phase's SendLua travel on two
+	-- channels: either may arrive first)
+	L.mcEnd = L.mcEnd or {}
+	L.mcEnd[L.phase] = pba.stats.mouthCopies or 0
 end)]])
 local old = GetConVar("pba_enable"):GetString()
 local LINE = "vo/npc/male01/question06.wav"
