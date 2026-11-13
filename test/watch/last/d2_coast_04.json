@@ -1,0 +1,75 @@
+{
+ "map": "d2_coast_04",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 27,
+ "visited": 20,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "stuck_once": {
+   "count": 104,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 46.93,
+     "pos": "2444.593750 2785.968750 1032.250000",
+     "dur": 7.2,
+     "map": "d2_coast_04",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.2,
+     "key": "451:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.010022309951557638
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 8,
+   "distinct": 4,
+   "samples": [
+    {
+     "db": 7.1,
+     "pos": "2696.000000 -1560.000000 311.106689",
+     "toG": 0.1505,
+     "t": 62.47,
+     "sound": "weapons/ar1/ar1_dist1.wav",
+     "fromG": 0.0664,
+     "key": "weapons/ar1/ar1_dist1.wav",
+     "map": "d2_coast_04"
+    },
+    {
+     "db": 10.2,
+     "pos": "3216.138672 -1516.496094 186.714676",
+     "toG": 0.0552,
+     "t": 62.47,
+     "sound": "ambient/machines/thumper_amb.wav",
+     "fromG": 0.017,
+     "key": "ambient/machines/thumper_amb.wav",
+     "map": "d2_coast_04"
+    },
+    {
+     "db": -6,
+     "pos": "4191.999512 -1664.000244 738.031189",
+     "toG": 0.0326,
+     "t": 67.42,
+     "sound": "weapons/smg1/npc_smg1_fire1.wav",
+     "fromG": 0.0651,
+     "key": "weapons/smg1/npc_smg1_fire1.wav",
+     "map": "d2_coast_04"
+    },
+    {
+     "db": -8,
+     "pos": "3431.362305 -2961.158936 450.031219",
+     "toG": 0.0113,
+     "t": 67.42,
+     "sound": "npc/combine_soldier/gear3.wav",
+     "fromG": 0.0284,
+     "key": "npc/combine_soldier/gear3.wav",
+     "map": "d2_coast_04"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

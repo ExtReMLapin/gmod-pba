@@ -1,0 +1,138 @@
+{
+ "map": "d2_prison_01",
+ "tag": "",
+ "sets": [],
+ "secs": 97,
+ "triggers": 23,
+ "visited": 23,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "stuck_once": {
+   "count": 4,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 77.62,
+     "pos": "3408.250000 -3774.093750 1288.093750",
+     "dur": 7.2,
+     "map": "d2_prison_01",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.2,
+     "key": "425:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.5349170316935741
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 77,
+   "distinct": 16,
+   "samples": [
+    {
+     "db": -13,
+     "pos": "2056.031250 -3650.712158 1129.573730",
+     "toG": 0.0105,
+     "t": 43.09,
+     "sound": "npc/antlion/foot2.wav",
+     "fromG": 0.0469,
+     "key": "npc/antlion/foot2.wav",
+     "map": "d2_prison_01"
+    },
+    {
+     "db": -13.8,
+     "pos": "2056.031250 -3687.032959 1116.628174",
+     "toG": 0.0096,
+     "t": 43.09,
+     "sound": "npc/antlion/foot1.wav",
+     "fromG": 0.0469,
+     "key": "npc/antlion/foot1.wav",
+     "map": "d2_prison_01"
+    },
+    {
+     "db": -7.2,
+     "pos": "4103.905273 -4390.244629 1418.199829",
+     "toG": 0.0061,
+     "t": 56.82,
+     "sound": "physics/surfaces/sand_impact_bullet4.wav",
+     "fromG": 0.014,
+     "key": "physics/surfaces/sand_impact_bullet4.wav",
+     "map": "d2_prison_01"
+    },
+    {
+     "db": -4.7,
+     "pos": "3727.828613 -4450.420410 1115.778687",
+     "toG": 0.0236,
+     "t": 57.18,
+     "sound": "npc/antlion/foot4.wav",
+     "fromG": 0.0403,
+     "key": "npc/antlion/foot4.wav",
+     "map": "d2_prison_01"
+    },
+    {
+     "db": 3,
+     "pos": "4099.708984 -4424.782715 1240.269775",
+     "toG": 0.0095,
+     "t": 57.72,
+     "sound": "physics/concrete/concrete_impact_bullet4.wav",
+     "fromG": 0.0067,
+     "key": "physics/concrete/concrete_impact_bullet4.wav",
+     "map": "d2_prison_01"
+    },
+    {
+     "db": -3.5,
+     "pos": "3787.269043 -4451.424316 1116.067627",
+     "toG": 0.0058,
+     "t": 59.43,
+     "sound": "npc/antlion/foot3.wav",
+     "fromG": 0.0086,
+     "key": "npc/antlion/foot3.wav",
+     "map": "d2_prison_01"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "ambient/alarms/siren.wav": {
+   "lvl": 100,
+   "dmin": 1352,
+   "dmax": 2449,
+   "n": 63,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_weapon_fire_loop6.wav": {
+   "lvl": 140,
+   "dmin": 408,
+   "dmax": 5594,
+   "n": 64,
+   "native": true
+  },
+  "^npc/combine_gunship/engine_whine_loop1.wav": {
+   "lvl": 130,
+   "dmin": 408,
+   "dmax": 5594,
+   "n": 64,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_engine_loop3.wav": {
+   "lvl": 120,
+   "dmin": 408,
+   "dmax": 5594,
+   "n": 64,
+   "native": true
+  },
+  "npc/combine_gunship/engine_rotor_loop1.wav": {
+   "lvl": 120,
+   "dmin": 408,
+   "dmax": 5594,
+   "n": 64,
+   "native": true
+  },
+  "ambient/alarms/city_siren_loop2.wav": {
+   "lvl": 100,
+   "dmin": 1337,
+   "dmax": 2424,
+   "n": 63,
+   "native": true
+  }
+ }
+}

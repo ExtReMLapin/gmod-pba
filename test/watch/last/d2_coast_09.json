@@ -1,0 +1,79 @@
+{
+ "map": "d2_coast_09",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 41,
+ "visited": 26,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "voice_step": {
+   "count": 12,
+   "distinct": 7,
+   "samples": [
+    {
+     "db": -5.3,
+     "pos": "-11793.591797 7402.436523 576.093750",
+     "toG": 0.1051,
+     "t": 37.73,
+     "sound": "npc/zombie/foot1.wav",
+     "fromG": 0.1936,
+     "key": "npc/zombie/foot1.wav",
+     "map": "d2_coast_09"
+    },
+    {
+     "db": 3.5,
+     "pos": "-11549.458984 7185.158691 553.241211",
+     "toG": 0.0448,
+     "t": 42.7,
+     "sound": "npc/headcrab/idle3.wav",
+     "fromG": 0.03,
+     "key": "npc/headcrab/idle3.wav",
+     "map": "d2_coast_09"
+    },
+    {
+     "db": -4.6,
+     "pos": "-11594.113281 7158.930664 579.549500",
+     "toG": 0.0691,
+     "t": 45.02,
+     "sound": "npc/zombie/foot_slide2.wav",
+     "fromG": 0.1171,
+     "key": "npc/zombie/foot_slide2.wav",
+     "map": "d2_coast_09"
+    },
+    {
+     "db": 3.5,
+     "pos": "-11594.729492 6987.889160 582.025269",
+     "toG": 0.6894,
+     "t": 45.58,
+     "sound": "npc/headcrab/attack3.wav",
+     "fromG": 0.4633,
+     "key": "npc/headcrab/attack3.wav",
+     "map": "d2_coast_09"
+    },
+    {
+     "db": 3.7,
+     "pos": "-11611.936523 7106.781250 562.313843",
+     "toG": 0.4747,
+     "t": 48.1,
+     "sound": "npc/headcrab/attack2.wav",
+     "fromG": 0.3093,
+     "key": "npc/headcrab/attack2.wav",
+     "map": "d2_coast_09"
+    },
+    {
+     "db": -11.9,
+     "pos": "-11682.698242 7048.253906 571.654602",
+     "toG": 0.1944,
+     "t": 49.75,
+     "sound": "npc/headcrab/attack1.wav",
+     "fromG": 0.7614,
+     "key": "npc/headcrab/attack1.wav",
+     "map": "d2_coast_09"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

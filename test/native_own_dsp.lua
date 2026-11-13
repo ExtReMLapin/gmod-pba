@@ -79,6 +79,14 @@ local ok, err = pcall(function()
 		if d and d > (A.cfg.max_duration or 10) + 5 then long = "music/" .. f break end
 	end
 	local LP = A.Loops
+	-- the long file decoded first: a >512 KB file is decoded asynchronously (N.EnsureSound "pending", 0.15-0.25 s
+	-- for this 1.7 MB mp3 on an idle game, more under load) and the mirror has no voice meanwhile; the step
+	-- passed only when an earlier run left it in the module's sound cache, else failed under load (side bug 42)
+	if long then
+		N.EnsureSound(long)
+		job:wait(function() return pba_native.HasSound(long) end, 10)
+		res.longDecoded = pba_native.HasSound(long)
+	end
 	if long and LP and LP.HandleClient then
 		local e = ClientsideModel("models/props_junk/PopCan01a.mdl")
 		e:SetPos(blocked)

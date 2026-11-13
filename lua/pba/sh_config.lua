@@ -109,6 +109,7 @@ A.CONFIG = {
 
 	-- level of detail
 	lod_dist        = { 6000, 500, 30000, "sv", "Beyond this distance sounds are left untouched." },
+	speech_floor_db = { -20, -80, 0, "cl", "A line on a face (an NPC speaking) is never rendered quieter than this (dB) under the engine's clear level for it: dialogue stays heard through walls. Without it Alyx's lines behind a lab wall (d1_trainstation_05) were -37 dB under, and in Light mode got no sound at all (the engine plays nothing that quiet). -80 = off." },
 	quiet_db        = { -40, -100, 0, "cl", "Sounds the engine would play quieter than this (dB, clear line, their volume included) get no path search: one-shots are left to the engine, loops keep their last values. -100 = off." },
 	probe_dist      = { 3000, 0, 30000, "sv", "Beyond this distance no probe path search (transmission only)." },
 	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_pba is installed." },
@@ -122,11 +123,13 @@ A.CONFIG = {
 	native_room_open_area = { 4608, 0, 100000, "cl", "Area (square units) of the opening an arrival enters the listener's space by (a door: 48 x 96 = 4608): the listener's room reverb gets the power through it (the flux at the opening times its area), not the full flux. 0 = the full flux (16-20 dB more room reverb behind a doorway)." },
 	native_echo     = { 0.25, 0, 4, "cl", "Echo level: reflections simulated for each loud sound (gunfire, explosions), heard in addition to the engine's sound. 0 = off." },
 	native_echo_lvl = { 95, 60, 160, "cl", "Minimum sound level (dB SNDLVL) for a sound to get simulated echoes." },
+	native_src_near = { 0.1, 0, 0.5, "cl", "Source reverb of a moving far source: its response is kept while the source stays within this fraction of its distance (and 1.5 m near). 0 = 1.5 m at any distance: a gunship 90 m away was re-simulated every 0.25 s from one noisy pass, its echo jumping +-4 dB." },
 	native_loud_dry = { 1, 0, 1, "cl", "Loud sounds stay dry, as in the engine: the reverb of a sound above dsp_db_min (95 dB) is lowered by dsp_db_mixdrop (0.1, -20 dB). Without it, gunfire in the open got as much reverb as direct sound (muddled)." },
 	native_law_engine = { 0, 0, 1, "cl", "Distance law of natively rendered sounds: 0 = a real sound, 1/r from 1 m (-6 dB per doubling); 1 = the engine's own law (much gentler for levels 80-110: a level 85 sound at 500 u is -0.7 dB in the engine, -19.6 dB with 1/r); in between, a mix in dB. The reverb follows the same law." },
+	native_quiet_law = { 1, 0, 1, "cl", "Natively rendered loops: judged quiet (pba_quiet_db, no path search) by the distance law they are heard with, and while quiet their level keeps following that law with distance. 0 = judged by the engine's law and frozen at their last values while quiet (a loop heard from the next room kept that level when the listener went far: up to +20 dB at 5000 u)." },
 	native_volume_sfx = { 1, 0, 1, "cl", "Natively rendered sounds follow the game's Effects volume (volume_sfx), as the engine's sounds and other addons' streams do (GMod sets BASS's global volume to volume x volume_sfx). 0 = the master volume alone (lowering the effects left the module's sounds at full level)." },
 	native_mix      = { 1, 0, 1, "cl", "Natively rendered sounds take the engine's mix group value (scripts/soundmixers.txt, the mixer snd_soundmixer a soundscape sets): the engine plays most sounds at 0.72, weapons 0.79, explosions 0.90, bullet hits 0.67; 0 = every sound at full value (2.9 dB louder than the engine for most)." },
-	native_duck     = { 1, 0, 1, "cl", "Natively rendered ambience, vehicles and music duck under gunfire, explosions and dialog as the engine's mixer does (to 60-75 %, 0.5 s down, 2.5 s back; snd_disable_mixer_duck 1 turns it off for both)." },
+	native_duck     = { 1, 0, 1, "cl", "The engine mixer's ducking for pba's sounds: gunfire, explosions and dialog, short or long (a long speech line followed like a loop included), duck the natively rendered ambience, vehicles and music as the engine's mixer does (to 60-75 %, 0.5 s down, 2.5 s back; snd_disable_mixer_duck 1 turns it off for both). 0 = no ducking: the ambience stays at full under a line." },
 	native_echo_own = { 0, 0, 1, "cl", "Echoes on your own loud sounds too (your gunfire): the engine plays them, the module adds their reflections." },
 	native_bounces  = { 16, 4, 256, "cl", "Bounces per ray of the reverb simulation: enough to fill the simulated window, or reflective rooms (tile, metal) get a reverb time capped too short. Background thread CPU grows with it." },
 	native_rays     = { 2048, 256, 8192, "cl", "Rays per reflection simulation (quality vs CPU of the background thread). Changing it rebuilds the Steam Audio scene (a few seconds)." },
@@ -155,7 +158,12 @@ A.CONFIG = {
 	native_path_fx  = { 1, 0, 1, "cl", "Render Steam Audio baked paths as a spatial sound field (several arrival directions) instead of one point." },
 	native_cache    = { 1, 0, 1, "cl", "Keep the Steam Audio path bake on disk (data/pba) to skip it next time." },
 	delay           = { 0, 0, 1, "cl", "Propagation delay (speed of sound, 343 m/s) on the sounds pba renders." },
+	long_lipsync    = { 1, 0, 1, "sv", "Lip sync of the long lines pba follows (a scene's speech, Breencast): an inaudible copy plays on the speaker for every player, from which the engine moves the mouth with its own timing. 0 = the face stays still once the line is taken over." },
+	long_lipsync_choice = { 1, 0, 1, "sv", "Each player's own lip sync setting (pba_lipsync) also chooses for the long lines' inaudible mouth copy, as for the short lines: the server allows it (pba_long_lipsync), the player picks. 0 = every player gets the long lines' mouth copy whatever his setting." },
+	long_soundtime  = { 1, 0, 1, "sv", "With pba_soundtime: a long line or sound patch stamped with its own start time (SoundTime, away from now) is taken over like a short sound (started at once) instead of refused. 0 = such a long sound is left to the engine and crosses every wall." },
 	lipsync         = { 1, 0, 1, "cl", "Lip sync of the voices pba renders: an inaudible copy of the line plays on the speaker itself, from which the engine moves the mouth (its phonemes)." },
+	lipsync_stop    = { 1, 0, 1, "cl", "A line's inaudible mouth copy stops with the line: a StopSound, a cancelled scene (the speaker interrupted, killed), stopsound or a new sound on its channel stop it as they stop the line's copies, and the mouth stops moving. 0 = the mouth copy plays to its end." },
+	lipsync_unseen  = { 1, 0, 1, "cl", "Lip sync of a relayed line whose speaker this client has not received yet (never in view): its inaudible copy plays on the speaker's entity number, so a face that comes into view during the line moves its mouth, as in vanilla. 0 = no copy for such speakers." },
 	allow_native    = { 1, 0, 1, "sv", "Allow players to use the optional native Steam Audio backend (HRTF, reflections...) on this server." },
 	native_relay    = { 1, 0, 1, "sv", "Relay every sound to players who render everything natively (pba_native_all): more traffic, only to them." },
 	echo_relay      = { 1, 0, 1, "sv", "Send loud server sounds to clients that render echoes natively (small extra traffic, only to those clients)." },
@@ -166,7 +174,6 @@ A.CONFIG = {
 	frame_budget_ms = { 1, 0.1, 20, "cl", "Path search time per frame; beyond it, sounds fall back to cheaper processing." },
 	min_level       = { 50, 0, 140, "sv", "Sounds with a lower SNDLVL are left untouched." },
 	cache_ttl       = { 0.25, 0, 5, "sv", "Seconds a (source cell, listener cell) result stays cached." },
-	hysteresis      = { 0.3, 0, 2, "sv", "Seconds before the voice layout of a repeating source may change." },
 	max_duration    = { 8, 0.5, 60, "sv", "Sounds longer than this (s) are left untouched." },
 	sentences       = { 1, 0, 1, "sv", "Sentences (Combine and metrocop radio, HL2 NPC lines from sentences.txt): relayed and muffled like other sounds instead of crossing every wall." },
 	phys_loops_muffle = { 1, 0, 1, "sv", "Physics scrape / rolling loops behind a wall: muffled by the engine (DSP preset, lower volume) instead of crossing it unchanged." },
@@ -175,6 +182,7 @@ A.CONFIG = {
 	mp_own          = { 1, 0, 1, "sv", "Multiplayer: the sounds the server plays on a player outside his own commands (pain, fall damage, the suit's HEV lines) are his own, as in singleplayer: the engine plays them on him, never relayed and placed in the room (0: relayed like any sound, rendered at his position with the room's reverb, a HEV line left behind where it started)." },
 	soundtime       = { 1, 0, 1, "sv", "Sounds stamped with their own start time (a weapon firing several shots between two network updates: SoundTime) keep it when relayed or re-emitted: the shots keep their rhythm, as the engine spaces them on the client. 0 = every relayed shot starts on arrival (two shots of one update played together, doubled)." },
 	long_sounds     = { 1, 0, 1, "sv", "Follow long sounds (music, speeches: longer than max_duration) like loops: their path is updated while they play." },
+	long_captions   = { 1, 0, 1, "sv", "Those long sounds keep their subtitle: the engine shows it for the original sound, which pba replaces; 0 = a long speech line shows no subtitle." },
 	allow_debug     = { 0, 0, 1, "sv", "Let every player use the debug overlay (it shows where sounds come from through walls: a wallhack). Admins can always use it." },
 	prop_max_db     = { 18, 0, 60, "sv", "Max loss when only objects (props) stand between source and listener: room and ground reflections still reach round them." },
 	water           = { 1, 0, 1, "sv", "Water surfaces between source and listener muffle sound heavily (air / water interface)." },
@@ -185,12 +193,26 @@ A.CONFIG = {
 	relay_rate      = { 80, 5, 1000, "sv", "Max relayed sounds per second to one player (token bucket, burst 1 s). Beyond it the engine re-emits the sound to that player muffled (low-pass preset from the wall, at most 24 dB down), never louder instead of a relay." },
 	loops_max       = { 64, 4, 512, "sv", "Max loops / long sounds followed by the server at once. Beyond it new ones are left to the engine." },
 	loops_cap_audible = { 1, 0, 1, "sv", "Only audible loops count against loops_max: patches started at volume 0 (airboat, gravity gun, mounted guns raise them later) no longer push a new audible loop out to the engine (vanilla through walls)." },
+	loops_once_end  = { 1, 0, 1, "cl", "A long one-shot mirrored from the server (a Breencast line on a TV) ends with its file, whether the engine or the native module renders it: its engine copy reads as playing long after the file ended (it lived on and replayed from its top at each volume change), and a native one that got no update (far and quiet, or left alone by the adaptive re-evaluation) lived on past its file and still counted as playing on its channel. 0 = both kept until the engine or an update finds them gone." },
+	loops_release_restart = { 0, 0, 1, "sv", "pba turned off midway through a long one-shot it follows (a speech, music): 1 = the engine plays it again from its top; 0 = it ends silently, as its client mirror (neither can resume midway)." },
+	door_dormant    = { 1, 0, 1, "cl", "Doors this client does not receive (shut doors that close their areaportals: dormant, no collision for its traces, pba_twodoors with both doors shut) are found by their box and their state from the server. 0 = traces only: such doors are not heard (the routes through them as if open)." },
+	relay_cl_enable = { 1, 0, 1, "sv", "A player who switched pba off on his side (pba_cl_enable 0) gets the engine's own sounds, as without the addon: nothing relayed nor muffled for him (his client tells the server). 0 = he is relayed as the others and his client plays the relays unchanged." },
+	native_speaker_follow = { 1, 0, 1, "cl", "With native rendering: a speaker's voice (SND_SPEAKER: a loudspeaker, Breencast) keeps its speaker EQ while pba follows it (walking, a moving speaker). 0 = the EQ is lost at the voice's first update (old behaviour)." },
+	loops_speaker_native = { 1, 0, 1, "cl", "With native rendering: a long line on a speaker (SND_SPEAKER: Breencast on a jumbotron) is rendered by the module with its speaker EQ, as the short speaker lines. 0 = an engine sound patch with the speaker DSP preset." },
+	doors_spawned   = { 1, 0, 1, "sv", "Doors created after the map loaded (sandbox spawns, the duplicator, map templates) are followed like the map's own: 0 = such a door has no state and counts as shut." },
 	loops_mic_disable = { 1, 0, 1, "sv", "A microphone (env_microphone) switched off stops what its speaker plays, as the engine does: the speaker's mirrors were never told and played on." },
 	brief_updates   = { 1, 0, 1, "sv", "A volume / pitch change of a brief sound pba relayed (non-looped ambient_generic with a preset or inputs, rotating or train move sounds) is dropped: the engine started a second, vanilla copy midway at the players who got pba's copy." },
 	soundscape_engine = { 1, 0, 1, "cl", "Soundscape ambience played around the ear (random positions within 64 u) is left to the engine: not muffled nor echoed." },
+	channel_one_rule = { 1, 0, 1, "sv", "One channel rule for every copy and mirror: a new sound on an entity's replacing channel (CHAN_VOICE...) cuts all pba plays there, whichever path started them (a client long sound cuts the short copies of its channel and the reverse, a client sound left to the engine cuts pba's copies). 0 = each path cut only its own kind (short copies by short sounds, client long mirrors by client long sounds), and the world's long lines were cut too." },
+	stop_followers  = { 1, 0, 1, "cl", "stopsound (console or Lua) also ends the following of every playing one-shot: a copy of a sound without an entity is in no copy registry, and its follower kept sending volume changes to a sound the engine had stopped. 0 = only the registered copies stop." },
 	stopsound_watch = { 1, 0, 1, "cl", "stopsound typed in the console or bound to a key (and snd_restart) also stops pba's copies, loop mirrors and native voices: no Lua function sees that command, a silent sound patch reports it (the engine marks it stopped). 0 = only the commands run from Lua (RunConsoleCommand, ConCommand) are caught." },
+	loops_native_fail = { 1, 0, 1, "cl", "A long line or loop the native module cannot start (its Play fails) is played by the engine's copy instead; 0 = the long line is marked played and stays silent (captioned, never heard)." },
+	silent_handback = { 1, 0, 1, "cl", "Safety net: a line pba took from the engine (a relayed line on a face, a long line) that nothing renders within 0.2 s (no module voice above -60 dB, no engine copy) is handed back to the engine, with a console line '[PBA] silent line handed back to the engine'." },
+	handback_speech = { 1, 0, 1, "cl", "The silent line safety net (pba_silent_handback) only watches speech: lines captioned as speech (not <sfx>) or files under vo/. 0 = every sound on a voice channel of a face and every long line (a relayed zap, a long mirror of common/null.wav were handed back and played by the engine)." },
+	caption_once    = { 1, 0, 1, "cl", "One caption per line: a line reaching you as several sounds (a microphone's line through two monitors, one relayed by pba, one played by the engine) is captioned once, as the engine does. 0 = pba captions every copy it relays (the line shown twice)." },
 	keep_dsp        = { 1, 0, 1, "cl", "A sound with its own DSP preset (radio, loudspeaker effect) keeps it when muffled (then muffled by volume only), and is left to the engine under native rendering (the module has no DSP presets); 0 = pba's muffling preset replaces it, the module may play it." },
 	loops_cpp_client = { 1, 0, 1, "cl", "Take over the loops game entities play from their own client code (manhack engine and blades) and muffle them in place." },
+	loops_cpp_death = { 1, 0, 1, "cl", "Those game-entity loops (manhack engine and blades) stop when the entity dies, as the game's own do (it switches the engine off at death); 0 = they play on until the entity is removed (a shot manhack lingers ~2 s)." },
 	loops_client    = { 1, 0, 1, "cl", "Take over looping sounds born on this client (CreateSound of addons: vehicle engines, client-side machines) and muffle them in place." },
 	loops_max_cl    = { 32, 4, 256, "cl", "Max long sounds born on this client (client-side radios) followed at once. Beyond it they are left to the engine." },
 	streams_max     = { 16, 1, 128, "cl", "Max 3D radios of other addons (BASS) processed at once. Beyond it they play untouched." },
@@ -198,7 +220,7 @@ A.CONFIG = {
 	update_interval = { 0.25, 0.05, 2, "cl", "Seconds between re-evaluations of loops, long sounds and radios (path, muffling)." },
 	loops_stagger   = { 1, 0, 1, "cl", "Spread the re-evaluation of loops and long sounds over the frames (same rate) instead of all of them in one frame (a hitch every interval with many loops)." },
 	continuous_ramp = { 1, 0, 1, "cl", "Loops, long sounds and radios glide to each re-evaluation over one update_interval (level and muffling EQ in equal dB steps, apparent position turning around you) instead of jumping: no audible step every interval when you or the source move. Loops played by the engine already fade their volume over 0.2 s; their DSP preset cannot glide. 0 = jump." },
-	reeval_adaptive = { 1, 0, 1, "cl", "Loops, long sounds and radios are re-evaluated only when something changed since their last evaluation: the source or you moved more than pba_reeval_move, a door changed state (or the map, the settings), or pba_reeval_max_s elapsed (an object pushed into a path sends no event). Still sounds then cost almost nothing. 0 = every update_interval." },
+	reeval_adaptive = { 1, 0, 1, "cl", "Loops, long sounds, radios and the short sounds followed while they play (pba_oneshot_follow) are re-evaluated only when something changed since their last evaluation: the source or you moved more than pba_reeval_move, a door changed state (or the map, the settings), or pba_reeval_max_s elapsed (an object pushed into a path sends no event). Still sounds then cost almost nothing. 0 = every update_interval." },
 	reeval_move     = { 8, 0, 256, "cl", "Units the source or you must move since a sound's last evaluation to re-evaluate it (pba_reeval_adaptive)." },
 	reeval_max_s    = { 1, 0.05, 10, "cl", "Seconds after which a still sound is re-evaluated anyway (pba_reeval_adaptive): how late a prop pushed into a path, or another change that sends no event, can be heard." },
 	oneshot_follow  = { 1, 0, 1, "cl", "Short sounds (voices, shots...: shorter than max_duration) that still play are re-evaluated every update_interval like loops: their apparent position and level follow you and the source (walk round an obstacle into clear sight and the voice comes from the source). The engine DSP preset of a copy cannot change mid-sound. 0 = path computed once, at emission." },
@@ -253,6 +275,20 @@ if CLIENT and cookie then
 		-- 1.1: native rendering on by default (the simulated reverb is only heard with it)
 		{ name = "native_render", old = 0, key = "pba_mig_native_render_v1" },
 	}
+	-- Options merged into another (refactor step 8: one option per feature, not one per path): a player who
+	-- had switched the old one off keeps the feature off, once. The old convar is read from its saved value.
+	local MERGED = {
+		{ old = "long_duck", into = "native_duck", key = "pba_mig_long_duck_v1" },
+		{ old = "loops_once_native_end", into = "loops_once_end", key = "pba_mig_loops_once_native_end_v1" },
+	}
+	for _, m in ipairs(MERGED) do
+		local cv = A.cv[m.into]
+		if cv and cookie.GetNumber(m.key, 0) == 0 then
+			cookie.Set(m.key, "1")
+			local oldCv = GetConVar("pba_" .. m.old) or CreateClientConVar("pba_" .. m.old, "1", true, false)
+			if oldCv and oldCv:GetFloat() < 0.5 then RunConsoleCommand(cv:GetName(), "0") end
+		end
+	end
 	for _, m in ipairs(MIGRATE) do
 		local cv = A.cv[m.name]
 		if cv and cookie.GetNumber(m.key, 0) == 0 then

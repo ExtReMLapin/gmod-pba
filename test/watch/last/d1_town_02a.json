@@ -1,0 +1,79 @@
+{
+ "map": "d1_town_02a",
+ "tag": "",
+ "sets": [],
+ "secs": 95,
+ "triggers": 13,
+ "visited": 13,
+ "scenes": 13,
+ "speech": 4,
+ "anomalies": {
+  "voice_step": {
+   "count": 65,
+   "distinct": 25,
+   "samples": [
+    {
+     "db": 3.4,
+     "pos": "-6291.886719 2177.476807 -3323.303223",
+     "toG": 0.4984,
+     "t": 31.44,
+     "sound": "player/footsteps/dirt1.wav",
+     "fromG": 0.3367,
+     "key": "player/footsteps/dirt1.wav",
+     "map": "d1_town_02a"
+    },
+    {
+     "db": 6.8,
+     "pos": "-7684.844238 1709.370972 -2936.289551",
+     "toG": 0.0739,
+     "t": 32.14,
+     "sound": "npc/fast_zombie/foot3.wav",
+     "fromG": 0.0339,
+     "key": "npc/fast_zombie/foot3.wav",
+     "map": "d1_town_02a"
+    },
+    {
+     "db": 6.9,
+     "pos": "-7684.844238 1709.370972 -2964.289551",
+     "toG": 0.0566,
+     "t": 32.14,
+     "sound": "npc/fast_zombie/breathe_loop1.wav",
+     "fromG": 0.0255,
+     "key": "npc/fast_zombie/breathe_loop1.wav",
+     "map": "d1_town_02a"
+    },
+    {
+     "db": -3.5,
+     "pos": "-7289.070801 1662.258179 -3220.614258",
+     "toG": 0.0018,
+     "t": 33.89,
+     "sound": "npc/fast_zombie/gurgle_loop1.wav",
+     "fromG": 0.0028,
+     "key": "npc/fast_zombie/gurgle_loop1.wav",
+     "map": "d1_town_02a"
+    },
+    {
+     "db": -5.4,
+     "pos": "-7284.892578 2003.678101 -2992.924316",
+     "toG": 0.0532,
+     "t": 34.69,
+     "sound": "npc/fast_zombie/foot2.wav",
+     "fromG": 0.0995,
+     "key": "npc/fast_zombie/foot2.wav",
+     "map": "d1_town_02a"
+    },
+    {
+     "db": 5.1,
+     "pos": "-7273.813965 481.914154 -3342.906250",
+     "toG": 0.0771,
+     "t": 34.69,
+     "sound": "npc/fast_zombie/foot1.wav",
+     "fromG": 0.0426,
+     "key": "npc/fast_zombie/foot1.wav",
+     "map": "d1_town_02a"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

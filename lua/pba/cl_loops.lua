@@ -11,6 +11,52 @@ LP.mirrors = LP.mirrors or {}
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 local AC = A.AC
 
+-- ------------------------------------------------------------------ silent lines handed back (pba_silent_handback)
+-- A line pba takes from the engine (a relayed line on a face, a long line mirrored from sv_loops) must be heard
+-- somewhere: a module voice above -60 dB, an engine emission from pba's Lua, a mirror's engine patch. Every
+-- rendering notes its file (A.NoteRendered); a watched line with no rendering of its file HANDBACK_S after it was
+-- due goes back to the engine, with one console line. (d1_trainstation_05, user report 2026-11-14: Kleiner's
+-- and Barney's lines captioned, never heard, not reproduced: whatever the cause, the line is not lost.)
+local HANDBACK_S, AUDIBLE = 0.2, 1e-3
+A.renderedT = A.renderedT or {} -- file (lower case, no sound chars) -> RealTime() of its last audible rendering
+A.handedBack = A.handedBack or {} -- the lines handed back, last 16 (tests, pba_status)
+local function lineKey(name) return string.lower((string.gsub(A.SoundFile(name or ""), "\\", "/"))) end
+A.LineKey = lineKey
+-- Only speech is watched (pba_handback_speech): a line whose caption the server sent (sv_relay sendCaption, with its
+-- file) and whose text is a line, not a sound effect (<sfx> captions: zaps, doors), or a file under vo/. A relayed
+-- zap on a face (d1_trainstation_05, ambient/energy/zap*.wav on CHAN_VOICE) and a long mirror of common/null.wav
+-- (silence, sent to stop sounds) were handed back by the first version: the engine then played sounds pba had
+-- muffled or that are nothing.
+A.speechT = A.speechT or {} -- file key -> RealTime() its speech caption arrived
+local SPEECH_CAP_S = 1
+local function isSpeech(key, t0)
+	if (A.cfg.handback_speech or 1) < 0.5 then return true end
+	if string.find(key, "null.wav", 1, true) then return false end -- (common/null.wav: silence)
+	local c = A.speechT[key]
+	if c and c >= t0 - SPEECH_CAP_S then return true end
+	return string.sub(key, 1, 3) == "vo/"
+end
+--- A rendering of `name` at linear gain / volume `g` (module voice, engine emission, mirror patch).
+function A.NoteRendered(name, g)
+	if name and (g or 1) > AUDIBLE then A.renderedT[lineKey(name)] = RealTime() end
+end
+--- Watches a line pba took from the engine: `handback()` (the engine plays it) when nothing rendered its file
+-- within HANDBACK_S (+ `lag`, its start delay) of now. `why` names the path, for the console line.
+function A.WatchLine(name, lag, why, handback)
+	if (A.cfg.silent_handback or 1) < 0.5 or not name then return end
+	local t0, key = RealTime(), lineKey(name)
+	timer.Simple(HANDBACK_S + (lag or 0), function()
+		local t = A.renderedT[key]
+		if t and t >= t0 - 0.05 then return end
+		if (A.cfg.silent_handback or 1) < 0.5 or not isSpeech(key, t0) then return end
+		local ok = handback()
+		if ok == false then return end -- (stopped meanwhile: nothing to give back)
+		MsgN("[PBA] silent line handed back to the engine: ", name, " (", why, ")")
+		if #A.handedBack >= 16 then table.remove(A.handedBack, 1) end
+		A.handedBack[#A.handedBack + 1] = { name = name, why = why, t = RealTime() }
+	end)
+end
+
 -- Loops born on this client (CreateSound of an addon: vehicle engines...). The hook sees their start
 -- (with SND_CHANGE_VOL), pitch and volume changes, but neither CSoundPatch:Stop / FadeOut nor the
 -- patch being collected: the patches are registered here (weak keys) and those two methods detoured,
@@ -85,9 +131,11 @@ end
 
 -- Sound patches the C++ of client entities plays (C_NPC_Manhack: its engine and blade loops). Their start,
 -- volume and pitch changes reach the hook; no Lua patch stands for them, so they stayed vanilla, through
--- every wall. Known classes only: their sounds end with the entity (measured: a killed manhack's loops play
--- on, vanilla, until it is removed ~1.5 s later; its "engine off" state is no longer networked by then), as
--- the mirror does (apply: entity gone). class -> { lowercased file = true }
+-- every wall. Known classes only. Their end: the entity's death (an NPC's StopLoopingSounds at death switches
+-- the manhack's engine off: the engine pitches go to -1 and its client code destroys the patches, with no
+-- event the hook sees; a shot manhack lingers ~2 s dying before its removal, its mirrors played on through
+-- it, heard as stuck: pba_loops_cpp_death, cppDead), or else its removal (apply: entity gone).
+-- class -> { lowercased file = true }
 LP.CPP_PATCHES = {
 	npc_manhack = { ["npc/manhack/mh_engine_loop1.wav"] = true, ["npc/manhack/mh_engine_loop2.wav"] = true,
 		["npc/manhack/mh_blade_loop1.wav"] = true },
@@ -101,6 +149,12 @@ local function cppPatch(e, name)
 end
 
 --- The registered client patch starting `name` on entity e right now, if any.
+--- True when the C++ loops of client entity e have ended with its death (pba_loops_cpp_death): an NPC at
+--- 0 health or below (the health is networked; the engine-off state is not readable on the client).
+local function cppDead(e)
+	return (A.cfg.loops_cpp_death or 1) >= 0.5 and e:IsNPC() and e:Health() <= 0
+end
+
 local function foreignPatch(e, name)
 	local p = LP.playing
 	local i = p and LP.patchInfo[p]
@@ -130,29 +184,67 @@ local function anchorFor(m)
 end
 
 local apply
+
+--- pba_quiet_db for a mirror at distance d. pba_native_quiet_law: a native voice is judged by the law it is
+-- heard with (N.PhysClear: 1/r by default), not the engine's, whose fast fall far away (-60 dB beyond
+-- ~2.4k u at level 60, where 1/r is still at -35 dB) stopped the path search of loops still well heard.
+local function quietFor(m, d)
+	local N = A.Native
+	if m.nativeId and N and (A.cfg.native_quiet_law or 0) >= 0.5 then
+		local q = A.cfg.quiet_db or -40
+		if q <= -100 then return false end
+		return (m.vol or 1) * N.PhysClear(m.lvl, math.max(d, 1)) < 10 ^ (q / 20)
+	end
+	return A.TooQuiet and A.TooQuiet(m.lvl, m.vol, d)
+end
+
+--- A quiet native loop (no path search: quietFor) keeps following its distance law from its last
+-- evaluation (pba_native_quiet_law): its gain and listener-room send scaled by law(d) / law(d then),
+-- the route (apparent position, spectrum) kept. Before, the voice was frozen at its last values: a loop
+-- heard from the next room stayed at that level wherever the listener went (a teleport, a fast vehicle,
+-- or walking away past the quiet threshold), up to +20 dB over its law at 5000 u (sweep louder_vanilla).
+local function followQuiet(m, S, L)
+	local N, e = A.Native, m.lastEval
+	if not (e and N and (A.cfg.native_quiet_law or 0) >= 0.5) then return end
+	if m.clearPath and IsValid(m.ent) then return end -- in clear sight: LP.FollowNative moves it every frame
+	local k = N.PhysClear(m.lvl, S:Distance(L)) / math.max(N.PhysClear(m.lvl, e.d), 1e-9)
+	local gain, send = e.gain * k, e.send * k
+	local el, em, eh, pos, pitch = e.el, e.em, e.eh, e.pos, e.pitch
+	if m.ramp and (A.cfg.continuous_ramp or 0) >= 0.5 then
+		local P, now = A.Paths, RealTime()
+		P.RampTo(m.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, gain, el, em, eh, pos, pitch)
+		gain, el, em, eh, pos, pitch = P.RampAt(m.ramp, now, L)
+	end
+	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil end
+end
+
 -- a mirror's far evaluation is ready (cl_slicer): applied at once
 local function sliceReady(m) if not m.done then apply(m) end end
 
 --- Path result of a mirror (direction / low-pass hysteresis). nil while a far sound's evaluation runs
 -- in slices (cl_slicer): the mirror keeps its values, and is applied again once it is ready (sliceReady).
 local FAR_CLEAR = { clear = true, voices = {} }
+--- Beyond lod_dist: no path search. Behind a wall on the straight line (pba_far_muffle) the cheap muffle of
+-- the short sounds (P.MuffleFor: DSP preset, the walls' loss), as sv_relay and cl_render A.FarMuffle do: a
+-- loop was heard clear through the wall there, muffled on the near side of the lod_dist boundary.
+-- { far = true, dsp, gain, lp }, or FAR_CLEAR.
 local function pathOf(m, S, L)
-	-- beyond lod_dist sounds are left untouched: heard as the original, no path search (a 130 dB rotor
-	-- 7000 u away is subscribed since the server suppresses it for everyone)
-	if S:DistToSqr(L) > A.cfg.lod_dist * A.cfg.lod_dist then return FAR_CLEAR end
-	m.hyst = m.hyst or {}
-	local raw
-	if A.Slicer then raw = A.Slicer.Held(m, S, L, m.lvl, m.ent, sliceReady) else raw = A.Paths.Compute(S, L, m.lvl, nil, m.ent) end
-	if not raw then return nil end
-	local r = A.Paths.Stable(m.hyst, raw)
-	return r
+	-- beyond lod_dist no path search (a 130 dB rotor 7000 u away is subscribed since the server suppresses
+	-- it for everyone): heard as the original, or muffled when a wall stands in the straight line (A.Render.Far,
+	-- the one far rule of copies and mirrors)
+	local R = A.Render
+	if R.Beyond(S, L) then
+		local dsp, gain, lp = R.Far(S, L, m.ent ~= m.anchor and m.ent or nil)
+		if not dsp then return FAR_CLEAR end
+		return { far = true, dsp = dsp, gain = gain, lp = lp }
+	end
+	return A.Paths.Evaluate(m, S, L, m.lvl, m.ent, R.WaterDry(m, m.name), sliceReady)
 end
 
 --- Adaptive re-evaluation (reeval_adaptive, P.ReevalDue): a playing mirror whose source, listener
 -- and world did not change since its last evaluation keeps its values.
 local function reevalDue(m, S, L)
-	m.reeval = m.reeval or {}
-	return A.Paths.ReevalDue(m.reeval, S, L, RealTime())
+	return A.Sched.Due(m, S, L, RealTime(), nil) -- the cadence rule of every followed sound (cl_sched.lua)
 end
 
 --- Tunnel-preset choice of a mirror (AC.DSPForVoice switches to the diffuse "tunnel" preset at
@@ -177,6 +269,11 @@ local function muffle(m, S, L)
 	if not A.Enabled() then m.tunnel = nil return 1, m.dsp end
 	local r = pathOf(m, S, L)
 	if not r then return nil end
+	if r.far then
+		m.tunnel = false
+		if (A.cfg.keep_dsp or 1) >= 0.5 and (m.dsp or 0) ~= 0 then return r.gain, m.dsp end
+		return r.gain, r.dsp
+	end
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
 	if r.clear or not r.voices or #r.voices == 0 then m.tunnel = false return 1, m.dsp end
 	-- total power of the selected voices relative to the engine's own direct attenuation
@@ -202,11 +299,15 @@ local function applyNative(m, S, L)
 	local N = A.Native
 	local r = pathOf(m, S, L)
 	if not r then return nil end -- (its evaluation still running: values kept)
-	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
+	if not r.far then A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop") end
 	local pos, gain, lp, trans, lpDb
-	m.clearPath = r.clear or not r.voices or #r.voices == 0
+	m.clearPath = not r.far and (r.clear or not r.voices or #r.voices == 0)
 	-- the full version's distance law (N.PhysClear / N.PhysPath): real spreading
-	if m.clearPath then
+	if r.far then
+		-- far, behind a wall (farPath): at the source, the walls' loss and muffling level
+		pos, gain, lp = S, N.PhysClear(m.lvl, S:Distance(L)) * r.gain, r.lp
+		m.diffuse, m.tunnel = 0, false
+	elseif m.clearPath then
 		pos, gain, lp = S, N.PhysClear(m.lvl, S:Distance(L)), 0
 		m.diffuse, m.tunnel = 0, false
 	else
@@ -235,9 +336,12 @@ local function applyNative(m, S, L)
 	local send = N.SlotFadeSend(m, m.srcBound, (trans or 0) * m.vol * A.cfg.native_gain, gain)
 	send = send * N.LoudWet(m.lvl) -- (a loud loop stays dry, as in the engine)
 	m.roomSend = send
+	-- the speaker's EQ and Doppler, as every module voice (A.Render.Tail)
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L), lpDb)
-	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
-	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
+	local pitch
+	el, em, eh, pitch = A.Render.Tail(el, em, eh, m.pitch, m.speaker, S, m.ent, L)
+	-- what this evaluation decided, for a quiet far loop to keep following its law (followQuiet)
+	m.lastEval = { d = d, gain = gain, el = el, em = em, eh = eh, pos = pos, pitch = m.pitch, send = send }
 	if m.nativeId then
 		if (A.cfg.continuous_ramp or 0) >= 0.5 then
 			-- glide to the new values over one interval (LP.FollowNative, every frame); the update
@@ -263,9 +367,17 @@ local function applyNative(m, S, L)
 	if A.Mix and not m.mixG then m.mixG = A.Mix.GroupsOf(m.name, m.ent, m.chan, m.lvl) end
 	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
 		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
-	m.started = true
-	m.nativeId = id > 0 and id or nil
+	-- (pba_loops_native_fail: a voice the module could not start leaves the line to the engine patch below;
+	-- marked started, a long line was then dropped there as "already played": captioned, never heard)
+	if (id or 0) > 0 or (A.cfg.loops_native_fail or 1) < 0.5 then m.started = true end
+	m.nativeId = (id or 0) > 0 and id or nil
+	if m.nativeId then A.NoteRendered(m.name, gain) end
 	m.stSel, m.stW = nil, nil
+	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
+	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_end or 1) >= 0.5 then
+		local e = A.PlayEnd(m.name, m.pitch, nil, A.END_GRACE)
+		if e then m.endT = math.max(m.endT, e) end
+	end
 	-- its source reverb slot at once (else only at the next evaluation)
 	if m.nativeId then
 		N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m)
@@ -282,11 +394,24 @@ local function applyNative(m, S, L)
 	return m.nativeId ~= nil
 end
 
---- A one-shot engine patch mirror that has played its file: the engine reports a CreateSound patch as
--- playing long after a file without loop points ended (measured 2026-11-13, the stopsound sentinel relies on
--- it), so its end is also its length at its start pitch (m.endT).
+--- A one-shot mirror that has played its file: the engine reports a CreateSound patch as playing long after
+-- a file without loop points ended (measured 2026-11-13, the stopsound sentinel relies on it), so its end is
+-- also its length at its start pitch (m.endT). A mirror rendered by the module (pba_loops_once_end, both renderings)
+-- ends the same way: it was dropped only when an update found its voice gone, and a far quiet one (the quiet
+-- shortcut) or one the adaptive re-evaluation left alone got no update and lived on past its file (sweep
+-- 2026-11-13: vehicle_rollover2, 1.6 s, alive 4.8 s on d3_c17_06a; it also counted as playing on its channel).
 local function onceEnded(m)
-	return m.patch and m.once and (not m.patch:IsPlaying() or (m.endT ~= nil and RealTime() > m.endT)) or false
+	if not m.once then return false end
+	if m.patch then return not m.patch:IsPlaying() or (m.endT ~= nil and RealTime() > m.endT) end
+	return m.nativeId ~= nil and m.endT ~= nil and (A.cfg.loops_once_end or 1) >= 0.5 and RealTime() > m.endT
+end
+
+--- The mirror's own DSP preset keeps it on an engine patch (A.OwnDSP, pba_keep_dsp). A speaker's preset is not
+-- the sound's own: sv_loops writes dsp_speaker for the SND_SPEAKER flag a patch cannot carry, and the module
+-- renders that flag with N.SPEAKER_EQ, as the short speaker lines (pba_loops_speaker_native).
+local function ownDSP(m)
+	if m.speakerDsp and (A.cfg.loops_speaker_native or 1) >= 0.5 then return false end
+	return A.OwnDSP(m.dsp)
 end
 
 function apply(m, fade)
@@ -299,10 +424,11 @@ function apply(m, fade)
 		m.done = true
 		return
 	end
+	if m.cpp and IsValid(ent) and cppDead(ent) then m.done = true return end -- (its engine switched off)
 	if not IsValid(ent) then
 		-- not networked (yet?): after a grace period, fall back to an anchor at the position
 		m.waited = (m.waited or 0) + 1
-		if m.waited < 3 and m.idx ~= 0 then return end
+		if m.waited < 3 and m.idx ~= 0 and not m.handBack then return end
 		ent = anchorFor(m)
 		if not ent then return end
 	end
@@ -310,7 +436,8 @@ function apply(m, fade)
 	if not L then return end
 	local S = ent == m.anchor and m.pos or ent:WorldSpaceCenter()
 	local nativeOn = A.Native and A.Native.render and A.Enabled()
-	if m.nativeId and (not nativeOn or A.OwnDSP(m.dsp)) then
+	-- (whether the module may render this mirror: A.Render.NativeOK, with the mirror's own reading of its preset)
+	if m.nativeId and (not nativeOn or ownDSP(m)) then
 		-- mode or native rendering switched off (or pba_keep_dsp switched on for a loop with its own preset):
 		-- hand the loop back to the engine without a double
 		pba_native.StopVoice(m.nativeId)
@@ -320,7 +447,10 @@ function apply(m, fade)
 	-- a far sound's evaluation running in slices (cl_slicer): its values kept until it is ready (sliceReady);
 	-- a finished one is applied whatever reevalDue says (it stamped this request already)
 	local sj = m.pbaSlice
-	if sj and not sj.finished then return end
+	if sj and not sj.finished then
+		if onceEnded(m) then m.done = true end -- (its file ended meanwhile)
+		return
+	end
 	if (m.patch or m.nativeId) and not sj and not reevalDue(m, S, L) then
 		if onceEnded(m) then m.done = true end
 		return
@@ -331,19 +461,20 @@ function apply(m, fade)
 	-- the new volume reads as "quiet" and the voice stayed at its old level for good. (A patch mirror gets
 	-- volume changes at once, from the update itself.)
 	if (m.patch or m.nativeId) and not sj and (not m.nativeId or m.appliedVol == m.vol)
-		and A.TooQuiet and A.TooQuiet(m.lvl, m.vol, S:Distance(L)) then
+		and quietFor(m, S:Distance(L)) then
+		if m.nativeId then followQuiet(m, S, L) end
 		if onceEnded(m) then m.done = true end
 		return
 	end
 	-- (a loop with its own DSP preset stays an engine patch: the module has no presets, A.OwnDSP)
-	if nativeOn and not m.patch and not A.OwnDSP(m.dsp) then
+	if nativeOn and not m.patch and not m.handBack and A.Render.NativeOK(m.name, m.dsp, ownDSP(m)) then
 		if applyNative(m, S, L) ~= false then return end
 	end
 	local g, dsp = muffle(m, S, L)
 	if g == nil then return end
 	if onceEnded(m) then m.done = true return end
 	if not m.patch then
-		if m.once and m.started then m.done = true return end
+		if m.once and m.started and not m.handBack then m.done = true return end
 		m.started = true
 		m.patch = LP.origCreateSound(ent, m.name)
 		A.reemitting = true
@@ -351,6 +482,7 @@ function apply(m, fade)
 		m.patch:SetDSP(dsp)
 		m.patch:PlayEx(m.vol * g, m.pitch)
 		A.reemitting = false
+		A.NoteRendered(m.name, m.vol * g)
 		m.g, m.curDsp = g, dsp
 		return
 	end
@@ -370,7 +502,14 @@ end
 -- radio:EmitSound of a 5-minute mp3 in a net receiver). Too long for A.Process, and the server
 -- never sees them: without this they play through every wall. Same mirror as a relayed long
 -- sound, keyed "cl:<entindex>:<channel>:<name>".
-local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+--- A long one-shot's start feeds the mixer's ducker, whichever side it was born on, as every short sound's
+-- (refactor step 8: one switch for the ducker, pba_native_duck, which also gated the short sounds' notes;
+-- the long lines had their own, pba_long_duck, merged into it).
+local function noteDuck(name, pos, lvl, vol, chan, e, idx, pitch)
+	if (A.cfg.native_duck or 1) < 0.5 or not (A.Mix and A.Mix.NoteSound) then return end
+	A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, Channel = chan, Entity = e,
+		EntIndex = idx }, A.ListenerPos(), A.PlaySeconds(name, pitch) or 0)
+end
 
 --- Stops the client-side long-sound mirrors of entity idx (channel chan, or any channel when nil;
 -- name, or any name when nil).
@@ -406,6 +545,7 @@ function LP.HandleClient(data)
 		and (A.cfg.loops_client or 0) >= 0.5 and not A.IsLooping(name)
 	local src = (loop or once) and foreignPatch(e, name)
 	local cpp = loop and not src and cppPatch(e, name)
+	if cpp and cppDead(e) then return false end -- (a dead one's: left to the engine, which has shut them)
 	if change and not src and not cpp then
 		if not m then return false end
 		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end
@@ -418,7 +558,8 @@ function LP.HandleClient(data)
 		if m.nativeId and m.reeval then m.reeval.force = true end -- applied at its next turn
 		return true
 	end
-	if replacing(chan) and not A.KeepsChannel(flags) then LP.StopClient(idx, chan) end
+	-- (a new sound: a change flag here is a patch's Play)
+	if A.CutsChannel(chan, flags, true) and A.CutChannel then A.CutChannel(idx, chan, A.ChannelCutOnly("mirrors")) end
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl >= 256 then return false end
 	if src or cpp then
@@ -427,27 +568,27 @@ function LP.HandleClient(data)
 			local st = data.SoundTime or 0
 			if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 			local dur = A.SoundDuration(name) or 0
-			if dur <= 0 or dur > 1800 then return false end
+			if not A.LongDuration(dur, 0) then return false end
 		end
 	else
 		if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 or A.IsLooping(name) then return false end
 		local st = data.SoundTime or 0
 		if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
 		local dur = A.SoundDuration(name) or 0
-		if dur <= A.cfg.max_duration or dur > 1800 then return false end
+		if not A.LongDuration(dur) then return false end
 	end
 	local n = 0
 	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end
 	if n >= (A.cfg.loops_max_cl or 32) then return false end -- cap: left to the engine
 	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
 		dsp = data.DSP or 0, once = not ((src or cpp) and not once), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
-		src = src and setmetatable({ src }, { __mode = "v" }) or nil }
+		src = src and setmetatable({ src }, { __mode = "v" }) or nil, cpp = cpp or nil }
 	-- its end: the file's length at its start pitch (onceEnded)
-	if m.once then
-		local dur = A.SoundDuration(name) or 0
-		if dur > 0 then m.endT = RealTime() + dur * 100 / math.max(m.pitch, 1) + 0.5 end
-	end
+	if m.once then m.endT = A.PlayEnd(name, m.pitch, nil, A.END_GRACE) end
 	LP.mirrors[key] = m
+	-- its start feeds the mixer's ducker, as a server long line's (OP_START below) and a short sound's
+	-- (A.Process, which this hook returns before) do
+	if m.once then noteDuck(name, m.pos, lvl, m.vol, chan, e, idx, m.pitch) end
 	apply(m, 0)
 	return true
 end
@@ -474,23 +615,48 @@ net.Receive("pba_loop", function()
 		if m then stopMirror(m) LP.mirrors[key] = nil end
 		return
 	end
-	local name, idx, pos = net.ReadString(), net.ReadUInt(16), net.ReadVector()
-	local vol, pitch, lvl, dsp = net.ReadUInt(8) / 255, net.ReadUInt(8), net.ReadUInt(9), net.ReadUInt(8)
+	local name = net.ReadString()
+	local d = A.ReadSound() -- (the common body, sh_core: as pba_snd's)
 	local once = net.ReadBool()
-	local speaker = net.ReadBool()
+	local idx, pos, vol, pitch, lvl, dsp, chan = d.EntIndex, d.Pos, d.Volume, d.Pitch, d.SoundLevel, d.DSP, d.Channel
+	local speaker = bit.band(d.Flags, SND_SPEAKER or 64) ~= 0
 	local m = LP.mirrors[key]
 	if op == OP_START and m then stopMirror(m) m = nil end
+	-- a change of a long one-shot whose mirror already ended here: it must not start it again from its top
+	-- (the server keeps the line until its own end time, a little later)
+	if not m and once and op == OP_UPDATE and (A.cfg.loops_once_end or 1) >= 0.5 then return end
+	local new = not m
 	if not m then
-		m = { key = key, name = name, idx = idx, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
+		m = { key = key, name = name, idx = idx, chan = chan, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
+		-- a speaker line: its DSP is the speaker preset sv_loops wrote for the flag (none on a server without
+		-- dsp_speaker: this client's own then, for its engine patch)
+		if speaker then
+			local cv = GetConVar("dsp_speaker")
+			local sp = cv and cv:GetInt() or 0
+			if dsp == 0 or dsp == sp then m.speakerDsp, m.dsp = true, sp end
+		end
+		-- its end: the file's length at its start pitch (onceEnded). Without it a server long one-shot's
+		-- engine patch, which reads "playing" long after its file ended, lived on for good, and the next
+		-- volume change replayed it from the top (the Breencast looping, d1_trainstation_02, 2026-11-13)
+		if once and (A.cfg.loops_once_end or 1) >= 0.5 then m.endT = A.PlayEnd(name, pitch, nil, A.END_GRACE) end
 		LP.mirrors[key] = m
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	m.vol, m.pitch = vol, pitch
+	-- a long line's start feeds the mixer's ducker as the short lines do (cl_render): a speech ducks the
+	-- other groups in the engine; without it a long line sounded quieter than the short ones around it,
+	-- the ambience left at full under it (pba_native_duck)
+	if op == OP_START and once then noteDuck(name, pos, lvl, vol, nil, nil, idx, pitch) end
+	-- a long line taken from the engine: heard within HANDBACK_S, else its engine patch plays it (pba_silent_handback)
+	if new and once and op == OP_START then
+		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end)
+	end
 	if m.nativeId and op == OP_UPDATE then
 		if m.reeval then m.reeval.force = true end
 		return -- applied at the next tick
 	end
 	if m.patch and op == OP_UPDATE then
+		if onceEnded(m) then m.done = true return end -- (a finished patch would start again from its top)
 		A.reemitting = true
 		m.patch:ChangePitch(pitch, 0.1)
 		m.patch:ChangeVolume(vol * (m.g or 1), 0.1)
@@ -499,6 +665,18 @@ net.Receive("pba_loop", function()
 		apply(m, 0)
 	end
 end)
+
+--- A long line mirror nothing renders: its module voice (if any, inaudible) stopped, the engine patch plays it
+-- from its top (apply's patch path). False when the line was stopped meanwhile (stopMirror ran: not in the list).
+function LP.HandBack(m)
+	if LP.mirrors[m.key] ~= m and not m.done then return false end
+	if m.endT and RealTime() > m.endT then return false end
+	if m.nativeId then pba_native.StopVoice(m.nativeId) m.nativeId = nil end
+	m.done, m.handBack = nil, true
+	LP.mirrors[m.key] = m
+	apply(m, 0)
+	return true
+end
 
 --- Every frame: natively rendered loops in clear sight follow their (moving) entity, and the
 -- others glide towards their last re-evaluation (continuous_ramp); the path itself is
@@ -522,8 +700,9 @@ function LP.FollowNative(L)
 				local S = ent:WorldSpaceCenter()
 				local d = S:Distance(L)
 				local el, em, eh = N.VoiceEQ(0, d)
-				if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
-				local g, pitch = N.PhysClear(m.lvl, d) * m.vol * A.cfg.native_gain, m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL)
+				local pitch
+				el, em, eh, pitch = A.Render.Tail(el, em, eh, m.pitch, m.speaker, S, ent, L, vL)
+				local g = N.PhysClear(m.lvl, d) * m.vol * A.cfg.native_gain
 				if ramp then
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
@@ -558,10 +737,9 @@ end
 
 -- Every mirror is re-evaluated each update_interval. loops_stagger spreads them over the frames:
 -- each frame takes its share in turn, instead of all of them in one frame (20 hidden loops on
--- gm_construct: one 15-55 ms frame every 0.25 s). Same update rate per loop.
-timer.Remove("pba_loops_cl") -- former timer (autorefresh)
+-- gm_construct: one 15-55 ms frame every 0.25 s). Same update rate per loop. The scheduler's tick (cl_sched.lua).
 local order, nextIdx, quota, acc, lastT = {}, 1, 0, 0, nil
-hook.Add("Think", "pba_loops_cl", A.PerfTimed("loops", function()
+function LP.Tick()
 	if not IsValid(LocalPlayer()) then return false end
 	local now = RealTime()
 	local dt = lastT and math.min(now - lastT, 0.5) or 0
@@ -586,4 +764,4 @@ hook.Add("Think", "pba_loops_cl", A.PerfTimed("loops", function()
 		local m = LP.mirrors[key]
 		if m then step(key, m) end
 	end
-end))
+end

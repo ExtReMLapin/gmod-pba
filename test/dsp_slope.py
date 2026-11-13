@@ -44,7 +44,8 @@ def active(x, rate):
     if n < 10:
         return None
     rms = np.sqrt((x[: n * w].reshape(n, w) ** 2).mean(axis=1))
-    on = np.where(rms > 0.3 * rms.max())[0]
+    # (a click as the noise starts is far above it: the level is taken from the typical loud window)
+    on = np.where(rms > 0.3 * np.median(rms[rms > 0.05 * rms.max()]))[0]
     if len(on) == 0:
         return None
     a, b = (on[0] + 10) * w, (on[-1] - 10) * w
@@ -156,7 +157,8 @@ def main():
             lua("client", f"LocalPlayer():EmitSound('{NOISE}', 75, 100, 1, CHAN_STATIC, 0, {dsp}) return true")
             time.sleep(SECONDS)
             call("console_exec", {"realm": "client", "cmd": "endmovie"})
-            time.sleep(1)
+            lua("client", f"LocalPlayer():StopSound('{NOISE}') return true")  # (8 s file: its tail must not be in the next recording)
+            time.sleep(1.5)
             found = sorted(glob.glob(os.path.join(gmod, name + "*.wav")), key=os.path.getmtime)
             if not found:
                 print(f"FAIL no {name}*.wav written in {gmod}: startmovie ... wav refused or written elsewhere "

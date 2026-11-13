@@ -579,23 +579,16 @@ local SUITE = {
 			local b = util.TableToJSON(G.Summary(G.Build(synthBsp())))
 			expect(a).to.equal(b)
 		end },
-		{ name = "ClampToPoly: inside unchanged, outside on the edge", func = function()
-			local poly = rect(100, 0, 50, 0, 100)
-			local c, n = Vector(100, 25, 50), Vector(1, 0, 0)
-			local q = G.ClampToPoly(Vector(120, 10, 10), poly, c, n)
-			expect(near(q.x, 100) and near(q.y, 10) and near(q.z, 10)).to.beTrue()
-			local r = G.ClampToPoly(Vector(100, 300, 50), poly, c, n)
-			expect(near(r.y, 50) and near(r.z, 50)).to.beTrue()
-		end },
-		{ name = "SlitRatio: whole doorway = 1; a narrow gap in line passes the highs; out of line passes less", func = function()
+		{ name = "ApertureRatio: whole doorway = 1; a narrow gap in line passes the highs; out of line passes less", func = function()
 			-- doorway 48 u wide, source and listener 100 u either side
-			expect(near(AC.SlitRatio({ { -24, 24 } }, -24, 24, 0, 100, 100, 1000), 1, 1e-6)).to.beTrue()
+			local function slit(iv, w0, w1, u0, d1, d2, f) return AC.ApertureRatio({ w0 = w0, w1 = w1, intervals = iv }, u0, 0, d1, d2, f) end
+			expect(near(slit({ { -24, 24 } }, -24, 24, 0, 100, 100, 1000), 1, 1e-6)).to.beTrue()
 			local gap = { { 20, 22 } } -- a 2-unit crack near the latch
-			local inLow = AC.SlitRatio(gap, -24, 24, 21, 100, 100, 250)
-			local inHigh = AC.SlitRatio(gap, -24, 24, 21, 100, 100, 4000)
+			local inLow = slit(gap, -24, 24, 21, 100, 100, 250)
+			local inHigh = slit(gap, -24, 24, 21, 100, 100, 4000)
 			expect(inHigh > inLow).to.beTrue() -- the crack is a high-pass in line of sight
 			expect(inHigh < 0.6).to.beTrue()   -- but still far from the whole doorway
-			local outHigh = AC.SlitRatio(gap, -24, 24, -15, 100, 100, 4000)
+			local outHigh = slit(gap, -24, 24, -15, 100, 100, 4000)
 			expect(outHigh < inHigh).to.beTrue() -- the same crack out of line passes less
 			local Cv, Sv = AC.Fresnel(1)
 			expect(near(Cv, 0.7799, 3e-3) and near(Sv, 0.4383, 3e-3)).to.beTrue() -- tabulated C(1), S(1)
@@ -1314,6 +1307,80 @@ local SUITE = {
 			P.Walls, A.Graph.Get = savedWalls, savedGet
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
+		end },
+		{ name = "Compute cache: entries past cache_ttl are swept (it grew without limit on a map whose doors never move)", func = function()
+			local savedWalls, savedGet, savedRT = P.Walls, A.Graph.Get, _G.RealTime
+			P.Walls = function() return {} end
+			A.Graph.Get = function() return nil end
+			local T = 1000
+			_G.RealTime = function() return T end -- (_G: this suite runs in its own environment)
+			local cfg = setmetatable({ probes = 0, path_props = 0, cache_ttl = 0.25 }, { __index = CFG })
+			local ok, err = pcall(function()
+				P.InvalidateCache()
+				-- 500 results an hour old (dead: older than cache_ttl), as a long session leaves them
+				for i = 1, 500 do P.cache["stale" .. i] = { t = T - 3600, r = {} } end
+				-- a few minutes of sounds later
+				for i = 1, 40 do
+					T = T + 5
+					P.Compute(Vector(i * 64, 0, 0), Vector(i * 64 + 300, 0, 0), 75, cfg)
+				end
+				local stale, n = 0, 0
+				for k in pairs(P.cache) do
+					n = n + 1
+					if tostring(k):sub(1, 5) == "stale" then stale = stale + 1 end
+				end
+				expect(stale).to.equal(0)
+				expect(n <= 2).to.beTrue()
+			end)
+			P.Walls, A.Graph.Get, _G.RealTime = savedWalls, savedGet, savedRT
+			P.cacheSweepT = nil
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
+		{ name = "A cfg given to the path model is used whole: corners, walls and their trace filter, source object, path cut and follow groups read nothing from A.cfg", func = function()
+			-- a complete cfg of its own (P.Compute(..., cfg): benches, P.DRY_SOURCE_CFG), A.cfg replaced by a recorder
+			local full = table.Copy(A.cfg)
+			full.corner_relax, full.corner_step_first, full.model_soft_cull, full.native_voice_mix = 1, 1, 1, 1
+			full.trans_props, full.listener_object, full.source_object = 1, 1, 1
+			local box = { Vector(140, -50, -50), Vector(160, 50, 50) }
+			local prop = { GetClass = function() return "prop_physics" end, BoundingRadius = function() return 100 end,
+				IsVehicle = function() return false end }
+			local savedCfg, savedTL, savedGSP = A.cfg, util.TraceLine, util.GetSurfacePropName
+			util.GetSurfacePropName = function() return "concrete" end
+			util.TraceLine = function(t)
+				local o = traceOut(t)
+				if type(t.filter) == "function" then t.filter(prop) end
+				local f = segBox(t.start, t.endpos, box[1], box[2])
+				if t.ignoreworld then f = nil end
+				o.Hit, o.HitWorld, o.Fraction, o.StartSolid, o.AllSolid = f ~= nil, f ~= nil, f or 1, false, false
+				o.FractionLeftSolid, o.Entity, o.MatType, o.SurfaceProps, o.HitTexture = 0, nil, MAT_CONCRETE, 0, "concrete"
+				o.HitPos = t.start + (t.endpos - t.start) * (f or 1)
+				return o
+			end
+			local reads = {}
+			A.cfg = setmetatable({}, { __index = function(_, k) reads[k] = true return full[k] end })
+			local ok, err = pcall(function()
+				P.ForgetWorld()
+				local S, L = Vector(0, 0, 0), Vector(300, 0, 0)
+				P.Walls(S, L, 6, nil, true, full)
+				P.SourceObject(S, nil, full)
+				-- S sees v1 only, v1 sees v2 only, v2 sees L: four kept vertices (corner_relax's pass)
+				P.RefineCorners({ S, Vector(100, -60, 0), Vector(200, -60, 0), L }, full)
+				local paths = {}
+				for i = 1, 5 do paths[i] = { length = 500, lossDb = i } end
+				P.KeepLoudest(paths, 3, 75, full)
+				P.FollowAssign(L, { Vector(0, 0, 0) }, { { pos = Vector(0, 10, 0), gain = 0.5, lp = 0, len = 300 },
+					{ pos = Vector(0, -10, 0), gain = 0.5, lp = 0, len = 300 } }, full)
+			end)
+			A.cfg, util.TraceLine, util.GetSurfacePropName = savedCfg, savedTL, savedGSP
+			P.ForgetWorld()
+			if not ok then error(err, 0) end
+			local mixed = {}
+			for _, k in ipairs({ "trans_props", "trans_prop_min", "listener_object", "wall_merge_graze", "door_3d", "source_object",
+				"corner_relax", "corner_step_first", "model_soft_cull", "native_voice_mix" }) do
+				if reads[k] then mixed[#mixed + 1] = k end
+			end
+			expect(table.concat(mixed, " ")).to.equal("")
 		end },
 		{ name = "Follow: a one-shot is followed when it still plays min_left after its first update", func = function()
 			expect(P.FollowWorth(3.4, 0.25, 0.5)).to.beTrue()       -- the courtyard radio line

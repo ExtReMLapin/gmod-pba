@@ -10,13 +10,15 @@ A.Loops = A.Loops or {}
 local LP = A.Loops
 local NET = "pba_loop"
 util.AddNetworkString(NET)
+-- each player's lip sync choice (pba_lipsync, cl): it also chooses for the long lines' mouth copy (MouthStart)
+util.AddNetworkString("pba_lipsync_pref")
+net.Receive("pba_lipsync_pref", function(_, ply) if IsValid(ply) then ply.pbaLipsyncOff = not net.ReadBool() end end)
 
 LP.active = LP.active or {} -- key -> { ent, idx, chan, name, vol, pitch, lvl, flags, dsp, pos, subs = {ply=true} }
 LP.released = LP.released or {} -- loops handed back to the engine while pba is off: taken again when it comes back
 -- loops left to the engine by the pba_loops_max cap (their later changes too), same fields as an
--- active loop: taken over by the timer once slots free up. An older file stored `true` here.
+-- active loop: taken over by the timer once slots free up.
 LP.capped = LP.capped or {}
-for k, v in pairs(LP.capped) do if not istable(v) then LP.capped[k] = nil end end
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 
@@ -27,7 +29,7 @@ local LEAVE_SCALE = 1.1
 -- The engine's attenuated PAS radius, NOT capped by lod_dist: the hook suppresses a loop for everyone, so a
 -- player beyond lod_dist must get the mirror too (130-150 dB rotors and sirens, still loud at 7000-10000 u,
 -- went silent there). His client renders it clear, without any path search (cl_loops pathOf).
-local function radiusFor(lvl) return lvl > 50 and 100 * (lvl - 50) or 500 end
+local function radiusFor(lvl) return A.AudibleRadius(lvl) end
 
 local function send(op, l, plys)
 	if #plys == 0 then return end
@@ -36,23 +38,22 @@ local function send(op, l, plys)
 	net.WriteString(l.key)
 	if op ~= OP_STOP then
 		net.WriteString(l.name)
-		net.WriteUInt(l.idx, 16)
-		net.WriteVector(l.pos)
-		net.WriteUInt(math.Clamp(math.Round(l.vol * 255), 0, 255), 8)
-		net.WriteUInt(math.Clamp(math.floor(l.pitch), 0, 255), 8)
-		net.WriteUInt(math.Clamp(math.floor(l.lvl), 0, 511), 9)
-		net.WriteUInt(math.Clamp(math.floor(l.dsp or 0), 0, 255), 8)
+		-- the common body (sh_core A.WriteSound, as pba_snd's): the speaker flag, SoundTime and face bit with it
+		A.WriteSound({ pos = l.pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
+			flags = l.speaker and (SND_SPEAKER or 64) or 0, dsp = l.dsp, idx = l.idx, st = l.st, face = l.face })
 		net.WriteBool(l.once or false)
-		net.WriteBool(l.speaker or false)
 	end
 	net.Send(plys)
 end
 
-local function inRange(l, ply, scale)
+--- True when player ply is within the audible radius of followed sound l (scale: the leaving hysteresis).
+-- (sv_sound Audience, kind "mirror")
+function LP.InRange(l, ply, scale)
 	local pos = IsValid(l.ent) and l.ent:WorldSpaceCenter() or l.pos
 	local r = radiusFor(l.lvl) * (scale or 1)
 	return A.PlayerEar(ply):DistToSqr(pos) <= r * r
 end
+local function inRange(l, ply, scale) return A.Sound.Audience(l, ply, scale) == "mirror" end
 
 -- ------------------------------------------------------------------ sound sets
 
@@ -65,13 +66,7 @@ LP.soundSets = LP.soundSets or {}
 local function addSound(set, s)
 	if not isstring(s) or s == "" then return end
 	set[string.lower(A.SoundFile(s))] = true
-	local props = sound.GetProperties(s)
-	local w = props and props.sound
-	if isstring(w) then
-		set[string.lower(A.SoundFile(w))] = true
-	elseif istable(w) then
-		for _, x in ipairs(w) do if isstring(x) then set[string.lower(A.SoundFile(x))] = true end end
-	end
+	for _, x in ipairs(A.Waves(s) or {}) do if isstring(x) then set[string.lower(A.SoundFile(x))] = true end end
 end
 
 --- True when the sound (its wave, or the script it came from) belongs to the set.
@@ -233,10 +228,9 @@ end
 --- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
 function LP.IsLong(data)
 	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
-	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+	if not A.SoundTimeTaken(data, true) then return false end
 	local dur = A.SoundDuration(data.SoundName) or 0
-	return dur > A.cfg.max_duration and dur <= 1800, dur
+	return A.LongDuration(dur), dur
 end
 
 --- A CSoundPatch on a file without loop points (CreateSound of addons, C++ envelopes): its Play reaches the
@@ -249,10 +243,9 @@ function LP.IsPatchStart(data)
 	if bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(flags, SND_STOP) ~= 0 then return false end
 	local name = data.SoundName or ""
 	if name == "invalid.wav" or A.IsSentence(name) then return false end
-	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+	if not A.SoundTimeTaken(data, true) then return false end
 	local dur = A.SoundDuration(name) or 0
-	return dur > 0 and dur <= 1800, dur
+	return A.LongDuration(dur, 0), dur
 end
 
 --- Loops counted against loops_max. C++ code starts many patches at volume 0 and raises them later
@@ -267,23 +260,24 @@ end
 
 local function stopReached(files, x) return A.StopReaches(files, x.name) or A.StopReaches(files, x.orig) end
 
---- Stops the loops / long sounds `name` of entity idx (any channel: a stop may come on another
+--- Stops the loops / long sounds `name` of entity idx (on channel chan; any when nil: a stop may come on another
 -- channel than the start). Returns true when one was running. Capped loops (vanilla) are forgotten
 -- too: the timer must not take over later a CSoundPatch an addon has stopped meanwhile.
-function LP.Stop(idx, name)
+function LP.Stop(idx, name, chan)
 	local found = false
 	-- a sound script reaches each of its waves (A.StopFiles); nil: every sound
 	local files = A.StopFiles(name)
 	for k, x in pairs(LP.released) do
-		if x.idx == idx and stopReached(files, x) then LP.released[k] = nil end
+		if x.idx == idx and (not chan or x.chan == chan) and stopReached(files, x) then LP.released[k] = nil end
 	end
 	for k, x in pairs(LP.capped) do
-		if x.idx == idx and stopReached(files, x) then LP.capped[k] = nil end
+		if x.idx == idx and (not chan or x.chan == chan) and stopReached(files, x) then LP.capped[k] = nil end
 	end
 	for k, x in pairs(LP.active) do
-		if x.idx == idx and stopReached(files, x) then
+		if x.idx == idx and (not chan or x.chan == chan) and stopReached(files, x) then
 			local plys = {}
 			for p in pairs(x.subs) do if IsValid(p) then plys[#plys + 1] = p end end
+			LP.MouthStop(x)
 			send(OP_STOP, x, plys)
 			LP.active[k] = nil
 			found = true
@@ -305,13 +299,7 @@ function LP.IsMoveSound(e, name)
 	for _, k in ipairs(MOVE_KEYS) do
 		local v = e:GetInternalVariable(k)
 		if isstring(v) and v ~= "" then
-			local props = sound.GetProperties(v)
-			local w = props and props.sound or v
-			if istable(w) then
-				for _, x in ipairs(w) do if string.lower(A.SoundFile(x)) == f then return true end end
-			elseif string.lower(A.SoundFile(w)) == f then
-				return true
-			end
+			for _, x in ipairs(A.Waves(v) or { v }) do if string.lower(A.SoundFile(x)) == f then return true end end
 		end
 	end
 	return false
@@ -385,85 +373,94 @@ function LP.WatchFade(l, step)
 	end)
 end
 
---- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
-local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+-- Lip sync of the long lines pba takes over (a scene's speech, Breencast): the client moves a face from the
+-- voices the ENGINE plays on that entity, on a voice channel (C_BaseFlex::ProcessVisemes). The line is now a
+-- mirror (native module or a CSoundPatch elsewhere), and a listener out of the mirror's range gets nothing:
+-- the face stayed still (Breen on the station's screens, 4000 u away). The same line plays on the speaker at a
+-- volume nobody hears (-60 dB, as cl_render's mouth copy), on its channel, for everyone: the engine's mouth,
+-- with the engine's timing (no propagation delay), as in vanilla.
+local MOUTH_VOL = A.MOUTH_VOL
+function LP.MouthStart(l, data)
+	if (A.cfg.long_lipsync or 0) < 0.5 or not l.once then return end
+	local e, ch = l.ent, l.chan
+	if not IsValid(e) or (ch ~= CHAN_VOICE and ch ~= CHAN_VOICE2) then return end
+	if (e.GetFlexNum and e:GetFlexNum() or 0) == 0 then return end
+	-- one lip sync choice for short and long lines (refactor step 8, pba_long_lipsync_choice): the server
+	-- allows (pba_long_lipsync), each player's pba_lipsync chooses, as for the mouth copies of short lines his
+	-- client makes; 0 = every player gets it
+	local rf
+	if (A.cfg.long_lipsync_choice or 1) >= 0.5 then
+		rf = RecipientFilter()
+		for _, p in ipairs(player.GetHumans()) do if not p.pbaLipsyncOff then rf:AddPlayer(p) end end
+		if rf:GetCount() == 0 then return end
+	end
+	A.reemitting = true
+	e:EmitSound(data.SoundName, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch, 0, 0, rf)
+	A.reemitting = false
+	l.mouth = true
+	A.stats.mouthLong = (A.stats.mouthLong or 0) + 1
+end
 
-function LP.Handle(data)
-	if A.cfg.loops < 0.5 then return false end
-	local e = data.Entity
-	-- players' own loops (underwater ambience...) are started and stopped by the engine's C++
-	-- code: that StopSound never reaches Lua, a mirror would play forever. Left to the engine.
-	if IsValid(e) and e:IsPlayer() then return false end
-	-- same for the loops of a weapon a player holds: the gravity gun's hold loop is a CSoundPatch on the
-	-- weapon, faded and destroyed by its C++ (weapon_physcannon); a mirror rendered it to its holder as
-	-- a foreign source and could outlive the destroy
-	if IsValid(e) and e:IsWeapon() then
-		local o = e:GetOwner()
-		if IsValid(o) and o:IsPlayer() then return false end
+--- Stops the mouth copy of long line l (its stop never reaches the engine: the hook takes it).
+function LP.MouthStop(l)
+	if not l.mouth or not IsValid(l.ent) then return end
+	l.mouth = nil
+	-- the engine's StopSound, not sv_relay's detour: that one relays a stop and calls LP.Stop again, from
+	-- inside LP.Stop (OP_STOP sent twice)
+	A.reemitting = true
+	A.orig.EntStopSound(l.ent, l.name)
+	A.reemitting = false
+end
+
+--- The channel rule (sv_relay A.CutChannel): a new sound `name` on entity idx's replacing channel cuts the long
+-- lines and loops followed there under another name (the engine replaces them; a capped one is over).
+function LP.CutChannel(idx, chan, name)
+	for _, x in pairs(LP.active) do
+		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name) end
 	end
-	local idx = IsValid(e) and e:EntIndex() or 0
-	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
-	local l = LP.active[key]
-	local flags = data.Flags or 0
-	-- SND_STOP_LOOPING ("stop all looping sounds on the entity") comes on any name (common/null.wav)
-	if bit.band(flags, SND_STOP_LOOPING or 32) ~= 0 and idx ~= 0 then
-		LP.Stop(idx, nil)
-		return false
+	for k, x in pairs(LP.capped) do
+		if x.idx == idx and x.chan == chan and x.name ~= name then LP.capped[k] = nil end
 	end
-	-- a new sound on a replacing channel (CHAN_VOICE...) cuts what that channel played, a followed long
-	-- line included (the engine replaces it; the mirror must go too, and a capped one is over)
-	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 and replacing(data.Channel) then
-		for k, x in pairs(LP.active) do
-			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.Stop(idx, x.name) end
-		end
-		for k, x in pairs(LP.capped) do
-			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.capped[k] = nil end
-		end
+end
+
+--- True when a long sound or loop `name` of entity idx is followed (a stop of it is pba's: LP.Stop finds it).
+function LP.Following(idx, name)
+	local files = A.StopFiles(name)
+	for _, x in pairs(LP.active) do
+		if x.idx == idx and stopReached(files, x) then return true end
 	end
-	-- left to the engine by the cap: its changes stay the engine's too (else a mirror doubles it);
-	-- they are kept so a later take-over (timer) starts at the current volume / pitch
+	return false
+end
+
+--- A loop left to the engine by the cap: its changes stay the engine's too (else a mirror doubles it); they are
+-- kept so a later take-over (timer) starts at the current volume / pitch. (sv_sound, step "capped")
+function LP.NoteCapped(key, data)
 	local c = LP.capped[key]
-	if c then
-		if bit.band(flags, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then
-			LP.capped[key] = nil
-		else
-			c.t = CurTime()
-			if bit.band(flags, SND_CHANGE_VOL) ~= 0 then c.vol = data.Volume or c.vol end
-			if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then c.pitch = data.Pitch or c.pitch end
-		end
-		return false
-	end
-	local once, dur = false, 0
-	if not l then
-		if A.IsLooping(data.SoundName) then
-			-- engine-driven physics loops (scraping / rolling friction): their envelope lives in the
-			-- physics engine; leave them to it
-			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then return false end
-		else
-			once, dur = LP.IsLong(data)
-			-- a change of a brief sound still playing: not a new patch (audit B-8). Taken over by pba:
-			-- dropped; played by the engine: its change is the engine's
-			if not once and A.BriefPlaying then
-				local playing, took = A.BriefPlaying(data)
-				if playing then return took end
-			end
-			if not once then once, dur = LP.IsPatchStart(data) end
-			if not once then return false end
-		end
-	end
-
-	-- stop events carry no sound level: test them first (SND_STOP_LOOPING ends a loop the same way)
+	if not c then return end
+	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then
-		return LP.Stop(idx, data.SoundName)
+		LP.capped[key] = nil
+	else
+		c.t = CurTime()
+		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then c.vol = data.Volume or c.vol end
+		if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then c.pitch = data.Pitch or c.pitch end
 	end
-	if not l and (data.SoundLevel or 75) <= 0 then return false end -- 2D loops: leave to the engine
+end
+
+--- Takes over a sound sv_sound classified "follow" (snd: key, idx, l = the followed entry or nil, once = a long
+-- one-shot or a patch start): a new mirror, or an update of a followed one, sent to its audience. Returns true
+-- when taken over, false when the cap leaves a new one to the engine (LP.capped). LP.Handle (sv_sound) is the
+-- whole entry: classification, then this.
+function LP.Take(data, snd)
+	local e, idx, key, l, once = data.Entity, snd.idx, snd.key, snd.l, snd.once
+	local flags = data.Flags or 0
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	local fresh = l == nil
 	if fresh then
-		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
+		l = { kind = "mirror", key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
 			orig = data.OriginalSoundName, posGiven = data.Pos }
 		-- sounds play in real time whatever the time scale (game.SetTimeScale, host_timescale): ends in real time
-		if once then l.once, l.endT = true, RealTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
+		if once then l.once, l.endT = true, A.PlayEnd(data.SoundName, data.Pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE end
 		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...) and model doors:
 		-- their C++ stops the loop with a StopSound that never reaches Lua; the mirror stops with the
 		-- motion. Brush models only ("*N"): a prop_dynamic is MOVETYPE_PUSH too, and a still machine
@@ -493,9 +490,10 @@ function LP.Handle(data)
 			l.dsp = cv and cv:GetInt() or 0
 		end
 		l.pos = data.Pos or (IsValid(e) and e:WorldSpaceCenter()) or Vector()
+		l.st, l.face = data.SoundTime, A.OnFace(e, data.Channel) or nil -- (net body only, unused by the mirror yet)
 		-- a long line started again (same key): it plays from its top again, so it ends later
 		if l.once and not fresh then
-			l.endT = RealTime() + (A.SoundDuration(data.SoundName) or 0) * 100 / math.max(l.pitch, 1) + 0.5
+			l.endT = A.PlayEnd(data.SoundName, l.pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE
 		end
 	end
 	if fresh then
@@ -508,6 +506,7 @@ function LP.Handle(data)
 	if l.vehicle and IsValid(e) and bit.band(flags, VOL_PITCH) == VOL_PITCH and isStateSound(e, l) then
 		LP.VehicleStatePlayed(e, l, key)
 	end
+	if not update then LP.MouthStart(l, data) end
 	-- a volume / pitch change of a long one-shot goes to its listeners only: to anyone else it would
 	-- start the mirror from the top, midway through the speech
 	local joinable = not (l.once and update)
@@ -519,6 +518,10 @@ function LP.Handle(data)
 		end
 	end
 	send(update and OP_UPDATE or OP_START, l, plys)
+	-- a long line taken over (a scene's speech longer than max_duration): the engine captions the original it
+	-- emits, suppressed here, so its listeners got no subtitle while the short lines around it had theirs
+	-- (Barney's first conversation line on d1_trainstation_06). Sent like a relayed sound's (sv_relay)
+	if not update and l.once and (A.cfg.long_captions or 1) >= 0.5 and A.SendCaption then A.SendCaption(data, plys) end
 	return true
 end
 
@@ -553,14 +556,10 @@ do
 	end
 end
 
---- Stops the mirror of `name` on entity e (and of the wave a sound script resolved it to).
+--- Stops the mirror of `name` on entity e (and of the wave a sound script resolved it to: LP.Stop reaches every
+-- wave of a script itself, A.StopFiles; one pass, not one more per wave).
 function LP.StopNamed(e, name)
-	local idx = e:EntIndex()
-	LP.Stop(idx, name)
-	local props = sound.GetProperties(name)
-	local w = props and props.sound
-	if isstring(w) then LP.Stop(idx, w)
-	elseif istable(w) then for _, x in ipairs(w) do LP.Stop(idx, x) end end
+	LP.Stop(e:EntIndex(), name)
 end
 
 -- Entity:StartLoopingSound (GMod): its start reaches EntityEmitSound, StopLoopingSound never does
@@ -647,7 +646,8 @@ timer.Create("pba_loops", 0.5, 0, function()
 	end
 	-- capped loops: drop the ended ones; take the others over while slots are free (a loop capped
 	-- during a 70-loop battle no longer stays through every wall once the battle is over)
-	local free = (A.cfg.loops_max or 64) - table.Count(LP.active)
+	-- (counted as LP.Handle caps: with loops_cap_audible, silent patches take no slot)
+	local free = (A.cfg.loops_max or 64) - LP.CapCount()
 	local adopt = {}
 	for key, c in pairs(LP.capped) do
 		if (c.idx ~= 0 and not IsValid(c.ent)) or (c.once and RealTime() > c.endT) or endedInCpp(c) then
@@ -673,10 +673,8 @@ end)
 
 --- Wave of a sound name (a sound script: its first wave).
 local function waveOf(name)
-	local props = name ~= "" and name:sub(1, 1) ~= "!" and sound.GetProperties(name)
-	if not props then return name end
-	local w = props.sound
-	return istable(w) and (w[1] or "") or w or name
+	local w = A.Waves(name)
+	return w and (w[1] or "") or name
 end
 
 --- Looping ambient_generic already playing when pba's hooks went in: started in Activate() at
@@ -721,7 +719,9 @@ function LP.Release()
 		local plys = {}
 		for p in pairs(l.subs) do if IsValid(p) then plys[#plys + 1] = p end end
 		send(OP_STOP, l, plys)
-		if IsValid(l.ent) then
+		-- a long one-shot is not emitted again (pba_loops_release_restart 0): the engine would play it from its
+		-- top, midway through a speech; it ends silently, as the client's mirror (cannot resume midway)
+		if IsValid(l.ent) and (not l.once or (A.cfg.loops_release_restart or 0) >= 0.5) then
 			A.Emit(A.orig.EntEmitSound, l.ent, l.name, l.lvl, l.pitch, l.vol, l.chan, 0, l.dsp)
 			if not l.once then l.subs = {} LP.released[key] = l end
 		end

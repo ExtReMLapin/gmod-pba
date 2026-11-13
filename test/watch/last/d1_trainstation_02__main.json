@@ -1,0 +1,127 @@
+{
+ "map": "d1_trainstation_02",
+ "tag": "main",
+ "sets": [],
+ "secs": 156,
+ "triggers": 49,
+ "visited": 29,
+ "scenes": 17,
+ "speech": 38,
+ "anomalies": {
+  "voice_step": {
+   "count": 15,
+   "distinct": 8,
+   "samples": [
+    {
+     "db": 7.5,
+     "pos": "-3740.000000 -932.000000 136.031250",
+     "toG": 0.7998,
+     "t": 67.92,
+     "sound": "!metropolice_back_up_a1",
+     "fromG": 0.3356,
+     "key": "!metropolice_back_up_a1",
+     "map": "d1_trainstation_02"
+    },
+    {
+     "db": -10.9,
+     "pos": "-3776.931641 -983.837463 136.031250",
+     "toG": 0.2847,
+     "t": 71.18,
+     "sound": "\\npc\\metropolice\\vo\\prepareforjudgement.wav",
+     "fromG": 0.9997,
+     "key": "\\npc\\metropolice\\vo\\prepareforjudgement.wav",
+     "map": "d1_trainstation_02"
+    },
+    {
+     "db": -22.2,
+     "pos": "-3820.491699 -1133.082397 136.031250",
+     "toG": 0.0269,
+     "t": 74.44,
+     "sound": "player/footsteps/tile3.wav",
+     "fromG": 0.3448,
+     "key": "player/footsteps/tile3.wav",
+     "map": "d1_trainstation_02"
+    },
+    {
+     "db": -5.6,
+     "pos": "-3484.695312 -2355.594971 115.542404",
+     "toG": 0.0011,
+     "t": 92.09,
+     "sound": "npc/scanner/cbot_fly_loop.wav",
+     "fromG": 0.0022,
+     "key": "npc/scanner/cbot_fly_loop.wav",
+     "map": "d1_trainstation_02"
+    },
+    {
+     "db": -3.6,
+     "pos": "-3442.588867 -2355.455078 123.359993",
+     "toG": 0.0016,
+     "t": 122.51,
+     "sound": "doors/wood_move1.wav",
+     "fromG": 0.0024,
+     "key": "doors/wood_move1.wav",
+     "map": "d1_trainstation_02"
+    },
+    {
+     "db": -14.9,
+     "pos": "-2863.321289 -2043.128540 78.014000",
+     "toG": 0.0271,
+     "t": 129.35,
+     "sound": "player/footsteps/concrete4.wav",
+     "fromG": 0.151,
+     "key": "player/footsteps/concrete4.wav",
+     "map": "d1_trainstation_02"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 14,
+   "distinct": 14,
+   "samples": [
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct01.wav",
+     "dist": 9443,
+     "lagMs": 524,
+     "t": 14.25
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct02.wav",
+     "dist": 9443,
+     "lagMs": 524,
+     "t": 30.21
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct03.wav",
+     "dist": 9443,
+     "lagMs": 524,
+     "t": 42.7
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct04.wav",
+     "dist": 9746,
+     "lagMs": 541,
+     "t": 61.62
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct05.wav",
+     "dist": 9992,
+     "lagMs": 555,
+     "t": 72.76
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct06.wav",
+     "dist": 10967,
+     "lagMs": 609,
+     "t": 84.01
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

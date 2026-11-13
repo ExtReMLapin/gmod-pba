@@ -19,31 +19,6 @@ local function polyInfo(poly)
 	return c, n, r
 end
 
---- Closest point to p inside the convex planar polygon (poly, centre c, normal n).
-function G.ClampToPoly(p, poly, c, n)
-	local q = p - n * (p - c):Dot(n) -- projection on the plane
-	local inside = true
-	local cnt = #poly
-	for i = 1, cnt do
-		local a, b = poly[i], poly[i % cnt + 1]
-		local edgeN = (b - a):Cross(n)
-		-- edgeN points outward or inward depending on winding; compare with centre side
-		local sc = (c - a):Dot(edgeN)
-		local sq = (q - a):Dot(edgeN)
-		if sq * sc < 0 then inside = false break end
-	end
-	if inside then return q end
-	local best, bd = q, math.huge
-	for i = 1, cnt do
-		local a, b = poly[i], poly[i % cnt + 1]
-		local ab = b - a
-		local t = math.Clamp((q - a):Dot(ab) / math.max(ab:Dot(ab), 1e-6), 0, 1)
-		local x = a + ab * t
-		local d = x:DistToSqr(q)
-		if d < bd then bd, best = d, x end
-	end
-	return best
-end
 
 --- Builds the graph from a parsed BSP table (see A.BSP.Load). Pure: no game state.
 function G.Build(bsp)

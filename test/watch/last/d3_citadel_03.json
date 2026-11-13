@@ -1,0 +1,128 @@
+{
+ "map": "d3_citadel_03",
+ "tag": "",
+ "sets": [],
+ "secs": 104,
+ "triggers": 23,
+ "visited": 21,
+ "scenes": 7,
+ "speech": 1,
+ "anomalies": {
+  "voice_step": {
+   "count": 15,
+   "distinct": 9,
+   "samples": [
+    {
+     "db": -4.5,
+     "pos": "7700.825195 -1291.315552 2139.591309",
+     "toG": 0.0906,
+     "t": 29.22,
+     "sound": "ambient/energy/electric_loop.wav",
+     "fromG": 0.1519,
+     "key": "ambient/energy/electric_loop.wav",
+     "map": "d3_citadel_03"
+    },
+    {
+     "db": -8.1,
+     "pos": "7745.770020 940.954285 2242.031006",
+     "toG": 0.0233,
+     "t": 38.99,
+     "sound": "player/footsteps/metal4.wav",
+     "fromG": 0.0592,
+     "key": "player/footsteps/metal4.wav",
+     "map": "d3_citadel_03"
+    },
+    {
+     "db": -7.2,
+     "pos": "7739.770996 1003.834961 2242.031006",
+     "toG": 0.0227,
+     "t": 38.99,
+     "sound": "player/footsteps/metal3.wav",
+     "fromG": 0.052,
+     "key": "player/footsteps/metal3.wav",
+     "map": "d3_citadel_03"
+    },
+    {
+     "db": 13,
+     "pos": "6277.275879 919.313843 2178.031006",
+     "toG": 0.1932,
+     "t": 43.55,
+     "sound": "physics/glass/glass_sheet_step3.wav",
+     "fromG": 0.043,
+     "key": "physics/glass/glass_sheet_step3.wav",
+     "map": "d3_citadel_03"
+    },
+    {
+     "db": -7.6,
+     "pos": "6303.803223 565.319824 2152.031006",
+     "toG": 0.29,
+     "t": 43.55,
+     "sound": "weapons/ar1/ar1_dist1.wav",
+     "fromG": 0.6965,
+     "key": "weapons/ar1/ar1_dist1.wav",
+     "map": "d3_citadel_03"
+    },
+    {
+     "db": 11.8,
+     "pos": "6322.266602 693.565125 2178.031006",
+     "toG": 0.2618,
+     "t": 43.55,
+     "sound": "npc/combine_soldier/gear3.wav",
+     "fromG": 0.0673,
+     "key": "npc/combine_soldier/gear3.wav",
+     "map": "d3_citadel_03"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_breen",
+     "name": "*vo/citadel/br_freemanatlast.wav",
+     "dist": 3502,
+     "lagMs": 194,
+     "t": 36.82
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "ambient/levels/citadel/weaponstrip1_adpcm.wav": {
+   "lvl": 100,
+   "dmin": 317,
+   "dmax": 317,
+   "n": 40,
+   "native": false
+  },
+  "ambient/levels/citadel/zapper_loop2.wav": {
+   "lvl": 100,
+   "dmin": 122,
+   "dmax": 122,
+   "n": 20,
+   "native": true
+  },
+  "ambient/levels/citadel/zapper_ambient_loop1.wav": {
+   "lvl": 100,
+   "dmin": 324,
+   "dmax": 385,
+   "n": 64,
+   "native": false
+  },
+  "ambient/levels/citadel/zapper_loop1.wav": {
+   "lvl": 100,
+   "dmin": 122,
+   "dmax": 5538,
+   "n": 159,
+   "native": true
+  },
+  "music/stingers/industrial_suspense1.wav": {
+   "lvl": 140,
+   "dmin": 251,
+   "dmax": 2775,
+   "n": 47,
+   "native": false
+  }
+ }
+}

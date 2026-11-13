@@ -1,0 +1,186 @@
+{
+ "map": "d3_c17_05",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 51,
+ "visited": 24,
+ "scenes": 6,
+ "speech": 50,
+ "anomalies": {
+  "mirror_step": {
+   "count": 8,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 13.27,
+     "pos": "1594.000000 -6941.000000 161.000000",
+     "toG": 0.391,
+     "sound": "ambient/fire/fire_small1.wav",
+     "fromG": 0.004,
+     "key": "ambient/fire/fire_small1.wav",
+     "map": "d3_c17_05"
+    },
+    {
+     "t": 39.4,
+     "pos": "594.156250 -6295.125000 561.281250",
+     "toG": 1,
+     "sound": "*^vo/breencast/br_collaboration05.wav",
+     "fromG": 0.032,
+     "key": "*^vo/breencast/br_collaboration05.wav",
+     "map": "d3_c17_05"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 50,
+   "distinct": 25,
+   "samples": [
+    {
+     "db": -9.3,
+     "pos": "220.163544 -5985.708008 198.031235",
+     "toG": 0.0971,
+     "t": 30.9,
+     "sound": "player/footsteps/tile3.wav",
+     "fromG": 0.2836,
+     "key": "player/footsteps/tile3.wav",
+     "map": "d3_c17_05"
+    },
+    {
+     "db": -7.4,
+     "pos": "202.076523 -6126.056152 198.031235",
+     "toG": 0.1384,
+     "t": 30.9,
+     "sound": "player/footsteps/tile2.wav",
+     "fromG": 0.3259,
+     "key": "player/footsteps/tile2.wav",
+     "map": "d3_c17_05"
+    },
+    {
+     "db": -8.1,
+     "pos": "286.594238 -6188.352051 198.031235",
+     "toG": 0.1175,
+     "t": 33.34,
+     "sound": "player/footsteps/tile4.wav",
+     "fromG": 0.2969,
+     "key": "player/footsteps/tile4.wav",
+     "map": "d3_c17_05"
+    },
+    {
+     "db": -7.6,
+     "pos": "384.600830 -6229.568848 201.831131",
+     "toG": 0.249,
+     "t": 33.34,
+     "sound": "npc/strider/strider_minigun.wav",
+     "fromG": 0.5963,
+     "key": "npc/strider/strider_minigun.wav",
+     "map": "d3_c17_05"
+    },
+    {
+     "db": -6.2,
+     "pos": "653.669373 -6144.479004 240.144501",
+     "toG": 0.0032,
+     "t": 33.7,
+     "sound": "npc/roller/mine/combine_mine_active_loop1.wav",
+     "fromG": 0.0064,
+     "key": "npc/roller/mine/combine_mine_active_loop1.wav",
+     "map": "d3_c17_05"
+    },
+    {
+     "db": 6.5,
+     "pos": "651.011780 -6145.293457 242.357132",
+     "toG": 0.0023,
+     "t": 33.7,
+     "sound": "npc/scanner/combat_scan_loop6.wav",
+     "fromG": 0.0011,
+     "key": "npc/scanner/combat_scan_loop6.wav",
+     "map": "d3_c17_05"
+    }
+   ]
+  },
+  "mouth_missing": {
+   "count": 3,
+   "distinct": 3,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/moan05.wav",
+     "dist": 1772,
+     "t": 12.76,
+     "pos": "1665.000000 -6951.899902 128.000000"
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/moan01.wav",
+     "dist": 1772,
+     "t": 19.98,
+     "pos": "1665.000000 -6951.899902 128.000000"
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/moan02.wav",
+     "dist": 1772,
+     "t": 28.33,
+     "pos": "1665.000000 -6951.899902 128.000000"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 17,
+   "distinct": 16,
+   "samples": [
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_collaboration01.wav",
+     "dist": 3733,
+     "lagMs": 207,
+     "t": 12.03
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/moan05.wav",
+     "dist": 1772,
+     "lagMs": 98,
+     "t": 12.76
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/moan01.wav",
+     "dist": 1772,
+     "lagMs": 98,
+     "t": 19.98
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_collaboration02.wav",
+     "dist": 3733,
+     "lagMs": 207,
+     "t": 20.28
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_collaboration03.wav",
+     "dist": 3733,
+     "lagMs": 207,
+     "t": 24.93
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/moan02.wav",
+     "dist": 1772,
+     "lagMs": 98,
+     "t": 28.33
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "doors/garage_move1.wav": {
+   "lvl": 100,
+   "dmin": 616,
+   "dmax": 1146,
+   "n": 27,
+   "native": true
+  }
+ }
+}

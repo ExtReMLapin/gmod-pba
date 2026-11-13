@@ -186,6 +186,9 @@ IPLVector3 g_lastDir{};                // last binaural direction computed (debu
 double g_dbgIn = 0, g_dbgL = 0, g_dbgR = 0; int g_dbgVoices = 0;
 constexpr int kMaxLag = 48;           // +-1 ms at 48 kHz
 double g_xc[kMaxLag * 2 + 1] = {};    // L/R cross-correlation of the mix (ITD meter)
+// the debug meters (g_xc, g_dbgIn/L/R) run only once Debug() was called (a test reads them): the ITD
+// cross-correlation alone is ~40 000 multiply-adds per block on the audio thread
+bool g_debugOn = false;
 double g_loadSum = 0, g_loadMax = 0; int g_loadN = 0;
 
 // audio-thread scratch buffers
@@ -239,7 +242,13 @@ constexpr float kStereoSpread = 0.577f;
 std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet consumed
 size_t g_fifoPos = 0;
 std::unordered_set<std::string> g_pending; // under g_mtx
-std::vector<std::thread> g_loaders;       // joined at Stop (the DLL may be unloaded after)
+// decoding threads: joined at Stop (the DLL may be unloaded after); the finished ones are joined and dropped
+// at the next LoadSoundAsync (their handles piled up for the whole session)
+struct Loader {
+	std::thread t;
+	std::shared_ptr<std::atomic<bool>> done;
+};
+std::vector<Loader> g_loaders;
 std::mutex g_loadMtx;
 
 IPLSpeakerLayout Stereo() {
@@ -639,7 +648,8 @@ void RenderBlock() {
 			} else {
 				spatialise(v.slot, dir, bin_in, &g_stereo);
 			}
-			for (int i = 0; i < kBlock; ++i) g_dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
+			if (g_debugOn)
+				for (int i = 0; i < kBlock; ++i) g_dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
 		}
 		g_dbgVoices++;
 		for (int i = 0; i < kBlock; ++i) {
@@ -655,8 +665,10 @@ void RenderBlock() {
 			}
 			l *= directGain;
 			r *= directGain;
-			g_dbgL += (double)l * l;
-			g_dbgR += (double)r * r;
+			if (g_debugOn) {
+				g_dbgL += (double)l * l;
+				g_dbgR += (double)r * r;
+			}
 			g_mix[i * 2] += l;
 			g_mix[i * 2 + 1] += r;
 		}
@@ -725,7 +737,7 @@ void RenderBlock() {
 	}
 	// cross-correlation: xc[lag] = sum L[i] * R[i + lag]; R lagging behind L (lag > 0) means the
 	// sound reaches the left ear first
-	for (int lag = -kMaxLag; lag <= kMaxLag; ++lag) {
+	for (int lag = -kMaxLag; g_debugOn && lag <= kMaxLag; ++lag) {
 		double acc = 0;
 		for (int i = kMaxLag; i < kBlock - kMaxLag; ++i) acc += (double)g_mix[i * 2] * g_mix[(i + lag) * 2 + 1];
 		g_xc[lag + kMaxLag] += acc;
@@ -915,13 +927,18 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 }
 
 void JoinLoaders() {
-	std::vector<std::thread> ts;
+	std::vector<Loader> ts;
 	{
 		std::lock_guard<std::mutex> lk(g_loadMtx);
 		ts.swap(g_loaders);
 	}
-	for (auto& t : ts)
-		if (t.joinable()) t.join();
+	for (auto& l : ts)
+		if (l.t.joinable()) l.t.join();
+}
+
+int LoaderThreads() {
+	std::lock_guard<std::mutex> lk(g_loadMtx);
+	return (int)g_loaders.size();
 }
 
 void Stop() {
@@ -1126,6 +1143,7 @@ void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
 	*lastDir = g_lastDir;
 	g_dbgIn = g_dbgL = g_dbgR = 0;
 	g_dbgVoices = 0;
+	g_debugOn = true;
 }
 
 void Load(double* avgMs, double* maxMs, int* blocks) {
@@ -1179,12 +1197,26 @@ bool LoadSoundAsync(const std::string& name, std::string data) {
 		g_pending.insert(name);
 	}
 	std::lock_guard<std::mutex> lk(g_loadMtx);
-	g_loaders.emplace_back([name, data = std::move(data)]() {
+	for (size_t i = 0; i < g_loaders.size();) {
+		if (g_loaders[i].done->load()) {
+			if (g_loaders[i].t.joinable()) g_loaders[i].t.join(); // (finished: returns at once)
+			g_loaders[i] = std::move(g_loaders.back());
+			g_loaders.pop_back();
+		} else {
+			++i;
+		}
+	}
+	auto done = std::make_shared<std::atomic<bool>>(false);
+	std::thread t([name, data = std::move(data), done]() {
 		double secs = 0;
 		LoadSound(name, data.data(), data.size(), &secs); // inserts into g_sounds on success
-		std::lock_guard<std::mutex> lk2(g_mtx);
-		g_pending.erase(name);
+		{
+			std::lock_guard<std::mutex> lk2(g_mtx);
+			g_pending.erase(name);
+		}
+		done->store(true);
 	});
+	g_loaders.push_back(Loader{std::move(t), done});
 	return true;
 }
 

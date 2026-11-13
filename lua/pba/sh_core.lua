@@ -38,9 +38,6 @@ end
 -- Several names per channel: one sound re-emitted clear to some players and muffled ("#" removed)
 -- to others is two engine sounds.
 A.vanillaOn = A.vanillaOn or {} -- entindex -> { [chan] = { [sound name played by the engine] = true } }
-for idx, per in pairs(A.vanillaOn) do -- an older file stored one name per channel
-	for chan, v in pairs(per) do if isstring(v) then per[chan] = { [v] = true } end end
-end
 local NOT_NEW = SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH
 
 local function stopEngineSound(e, name)
@@ -61,12 +58,104 @@ function A.KeepsChannel(flags)
 	return bit.band(flags or 0, NO_OVERWRITE) ~= 0
 end
 
+--- True for a replacing channel (not CHAN_AUTO / CHAN_STATIC, above 0): a new sound there cuts the previous one.
+function A.ReplacingChannel(chan)
+	return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0
+end
+
+--- THE channel rule, for every copy, mirror, re-emission and voice on both realms: true when a new sound
+-- (chan, flags) replaces what its entity plays on that channel. Not on CHAN_AUTO / CHAN_STATIC, not with
+-- SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL, not for a stop or a change of a playing sound (SND_STOP,
+-- SND_CHANGE_*) unless `started`: the caller knows it starts one (a CSoundPatch's Play arrives as a change).
+function A.CutsChannel(chan, flags, started)
+	if not A.ReplacingChannel(chan) or A.KeepsChannel(flags) then return false end
+	return started or bit.band(flags or 0, NOT_NEW) == 0
+end
+
+--- True when a sound of `dur` seconds is a long one: longer than `min` (pba_max_duration when nil), and
+-- not past 30 minutes (a stream or a broken header, left to the engine).
+function A.LongDuration(dur, min)
+	return dur > (min or A.cfg.max_duration) and dur <= 1800
+end
+
+-- Volume of a mouth copy (lip sync only): -60 dB, nobody hears it.
+A.MOUTH_VOL = 0.001
+
+-- ------------------------------------------------------------------ end of file
+-- One end-of-file rule for every copy, mirror and voice (engine copies and module voices of cl_render, long
+-- one-shot mirrors of cl_loops, the server's long lines of sv_loops): a sound ends when its file has played
+-- at its start pitch. A mirror is told ended END_GRACE after it (its start's latency).
+A.END_GRACE = 0.5
+
+--- Seconds `secs` of file play at `pitch` (at least 0.1 s of file).
+function A.AtPitch(secs, pitch)
+	return math.max(secs, 0.1) * 100 / math.max(pitch or 100, 1)
+end
+
+--- Seconds `name` plays at `pitch`; nil when its length is unknown (SoundDuration 0 for a VBR mp3, a missing
+-- file, a sentence) and was not read yet by the client's BASS probe (cl_render playLength, A.lengthProbe).
+function A.PlaySeconds(name, pitch)
+	local secs = A.SoundDuration(name)
+	if not (secs and secs > 0) and A.lengthProbe and not A.IsSentence(name) then
+		secs = A.lengthProbe[string.lower(A.SoundFile(name))]
+		if type(secs) ~= "number" then secs = nil end
+	end
+	if secs and secs > 0 then return A.AtPitch(secs, pitch) end
+end
+
+--- When `name`, started at t0 (RealTime when nil) at `pitch`, has played its file, plus `grace` seconds;
+-- nil when its length is unknown.
+function A.PlayEnd(name, pitch, t0, grace)
+	local s = A.PlaySeconds(name, pitch)
+	return s and (t0 or RealTime()) + s + (grace or 0) or nil
+end
+
+-- ------------------------------------------------------------------ net format of a sound
+-- One body for every sound the server sends (pba_snd relays, sv_relay; pba_loop mirrors, sv_loops): position,
+-- level, pitch, volume, channel, flags (SND_SPEAKER...), DSP, entity, its own start time (SoundTime) and the
+-- face bit. A relay's body is about 20 bytes (relay_net: a whole pba_snd within 30).
+
+--- True for a line on a face: a voice channel of an entity with flexes (the client may not have that entity
+-- yet, never in its view, and could not tell; it gives it its mouth copy by index).
+function A.OnFace(e, chan)
+	return (chan == CHAN_VOICE or chan == CHAN_VOICE2) and IsValid(e) and not e:IsWorld()
+		and (e.GetFlexNum and e:GetFlexNum() or 0) > 0
+end
+
+--- Writes a sound's body. s: { pos, lvl, pitch, vol, chan, flags, dsp, idx, st (SoundTime, 0/nil none), face }.
+function A.WriteSound(s)
+	net.WriteVector(s.pos)
+	net.WriteUInt(math.Clamp(math.floor(s.lvl or 75), 0, 511), 9)
+	net.WriteUInt(math.Clamp(math.floor(s.pitch or 100), 0, 255), 8)
+	net.WriteUInt(math.Clamp(math.Round((s.vol or 1) * 255), 0, 255), 8)
+	net.WriteInt(s.chan or CHAN_AUTO, 10) -- CHAN_REPLACE (-1) to user channels (up to 255)
+	net.WriteUInt(s.flags or 0, 16)
+	net.WriteUInt(math.Clamp(math.floor(s.dsp or 0), 0, 255), 8)
+	net.WriteUInt(s.idx or 0, 16)
+	-- its own start time (SoundTime: the shots of a weapon fired between two network updates, each at
+	-- its tick), in ms modulo 65.536 s: the client keeps their spacing (cl_render A.SoundTimeDelay)
+	local st = (A.cfg.soundtime or 1) >= 0.5 and s.st or 0
+	net.WriteBool(st ~= 0)
+	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
+	net.WriteBool(s.face or false)
+end
+
+--- Reads a body written by A.WriteSound, as EntityEmitSound data (+ stMs: its SoundTime in ms modulo 65536,
+-- nil when none; Face).
+function A.ReadSound()
+	local d = {
+		Pos = net.ReadVector(), SoundLevel = net.ReadUInt(9), Pitch = net.ReadUInt(8), Volume = net.ReadUInt(8) / 255,
+		Channel = net.ReadInt(10), Flags = net.ReadUInt(16), DSP = net.ReadUInt(8), EntIndex = net.ReadUInt(16),
+	}
+	if net.ReadBool() then d.stMs = net.ReadUInt(16) end
+	d.Face = net.ReadBool()
+	return d
+end
+
 --- Entity index and channel of a new sound the channel rule applies to (nil otherwise).
 local function ruleSlot(data)
 	local chan, e = data.Channel, data.Entity
-	if not chan or chan == CHAN_AUTO or chan == CHAN_STATIC or chan <= 0 then return nil end
-	if A.KeepsChannel(data.Flags) then return nil end
-	if not IsValid(e) or e:IsWorld() or bit.band(data.Flags or 0, NOT_NEW) ~= 0 then return nil end
+	if not A.CutsChannel(chan, data.Flags) or not IsValid(e) or e:IsWorld() then return nil end
 	local idx = e:EntIndex()
 	if idx <= 0 then return nil end
 	return idx, chan
@@ -76,7 +165,16 @@ end
 function A.WithChannelRule(fn)
 	return function(data)
 		local idx, chan = ruleSlot(data)
-		if not idx then return fn(data) end
+		if not idx then
+			-- pba_channel_one_rule 0: the server's followed long lines of the world were cut as well
+			if SERVER and (A.cfg.channel_one_rule or 1) < 0.5 and not A.reemitting and A.CutsChannel(data.Channel, data.Flags)
+				and (not IsValid(data.Entity) or data.Entity:IsWorld()) and A.Loops and A.Loops.CutChannel then
+				local ret = fn(data)
+				A.Loops.CutChannel(0, data.Channel, data.SoundName)
+				return ret
+			end
+			return fn(data)
+		end
 		if A.reemitting then
 			-- pba's own emission (the original re-emitted to clear or muffled listeners): the engine
 			-- plays it, on this channel, for those players
@@ -90,11 +188,18 @@ function A.WithChannelRule(fn)
 			end
 			return ret
 		end
+		-- the client's copies and mirrors on that channel stop before the new sound plays (cl_render
+		-- A.CutChannel; a relayed sound, which never reaches this hook, cuts them in A.Process)
+		-- (pba_channel_one_rule 0: none, the sound left to the engine cut nothing of pba's)
+		if CLIENT and A.CutChannel and (A.cfg.channel_one_rule or 1) >= 0.5 then A.CutChannel(idx, chan) end
 		-- what the engine played before this sound; the handler's re-emissions record themselves anew
 		local per = A.vanillaOn[idx]
 		local prev = per and per[chan]
 		if per then per[chan] = nil end
 		local ret = fn(data)
+		-- the server's mirrors and the players' relayed copies on that channel, once the handler said who
+		-- got this sound relayed (sv_relay A.CutChannel)
+		if SERVER and A.CutChannel then A.CutChannel(data, idx, chan) end
 		if ret == false then
 			if prev then
 				per = A.vanillaOn[idx]
@@ -147,17 +252,16 @@ end
 
 function A.OnConfigChanged(name)
 	if name == "enable" or name == "cl_enable" then A.Refresh() end
+	-- the server learns that this client switched pba off or on (sv_relay pba_relay_cl_enable)
+	if (name == "enable" or name == "cl_enable") and CLIENT and A.SayReady then A.SayReady() end
 	-- loops switched off: their mirrors go back to the engine; on again: taken over again
 	if name == "loops" and SERVER and A.Loops and A.hooksInstalled then
 		if (A.cfg.loops or 0) < 0.5 then A.Loops.Release() else timer.Simple(0, A.Loops.AdoptAmbients) end
 	end
 	-- pba_compat_auto switched: Sound Muffling Effect is turned off, or given back its value
+	-- the player's lip sync choice reaches the server (sv_loops MouthStart, the long lines' mouth copy)
+	if name == "lipsync" and CLIENT and A.SendLipsyncPref then A.SendLipsyncPref() end
 	if name == "compat_auto" and A.Compat and A.Compat.Check then A.Compat.Check() end
-	if name == "update_interval" and CLIENT then
-		for _, t in ipairs({ "pba_streams" }) do
-			if timer.Exists(t) then timer.Adjust(t, A.cfg.update_interval) end
-		end
-	end
 	if A.Paths then A.Paths.InvalidateCache() end
 end
 
@@ -208,22 +312,24 @@ local function fileKey(name) return string.lower(A.SoundFile(name or "")) end
 function A.StopFiles(name)
 	if not name or name == "" then return nil end
 	local set = { [fileKey(name)] = true }
-	local props = not A.IsSentence(name) and sound.GetProperties(name)
-	local w = props and props.sound
-	if isstring(w) then
-		set[fileKey(w)] = true
-	elseif istable(w) then
-		for _, x in ipairs(w) do set[fileKey(x)] = true end
-	end
+	for _, x in ipairs(A.Waves(name) or {}) do set[fileKey(x)] = true end
 	return set
+end
+
+--- The waves of sound script `name` (sound.GetProperties' `sound`, one wave or a list) as a list; nil when
+-- `name` is no script (a file, a sentence, "" or nil).
+function A.Waves(name)
+	local props = name and name ~= "" and not A.IsSentence(name) and sound.GetProperties(name)
+	local w = props and props.sound
+	if isstring(w) then return { w } end
+	if istable(w) then return w end
+	return nil
 end
 
 --- The waves of a sound script (the name itself when it is not one): what a StopSound(name) stops.
 function A.StopWaves(name)
-	local props = name and name ~= "" and not A.IsSentence(name) and sound.GetProperties(name)
-	local w = props and props.sound
-	if isstring(w) then return { w } end
-	if istable(w) and #w > 0 then return w end
+	local w = A.Waves(name)
+	if w and #w > 0 then return w end
 	return { name or "" }
 end
 
@@ -408,18 +514,28 @@ function A.IsLooping(name)
 	return loop
 end
 
+--- One SoundTime rule for short and long sounds (refactor step 8): a sound stamped away from "now" (more than
+-- 0.25 s) was left to the engine; on the server with pba_soundtime its stamp goes with the relay and the
+-- re-emission (short), and a long line is taken over as well (started at once: a long line's start within a
+-- few tenths is not heard, crossing every wall is), pba_long_soundtime. long: asked for a long sound.
+function A.SoundTimeTaken(data, long)
+	local st = data.SoundTime or 0
+	if st == 0 or math.abs(st - CurTime()) <= 0.25 then return true end
+	if not SERVER or (A.cfg.soundtime or 1) < 0.5 then return false end
+	return not long or (A.cfg.long_soundtime or 1) >= 0.5
+end
+
 --- Common eligibility rules for an EntityEmitSound table. Returns true when pba may
 -- process the sound.
 function A.Eligible(data)
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl < A.cfg.min_level or lvl >= 256 then return false end
-	if data.SoundName == "invalid.wav" then return false end -- sentences: vanilla in v1
+	if data.SoundName == "invalid.wav" then return false end
 	-- SoundTime: predicted weapons (every player's gunfire) stamp their sounds with the current
 	-- time; sounds scheduled away from "now" were left alone (re-emission played them immediately). On the
 	-- server with pba_soundtime their stamp goes with the relay (the client schedules them as the engine
 	-- would, A.SoundTimeDelay) and with the re-emission (sv_relay reemit): taken like any other
-	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 and not (SERVER and (A.cfg.soundtime or 1) >= 0.5) then return false end
+	if not A.SoundTimeTaken(data) then return false end
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
 	if A.IsLooping(data.SoundName) then return false end
@@ -463,8 +579,8 @@ function A.InWater(p) return bit.band(util.PointContents(p), LIQUID) ~= 0 end
 
 --- True for the engine's files of a sound already muffled by water: WaterExplosionEffect.Sound, played by
 -- an explosion deeper than 128 u (C_WaterExplosionEffect::PlaySound) and heard as is from the air. Read
--- from the sound script once (names without their "^" / ")" prefixes).
-local PREFIX = "^[%^%)%(<>%*@#!?~]+"
+-- from the sound script once (names without their sound characters: A.SoundFile, the one list of them; a
+-- partial copy here missed "}", "$", "&", "`", "+", "%" and "(").
 local muffled
 function A.WaterMuffledFile(name)
 	if not isstring(name) then return false end
@@ -473,9 +589,9 @@ function A.WaterMuffledFile(name)
 		local p = sound.GetProperties and sound.GetProperties("WaterExplosionEffect.Sound")
 		local s = p and p.sound
 		if isstring(s) then s = { s } end
-		for _, f in ipairs(s or {}) do muffled[string.lower(string.gsub(f, PREFIX, ""))] = true end
+		for _, f in ipairs(s or {}) do muffled[string.lower(A.SoundFile(f))] = true end
 	end
-	return muffled[string.lower(string.gsub((string.gsub(name, "\\", "/")), PREFIX, ""))] or false
+	return muffled[string.lower(A.SoundFile((string.gsub(name, "\\", "/"))))] or false
 end
 
 --- World position of a sound.

@@ -1,0 +1,186 @@
+{
+ "map": "d1_trainstation_06",
+ "tag": "",
+ "sets": [],
+ "secs": 99,
+ "triggers": 22,
+ "visited": 22,
+ "scenes": 4,
+ "speech": 12,
+ "anomalies": {
+  "louder_vanilla": {
+   "count": 18,
+   "distinct": 1,
+   "samples": [
+    {
+     "dist": 3683,
+     "lvl": 60,
+     "overDb": 6.7,
+     "t": 47.65,
+     "sound": "ambient/machines/train_idle.wav",
+     "map": "d1_trainstation_06",
+     "key": "ambient/machines/train_idle.wav",
+     "g": 0.19993079540769196
+    }
+   ]
+  },
+  "mirror_step": {
+   "count": 6,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 35.5,
+     "pos": "-9232.000000 -3040.000000 -9.375000",
+     "toG": 1,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "fromG": 0.499,
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d1_trainstation_06"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 29,
+   "distinct": 7,
+   "samples": [
+    {
+     "db": 4.9,
+     "pos": "-10428.335938 -3756.307617 45.199020",
+     "toG": 0.0024,
+     "t": 44.93,
+     "sound": "ambient/machines/train_rumble.wav",
+     "fromG": 0.0014,
+     "key": "ambient/machines/train_rumble.wav",
+     "map": "d1_trainstation_06"
+    },
+    {
+     "db": -3.3,
+     "pos": "-8667.430664 -3004.846680 -17.704256",
+     "toG": 0.0025,
+     "t": 49.39,
+     "sound": "ambient/machines/train_idle.wav",
+     "fromG": 0.0037,
+     "key": "ambient/machines/train_idle.wav",
+     "map": "d1_trainstation_06"
+    },
+    {
+     "db": -3.3,
+     "pos": "-8667.877930 -3004.917969 -18.024881",
+     "toG": 0.0104,
+     "t": 49.57,
+     "sound": "ambient/alarms/train_horn2.wav",
+     "fromG": 0.0151,
+     "key": "ambient/alarms/train_horn2.wav",
+     "map": "d1_trainstation_06"
+    },
+    {
+     "db": 6.5,
+     "pos": "-6257.007812 -2116.984375 81.483109",
+     "toG": 0.0265,
+     "t": 54.66,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "fromG": 0.0125,
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d1_trainstation_06"
+    },
+    {
+     "db": -7.5,
+     "pos": "-8063.883789 -3136.016113 262.095978",
+     "toG": 0.0488,
+     "t": 61.94,
+     "sound": "npc/scanner/cbot_fly_loop.wav",
+     "fromG": 0.1154,
+     "key": "npc/scanner/cbot_fly_loop.wav",
+     "map": "d1_trainstation_06"
+    },
+    {
+     "db": 6.3,
+     "pos": "-8064.038574 -3136.022217 253.180191",
+     "toG": 0.2144,
+     "t": 63.56,
+     "sound": "npc/scanner/scanner_scan_loop2.wav",
+     "fromG": 0.1037,
+     "key": "npc/scanner/scanner_scan_loop2.wav",
+     "map": "d1_trainstation_06"
+    }
+   ]
+  },
+  "mouth_missing": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 1802,
+     "t": 65.85,
+     "pos": "-6064.000000 -2048.000244 -103.968750"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 7,
+   "distinct": 2,
+   "samples": [
+    {
+     "class": "npc_barney",
+     "name": "*vo/trainyard/ba_heygordon.wav",
+     "dist": 1585,
+     "lagMs": 88,
+     "t": 42.3
+    },
+    {
+     "class": "npc_barney",
+     "name": "*vo/trainyard/ba_heygordon.wav",
+     "dist": 1913,
+     "lagMs": 106,
+     "t": 50.62
+    },
+    {
+     "class": "npc_barney",
+     "name": "*vo/trainyard/ba_heygordon.wav",
+     "dist": 1785,
+     "lagMs": 99,
+     "t": 58.41
+    },
+    {
+     "class": "npc_barney",
+     "name": "*vo/trainyard/ba_heygordon.wav",
+     "dist": 2581,
+     "lagMs": 143,
+     "t": 64.78
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 1802,
+     "lagMs": 100,
+     "t": 65.85
+    },
+    {
+     "class": "npc_barney",
+     "name": "*vo/trainyard/ba_heygordon.wav",
+     "dist": 3420,
+     "lagMs": 190,
+     "t": 72.4
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "ambient/alarms/train_crossing_bell_loop1.wav": {
+   "lvl": 105,
+   "dmin": 240,
+   "dmax": 1229,
+   "n": 46,
+   "native": true
+  },
+  "ambient/alarms/citadel_alert_loop2.wav": {
+   "lvl": 100,
+   "dmin": 976,
+   "dmax": 2193,
+   "n": 89,
+   "native": false
+  }
+ }
+}

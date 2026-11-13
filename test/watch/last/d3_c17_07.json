@@ -1,0 +1,94 @@
+{
+ "map": "d3_c17_07",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 22,
+ "visited": 22,
+ "scenes": 37,
+ "speech": 4,
+ "anomalies": {
+  "mirror_step": {
+   "count": 5,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 36.51,
+     "pos": "5615.062500 2705.406250 90.593750",
+     "toG": 0.023,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "fromG": 0.082,
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d3_c17_07"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 26,
+   "distinct": 7,
+   "samples": [
+    {
+     "db": 3,
+     "pos": "6483.864746 1535.717163 108.587616",
+     "toG": 0.0088,
+     "t": 49.34,
+     "sound": "npc/manhack/mh_blade_loop1.wav",
+     "fromG": 0.0062,
+     "key": "npc/manhack/mh_blade_loop1.wav",
+     "map": "d3_c17_07"
+    },
+    {
+     "db": 4.2,
+     "pos": "6483.859863 1535.717163 108.586990",
+     "toG": 0.0096,
+     "t": 49.34,
+     "sound": "npc/manhack/mh_engine_loop2.wav",
+     "fromG": 0.006,
+     "key": "npc/manhack/mh_engine_loop2.wav",
+     "map": "d3_c17_07"
+    },
+    {
+     "db": 3,
+     "pos": "6483.859863 1535.717163 108.586990",
+     "toG": 0.0119,
+     "t": 49.49,
+     "sound": "npc/manhack/mh_engine_loop1.wav",
+     "fromG": 0.0084,
+     "key": "npc/manhack/mh_engine_loop1.wav",
+     "map": "d3_c17_07"
+    },
+    {
+     "db": -7.5,
+     "pos": "7219.729980 1029.869995 902.022949",
+     "toG": 0.0698,
+     "t": 70.8,
+     "sound": "weapons/pistol/pistol_fire3.wav",
+     "fromG": 0.1665,
+     "key": "weapons/pistol/pistol_fire3.wav",
+     "map": "d3_c17_07"
+    },
+    {
+     "db": -3.3,
+     "pos": "6266.185059 1806.261108 36.357765",
+     "toG": 0.0055,
+     "t": 73.27,
+     "sound": "physics/concrete/concrete_impact_bullet2.wav",
+     "fromG": 0.0081,
+     "key": "physics/concrete/concrete_impact_bullet2.wav",
+     "map": "d3_c17_07"
+    },
+    {
+     "db": -3.3,
+     "pos": "6266.185059 1806.261108 36.357765",
+     "toG": 0.0055,
+     "t": 73.27,
+     "sound": "physics/concrete/concrete_impact_bullet4.wav",
+     "fromG": 0.0081,
+     "key": "physics/concrete/concrete_impact_bullet4.wav",
+     "map": "d3_c17_07"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

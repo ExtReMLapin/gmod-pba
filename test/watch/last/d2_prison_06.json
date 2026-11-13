@@ -1,0 +1,113 @@
+{
+ "map": "d2_prison_06",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 50,
+ "visited": 21,
+ "scenes": 32,
+ "speech": 6,
+ "anomalies": {
+  "mirror_step": {
+   "count": 6,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 12.79,
+     "pos": "2042.000000 96.000000 4.000000",
+     "toG": 0.269,
+     "sound": "plats/skylift_move.wav",
+     "fromG": 0.403,
+     "key": "plats/skylift_move.wav",
+     "map": "d2_prison_06"
+    },
+    {
+     "t": 65.13,
+     "pos": "726.000000 660.000000 -97.375000",
+     "toG": 0.029,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "fromG": 0.011,
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d2_prison_06"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 24,
+   "distinct": 5,
+   "samples": [
+    {
+     "db": -8,
+     "pos": "1981.364502 1270.452393 -474.519623",
+     "toG": 0.0042,
+     "t": 17.71,
+     "sound": "plats/skylift_move.wav",
+     "fromG": 0.0106,
+     "key": "plats/skylift_move.wav",
+     "map": "d2_prison_06"
+    },
+    {
+     "db": 4,
+     "pos": "2047.555420 268.260101 -476.683899",
+     "toG": 0.0469,
+     "t": 32.69,
+     "sound": "ambient/machines/razor_train_wheels_loop1.wav",
+     "fromG": 0.0294,
+     "key": "ambient/machines/razor_train_wheels_loop1.wav",
+     "map": "d2_prison_06"
+    },
+    {
+     "db": 3.3,
+     "pos": "2074.546875 430.117401 -482.093964",
+     "toG": 0.0437,
+     "t": 32.8,
+     "sound": "ambient/machines/razor_train_wheels_loop2.wav",
+     "fromG": 0.03,
+     "key": "ambient/machines/razor_train_wheels_loop2.wav",
+     "map": "d2_prison_06"
+    },
+    {
+     "db": 3.8,
+     "pos": "726.000000 644.000000 -97.375000",
+     "toG": 0.6997,
+     "t": 57.8,
+     "sound": "ambient/machines/combine_shield_touch_loop1.wav",
+     "fromG": 0.4506,
+     "key": "ambient/machines/combine_shield_touch_loop1.wav",
+     "map": "d2_prison_06"
+    },
+    {
+     "db": 4.5,
+     "pos": "524.924255 347.355957 65.248329",
+     "toG": 0.0139,
+     "t": 64.91,
+     "sound": "ambient/machines/combine_shield_loop3.wav",
+     "fromG": 0.0083,
+     "key": "ambient/machines/combine_shield_loop3.wav",
+     "map": "d2_prison_06"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 2,
+   "distinct": 2,
+   "samples": [
+    {
+     "class": "npc_alyx",
+     "name": "ambient/levels/prison/radio_random2.wav",
+     "dist": 1582,
+     "lagMs": 88,
+     "t": 76.18
+    },
+    {
+     "class": "npc_alyx",
+     "name": "ambient/levels/prison/radio_random6.wav",
+     "dist": 1637,
+     "lagMs": 91,
+     "t": 77.74
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

@@ -515,6 +515,8 @@ function N.ApplySettings()
 	local k = N.wetScale or 1
 	pba_native.SetReflections(wetLevel(A.cfg.native_reverb, k), wetLevel(A.cfg.native_echo, k), A.cfg.native_rays,
 		A.cfg.native_bounces or 16, A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
+	-- a far moving source keeps its source reverb response over a fraction of its distance (module 1.2.0+)
+	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.cfg.native_src_near or 0.1) end
 end
 
 N.hrtfCvar = N.hrtfCvar or CreateClientConVar("pba_native_hrtf", "", true, false,
@@ -875,7 +877,6 @@ function N.BindSource(id, S, srcSend)
 	local slot = pba_native.SourceReflect(id, S, srcSend)
 	return slot ~= nil and slot >= 0
 end
-timer.Remove("pba_native_enclosure") -- the former one-trace enclosure guess (autorefresh of a running game)
 
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),
 -- srcPos, srcSend = the source's true position and its slot send (N.PhysSrcSend x volume, before
@@ -909,6 +910,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local id
 	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
 	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend) end
+	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
 	if id and id > 0 and srcPos and L then
 		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain
@@ -921,6 +923,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100
 		opt.follow.name = name
+		opt.follow.eq = opt.eq -- a speaker's EQ, kept at every update (pba_native_speaker_follow)
 		-- a weapon emission keeps the aim it was fired with (N.Directivity) while it follows the shooter
 		if opt.follow.aim == nil then
 			local _, aim = N.WeaponAim(opt.follow.ent, opt.follow.chan)
@@ -1006,6 +1009,7 @@ function N.UpdateFollowers(L)
 			local d = S:Distance(L)
 			local g = f.vol * N.PhysClear(f.lvl, d) * N.Directivity(e, L, f.chan, f.aim or nil) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)
+			if f.eq and (A.cfg.native_speaker_follow or 1) >= 0.5 then l, m, h = l * f.eq[1], m * f.eq[2], h * f.eq[3] end
 			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
 			-- clear line: the reverb is the source slot's (bound at Play), kept alive while the voice lives
 			if not pba_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil
@@ -1287,7 +1291,8 @@ hook.Add("Think", "pba_native_listener", function()
 	if not L then return end
 	ang = vang or ang
 	N.live, eL, eR = pba_native.SetListener(L, ang:Forward(), ang:Up(), master)
-	N.UpdateFollowers(L)
+	-- what follows its entity every frame (clear voices, native mirrors): the scheduler's frame pass
+	if A.Sched then A.Sched.Frame(L) else N.UpdateFollowers(L) end
 	-- single player menu: the engine pauses its sounds; the module's voices freeze too
 	local paused = game.SinglePlayer() and gui.IsGameUIVisible() or false
 	if paused ~= N.paused and pba_native.SetPaused then
@@ -1310,7 +1315,6 @@ hook.Add("Think", "pba_native_listener", function()
 		N.wetScale = k
 		N.ApplySettings()
 	end
-	if A.Loops and A.Loops.FollowNative then A.Loops.FollowNative(L) end
 	N.energyL, N.energyR = (N.energyL or 0) + (eL or 0), (N.energyR or 0) + (eR or 0)
 end)
 

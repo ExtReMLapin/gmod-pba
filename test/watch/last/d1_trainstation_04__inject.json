@@ -1,0 +1,22 @@
+{
+ "map": "d1_trainstation_04",
+ "tag": "inject",
+ "sets": [],
+ "secs": 118,
+ "triggers": 24,
+ "visited": 24,
+ "scenes": 6,
+ "speech": 0,
+ "anomalies": {
+  "lua_error": {
+   "count": 19,
+   "distinct": 1,
+   "samples": [
+    {
+     "msg": "mcpagent:lua_exec:11: bad argument #1 to '__add' (Angle expected, got number)",
+     "n": 19
+    }
+   ]
+  }
+ }
+}

@@ -190,7 +190,6 @@ if CLIENT then
 	A.Streams = A.Streams or {}
 	A.Streams.adapters = A.Streams.adapters or {}
 	A.Streams.adapters.rradio = C.RRadioVolume
-	timer.Remove("pba_compat_rradio") -- the former 2 s re-application (autorefresh of a running game)
 	hook.Add("rRadio_ConfigChanged", "pba_compat", function() C.RRadio() end)
 end
 

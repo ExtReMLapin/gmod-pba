@@ -277,6 +277,7 @@ function M.NoteSound(data, L, secs)
 	local lvl = data.SoundLevel or 75
 	local g = M.GroupsOf(data.SoundName, data.Entity or data.EntIndex, data.Channel, lvl)
 	local vol = (data.Volume or 1) * math.min(A.AC.EngineGain(math.max(data.Pos:Distance(L), 1), lvl), 1) * M.ValueIn(g, M.mixer, true)
+	if not isnumber(secs) then secs = nil end -- (a caller passing pba.ListenerPos() straight: its 2nd value is the angle)
 	M.Note(g, vol, RealTime() + (secs or A.SoundDuration(data.SoundName) or 1))
 end
 

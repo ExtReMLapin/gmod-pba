@@ -1,0 +1,176 @@
+{
+ "map": "d3_c17_06a",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 48,
+ "visited": 24,
+ "scenes": 11,
+ "speech": 17,
+ "anomalies": {
+  "louder_vanilla": {
+   "count": 504,
+   "distinct": 3,
+   "samples": [
+    {
+     "dist": 2643,
+     "lvl": 65,
+     "overDb": 6.8,
+     "t": 47.26,
+     "sound": "npc/manhack/mh_engine_loop1.wav",
+     "map": "d3_c17_06a",
+     "key": "npc/manhack/mh_engine_loop1.wav",
+     "g": 1
+    },
+    {
+     "dist": 2643,
+     "lvl": 65,
+     "overDb": 6.8,
+     "t": 47.26,
+     "sound": "npc/manhack/mh_engine_loop2.wav",
+     "map": "d3_c17_06a",
+     "key": "npc/manhack/mh_engine_loop2.wav",
+     "g": 1
+    },
+    {
+     "dist": 3985,
+     "lvl": 70,
+     "overDb": 6.2,
+     "t": 57.6,
+     "sound": "npc/manhack/mh_blade_loop1.wav",
+     "map": "d3_c17_06a",
+     "key": "npc/manhack/mh_blade_loop1.wav",
+     "g": 0.6055543391385398
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 153,
+   "distinct": 13,
+   "samples": [
+    {
+     "db": -13,
+     "pos": "3691.402588 -6373.369141 -188.853821",
+     "toG": 0.0457,
+     "t": 32.32,
+     "sound": "player/footsteps/concrete3.wav",
+     "fromG": 0.2041,
+     "key": "player/footsteps/concrete3.wav",
+     "map": "d3_c17_06a"
+    },
+    {
+     "db": 14.7,
+     "pos": "3968.000000 -4888.000000 -201.000000",
+     "toG": 0.0131,
+     "t": 36.92,
+     "sound": "npc/manhack/mh_engine_loop1.wav",
+     "fromG": 0.0024,
+     "key": "npc/manhack/mh_engine_loop1.wav",
+     "map": "d3_c17_06a"
+    },
+    {
+     "db": 13.8,
+     "pos": "3968.000000 -4888.000000 -201.000000",
+     "toG": 0.0103,
+     "t": 36.92,
+     "sound": "npc/manhack/mh_blade_loop1.wav",
+     "fromG": 0.0021,
+     "key": "npc/manhack/mh_blade_loop1.wav",
+     "map": "d3_c17_06a"
+    },
+    {
+     "db": 14.7,
+     "pos": "3968.000000 -4888.000000 -201.000000",
+     "toG": 0.0134,
+     "t": 36.92,
+     "sound": "npc/manhack/mh_engine_loop2.wav",
+     "fromG": 0.0025,
+     "key": "npc/manhack/mh_engine_loop2.wav",
+     "map": "d3_c17_06a"
+    },
+    {
+     "db": -3.8,
+     "pos": "3871.537109 -5806.253418 -189.968719",
+     "toG": 0.0081,
+     "t": 42.21,
+     "sound": "player/footsteps/concrete2.wav",
+     "fromG": 0.0125,
+     "key": "player/footsteps/concrete2.wav",
+     "map": "d3_c17_06a"
+    },
+    {
+     "db": -5.8,
+     "pos": "3861.638672 -5009.167969 -231.668442",
+     "toG": 0.0054,
+     "t": 42.21,
+     "sound": "vehicles/v8/vehicle_rollover2.wav",
+     "fromG": 0.0105,
+     "key": "vehicles/v8/vehicle_rollover2.wav",
+     "map": "d3_c17_06a"
+    }
+   ]
+  },
+  "mouth_missing": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "*vo/Streetwar/tunnel/male01/c17_06_tunnel_greet.wav",
+     "dist": 136,
+     "t": 29.95,
+     "pos": "3688.000000 -6368.000000 -257.656189"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 7,
+   "distinct": 4,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/female01/startle02.wav",
+     "dist": 3029,
+     "lagMs": 168,
+     "t": 43.38
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/female01/startle02.wav",
+     "dist": 2766,
+     "lagMs": 154,
+     "t": 49.47
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/getdown02.wav",
+     "dist": 3350,
+     "lagMs": 186,
+     "t": 54.73
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2833,
+     "lagMs": 157,
+     "t": 59.19
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2511,
+     "lagMs": 139,
+     "t": 60.1
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2239,
+     "lagMs": 124,
+     "t": 64.2
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

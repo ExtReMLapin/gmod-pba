@@ -1,0 +1,33 @@
+{
+ "map": "d1_trainstation_01",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 64,
+ "visited": 24,
+ "scenes": 43,
+ "speech": 6,
+ "anomalies": {
+  "lip_delay": {
+   "count": 2,
+   "distinct": 2,
+   "samples": [
+    {
+     "class": "cycler_actor",
+     "name": "*vo/gman_misc/gman_03.wav",
+     "dist": 15144,
+     "lagMs": 841,
+     "t": 47.16
+    },
+    {
+     "class": "cycler_actor",
+     "name": "*vo/gman_misc/gman_04.wav",
+     "dist": 15103,
+     "lagMs": 839,
+     "t": 54.64
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}
