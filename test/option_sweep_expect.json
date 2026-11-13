@@ -267,6 +267,10 @@
   "pos0": "hook",
   "why": "mouth copy stopped with the line"
  },
+ "channel_one_rule": {
+  "pos0": "hook",
+  "why": "channel cut across short copies and long mirrors (render time)"
+ },
  "stop_followers": {
   "pos0": "hook",
   "why": "followers ended by stopsound"

@@ -180,15 +180,22 @@ end
 -- on channel chan stops, every copy (anchors, native voices, those at a fixed position past the anchor
 -- cap, mouth copies) and every client-side long sound mirror (whichever started it: a long line cut the
 -- brief copies of its channel, a brief one the long mirror).
-function A.CutChannel(idx, chan)
-	local list = A.emitted[idx]
+-- only: "copies" or "mirrors" restricts the cut to one kind (pba_channel_one_rule 0: each path cut its own).
+function A.CutChannel(idx, chan, only)
+	local list = only ~= "mirrors" and A.emitted[idx]
 	if list then
 		for i = #list, 1, -1 do
 			if list[i].srcChan == chan then stopCopy(list[i]) table.remove(list, i) end
 		end
 		if #list == 0 then A.emitted[idx] = nil end
 	end
-	if A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
+	if only ~= "copies" and A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
+end
+
+--- The kind a path cuts under pba_channel_one_rule 0 (nil: everything, the one rule).
+function A.ChannelCutOnly(kind)
+	if (A.cfg.channel_one_rule or 1) >= 0.5 then return nil end
+	return kind
 end
 
 --- Copy set of a sound's source on a replacing channel; a new sound there cuts every earlier copy of
@@ -196,7 +203,7 @@ end
 local function beginCopies(data, idx)
 	local chan = data.Channel or CHAN_AUTO
 	if not idx or not replaces(chan) then return nil end
-	if A.CutsChannel(chan, data.Flags) then A.CutChannel(idx, chan) end
+	if A.CutsChannel(chan, data.Flags) then A.CutChannel(idx, chan, A.ChannelCutOnly("copies")) end
 	local key = idx .. ":" .. chan
 	local c = A.copies[key]
 	if not c then

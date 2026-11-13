@@ -165,7 +165,16 @@ end
 function A.WithChannelRule(fn)
 	return function(data)
 		local idx, chan = ruleSlot(data)
-		if not idx then return fn(data) end
+		if not idx then
+			-- pba_channel_one_rule 0: the server's followed long lines of the world were cut as well
+			if SERVER and (A.cfg.channel_one_rule or 1) < 0.5 and not A.reemitting and A.CutsChannel(data.Channel, data.Flags)
+				and (not IsValid(data.Entity) or data.Entity:IsWorld()) and A.Loops and A.Loops.CutChannel then
+				local ret = fn(data)
+				A.Loops.CutChannel(0, data.Channel, data.SoundName)
+				return ret
+			end
+			return fn(data)
+		end
 		if A.reemitting then
 			-- pba's own emission (the original re-emitted to clear or muffled listeners): the engine
 			-- plays it, on this channel, for those players
@@ -181,7 +190,8 @@ function A.WithChannelRule(fn)
 		end
 		-- the client's copies and mirrors on that channel stop before the new sound plays (cl_render
 		-- A.CutChannel; a relayed sound, which never reaches this hook, cuts them in A.Process)
-		if CLIENT and A.CutChannel then A.CutChannel(idx, chan) end
+		-- (pba_channel_one_rule 0: none, the sound left to the engine cut nothing of pba's)
+		if CLIENT and A.CutChannel and (A.cfg.channel_one_rule or 1) >= 0.5 then A.CutChannel(idx, chan) end
 		-- what the engine played before this sound; the handler's re-emissions record themselves anew
 		local per = A.vanillaOn[idx]
 		local prev = per and per[chan]

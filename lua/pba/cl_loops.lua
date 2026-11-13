@@ -557,7 +557,7 @@ function LP.HandleClient(data)
 		return true
 	end
 	-- (a new sound: a change flag here is a patch's Play)
-	if A.CutsChannel(chan, flags, true) and A.CutChannel then A.CutChannel(idx, chan) end
+	if A.CutsChannel(chan, flags, true) and A.CutChannel then A.CutChannel(idx, chan, A.ChannelCutOnly("mirrors")) end
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl >= 256 then return false end
 	if src or cpp then
