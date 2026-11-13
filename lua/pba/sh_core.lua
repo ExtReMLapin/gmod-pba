@@ -190,6 +190,14 @@ function A.WithoutDryMix(name)
 	return string.gsub(pre, "#", "") .. string.sub(name, n + 1)
 end
 
+--- True when the name carries the dry-mix character "#" among its sound characters: the engine runs no DSP
+-- on it (no room reverb).
+function A.IsDryMix(name)
+	name = name or ""
+	local n = #name - #A.SoundFile(name)
+	return n > 0 and string.find(string.sub(name, 1, n), "#", 1, true) ~= nil
+end
+
 local function fileKey(name) return string.lower(A.SoundFile(name or "")) end
 
 --- The files a StopSound(name) reaches, as a set keyed like A.StopReaches: the name itself and, for a
