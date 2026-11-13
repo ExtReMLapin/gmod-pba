@@ -330,6 +330,23 @@ function A.IsDemoMap() return string.StartWith(game.GetMap() or "", "pba_demo") 
 local LIQUID = CONTENTS_WATER + CONTENTS_SLIME
 function A.InWater(p) return bit.band(util.PointContents(p), LIQUID) ~= 0 end
 
+--- True for the engine's files of a sound already muffled by water: WaterExplosionEffect.Sound, played by
+-- an explosion deeper than 128 u (C_WaterExplosionEffect::PlaySound) and heard as is from the air. Read
+-- from the sound script once (names without their "^" / ")" prefixes).
+local PREFIX = "^[%^%)%(<>%*@#!?~]+"
+local muffled
+function A.WaterMuffledFile(name)
+	if not isstring(name) then return false end
+	if not muffled then
+		muffled = {}
+		local p = sound.GetProperties and sound.GetProperties("WaterExplosionEffect.Sound")
+		local s = p and p.sound
+		if isstring(s) then s = { s } end
+		for _, f in ipairs(s or {}) do muffled[string.lower(string.gsub(f, PREFIX, ""))] = true end
+	end
+	return muffled[string.lower(string.gsub((string.gsub(name, "\\", "/")), PREFIX, ""))] or false
+end
+
 --- World position of a sound.
 function A.SoundPos(data)
 	if data.Pos then return data.Pos end
