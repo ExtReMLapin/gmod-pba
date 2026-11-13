@@ -64,6 +64,9 @@ end
 ticks[1] = timed("oneshots", function() return A.OneShots end, "Tick")
 ticks[2] = timed("loops", function() return A.Loops end, "Tick")
 ticks[3] = timed("far_sliced", function() return A.Slicer end, "Run")
+-- the streams of other addons (cl_streams.lua): their re-evaluation every update_interval, their ramps every frame
+ticks[4] = timed("streams", function() return A.Streams end, "Tick")
+ticks[5] = timed("streams_ramp", function() return A.Streams end, "RampTick")
 
 hook.Add("Think", "pba_sched", function()
 	for i = 1, #ticks do ticks[i]() end

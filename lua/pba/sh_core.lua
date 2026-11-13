@@ -260,11 +260,6 @@ function A.OnConfigChanged(name)
 	-- the player's lip sync choice reaches the server (sv_loops MouthStart, the long lines' mouth copy)
 	if name == "lipsync" and CLIENT and A.SendLipsyncPref then A.SendLipsyncPref() end
 	if name == "compat_auto" and A.Compat and A.Compat.Check then A.Compat.Check() end
-	if name == "update_interval" and CLIENT then
-		for _, t in ipairs({ "pba_streams" }) do
-			if timer.Exists(t) then timer.Adjust(t, A.cfg.update_interval) end
-		end
-	end
 	if A.Paths then A.Paths.InvalidateCache() end
 end
 
