@@ -911,6 +911,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local id
 	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
 	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend) end
+	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
 	if id and id > 0 and srcPos and L then
 		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain

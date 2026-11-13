@@ -97,6 +97,12 @@ def any_map():
     if not call("status", {}).get("map"):
         load("pba_tworooms")
 
+def at_room_a():
+    """The host in pba_tworooms' room A, at its spawn (256, 256, 0), and the client's view there."""
+    lua("server", "local p = player.GetHumans()[1] if IsValid(p) then p:SetPos(Vector(256, 256, 0)) end")
+    wait_lua("client", "return LocalPlayer():GetPos():Distance(Vector(256, 256, 0)) < 1", 5)
+    time.sleep(0.3)
+
 def native_on(on):
     """pba_native_render on / off, and wait until the client renderer follows (when the module exists)."""
     call("console_exec", {"realm": "client", "cmd": f"pba_native_render {1 if on else 0}"})
@@ -295,6 +301,50 @@ def manhack_loop_death():
     ok = isinstance(taken, dict) and taken.get("pass") is True and isinstance(dead, dict) and dead.get("pass") is True
     return {"pass": ok, "taken": taken, "dead": dead}
 
+def cl_set(**kv):
+    """Client convars pba_<k> = v, and wait until pba.cfg follows."""
+    for k, v in kv.items():
+        call("console_exec", {"realm": "client", "cmd": f"pba_{k} {v}"})
+    wait_lua("client", " and ".join(f"(pba.cfg.{k} or -1) == {v}" for k in kv for v in [kv[k]]), 5)
+
+def long_line_play_fail(net):
+    """A long line the native module cannot play (pba_native.Play fails) is still heard: its engine patch plays
+    it (pba_loops_native_fail; net=False: the safety net off) or the safety net gives it back (net=True,
+    pba_loops_native_fail 0: pba_silent_handback, with its console line)."""
+    load(TW)
+    native_on(True)
+    cl_set(loops_native_fail=0 if net else 1, silent_handback=1 if net else 0)
+    try:
+        job("server", "long_line_setup.lua")
+        job("client", "long_line_play_fail.lua")
+        emit = job("server", "long_line_emit.lua")
+        chk = job("client", "long_line_play_check.lua")
+    finally:
+        cl_set(loops_native_fail=1, silent_handback=1)
+    if not (isinstance(emit, dict) and emit.get("pass") is True):
+        return {"pass": False, "emit": emit, "check": chk}
+    if net and isinstance(chk, dict) and chk.get("pass") is True:
+        back = chk.get("handedBack") or []
+        if not any(str(b).startswith("long line mirror") for b in back):
+            chk["pass"] = False
+            chk["fails"] = ["handedBack"]
+    return chk
+
+def silent_relay(on=True):
+    """A relayed voice line pba renders nowhere (A.Process made to drop it) is handed back to the engine."""
+    load(TW)
+    cl_set(silent_handback=1 if on else 0)
+    try:
+        job("server", "long_line_setup.lua")
+        job("client", "silent_relay_wrap.lua")
+        emit = job("server", "silent_relay_emit.lua")
+        chk = job("client", "silent_relay_check.lua")
+    finally:
+        cl_set(silent_handback=1)
+    if not (isinstance(emit, dict) and emit.get("pass") is True):
+        return {"pass": False, "emit": emit, "check": chk}
+    return chk
+
 def long_line():
     """A long speech line taken over by sv_loops keeps its subtitle and ducks the other sounds."""
     load(TW)
@@ -390,9 +440,16 @@ steps = [
     ("manhack_loop_death", lambda: manhack_loop_death()),
     # a long speech line (sv_loops) keeps its subtitle and ducks the other sounds like the short lines
     ("long_line", lambda: long_line()),
+    # a long line the module cannot play goes to the engine (side bug 32: captioned, never heard)
+    ("long_line_play_fail", lambda: long_line_play_fail(False)),
+    # the safety net: a line taken from the engine that nothing renders is handed back (pba_silent_handback)
+    ("silent_handback", lambda: long_line_play_fail(True)),
+    ("silent_handback relay", lambda: silent_relay()),
     ("looping_sound_stop", lambda: seq(lambda: load(TW), lambda: job("server", "looping_sound_stop.lua"))),
     ("weapon_loop_owner", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
-    ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_loop_fade_hidden.lua"))),
+    # the player in room A (a step before may leave him in room B: manhack_loop_kill puts him at x 600, the loop
+    # then in clear sight)
+    ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_loop_fade_hidden.lua"))),
     ("loop_fade_tail", lambda: seq(lambda: load(TW), lambda: job("server", "loop_fade_tail.lua"))),
     ("constraint_travel_loop", lambda: seq(lambda: load(TW), lambda: job("server", "constraint_travel_loop.lua"))),
     ("loud_loop_far", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "loud_loop_far_setup.lua"), lambda: job("client", "loud_loop_far.lua"))),
@@ -709,7 +766,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "long_line", "caption_once d1_trainstation_05"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state
