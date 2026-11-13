@@ -1,5 +1,5 @@
 -- Perf bench collector (server): PBA's EntityEmitSound hook timed per sound, and the tick time.
--- Sent once by lua_exec; the wrapper runs later, outside the gmod-mcp debug hook. In singleplayer the
+-- Loaded by perf_suite.py's load() (from a file, JIT on); the wrapper runs later, in the game's frames. In singleplayer the
 -- server ticks in the game's main thread: its time is inside the client's frame time.
 PBA_PERF_SV = PBA_PERF_SV or {}
 local P = PBA_PERF_SV

@@ -1,6 +1,6 @@
 -- Perf bench collector (client): frame times and PBA's own cost per frame, for test/perf_suite.py.
--- Sent once by lua_exec (it only defines hooks: they run later, outside the gmod-mcp debug hook, so
--- LuaJIT compiles them). PBA_PERF.Arm(pre, post) records from now for pre + post seconds; the burst
+-- Loaded once per map by perf_suite.py's load() (compiled in the game from a timer, never sent through
+-- lua_exec: lua_exec turns the JIT off for every function its chunk defines, hooks included). PBA_PERF.Arm(pre, post) records from now for pre + post seconds; the burst
 -- is triggered by the scene `pre` seconds after arming. PBA_PERF.Result() returns the statistics
 -- (quantiles, not every frame: lua_exec truncates large answers).
 PBA_PERF = PBA_PERF or {}
@@ -37,6 +37,12 @@ local function timersSum()
 	return s
 end
 
+-- every sound pba handled: evaluated (processed), played clear by the engine (vanilla) or by the module (nativeDirect)
+function P.Seen()
+	local st = A.stats
+	return (st.processed or 0) + (st.vanilla or 0) + (st.nativeDirect or 0)
+end
+
 function P.Arm(pre, post)
 	P.pre, P.post = pre, post
 	P.t0 = now()
@@ -50,6 +56,9 @@ function P.Arm(pre, post)
 	P.timers0 = timersSum()
 	P.timersPrev = P.timers0
 	P.processed0 = A.stats.processed
+	P.seen0 = P.Seen()
+	P.echoes0 = A.Native and A.Native.echoes or 0
+	P.ndirect0 = A.stats.nativeDirect or 0
 	P.relayed0 = A.stats.relayedIn or 0
 	P.voices0 = A.stats.voices
 	P.kb0 = collectgarbage("count")
@@ -124,7 +133,7 @@ function P.Result()
 		excess = r3(excess), hitches = hitches, over16 = over16,
 		pba_p50 = r3(q(pS, 0.5)), pba_p99 = r3(q(pS, 0.99)), pba_max = r3(q(pS, 1)), pba_sum = r3(pbaSum),
 		gc_drops = gcDrops, kb_alloc = math.Round(kbAlloc),
-		processed = A.stats.processed - P.processed0, relayedIn = (A.stats.relayedIn or 0) - P.relayed0,
+		processed = A.stats.processed - P.processed0, seen = P.Seen() - P.seen0, echoes = (A.Native and A.Native.echoes or 0) - P.echoes0, ndirect = (A.stats.nativeDirect or 0) - P.ndirect0, relayedIn = (A.stats.relayedIn or 0) - P.relayed0,
 		voices = A.stats.voices - P.voices0, maxNativeVoices = P.maxVoices,
 		ensure = { ms = r3(P.acc.ensure.ms), n = P.acc.ensure.n, max = r3(P.acc.ensure.max) },
 		doors = { ms = r3(P.acc.doors.ms), n = P.acc.doors.n, max = r3(P.acc.doors.max) },
