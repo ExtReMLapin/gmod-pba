@@ -6,7 +6,8 @@
 --   stuck_once      a pba mirror of a non-looping line alive longer than its file (+ margin): stuck or looping
 --   overlap_channel two pba mirrors of different lines alive at once on one entity's voice channel
 --   mirror_step     a mirror's gain jumps > STEP_DB between two samples with no ramp (audible step)
---   voice_step      a module voice's gain jumps > STEP_DB between two Update calls < 0.5 s apart
+--   voice_step      a module voice's gain jumps > STEP_DB between two Update calls < 0.5 s apart, outside a glide
+--   voice_glide     a module voice glides > GLIDE_DB within 0.4 s (its target jumped: a path appearing / vanishing)
 --   louder_vanilla  a module loop at the listener > LOUD_DB above the engine's own law for its level
 --   voices_spike    the module plays more than VOICES_MAX voices
 -- Mouth copies: pba drives a face's lip sync with a copy of the line at volume 0.001 on the face (cl_render
@@ -20,8 +21,12 @@ W.copies = W.copies or {}       -- entindex -> { CurTime() of each mouth copy }
 W.voices = W.voices or {}       -- module voice id -> { n, g, t, steps }
 W.seen = W.seen or {}           -- mirror key -> first seen CurTime()
 W.mg = W.mg or {}               -- mirror key -> last gain
-local STEP_DB, LOUD_DB, VOICES_MAX, ONCE_MARGIN = 3, 6, 96, 3
+local STEP_DB, LOUD_DB, VOICES_MAX, ONCE_MARGIN, GLIDE_DB, HITCH_S = 3, 6, 96, 3, 12, 0.15
 local JUMP_UNITS, JUMP_QUIET = 200, 1.5 -- a listener teleport (the sweeper's) changes paths for real: no step check right after
+-- a teleport is also a listener faster than any walk or sprint (the sweeper's trigger centres can be < 200 u apart:
+-- a Breencast mirror stepped 47 dB at a 'still' listener on d2_prison_04, 2026-11-13)
+local JUMP_SPEED, JUMP_SLACK = 700, 8 -- u/s, u
+local function jumped(a, b, dt) return a and b and a:Distance(b) > math.min(JUMP_UNITS, JUMP_SPEED * math.max(dt, 0) + JUMP_SLACK) end
 local SAMPLES = 6
 
 local function db(x) return 20 * math.log10(math.max(x, 1e-9)) end
@@ -50,22 +55,69 @@ if pba_native and not pba_native.pbaWatchWrapped then
 	local play, update = pba_native.Play, pba_native.Update
 	pba_native.Play = function(n, pos, gain, ...)
 		local id = play(n, pos, gain, ...)
-		if id and id > 0 then W.voices[id] = { n = n, g = gain, t = RealTime(), steps = 0, pos = pos } end
+		if id and id > 0 then
+			W.voices[id] = { n = n, g = gain, t = RealTime(), steps = 0, pos = pos, first = true, by = "Play",
+				L = pba and pba.ListenerPos and pba.ListenerPos() or nil }
+		end
 		return id
 	end
 	pba_native.Update = function(id, pos, gain, ...)
 		local v = W.voices[id]
 		if v and gain then
 			local now = RealTime()
-			if v.g and v.g > 1e-3 and gain > 1e-3 and now - v.t < 0.5 and CurTime() - (W.jumpT or -99) > JUMP_QUIET then
-				local d = db(gain) - db(v.g)
-				if math.abs(d) > STEP_DB then
+			-- the listener now, checked here: the sweeper's teleports happen between two timer ticks, and the
+			-- voices re-evaluated in the frames before the next tick stepped for real (new paths) without the
+			-- timer's jump mark yet (2026-11-13: most voice_step samples shared one time across many sounds)
+			local L = pba and pba.ListenerPos and pba.ListenerPos() or nil
+			if jumped(L, W.lastLU, now - (W.lastLUT or now)) then W.jumpRT = now end
+			if L then W.lastLU, W.lastLUT = L, now end
+			local moved = L and v.L and L:Distance(v.L) > JUMP_UNITS
+			local c = debug.getinfo(2, "Sl")
+			local by = c and ((string.match(c.short_src, "[^/\\]+$") or "?") .. ":" .. c.currentline) or "?"
+			-- (same frame as the previous update: a re-evaluation restarting its glide sends the value heard, then the
+			-- per-frame follower sends it again; that zero change is no neighbour. A frame longer than HITCH_S (the
+			-- test instances share the machine: 0.2-0.5 s stalls) finishes a glide in one frame: no step of pba's)
+			if now - v.t < 1e-3 then
+				v.g, v.by = gain, by
+				return update(id, pos, gain, ...)
+			end
+			local ok = v.g and v.g > 1e-3 and gain > 1e-3 and now - v.t < 0.5 and not moved and now - (W.jumpRT or -99) > JUMP_QUIET
+				and CurTime() - (W.jumpT or -99) > JUMP_QUIET and RealFrameTime() < HITCH_S
+			local d = ok and db(gain) - db(v.g) or 0
+			local function glides(a, b) return a ~= 0 and b ~= 0 and (a > 0) == (b > 0) and math.abs(a) >= 0.3 * math.abs(b) end
+			-- a step is decided one update later: a frame of a glide (continuous_ramp spreads a re-evaluation over
+			-- update_interval, about 5 frames at a test instance's 20 fps: 3-8 dB per frame) has a neighbour moving
+			-- the same way; a jump has none. (2026-11-13: most steps left after the teleport fix were glide frames)
+			local cand = v.cand
+			if cand then
+				v.cand = nil
+				if not glides(d, cand.db) then
 					v.steps = v.steps + 1
-					note("voice_step", tostring(v.n), { sound = tostring(v.n), fromG = math.Round(v.g, 4), toG = math.Round(gain, 4),
-						db = math.Round(d, 1), pos = pos and tostring(pos) or nil })
+					cand.nextDb = math.Round(d, 1)
+					note("voice_step", tostring(v.n), cand)
 				end
 			end
-			v.g, v.t = gain, now
+			if math.abs(d) > STEP_DB and not glides(v.d or 0, d) then
+				-- first: the first update after Play (the module jumps from the Play gain); by / prevBy: the
+				-- callers of this update and the previous one (two drivers of one voice disagreeing)
+				v.cand = { sound = tostring(v.n), fromG = math.Round(v.g, 4), toG = math.Round(gain, 4),
+					db = math.Round(d, 1), pos = pos and tostring(pos) or nil, first = v.first or nil,
+					dt = math.Round(now - v.t, 3), by = by, prevBy = v.by }
+			end
+			-- glide: the same-way changes summed; one over GLIDE_DB in at most 0.4 s is a level jump of the target
+			-- (a path appearing / vanishing, a server volume change), smoothed but heard as a swell or a drop
+			if ok and d ~= 0 and v.gs and (d > 0) == (v.gs > 0) and now - v.gt0 <= 0.4 then
+				v.gs = v.gs + d
+			else
+				if v.gs and math.abs(v.gs) > GLIDE_DB then
+					note("voice_glide", tostring(v.n), { sound = tostring(v.n), db = math.Round(v.gs, 1), secs = math.Round((v.gt1 or now) - v.gt0, 2),
+						by = v.gby, pos = pos and tostring(pos) or nil })
+				end
+				v.gs, v.gt0, v.gby = ok and d ~= 0 and d or nil, now, by
+			end
+			v.gt1 = now
+			v.d = ok and d or 0
+			v.g, v.t, v.L, v.first, v.by = gain, now, L or v.L, nil, by
 		end
 		return update(id, pos, gain, ...)
 	end
@@ -99,8 +151,8 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 	if not A then return end
 	local now = CurTime()
 	local L = A.ListenerPos and (A.ListenerPos()) or LocalPlayer():EyePos()
-	if L and W.lastL and L:Distance(W.lastL) > JUMP_UNITS then W.jumpT = now end
-	W.lastL = L
+	if jumped(L, W.lastL, now - (W.lastLT or now)) then W.jumpT = now end
+	W.lastL, W.lastLT = L, now
 	local quiet = now - (W.jumpT or -99) <= JUMP_QUIET
 	W.tick = (W.tick or 0) + 1
 	if W.tick % 3 ~= 0 then return end
@@ -109,29 +161,47 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 	local alive, byChan = {}, {}
 	for key, m in pairs(LP and LP.mirrors or {}) do
 		alive[key] = true
+		-- (per mirror, not per key: a sound started again on the same entity, channel and name (a rock hitting
+		-- the floor again, a scrape restarted) is a new mirror under the same key, a new start of the file)
+		W.seenM = W.seenM or {}
 		local first = W.seen[key]
-		if not first then first = now W.seen[key] = now end
+		if not first or W.seenM[key] ~= m then first = now W.seen[key] = now W.seenM[key] = m end
 		local name = m.name or ""
 		local dur = 0
 		if m.once then
 			dur = A.SoundDuration and A.SoundDuration(bare(name)) or 0
 			dur = dur / math.max((m.pitch or 100) / 100, 0.1)
 			if dur > 0 and now - first > dur + ONCE_MARGIN then
-				note("stuck_once", key, { sound = name, age = math.Round(now - first, 1), dur = math.Round(dur, 2), g = m.g, pos = m.pos and tostring(m.pos) or nil })
+				note("stuck_once", key, { sound = name, age = math.Round(now - first, 1), dur = math.Round(dur, 2), g = m.g, pos = m.pos and tostring(m.pos) or nil,
+					native = m.nativeId ~= nil, patch = m.patch ~= nil, playing = m.patch and m.patch:IsPlaying() or nil,
+					endIn = m.endT and math.Round(m.endT - RealTime(), 2) or nil, slicing = m.pbaSlice ~= nil or nil, client = m.client or nil })
 			end
 		end
 		local idx, ch = string.match(key, "^(%d+):(%d+):")
 		-- (only while each line is within its own file: a mirror lingering silent past its end is stuck_once's)
-		if idx and (ch == "2" or m.once) and (not m.once or dur <= 0 or now - first < dur) then
+		-- (CHAN_AUTO 0 and CHAN_STATIC 6 never replace what the entity plays: lines overlap there in the engine too)
+		-- (within its file: by its own end time when it has one, m.endT = file end + 0.5 s from its arrival; the
+		-- first sight here lags the arrival by up to a tick, and a Breencast line starting as the previous one
+		-- ends read as overlapping for one tick, d2_prison_04 2026-11-13)
+		local within = not m.once or (m.endT and RealTime() < m.endT - 0.5) or (not m.endT and (dur <= 0 or now - first < dur))
+		if idx and ch ~= "0" and ch ~= "6" and (ch == "2" or m.once) and within then
 			local k = idx .. ":" .. ch
 			byChan[k] = byChan[k] or {}
-			table.insert(byChan[k], name)
+			table.insert(byChan[k], name .. "@" .. math.Round(now - first, 2))
 		end
 		local g = m.g
 		local last = W.mg[key]
-		if g and last and not quiet and g > 1e-3 and last > 1e-3 and not m.ramp and math.abs(db(g) - db(last)) > STEP_DB then
-			note("mirror_step", name, { sound = name, fromG = math.Round(last, 3), toG = math.Round(g, 3), pos = m.pos and tostring(m.pos) or nil })
+		-- (the listener where the last value was sampled: a far mirror's evaluation can land seconds after a
+		-- teleport, out of the quiet window, and its new value then belongs to the new place, not a step)
+		W.mgL, W.mgT = W.mgL or {}, W.mgT or {}
+		local lastL = W.mgL[key]
+		-- (or a teleport since that value: whatever its distance)
+		local moved = (L and lastL and L:Distance(lastL) > JUMP_UNITS) or (W.mgT[key] and (W.jumpT or -99) >= W.mgT[key])
+		if g and last and not quiet and not moved and g > 1e-3 and last > 1e-3 and not m.ramp and math.abs(db(g) - db(last)) > STEP_DB then
+			note("mirror_step", name, { sound = name, fromG = math.Round(last, 3), toG = math.Round(g, 3), pos = m.pos and tostring(m.pos) or nil,
+				native = m.nativeId ~= nil, once = m.once or nil, dsp = m.curDsp })
 		end
+		if g ~= last or not lastL then W.mgL[key], W.mgT[key] = L, now end
 		W.mg[key] = g
 		-- census of loud sounds heard (report only: what the map played, for a human to compare with vanilla)
 		if (m.lvl or 0) >= 100 and m.pos and L then
@@ -156,10 +226,10 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 			end
 		end
 	end
-	for k in pairs(W.seen) do if not alive[k] then W.seen[k] = nil W.mg[k] = nil end end
+	for k in pairs(W.seen) do if not alive[k] then W.seen[k] = nil W.mg[k] = nil if W.seenM then W.seenM[k] = nil end if W.mgL then W.mgL[k] = nil end end end
 	for k, names in pairs(byChan) do
 		local distinct = {}
-		for _, n in ipairs(names) do distinct[n] = true end
+		for _, n in ipairs(names) do distinct[string.match(n, "^(.*)@") or n] = true end
 		if table.Count(distinct) > 1 then note("overlap_channel", k, { names = table.concat(names, " + ") }) end
 	end
 	-- module voices count
