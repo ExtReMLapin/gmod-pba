@@ -306,7 +306,7 @@ steps = [
                                        lambda: [job("server", "impact_inside_prop.lua", 30), job("client", "impact_inside_prop_client.lua", 10)])),
     # a sound beyond lod_dist behind a wall: the cheap muffle (one trace, DSP preset), server and client
     # (was left to the engine, heard through the wall as in plain sight)
-    ("listener_inside_prop", lambda: seq(lambda: load(TW), lambda: job("server", "listener_inside_prop.lua", 20))),
+    ("listener_inside_prop", "runconsolecommand_blame", lambda: seq(lambda: load(TW), lambda: job("server", "listener_inside_prop.lua", 20))),
     ("far_muffle", lambda: seq(lambda: load(TW), lambda: native_on(False),
                                lambda: [job("server", "far_muffle.lua", 30), job("client", "far_muffle_client.lua", 15)])),
     # a sentence an addon plays on the world (no position in EntityEmitSound): taken behind a wall
@@ -356,6 +356,7 @@ steps = [
     # sentences (scripts/sentences.txt, HL2 mounted): the line parser, then the words rendered by the module
     ("sentence_parse", lambda: job("client", "sentence_parse.lua")),
     ("sentence_files", lambda: job("client", "sentence_files.lua")),
+    ("runconsolecommand_blame", lambda: job("client", "runconsolecommand_blame.lua")),
     ("sound_duration", lambda: job("client", "sound_duration.lua")),
     ("sound_duration server", lambda: job("server", "sound_duration.lua")),
     ("sentence_virtual", lambda: job("client", "sentence_virtual.lua")),

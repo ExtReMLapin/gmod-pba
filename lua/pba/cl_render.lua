@@ -1206,15 +1206,19 @@ do
 	if not A.origCmd.run and debug.getinfo(RunConsoleCommand, "S").what == "C" then A.origCmd.run = RunConsoleCommand end
 	if not A.origCmd.ply and debug.getinfo(PLY.ConCommand, "S").what == "C" then A.origCmd.ply = PLY.ConCommand end
 	if A.origCmd.run then
+		-- every other command is a tail call: its errors (a command blocked in multiplayer, a bad argument)
+		-- are the caller's, as without pba (they blamed cl_render.lua and a function 'run')
 		function RunConsoleCommand(cmd, ...)
+			if not A.StopsAllSounds(cmd) then return A.origCmd.run(cmd, ...) end
 			A.origCmd.run(cmd, ...)
-			if A.StopsAllSounds(cmd) then A.StopAllSounds() end
+			A.StopAllSounds()
 		end
 	end
 	if A.origCmd.ply then
 		function PLY:ConCommand(cmd, ...)
+			if not A.StopsAllSounds(cmd) then return A.origCmd.ply(self, cmd, ...) end
 			A.origCmd.ply(self, cmd, ...)
-			if A.StopsAllSounds(cmd) then A.StopAllSounds() end
+			A.StopAllSounds()
 		end
 	end
 end
