@@ -253,6 +253,9 @@ steps = [
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                     lambda: job("client", "native_features.lua"))),
     ("native_stereo", lambda: seq(lambda: native_on(True), lambda: job("client", "native_stereo.lua"))),
+    # sentences (scripts/sentences.txt, HL2 mounted): the line parser, then the words rendered by the module
+    ("sentence_parse", lambda: job("client", "sentence_parse.lua")),
+    ("native_sentences", lambda: seq(lambda: native_on(True), lambda: job("client", "native_sentences.lua", 30))),
     # engine traces from the module (pba_native.trace): identical to util.TraceLine / TraceHull / PointContents
     ("native_trace", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_trace.lua", 60))),
     # a loud server sound in sight is relayed to a client rendering native echoes, a quiet one is not
@@ -500,7 +503,7 @@ if "--special" in opts:
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
 QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "loop_removed", "loop_reenable", "vehicle_state_sounds", "sp_own_echo",
-         "client_loop", "native_doors", "native_features", "native_stereo", "path_hysteresis twodoors", "continuous_ramp twodoors",
+         "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "native_sentences", "path_hysteresis twodoors", "continuous_ramp twodoors",
          "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]

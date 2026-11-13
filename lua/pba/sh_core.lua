@@ -184,7 +184,12 @@ end
 --- Duration of a sound name (s), looked up on its file: nil or 0 when unknown (sentence, missing
 -- file, VBR mp3).
 function A.SoundDuration(name)
-	if A.IsSentence(name) then return SentenceDuration(string.sub(name, 2)) end
+	if A.IsSentence(name) then
+		-- rendered by the module (cl_sentences): its real length; else the engine's own {len}
+		local s = CLIENT and A.Sentences and A.Sentences.Length(name)
+		if s then return s end
+		return SentenceDuration(string.sub(name, 2))
+	end
 	return SoundDuration(A.SoundFile(name))
 end
 

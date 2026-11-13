@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "streambuf.h"
 
@@ -109,6 +110,17 @@ bool HasSound(const std::string& name);
 // stereo: the file has two different channels (kept: see SetVoiceStereo)
 std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart = nullptr,
                       bool* stereo = nullptr);
+// One word of a sentence (LoadSentence): a sound already loaded (LoadSound), its volume and pitch in
+// percent (pitch <= 0: none) and its start / end cut in percent of its length (0: none).
+struct SentenceWord {
+	std::string file;
+	int vol = 100, pitch = 0, start = 0, end = 0;
+};
+// Renders the words of a sentence, one after the other, into one sound stored under `name` (played then
+// like any loaded sound). Words not loaded are skipped (used: how many were rendered). "" on success.
+std::string LoadSentence(const std::string& name, const SentenceWord* words, int n, double* seconds, int* used = nullptr);
+// a copy of a loaded sound's samples (mono / mid, 48 kHz): offline tests; empty if not loaded
+std::vector<float> SoundPcm(const std::string& name);
 // stereo sound: the voice spatialises mid + sel x side (sel 1 = left channel, -1 = right, 0 = (L + R) / 2,
 // the default) and adds width x side unspatialised (0 = none, the default; 1 = the file's full width).
 // Ramped over one block. No effect on a mono sound. false if the voice is gone or dying.
