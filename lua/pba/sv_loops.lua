@@ -228,6 +228,22 @@ function LP.IsLong(data)
 	return dur > A.cfg.max_duration and dur <= 1800, dur
 end
 
+--- A CSoundPatch on a file without loop points (CreateSound of addons, C++ envelopes): its Play reaches the
+-- hook as a SND_CHANGE_VOL / SND_CHANGE_PITCH, which the engine turns into a start when the sound is not
+-- playing (it plays once and ends; a later change starts it again). Neither a loop nor an eligible one-shot
+-- (a change flag): it crossed every wall. Followed like a long one-shot for its length. Returns true, dur.
+function LP.IsPatchStart(data)
+	if (A.cfg.patch_oneshots or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
+	local flags = data.Flags or 0
+	if bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(flags, SND_STOP) ~= 0 then return false end
+	local name = data.SoundName or ""
+	if name == "invalid.wav" or A.IsSentence(name) then return false end
+	local st = data.SoundTime or 0
+	if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+	local dur = A.SoundDuration(name) or 0
+	return dur > 0 and dur <= 1800, dur
+end
+
 local function stopReached(files, x) return A.StopReaches(files, x.name) or A.StopReaches(files, x.orig) end
 
 --- Stops the loops / long sounds `name` of entity idx (any channel: a stop may come on another
@@ -404,6 +420,7 @@ function LP.Handle(data)
 			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then return false end
 		else
 			once, dur = LP.IsLong(data)
+			if not once then once, dur = LP.IsPatchStart(data) end
 			if not once then return false end
 		end
 	end
