@@ -401,9 +401,10 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		-- the listener's room: what this path brings to where it enters the listener's space (one rule for
 		-- every sound: N.EntrySend with the sound's law)
 		local lvl0 = data.SoundLevel or 75
-		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0))
+		local wet = A.Native.LoudWet(lvl0)
+		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0)) * wet
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
-			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true })
+			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
 			local t0 = RealTime() + delay
@@ -583,7 +584,7 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and t.sh or nil
 	-- the listener's room: what the path brings to its entry point (N.EntrySend), clear sight: none
 	local roomSend = t.len and t.pos and t.pos:DistToSqr(rec.S) > 1 and rec.vol * N.EntrySend(N.Law(rec.lvl), t, L, N.LossLin(t, rec.lvl))
-		* N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain or 0
+		* N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain * N.LoudWet(rec.lvl) or 0
 	local id = pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset)
 	if not id or id <= 0 then
 		fv.switchFails = (fv.switchFails or 0) + 1
@@ -597,7 +598,7 @@ local function switchNative(rec, fv, t, L, now, dominant)
 		local srcSend = rec.vol * N.PhysSrcSend(rec.lvl, rec.S:Distance(L)) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain
 		bound = N.BindSource(id, rec.S, srcSend)
 	end
-	if not bound and roomSend <= 0 then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g) end
+	if not bound and roomSend <= 0 then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g * N.LoudWet(rec.lvl)) end
 	-- the engine copy stops once the module has it (stopCopy without cancelling the handle)
 	local a, name = fv.a, fv.name or rec.name
 	if anchorAlive(fv, name) then a:StopSound(name) a.pbaName = nil end
@@ -920,7 +921,7 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 			local delay = math.max(voiceDelay({ len = d, pos = S }, L) - waited, 0)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
-				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir })
+				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl) })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
 				local play, ukey = playLength(data.SoundName, data.Pitch)

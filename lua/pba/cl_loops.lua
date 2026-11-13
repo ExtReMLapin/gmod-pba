@@ -211,6 +211,7 @@ local function applyNative(m, S, L)
 	end
 	gain = gain * m.vol * A.cfg.native_gain
 	local send = N.SlotFadeSend(m, m.srcBound, (trans or 0) * m.vol * A.cfg.native_gain, gain)
+	send = send * N.LoudWet(m.lvl) -- (a loud loop stays dry, as in the engine)
 	m.roomSend = send
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L), lpDb)
 	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
@@ -242,7 +243,7 @@ local function applyNative(m, S, L)
 	if m.nativeId then
 		m.srcNext = RealTime() + 0.3
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
-		if m.srcBound then pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, (trans or 0) * m.vol * A.cfg.native_gain) end
+		if m.srcBound then pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, (trans or 0) * m.vol * A.cfg.native_gain * N.LoudWet(m.lvl)) end
 	end
 	-- a new voice starts at its target: the next ramp starts from there
 	m.ramp = nil
@@ -468,7 +469,7 @@ function LP.FollowNative(L)
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
 					-- clear sight: nothing through walls; the reverb is the slot's (no slot: the room at the gain)
-					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, m.srcBound and 0 or g)
+					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, m.srcBound and 0 or g * N.LoudWet(m.lvl))
 				end
 			end
 			if ramp and ramp.pending then
