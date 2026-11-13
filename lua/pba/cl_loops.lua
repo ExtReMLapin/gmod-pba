@@ -333,8 +333,10 @@ local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHA
 --- Stops the client-side long-sound mirrors of entity idx (channel chan, or any channel when nil;
 -- name, or any name when nil).
 function LP.StopClient(idx, chan, name, patch)
+	-- a sound script reaches each of its waves (A.StopFiles); nil: every sound
+	local files = A.StopFiles(name)
 	for key, m in pairs(LP.mirrors) do
-		if m.client and m.idx == idx and (not chan or m.chan == chan) and (not name or name == "" or m.name == name)
+		if m.client and m.idx == idx and (not chan or m.chan == chan) and A.StopReaches(files, m.name)
 			and (not patch or not m.src or m.src[1] == patch) then
 			stopMirror(m)
 			LP.mirrors[key] = nil

@@ -137,8 +137,16 @@ function A.RelayStop(e, name, chan, except)
 	if #plys == 0 then return end
 	net.Start("pba_snd_stop")
 	net.WriteUInt(idx, 16)
-	net.WriteString(name or "")
 	net.WriteInt(chan or CHAN_AUTO, 10) -- CHAN_AUTO (0): any channel
+	-- the waves it stops (a sound script resolved here: the client may not know the script); none: all
+	if not name or name == "" then
+		net.WriteUInt(0, 8)
+	else
+		local waves = A.StopWaves(name)
+		local n = math.min(#waves, 32)
+		net.WriteUInt(n, 8)
+		for i = 1, n do net.WriteString(waves[i]) end
+	end
 	net.Send(plys)
 end
 
@@ -183,8 +191,8 @@ local function relayChannelCut(data, relayedTo)
 	if #plys == 0 then return end
 	net.Start("pba_snd_stop")
 	net.WriteUInt(idx, 16)
-	net.WriteString("")
 	net.WriteInt(chan, 10)
+	net.WriteUInt(0, 8) -- every name
 	net.Send(plys)
 	A.stats.chanCuts = (A.stats.chanCuts or 0) + 1
 end
