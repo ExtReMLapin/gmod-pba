@@ -11,9 +11,11 @@ local fwd = Angle(0, LocalPlayer():EyeAngles().y, 0):Forward()
 local S = L + fwd * 670
 local NAME = "vo/k_lab/al_foundhim.wav"
 local native = A.Native and A.Native.render
+-- (only new copies count: the follower of the face run's copy, still sending its volume ramp after StopAllSounds
+-- as SND_CHANGE_VOL to the stopped copy, counted as a copy of the next run)
 local got = {}
 hook.Add("EntityEmitSound", "pba_test_floor", function(d)
-	if d.SoundName == NAME and (d.Volume or 1) > 0.01 and bit.band(d.Flags or 0, SND_STOP) == 0 then got[#got + 1] = d.Volume end
+	if d.SoundName == NAME and (d.Volume or 1) > 0.01 and bit.band(d.Flags or 0, bit.bor(SND_STOP, SND_CHANGE_VOL, SND_CHANGE_PITCH)) == 0 then got[#got + 1] = d.Volume end
 end)
 local origPlay = pba_native and pba_native.Play
 if origPlay then
