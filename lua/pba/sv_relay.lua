@@ -187,6 +187,19 @@ local function reemit(data, pos, lvl, plys, name, vol, dsp)
 	end
 end
 
+-- Footsteps of other players: the engine sends the server's footstep only to the players of the PAS
+-- outside the stepping player's PVS (CBasePlayer::PlayStepSound: RemoveRecipientsByPVS); the players
+-- who see him generate the footstep on their own client. PlayerFootstep runs right before that
+-- emission: the stepping player is noted for this tick, and the players whose PVS holds him are left
+-- out (relaying to them too doubled every step).
+hook.Add("PlayerFootstep", "pba_step", function(ply)
+	A.stepPly, A.stepTick = ply, engine.TickCount()
+end)
+local function stepper(data)
+	local e = data.Entity
+	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then return e end
+end
+
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
 	if A.reemitting or A.explicitFilter then return end
 	A.stats.seen = A.stats.seen + 1
@@ -219,6 +232,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
 	-- client never sees them (no echoes on his own gunfire). They are his own: clear, as on the client
 	local sp = game.SinglePlayer()
+	local step = not sp and stepper(data)
 	-- clear: original re-emitted unchanged; blocked: relayed; muffled: blocked but over the relay
 	-- budget, re-emitted muffled by the engine; far: beyond lod_dist, too far to process (unchanged)
 	local clear, blocked, muffled, far = {}, {}, {}, {}
@@ -229,7 +243,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	for _, ply in ipairs(player.GetHumans()) do
 		if sp and ply == predicted and data.Entity == ply then
 			clear[#clear + 1] = ply
-		elseif sp or ply ~= predicted then
+		elseif (sp or ply ~= predicted) and not (step and ply ~= step and ply:TestPVS(step)) then
 			local eye = A.PlayerEar(ply)
 			local d2 = eye:DistToSqr(pos)
 			if d2 <= radius * radius then
