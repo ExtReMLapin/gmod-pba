@@ -271,10 +271,7 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 			end
 		end
 	end
-<<<<<<< HEAD
-	for k in pairs(W.seen) do if not alive[k] then W.seen[k] = nil W.mg[k] = nil if W.seenM then W.seenM[k] = nil end if W.mgL then W.mgL[k] = nil end end end
-=======
-	for k in pairs(W.seen) do if not alive[k] then W.seen[k] = nil W.mg[k] = nil W.deadT[k] = nil end end
+	for k in pairs(W.seen) do if not alive[k] then W.seen[k] = nil W.mg[k] = nil W.deadT[k] = nil if W.seenM then W.seenM[k] = nil end if W.mgL then W.mgL[k] = nil end end end
 	-- a driven engine vehicle with no mirror of any of its sounds
 	local ply = LocalPlayer()
 	local veh = IsValid(ply) and ply:InVehicle() and ply:GetVehicle() or nil
@@ -288,7 +285,6 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 	else
 		W.vehQuietT = nil
 	end
->>>>>>> fix/l2-user-bugs
 	for k, names in pairs(byChan) do
 		local distinct = {}
 		for _, n in ipairs(names) do distinct[string.match(n, "^(.*)@") or n] = true end
