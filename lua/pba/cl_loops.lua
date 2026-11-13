@@ -382,7 +382,7 @@ local function applyNative(m, S, L)
 	if m.nativeId then A.NoteRendered(m.name, gain) end
 	m.stSel, m.stW = nil, nil
 	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
-	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_native_end or 1) >= 0.5 then
+	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_end or 1) >= 0.5 then
 		local e = A.PlayEnd(m.name, m.pitch, nil, A.END_GRACE)
 		if e then m.endT = math.max(m.endT, e) end
 	end
@@ -404,14 +404,14 @@ end
 
 --- A one-shot mirror that has played its file: the engine reports a CreateSound patch as playing long after
 -- a file without loop points ended (measured 2026-11-13, the stopsound sentinel relies on it), so its end is
--- also its length at its start pitch (m.endT). A mirror rendered by the module (pba_loops_once_native_end)
+-- also its length at its start pitch (m.endT). A mirror rendered by the module (pba_loops_once_end, both renderings)
 -- ends the same way: it was dropped only when an update found its voice gone, and a far quiet one (the quiet
 -- shortcut) or one the adaptive re-evaluation left alone got no update and lived on past its file (sweep
 -- 2026-11-13: vehicle_rollover2, 1.6 s, alive 4.8 s on d3_c17_06a; it also counted as playing on its channel).
 local function onceEnded(m)
 	if not m.once then return false end
 	if m.patch then return not m.patch:IsPlaying() or (m.endT ~= nil and RealTime() > m.endT) end
-	return m.nativeId ~= nil and m.endT ~= nil and (A.cfg.loops_once_native_end or 1) >= 0.5 and RealTime() > m.endT
+	return m.nativeId ~= nil and m.endT ~= nil and (A.cfg.loops_once_end or 1) >= 0.5 and RealTime() > m.endT
 end
 
 --- The mirror's own DSP preset keeps it on an engine patch (A.OwnDSP, pba_keep_dsp). A speaker's preset is not
@@ -509,6 +509,15 @@ end
 -- radio:EmitSound of a 5-minute mp3 in a net receiver). Too long for A.Process, and the server
 -- never sees them: without this they play through every wall. Same mirror as a relayed long
 -- sound, keyed "cl:<entindex>:<channel>:<name>".
+--- A long one-shot's start feeds the mixer's ducker, whichever side it was born on, as every short sound's
+-- (refactor step 8: one switch for the ducker, pba_native_duck, which also gated the short sounds' notes;
+-- the long lines had their own, pba_long_duck, merged into it).
+local function noteDuck(name, pos, lvl, vol, chan, e, idx, pitch)
+	if (A.cfg.native_duck or 1) < 0.5 or not (A.Mix and A.Mix.NoteSound) then return end
+	A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, Channel = chan, Entity = e,
+		EntIndex = idx }, A.ListenerPos(), A.PlaySeconds(name, pitch) or 0)
+end
+
 --- Stops the client-side long-sound mirrors of entity idx (channel chan, or any channel when nil;
 -- name, or any name when nil).
 function LP.StopClient(idx, chan, name, patch)
@@ -585,11 +594,8 @@ function LP.HandleClient(data)
 	if m.once then m.endT = A.PlayEnd(name, m.pitch, nil, A.END_GRACE) end
 	LP.mirrors[key] = m
 	-- its start feeds the mixer's ducker, as a server long line's (OP_START below) and a short sound's
-	-- (A.Process, which this hook returns before) do (pba_long_duck)
-	if m.once and (A.cfg.long_duck or 1) >= 0.5 and A.Mix and A.Mix.NoteSound then
-		A.Mix.NoteSound({ SoundName = name, Pos = m.pos, SoundLevel = lvl, Volume = m.vol, Channel = chan, Entity = e,
-			EntIndex = idx }, A.ListenerPos(), A.PlaySeconds(name, m.pitch) or 0)
-	end
+	-- (A.Process, which this hook returns before) do
+	if m.once then noteDuck(name, m.pos, lvl, m.vol, chan, e, idx, m.pitch) end
 	apply(m, 0)
 	return true
 end
@@ -646,11 +652,8 @@ net.Receive("pba_loop", function()
 	m.vol, m.pitch = vol, pitch
 	-- a long line's start feeds the mixer's ducker as the short lines do (cl_render): a speech ducks the
 	-- other groups in the engine; without it a long line sounded quieter than the short ones around it,
-	-- the ambience left at full under it (pba_long_duck)
-	if op == OP_START and once and (A.cfg.long_duck or 1) >= 0.5 and A.Mix and A.Mix.NoteSound then
-		A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, EntIndex = idx }, A.ListenerPos(),
-			A.PlaySeconds(name, pitch) or 0)
-	end
+	-- the ambience left at full under it (pba_native_duck)
+	if op == OP_START and once then noteDuck(name, pos, lvl, vol, nil, nil, idx, pitch) end
 	-- a long line taken from the engine: heard within HANDBACK_S, else its engine patch plays it (pba_silent_handback)
 	if new and once and op == OP_START then
 		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end)

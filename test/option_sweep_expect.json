@@ -91,9 +91,13 @@
   "pos0": "hook",
   "why": "captions of long sounds"
  },
- "long_duck": {
+ "loops_once_end": {
   "pos0": "hook",
-  "why": "ducking by long lines"
+  "why": "end of long one-shot mirrors, engine and native (render time)"
+ },
+ "native_duck": {
+  "pos0": "hook",
+  "why": "ducking by the engine mixer rules, short and long sounds (render time)"
  },
  "long_lipsync": {
   "pos0": "hook",
