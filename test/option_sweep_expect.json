@@ -1,0 +1,254 @@
+{
+ "bend_final": {
+  "pos0": "same",
+  "why": "only reaches the diffuse share of a route whose final bend differs from its coarse one: not met"
+ },
+ "caption_once": {
+  "pos0": "hook",
+  "why": "caption dedup"
+ },
+ "continuous_ramp": {
+  "pos0": "hook",
+  "why": "gliding between updates (render time)"
+ },
+ "corner_refine": {
+  "pos0": "differs",
+  "why": "corners costed on real edges"
+ },
+ "corner_relax": {
+  "pos0": "same",
+  "why": "second corner pass changes the route only where a corner grazes a lintel: not met"
+ },
+ "corner_step_first": {
+  "pos0": "same",
+  "why": "a speed shortcut (same corners, fewer traces): position 0 must give the same voices (this IS the check)"
+ },
+ "corner_wedge": {
+  "pos0": "differs",
+  "why": "close corners bend as one wedge"
+ },
+ "diffuse": {
+  "pos0": "differs",
+  "why": "long detours (pba_demo room 14) sound diffuse"
+ },
+ "door_3d": {
+  "pos0": "differs",
+  "why": "door leaf in 3-D (the ajar door of pba_tworooms, boombox door of pba_demo)"
+ },
+ "door_leaf_portal": {
+  "pos0": "same",
+  "why": "door leaf modelled as its doorway: the sweep scenes do not have a line crossing a leaf"
+ },
+ "edge_bound": {
+  "pos0": "same",
+  "why": "needs a route and the transmission through the same obstacle: not met on these scenes"
+ },
+ "edge_dup_best": {
+  "pos0": "same",
+  "why": "needs a same-way route and edge: not met"
+ },
+ "edge_dup_blend": {
+  "pos0": "same",
+  "why": "needs a route near an edge apex: not met"
+ },
+ "edge_dup_mix": {
+  "pos0": "same",
+  "why": "needs a same-way route and edge: not met"
+ },
+ "edge_leg_doors": {
+  "pos0": "same",
+  "why": "needs an edge way whose legs meet one door leaf: not met"
+ },
+ "enable": {
+  "pos0": "hook",
+  "why": "master switch, read by the hooks (A.Enabled), not by P.Compute; covered by the battery preflight and ab_counts"
+ },
+ "far_muffle": {
+  "pos0": "hook",
+  "why": "hook-level cheap muffle beyond lod_dist (A.FarMuffle), outside P.Compute; far_muffle test"
+ },
+ "far_sliced": {
+  "pos0": "hook",
+  "why": "schedules far paths over frames (cl_render), outside a direct P.Compute"
+ },
+ "group_time": {
+  "pos0": "hook",
+  "why": "repeat-sound memo of the sound hook, outside a direct P.Compute call on cold positions"
+ },
+ "handback_speech": {
+  "pos0": "hook",
+  "why": "silent-line safety net of the relay (speech handed back to the engine), outside P.Compute"
+ },
+ "keep_dsp": {
+  "pos0": "hook",
+  "why": "DSP of the sound kept when muffled (render time)"
+ },
+ "lipsync_unseen": {
+  "pos0": "hook",
+  "why": "lip sync of unseen speakers"
+ },
+ "long_captions": {
+  "pos0": "hook",
+  "why": "captions of long sounds"
+ },
+ "long_duck": {
+  "pos0": "hook",
+  "why": "ducking by long lines"
+ },
+ "long_lipsync": {
+  "pos0": "hook",
+  "why": "lip sync of long lines (cl/sv loops)"
+ },
+ "loops_cpp_death": {
+  "pos0": "hook",
+  "why": "game-entity loops lifecycle"
+ },
+ "loops_native_fail": {
+  "pos0": "hook",
+  "why": "hands a loop the module cannot play back to the engine (loop lifecycle), outside P.Compute"
+ },
+ "model_soft_cull": {
+  "pos0": "same",
+  "why": "needs paths past max_paths / reject_db within 6 dB: not met on these scenes"
+ },
+ "mp_own": {
+  "pos0": "hook",
+  "why": "multiplayer own sounds (hook)"
+ },
+ "native_dir": {
+  "pos0": "hook",
+  "why": "native module directivity"
+ },
+ "native_law_engine": {
+  "pos0": "hook",
+  "why": "native module distance law"
+ },
+ "native_loud_dry": {
+  "pos0": "hook",
+  "why": "native module reverb level"
+ },
+ "native_mix": {
+  "pos0": "hook",
+  "why": "native module mix groups"
+ },
+ "native_out": {
+  "pos0": "hook",
+  "why": "native module output mode"
+ },
+ "native_quiet_law": {
+  "pos0": "hook",
+  "why": "native module loops"
+ },
+ "native_render": {
+  "pos0": "hook",
+  "why": "native module rendering switch"
+ },
+ "native_room_shadow": {
+  "pos0": "hook",
+  "why": "native module reverb send"
+ },
+ "native_scattering": {
+  "pos0": "hook",
+  "why": "native module scene"
+ },
+ "native_scene": {
+  "pos0": "hook",
+  "why": "native module scene tracer"
+ },
+ "native_slot_fade": {
+  "pos0": "hook",
+  "why": "native module render (needs the module and native rendering)"
+ },
+ "native_stereo_width": {
+  "pos0": "hook",
+  "why": "native module stereo"
+ },
+ "native_traces": {
+  "pos0": "hook",
+  "why": "probe-link traces through the module: needs the module and the probe graph builds; not in P.Compute of these scenes"
+ },
+ "native_voice_mix": {
+  "pos0": "hook",
+  "why": "native module voice mixing"
+ },
+ "native_volume_sfx": {
+  "pos0": "hook",
+  "why": "native module volume"
+ },
+ "native_water_listener": {
+  "pos0": "hook",
+  "why": "native module under water"
+ },
+ "native_water_reverb": {
+  "pos0": "hook",
+  "why": "native module under water"
+ },
+ "oneshot_follow": {
+  "pos0": "hook",
+  "why": "following of short sounds while they play"
+ },
+ "path_props": {
+  "pos0": "same",
+  "why": "no props on the sweep scenes (path_obstruction / vehicle_obstacle tests)"
+ },
+ "predicted_exact": {
+  "pos0": "hook",
+  "why": "multiplayer prediction (relay)"
+ },
+ "reeval_adaptive": {
+  "pos0": "hook",
+  "why": "re-evaluation schedule of loops"
+ },
+ "relay_ready": {
+  "pos0": "hook",
+  "why": "server relay decision (sv_relay), outside P.Compute"
+ },
+ "route_pos_straight": {
+  "pos0": "same",
+  "why": "needs a probe route whose corners all lie on the line: not met"
+ },
+ "soundtime": {
+  "pos0": "hook",
+  "why": "sound start times (relay)"
+ },
+ "stopsound_watch": {
+  "pos0": "hook",
+  "why": "console stopsound watch"
+ },
+ "trans_bundle": {
+  "pos0": "differs",
+  "why": "bundle of lines for the transmission"
+ },
+ "trans_bundle_edge": {
+  "pos0": "same",
+  "why": "needs a line beside a door leaf: not met"
+ },
+ "trans_leaf_fade": {
+  "pos0": "same",
+  "why": "needs a line through the world and a door leaf a route owns: not met"
+ },
+ "trans_pos_clamp": {
+  "pos0": "same",
+  "why": "needs the listener closer than 2 u to the last wall exit: not met"
+ },
+ "trans_route": {
+  "pos0": "same",
+  "why": "needs the probe graph and a floor between source and listener: not met"
+ },
+ "trans_tilt": {
+  "pos0": "same",
+  "why": "needs a transmission through several walls of unequal muffling: not met"
+ },
+ "trans_window_soft": {
+  "pos0": "same",
+  "why": "only matters when a transmission voice sits past trans_window_db of the dominant voice: no such couple on these scenes"
+ },
+ "water_planes": {
+  "pos0": "same",
+  "why": "no water on the sweep scenes (water_planes test: d1_canals_06)"
+ },
+ "world_edge": {
+  "pos0": "differs",
+  "why": "edge diffraction over obstacle ends"
+ }
+}
