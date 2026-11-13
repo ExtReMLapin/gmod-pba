@@ -658,7 +658,18 @@ end
 -- 1 m level (a real balance against a 1/r direct); while the direct is clipped at full scale (a loud source
 -- near) no more than the clipped direct times d / 1 m, so the reverb never outgrows what is heard.
 function N.PhysSrcSend(lvl, d)
-	return N.SlotSend(N.Law(lvl), d, spread(lvl, N.REF_UNITS))
+	return N.SlotSend(N.Law(lvl), d, spread(lvl, N.REF_UNITS)) * N.LoudWet(lvl)
+end
+--- Reverb share kept by a sound of level lvl (pba_native_loud_dry): the engine's own rule for its room DSP,
+-- a sound above dsp_db_min (95 dB in GMod) has its wet mix multiplied by dsp_db_mixdrop (0.1, -20 dB),
+-- which keeps gunfire and explosions sharp. The module's reverb of a loud sound is physical (fed at its 1 m
+-- power): in the open an SMG shot at 300 u got as much reflected energy as direct sound (+1.4 dB, mostly
+-- the ground, rendered as Steam Audio's noise-built response), heard as muddled. Applied to every reverb
+-- send of the sound (source slot, listener room, room bus without a slot), never to its direct sound.
+local dspDbMin, dspMixDrop = GetConVar("dsp_db_min"), GetConVar("dsp_db_mixdrop")
+function N.LoudWet(lvl)
+	if (A.cfg.native_loud_dry or 0) < 0.5 or (lvl or 75) <= (dspDbMin and dspDbMin:GetFloat() or 95) then return 1 end
+	return math.Clamp(dspMixDrop and dspMixDrop:GetFloat() or 0.1, 0, 1)
 end
 --- 1/r from 1 m without a sound level (full scale at 1 m). Not the law of other addons' BASS streams: they keep
 -- the channel's own (cl_streams, bassGain: the addon chose the range; a radio set to Set3DFadeDistance(1e6)
@@ -790,7 +801,7 @@ timer.Remove("pba_native_enclosure") -- the former one-trace enclosure guess (au
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds, diffuse = share
 -- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction),
 -- lpDb = the voice's continuous loss behind lp (path.lpDb: N.LowpassDb), follow = { ent, vol, lvl, chan }
--- to follow a moving entity }.
+-- to follow a moving entity, wet = share of the reverb kept (N.LoudWet) for the room bus without a slot }.
 -- Returns true on success.
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
@@ -811,7 +822,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
 	if id and id > 0 and opt.srcPos and L then
 		if not N.BindSource(id, opt.srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
-			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g) -- no slot: the room bus at its gain
+			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain
 		end
 	end
 	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
