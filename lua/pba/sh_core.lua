@@ -463,8 +463,8 @@ function A.InWater(p) return bit.band(util.PointContents(p), LIQUID) ~= 0 end
 
 --- True for the engine's files of a sound already muffled by water: WaterExplosionEffect.Sound, played by
 -- an explosion deeper than 128 u (C_WaterExplosionEffect::PlaySound) and heard as is from the air. Read
--- from the sound script once (names without their "^" / ")" prefixes).
-local PREFIX = "^[%^%)%(<>%*@#!?~]+"
+-- from the sound script once (names without their sound characters: A.SoundFile, the one list of them; a
+-- partial copy here missed "}", "$", "&", "`", "+", "%" and "(").
 local muffled
 function A.WaterMuffledFile(name)
 	if not isstring(name) then return false end
@@ -473,9 +473,9 @@ function A.WaterMuffledFile(name)
 		local p = sound.GetProperties and sound.GetProperties("WaterExplosionEffect.Sound")
 		local s = p and p.sound
 		if isstring(s) then s = { s } end
-		for _, f in ipairs(s or {}) do muffled[string.lower(string.gsub(f, PREFIX, ""))] = true end
+		for _, f in ipairs(s or {}) do muffled[string.lower(A.SoundFile(f))] = true end
 	end
-	return muffled[string.lower(string.gsub((string.gsub(name, "\\", "/")), PREFIX, ""))] or false
+	return muffled[string.lower(A.SoundFile((string.gsub(name, "\\", "/"))))] or false
 end
 
 --- World position of a sound.

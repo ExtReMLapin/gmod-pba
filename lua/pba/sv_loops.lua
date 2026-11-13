@@ -44,6 +44,7 @@ local function send(op, l, plys)
 		net.WriteUInt(math.Clamp(math.floor(l.dsp or 0), 0, 255), 8)
 		net.WriteBool(l.once or false)
 		net.WriteBool(l.speaker or false)
+		net.WriteInt(l.chan or 0, 10) -- (as sv_relay: CHAN_REPLACE -1 to user channels 255)
 	end
 	net.Send(plys)
 end
@@ -409,8 +410,10 @@ end
 function LP.MouthStop(l)
 	if not l.mouth or not IsValid(l.ent) then return end
 	l.mouth = nil
+	-- the engine's StopSound, not sv_relay's detour: that one relays a stop and calls LP.Stop again, from
+	-- inside LP.Stop (OP_STOP sent twice)
 	A.reemitting = true
-	l.ent:StopSound(l.name)
+	A.orig.EntStopSound(l.ent, l.name)
 	A.reemitting = false
 end
 
@@ -441,7 +444,9 @@ function LP.Handle(data)
 	end
 	-- a new sound on a replacing channel (CHAN_VOICE...) cuts what that channel played, a followed long
 	-- line included (the engine replaces it; the mirror must go too, and a capped one is over)
-	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 and replacing(data.Channel) then
+	-- (not with SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps both, A.KeepsChannel)
+	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 and replacing(data.Channel)
+		and not A.KeepsChannel(flags) then
 		for k, x in pairs(LP.active) do
 			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.Stop(idx, x.name) end
 		end
@@ -587,14 +592,10 @@ do
 	end
 end
 
---- Stops the mirror of `name` on entity e (and of the wave a sound script resolved it to).
+--- Stops the mirror of `name` on entity e (and of the wave a sound script resolved it to: LP.Stop reaches every
+-- wave of a script itself, A.StopFiles; one pass, not one more per wave).
 function LP.StopNamed(e, name)
-	local idx = e:EntIndex()
-	LP.Stop(idx, name)
-	local props = sound.GetProperties(name)
-	local w = props and props.sound
-	if isstring(w) then LP.Stop(idx, w)
-	elseif istable(w) then for _, x in ipairs(w) do LP.Stop(idx, x) end end
+	LP.Stop(e:EntIndex(), name)
 end
 
 -- Entity:StartLoopingSound (GMod): its start reaches EntityEmitSound, StopLoopingSound never does
@@ -681,7 +682,8 @@ timer.Create("pba_loops", 0.5, 0, function()
 	end
 	-- capped loops: drop the ended ones; take the others over while slots are free (a loop capped
 	-- during a 70-loop battle no longer stays through every wall once the battle is over)
-	local free = (A.cfg.loops_max or 64) - table.Count(LP.active)
+	-- (counted as LP.Handle caps: with loops_cap_audible, silent patches take no slot)
+	local free = (A.cfg.loops_max or 64) - LP.CapCount()
 	local adopt = {}
 	for key, c in pairs(LP.capped) do
 		if (c.idx ~= 0 and not IsValid(c.ent)) or (c.once and RealTime() > c.endT) or endedInCpp(c) then
@@ -755,7 +757,9 @@ function LP.Release()
 		local plys = {}
 		for p in pairs(l.subs) do if IsValid(p) then plys[#plys + 1] = p end end
 		send(OP_STOP, l, plys)
-		if IsValid(l.ent) then
+		-- a long one-shot is not emitted again (pba_loops_release_restart 0): the engine would play it from its
+		-- top, midway through a speech; it ends silently, as the client's mirror (cannot resume midway)
+		if IsValid(l.ent) and (not l.once or (A.cfg.loops_release_restart or 0) >= 0.5) then
 			A.Emit(A.orig.EntEmitSound, l.ent, l.name, l.lvl, l.pitch, l.vol, l.chan, 0, l.dsp)
 			if not l.once then l.subs = {} LP.released[key] = l end
 		end

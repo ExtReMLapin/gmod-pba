@@ -421,6 +421,11 @@ steps = [
     ("loop_removed", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_removed.lua"))),
     # silent patches (started at volume 0) do not count against loops_max (audit B-7)
     ("silent_loops_cap", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "silent_loops_cap.lua", 30))),
+    ("loops_cap_resume", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loops_cap_resume.lua", 30))),
+    ("loops_stop_reentry", lambda: seq(lambda: load(TW), lambda: job("server", "loops_stop_reentry.lua", 30))),
+    ("loops_stop_named", lambda: seq(lambda: load(TW), lambda: job("server", "loops_stop_named.lua"))),
+    ("loop_channel", lambda: seq(lambda: load(TW), lambda: job("server", "loop_channel_setup.lua"), lambda: job("client", "loop_channel.lua"))),
+    ("client_long_duck", lambda: seq(lambda: load(TW), lambda: job("client", "client_long_duck.lua"))),
     # env_microphone Disable stops its speaker's mirror (audit B-12)
     ("mic_disable", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "mic_disable.lua", 40))),
     # a CSoundPatch on a file without loop points (plays once): followed for its length, restarted, stopped
@@ -459,6 +464,9 @@ steps = [
     ("loop_fade_tail", lambda: seq(lambda: load(TW), lambda: job("server", "loop_fade_tail.lua"))),
     ("constraint_travel_loop", lambda: seq(lambda: load(TW), lambda: job("server", "constraint_travel_loop.lua"))),
     ("loud_loop_far", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "loud_loop_far_setup.lua"), lambda: job("client", "loud_loop_far.lua"))),
+    ("loop_far_muffle", lambda: seq(lambda: load(TW), lambda: job("server", "loop_far_muffle_setup.lua"), lambda: job("client", "loop_far_muffle.lua"))),
+    ("speaker_long_native", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "speaker_long_native_setup.lua"), lambda: job("client", "speaker_long_native.lua", 30))),
+    ("door_spawned", lambda: seq(lambda: load(TW), lambda: job("server", "door_spawned_setup.lua"), lambda: job("server", "door_spawned_remove.lua"), lambda: job("client", "door_spawned.lua"))),
     # a quiet (far) native loop keeps following its distance law, not frozen at its near gain
     ("quiet_loop_far", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "quiet_loop_far_setup.lua"), lambda: job("client", "quiet_loop_far.lua"))),
     ("looping_sound_stop_client", lambda: seq(lambda: load(TW), lambda: job("client", "looping_sound_stop_client.lua"))),
@@ -469,6 +477,7 @@ steps = [
     ("channel_cut", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "channel_cut_setup.lua"), lambda: job("client", "channel_cut_mid.lua"), lambda: job("server", "channel_cut_next.lua"), lambda: job("client", "channel_cut.lua"))),
     ("relay_dict_overflow", lambda: seq(lambda: load(TW), lambda: job("client", "relay_dict_capture.lua"), lambda: job("server", "relay_dict_overflow.lua", 30), lambda: job("client", "relay_dict_check.lua"))),
     ("channel_no_overwrite", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(False), lambda: job("client", "channel_no_overwrite.lua", 30))),
+    ("channel_no_overwrite_server", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "channel_no_overwrite_server.lua"))),
     ("relay_client_ready", lambda: seq(lambda: load(TW), lambda: job("server", "relay_client_ready.lua", 30))),
     # StopSound by sound-script name reaches the relayed copies and the loop mirrors of its waves
     ("stop_script", lambda: seq(lambda: load(TW), lambda: job("server", "stop_script_setup.lua"), lambda: job("client", "stop_script_mid.lua"), lambda: job("server", "stop_script_next.lua"), lambda: job("client", "stop_script.lua"))),
@@ -478,6 +487,7 @@ steps = [
     # a loop playing while pba is turned off then on: back to the engine, then mirrored again (and a still
     # prop_dynamic, MOVETYPE_PUSH like a door, keeps its loop)
     ("loop_reenable", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_reenable.lua", 20))),
+    ("loop_release_long", lambda: seq(lambda: load(TW), lambda: job("server", "loop_release_long.lua", 30))),
     # loops born on the client (CreateSound of addons: vehicle engines): mirrored, stopped with Stop, GC, removal
     ("patch_oneshot_client", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("client", "patch_oneshot_client.lua", 20))),
     ("client_loop", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("client", "client_loop.lua", 20))),
@@ -780,7 +790,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_scope", "speech_floor light", "speech_floor native"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state

@@ -198,7 +198,7 @@ if SERVER then
 			if key then apByKey[key] = ap end
 		end
 		for _, p in ipairs(g.portals) do
-			local l = { ap = apByKey[p.key], doors = {} }
+			local l = { ap = apByKey[p.key], doors = {}, target = p.target }
 			if p.target then
 				for _, e in ipairs(ents.FindByName(p.target)) do
 					l.doors[#l.doors + 1] = e
@@ -263,9 +263,9 @@ if SERVER then
 		return changed
 	end
 
-	local function send(keys, target, entKeys)
-		entKeys = entKeys or {}
-		if #keys == 0 and #entKeys == 0 then return end
+	local function send(keys, target, entKeys, gone)
+		entKeys, gone = entKeys or {}, gone or {}
+		if #keys == 0 and #entKeys == 0 and #gone == 0 then return end
 		net.Start(NET)
 		net.WriteUInt(#keys, 12)
 		for _, key in ipairs(keys) do
@@ -283,8 +283,42 @@ if SERVER then
 			net.WriteUInt(math.Clamp(s.closedDb, 0, 255), 8)
 			net.WriteUInt(math.Clamp(s.closedLp or 3, 0, 4), 3)
 		end
+		-- doors removed: their state is forgotten (an entity index is reused by later entities)
+		net.WriteUInt(#gone, 12)
+		for _, idx in ipairs(gone) do net.WriteUInt(idx, 16) end
 		if target then net.Send(target) else net.Broadcast() end
 	end
+
+	-- Doors created after the map loaded (a sandbox spawn, the duplicator, a point_template): D.Relink lists
+	-- the doors at D.Start and PostCleanupMap only, so such a door was never polled, and a door without a
+	-- state counts as shut in the paths and the probe links (pba_doors_spawned). Taken in on the next tick
+	-- (its name and model are set by then), into its areaportal's link when the portal targets its name. A
+	-- removed door's state goes, here and on the clients.
+	local DOOR_SET = {}
+	for _, c in ipairs(DOOR_CLASSES) do DOOR_SET[c] = true end
+	hook.Add("OnEntityCreated", "pba_doors_new", function(e)
+		if not DOOR_SET[e:GetClass()] then return end
+		timer.Simple(0, function()
+			if not IsValid(e) or (A.cfg.doors_spawned or 1) < 0.5 or not timer.Exists("pba_doors") then return end
+			for _, x in ipairs(D.ents) do if x == e then return end end
+			D.ents[#D.ents + 1] = e
+			local name = e:GetName()
+			if name ~= "" then
+				for _, l in pairs(D.links or {}) do
+					if l.target == name then l.doors[#l.doors + 1] = e end
+				end
+			end
+		end)
+	end)
+	hook.Add("EntityRemoved", "pba_doors_gone", function(e)
+		if not DOOR_SET[e:GetClass()] or (A.cfg.doors_spawned or 1) < 0.5 then return end
+		for i = #D.ents, 1, -1 do if D.ents[i] == e then table.remove(D.ents, i) end end
+		local idx = e:EntIndex()
+		if D.entState[idx] then
+			D.entState[idx] = nil
+			send({}, nil, {}, { idx })
+		end
+	end)
 
 	function D.Apply()
 		local g = A.Graph.current
@@ -340,6 +374,7 @@ else
 			local idx, q, closedDb, closedLp = net.ReadUInt(16), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(3)
 			D.byEnt[idx] = { frac = q / 255, closedDb = closedDb, closedLp = closedLp }
 		end
+		for _ = 1, net.ReadUInt(12) do D.byEnt[net.ReadUInt(16)] = nil end
 		D.Apply()
 	end)
 

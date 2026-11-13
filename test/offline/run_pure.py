@@ -55,11 +55,75 @@ for root, _, names in os.walk(os.path.join(repo, "lua")):
         for i, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
             if re.search(r"(?<![\w.])SoundDuration\(", line):
                 raw.append("%s:%d" % (rel, i))
-            if "&~`+%%%(" in line:
+            # (any class of sound characters anchored at the start: "^[%^..." - a second, partial copy hid
+            # behind a different character list, A.WaterMuffledFile)
+            if "&~`+%%%(" in line or '"^[%^' in line:
                 pat.append("%s:%d" % (rel, i))
 ok_static = len(raw) == 1 and raw[0].startswith("lua/pba/sh_core.lua:") and len(pat) == 1 and pat[0].startswith("lua/pba/sh_core.lua:")
 print("%s static: SoundDuration only via A.SoundDuration, prefix pattern only in A.SoundFile (raw calls %s, patterns %s)"
       % ("PASS" if ok_static else "FAIL", raw, pat))
+
+# Static lock (offline only): no Lua file writes the global `_` (a placeholder in a multiple assignment with no
+# `local _` in scope: d1, l1, _, e1 = f()). Found in the bytecode (GSET of the constant "_"), every function
+# of every file; the GSET opcode is read from a probe function, not hard-coded.
+gset_code = r"""
+local ju, band, rshift = require("jit.util"), bit.band, bit.rshift
+local function gsets(f, name, out)
+	local pc = 1
+	while true do
+		local ins = ju.funcbc(f, pc)
+		if not ins then break end
+		out[#out + 1] = { op = band(ins, 0xff), d = rshift(ins, 16), pc = pc }
+		pc = pc + 1
+	end
+	return out
+end
+local probe = loadstring("pba_probe_global_ = 1")
+local GSET
+for _, i in ipairs(gsets(probe, nil, {})) do
+	if ju.funck(probe, -(i.d + 1)) == "pba_probe_global_" then GSET = i.op end
+end
+local hits = {}
+local function scan(f, file)
+	local info = ju.funcinfo(f)
+	for _, i in ipairs(gsets(f, nil, {})) do
+		if i.op == GSET and ju.funck(f, -(i.d + 1)) == "_" then
+			local li = ju.funcinfo(f, i.pc)
+			hits[#hits + 1] = file .. ":" .. tostring(li.currentline)
+		end
+	end
+	local k = -1
+	while true do
+		local c = ju.funck(f, k)
+		if c == nil then break end
+		if type(c) == "proto" then scan(c, file) end
+		k = k - 1
+	end
+end
+local files = ...
+for name, src in pairs(files) do scan(assert(loadstring(src, name)), name) end
+table.sort(hits)
+return tostring(GSET ~= nil), table.concat(hits, " ")
+"""
+srcs = {}
+for root, _, names in os.walk(os.path.join(repo, "lua")):
+    for n in names:
+        if n.endswith(".lua"):
+            pth = os.path.join(root, n)
+            srcs[os.path.relpath(pth, repo).replace(os.sep, "/")] = open(pth, encoding="utf-8", errors="replace").read()
+probe_ok, gset_hits = L.execute(gset_code, L.table_from(srcs))
+ok_gset = probe_ok == "true" and gset_hits == ""
+print("%s static: no write to the global `_` (GSET opcode found %s; writes at %s)" % ("PASS" if ok_gset else "FAIL", probe_ok, gset_hits or "none"))
+
+# Static lock (offline only): every option of A.CONFIG is read somewhere (cfg.<name>, or its name quoted
+# outside sh_config.lua); the low-pass tables are read by a built name (cfg["dsp_lp" .. level], "lp" .. n .. "_db").
+cfg_src = open(os.path.join(repo, "lua", "pba", "sh_config.lua"), encoding="utf-8").read()
+opt_names = re.findall(r"^\t(\w+)\s*=\s*\{\s*[-\d.]", cfg_src, re.M)
+other_src = "".join(v for k, v in srcs.items() if not k.endswith("/sh_config.lua"))
+unread = [n for n in opt_names if not re.match(r"^(dsp_lp\d|lp\d_db)$", n)
+          and not re.search(r"(cfg\.%s\b|[\"']%s[\"'])" % (n, n), other_src)]
+print("%s static: every option is read somewhere (%d options; read nowhere: %s)"
+      % ("PASS" if opt_names and not unread else "FAIL", len(opt_names), unread or "none"))
 
 # The native helpers (cl_native.lua: distance law, sends, directivity, EQ) and their suite. Loaded last:
 # the suite above runs without pba.Native, as before.

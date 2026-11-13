@@ -34,7 +34,7 @@
 //     is fed at once), else a free one is taken (never one with a live voice; none: -1, room send
 //     only). A slot lives as long as one of its voices (bind once right after Play; call again on
 //     Update for a moving source), an unbound one 1 s. pos not a Vector: unbinds that voice.
-//     SetSourceSlots: active pool size (0..32, default 16); the reflections run cost grows with it
+//     SetSourceSlots: active pool size (0..16, default 16); the reflections run cost grows with it
 //     send: room reverb send level (linear), independent from gain, which carries the distance law;
 //     absent = keep the voice's (a voice that never received one sends at its gain)
 //     offset (Play arg 13): start this many seconds into the sound (playback time at the given pitch:
@@ -135,7 +135,7 @@ constexpr float kSrcNear = 1.5f;
 // slot's average from one noisy pass (a gunship flying past re-simulated every 0.25 s, its reverb level
 // swinging +-4 dB: heard as an echo that jumps)
 std::atomic<float> g_srcNearFrac{0.0f};
-std::atomic<int> g_srcPool{16}; // SetSourceSlots
+std::atomic<int> g_srcPool{render::kSrcSlotsDefault}; // SetSourceSlots
 // incremented on every scene change (doors, props): a response simulated before it is stale
 std::atomic<int> g_sceneVersion{0};
 // under g_stageMtx; live: render::SrcSlotLive
@@ -2098,7 +2098,7 @@ LUA_FUNCTION(SourceReflect) {
 	return 1;
 }
 
-// SetSourceSlots(n) -> n: size of the source reverb slot pool (0..kSrcSlotsMax, default 16). Every
+// SetSourceSlots(n) -> n: size of the source reverb slot pool (0..kSrcSlotsMax, default kSrcSlotsDefault). Every
 // active slot is one more source in each reflections run (Stats().reflMs, srcSlots); slots beyond n
 // are not simulated and their voices fall back to the room send.
 LUA_FUNCTION(SetSourceSlots) {
