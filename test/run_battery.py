@@ -349,7 +349,7 @@ steps = [
     ("native_doors", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_doors.lua"))),
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                     lambda: job("client", "native_features.lua"))),
-    ("native_stereo", "native_own_dsp", lambda: seq(lambda: native_on(True), lambda: job("client", "native_stereo.lua"))),
+    ("native_stereo", lambda: seq(lambda: native_on(True), lambda: job("client", "native_stereo.lua"))),
     ("native_own_dsp", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                    lambda: job("client", "native_own_dsp.lua", 60))),
     ("native_volume_sfx", lambda: volume_sfx_step()),
@@ -611,7 +611,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "native_own_dsp", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state
