@@ -46,6 +46,7 @@ local function sendCaption(data, plys)
 	net.Start("pba_caption")
 	net.WriteString(tok)
 	net.WriteFloat(A.SoundDuration(data.SoundName) or 0)
+	net.WriteString(data.SoundName or "") -- (its file: the client's speech lines, pba_handback_speech)
 	net.Send(plys)
 end
 A.SendCaption = sendCaption -- (the long lines sv_loops takes over: pba_long_captions)

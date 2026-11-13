@@ -1104,8 +1104,10 @@ end
 -- (fallback: a partial autorefresh may reload this file before sh_core)
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
 	if A.reemitting then
-		-- pba's own engine emission (a copy, its vanilla fallback, a mirror's patch): the line is heard
-		if bit.band(data.Flags or 0, SND_STOP) == 0 and A.NoteRendered then A.NoteRendered(data.SoundName, data.Volume or 1) end
+		-- pba's own engine emission (a copy, its vanilla fallback, a mirror's patch): the line is heard. Not a
+		-- mouth copy (volume 0.001, mouthCopy: lip sync only, nobody hears it; it hid silent lines from the net)
+		local v = data.Volume or 1
+		if bit.band(data.Flags or 0, SND_STOP) == 0 and A.NoteRendered and v > 0.01 then A.NoteRendered(data.SoundName, v) end
 		return
 	end
 	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
@@ -1250,8 +1252,11 @@ hook.Add("OnCloseCaptionEmit", "pba_caption_once", function(tok, dur, fromPlayer
 end)
 net.Receive("pba_caption", function()
 	local tok, dur = net.ReadString(), net.ReadFloat()
+	local file = net.ReadString()
 	local txt = language.GetPhrase(tok)
 	if not txt or txt == tok then return end
+	-- a spoken line (not an <sfx> caption): watched by the silent line safety net (pba_handback_speech)
+	if file ~= "" and A.LineKey and not string.find(string.lower(txt), "<sfx>", 1, true) then A.speechT[A.LineKey(file)] = RealTime() end
 	if (A.cfg.caption_once or 1) >= 0.5 then
 		local key = captionKey(txt)
 		if captionRecent(key) then return end

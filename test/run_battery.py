@@ -450,6 +450,8 @@ steps = [
     # the safety net: a line taken from the engine that nothing renders is handed back (pba_silent_handback)
     ("silent_handback", lambda: long_line_play_fail(True)),
     ("silent_handback relay", lambda: silent_relay()),
+    # only speech is handed back: not a relayed zap on a face, not common/null.wav (pba_handback_speech)
+    ("handback_scope", lambda: seq(lambda: load(TW), lambda: job("client", "handback_scope.lua"))),
     ("looping_sound_stop", lambda: seq(lambda: load(TW), lambda: job("server", "looping_sound_stop.lua"))),
     ("weapon_loop_owner", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
     # the player in room A (a step before may leave him in room B: manhack_loop_kill puts him at x 600, the loop
@@ -654,7 +656,15 @@ steps = [
     # gm_construct first: path_quality field only ends on it (one load less); pba_demo: portal paths
     ("path_perceptual", lambda: py("path_perceptual.py", "--check", "--pairs=15", "gm_construct", "pba_demo")),
     # continuous sounds re-evaluated only on change (pba_reeval_adaptive): still cost, listener move, door
-    ("reeval_adaptive", lambda: py("reeval_adaptive.py")),
+    ("reeval_adaptive", lambda: py("reeval_adaptive.py")),    # T6: relayed sounds carry the door loss and DSP, <= 30 bytes each, relay_rate falls back to the engine (muffled), allow_native 0
+    ("relay_net", lambda: seq(lambda: load(TW), lambda: py("relay_net.py"))),
+    # T8: the native module over 3 map changes, a disconnect / reconnect and stopsound (voices, mirrors, memory)
+    ("native_lifecycle", lambda: py("native_lifecycle.py")),
+    # T9: the engine presets really low-pass (recorded), and a relayed copy behind the closed door is 10 dB duller;
+    # writes wav files and plays loud noise: one instance at a time
+    ("dsp_muffle_real", lambda: seq(lambda: load(TW), lambda: py("dsp_muffle_real.py"))),
+    # T10: room reverb present / absent (native_reverb 0), echoes near walls vs open field, native_echo 0, native_props
+    ("reverb_echo_basics", lambda: py("reverb_echo_basics.py")),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
@@ -776,7 +786,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_scope", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state
