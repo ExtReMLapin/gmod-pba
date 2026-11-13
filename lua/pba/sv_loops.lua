@@ -181,6 +181,44 @@ local function chargerSounds(class)
 	return set
 end
 
+-- Physics constraints with a travel sound (SDK physconstraint.cpp ConstraintSoundInfo): the loop starts on
+-- the moving object when the attached objects move relative to each other and is DESTROYED (invisible
+-- StopSound) once that speed falls under minSoundThreshold, or with the constraint.
+local TRAVEL_CONSTRAINTS = { "phys_slideconstraint", "phys_hinge" }
+
+--- The constraint whose travel sound `name` plays on physics object e: { c = constraint, other = the other
+-- attached entity (nil: the world), min = minSoundThreshold }, or nil.
+function LP.ConstraintOf(e, name, orig)
+	local own = e:GetName()
+	if own == "" then return nil end
+	for _, class in ipairs(TRAVEL_CONSTRAINTS) do
+		for _, c in ipairs(ents.FindByClass(class)) do
+			local n1, n2 = c:GetInternalVariable("m_nameAttach1"), c:GetInternalVariable("m_nameAttach2")
+			if n1 == own or n2 == own then
+				local set = {}
+				addSound(set, c:GetInternalVariable("m_soundInfo.m_iszTravelSoundFwd"))
+				addSound(set, c:GetInternalVariable("m_soundInfo.m_iszTravelSoundBack"))
+				if inSet(set, name, orig) then
+					local otherName = n1 == own and n2 or n1
+					local other = isstring(otherName) and otherName ~= "" and ents.FindByName(otherName)[1] or nil
+					return { c = c, other = other, min = tonumber(c:GetInternalVariable("minSoundThreshold")) or 0 }
+				end
+			end
+		end
+	end
+end
+
+--- Relative speed of a constrained object (linear u/s, or angular deg/s for a hinge, the larger).
+local function relSpeed(e, other)
+	local p = e:GetPhysicsObject()
+	if not IsValid(p) then return 0 end
+	local v, w = p:GetVelocity(), p:GetAngleVelocity()
+	local q = IsValid(other) and other:GetPhysicsObject() or nil
+	if IsValid(q) then v, w = v - q:GetVelocity(), w - q:GetAngleVelocity() end
+	if not p:IsMotionEnabled() and not (IsValid(q) and q:IsMotionEnabled()) then return 0 end
+	return math.max(v:Length(), w:Length())
+end
+
 --- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
 function LP.IsLong(data)
 	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
@@ -389,6 +427,8 @@ function LP.Handle(data)
 		l.charger = IsValid(e) and CHARGERS[e:GetClass()] and inSet(chargerSounds(e:GetClass()), data.SoundName, l.orig) or nil
 		-- vehicles: their engine loops end in C++ when it is switched off; only their own sounds
 		l.vehicle = IsValid(e) and e:IsVehicle() and LP.IsVehicleSound(e, data.SoundName, l.orig) or nil
+		-- a constraint's travel sound: ends in C++ when the objects stop moving relative to each other
+		l.constraint = IsValid(e) and e:GetMoveType() == MOVETYPE_VPHYSICS and LP.ConstraintOf(e, data.SoundName, l.orig) or nil
 	end
 	l.t = CurTime()
 	local prevVol = l.vol
@@ -518,6 +558,8 @@ local function endedInCpp(l)
 	if l.mover then return age > 0.4 and LP.MoverStill(e) end
 	if l.charger and age > 0.5 and e:GetInternalVariable("m_iOn") == 0 then return true end
 	if l.vehicle and age > 1 and e.IsEngineStarted and not e:IsEngineStarted() then return true end
+	local ct = l.constraint
+	if ct and (not IsValid(ct.c) or (age > 0.4 and relSpeed(e, ct.other) < math.max(ct.min, 1))) then return true end
 	return false
 end
 

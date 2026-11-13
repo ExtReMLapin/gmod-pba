@@ -248,6 +248,7 @@ steps = [
     ("weapon_loop_owner", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
     ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_loop_fade_hidden.lua"))),
     ("loop_fade_tail", lambda: seq(lambda: load(TW), lambda: job("server", "loop_fade_tail.lua"))),
+    ("constraint_travel_loop", lambda: seq(lambda: load(TW), lambda: job("server", "constraint_travel_loop.lua"))),
     ("loud_loop_far", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "loud_loop_far_setup.lua"), lambda: job("client", "loud_loop_far.lua"))),
     ("looping_sound_stop_client", lambda: seq(lambda: load(TW), lambda: job("client", "looping_sound_stop_client.lua"))),
     ("stopsound", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "stopsound_setup.lua"), lambda: job("client", "stopsound.lua"))),
@@ -507,7 +508,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "loud_loop_far", "stopsound", "removed_oneshot", "loop_reenable", "vehicle_state_sounds", "sp_own_echo",
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "removed_oneshot", "loop_reenable", "vehicle_state_sounds", "sp_own_echo",
          "client_loop", "native_doors", "native_features", "path_hysteresis twodoors", "continuous_ramp twodoors",
          "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed"}
 if "--quick" in opts:
