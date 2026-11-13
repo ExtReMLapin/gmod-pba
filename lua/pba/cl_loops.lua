@@ -83,6 +83,23 @@ do
 	end
 end
 
+-- Sound patches the C++ of client entities plays (C_NPC_Manhack: its engine and blade loops). Their start,
+-- volume and pitch changes reach the hook; no Lua patch stands for them, so they stayed vanilla, through
+-- every wall. Known classes only: their sounds end with the entity (measured: a killed manhack's loops play
+-- on, vanilla, until it is removed ~1.5 s later; its "engine off" state is no longer networked by then), as
+-- the mirror does (apply: entity gone). class -> { lowercased file = true }
+LP.CPP_PATCHES = {
+	npc_manhack = { ["npc/manhack/mh_engine_loop1.wav"] = true, ["npc/manhack/mh_engine_loop2.wav"] = true,
+		["npc/manhack/mh_blade_loop1.wav"] = true },
+}
+
+--- True when `name` on client entity e is one of the C++ patches of its class.
+local function cppPatch(e, name)
+	if (A.cfg.loops_cpp_client or 0) < 0.5 then return false end
+	local files = LP.CPP_PATCHES[e:GetClass()]
+	return files ~= nil and files[string.lower(A.SoundFile(name))] == true
+end
+
 --- The registered client patch starting `name` on entity e right now, if any.
 local function foreignPatch(e, name)
 	local p = LP.playing
@@ -372,7 +389,8 @@ function LP.HandleClient(data)
 	-- a client loop (CSoundPatch:Play arrives as a SND_CHANGE_VOL that starts the sound)
 	local loop = not m and (A.cfg.loops_client or 0) >= 0.5 and (A.cfg.loops or 0) >= 0.5 and A.IsLooping(name)
 	local src = loop and foreignPatch(e, name)
-	if change and not src then
+	local cpp = loop and not src and cppPatch(e, name)
+	if change and not src and not cpp then
 		if not m then return false end
 		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end
 		if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then m.pitch = data.Pitch or m.pitch end
@@ -387,8 +405,8 @@ function LP.HandleClient(data)
 	if replacing(chan) then LP.StopClient(idx, chan) end
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl >= 256 then return false end
-	if src then
-		-- client loop: needs its registered patch (else nothing would ever stop the mirror)
+	if src or cpp then
+		-- client loop: needs its registered patch or a known C++ owner (else nothing would ever stop the mirror)
 	else
 		if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 or A.IsLooping(name) then return false end
 		local st = data.SoundTime or 0
@@ -400,7 +418,7 @@ function LP.HandleClient(data)
 	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end
 	if n >= (A.cfg.loops_max_cl or 32) then return false end -- cap: left to the engine
 	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
-		dsp = data.DSP or 0, once = not src, client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
+		dsp = data.DSP or 0, once = not (src or cpp), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
 		src = src and setmetatable({ src }, { __mode = "v" }) or nil }
 	LP.mirrors[key] = m
 	apply(m, 0)
