@@ -90,6 +90,15 @@ function S.ParseData(data)
 		while j <= n and string.find(string.sub(text, j, j), "[ ,%.]") do j = j + 1 end
 		i = j
 	end
+	def.tokens = tokens
+	def.words, def.virtual = S.Words(dir, tokens)
+	return def
+end
+
+--- Words of a sentence from its tokens (the engine reads the parameters after replacing the virtual words,
+-- cl_sentences_virtual): { { file, vol, pitch, start, finish, tc } }, and true when a word is "V_...".
+function S.Words(dir, tokens)
+	local words, virtual = {}, false
 	-- parameters: a block after a word is that word's; a block alone becomes the default
 	local dflt = { vol = 100, pitch = -1, start = 0, finish = 100, tc = 0 }
 	for _, tok in ipairs(tokens) do
@@ -105,12 +114,12 @@ function S.ParseData(data)
 		if word == "" then
 			if string.sub(tok, -1) == ")" then dflt = p end -- a parameter block alone
 		else
-			if string.sub(word, 1, 2) == "V_" then def.virtual = true end
-			def.words[#def.words + 1] = { file = string.lower(dir .. word .. ".wav"), vol = p.vol, pitch = p.pitch,
+			if string.sub(word, 1, 2) == "V_" then virtual = true end
+			words[#words + 1] = { file = string.lower(dir .. word .. ".wav"), vol = p.vol, pitch = p.pitch,
 				start = p.start, finish = p.finish, tc = p.tc }
 		end
 	end
-	return def
+	return words, virtual
 end
 
 --- Parses a whole sentences file into NAME (upper) -> line data (the first line of a name wins).
@@ -174,19 +183,29 @@ function S.Ensure(name)
 	if not S.On() then return false end
 	local sub = string.upper(string.sub(name, 2))
 	local key = "!" .. string.lower(sub)
-	if pba_native.HasSound(key) then return true, key end
-	local f = S.failed[sub]
+	local words, fkey = nil, sub
+	-- virtual words ("V_..."): the words picked for the sound being played (cl_sentences_virtual, at
+	-- emission), rendered under their own key; without them (option off, no emission seen): the engine's
+	local cur = S.current and S.current[sub]
+	if cur then key, words, fkey = cur.key, cur.words, cur.key end
+	if pba_native.HasSound(key) then
+		if cur then S.len[sub] = S.len[cur.key] end
+		return true, key
+	end
+	local f = S.failed[fkey]
 	if f and RealTime() - f < 30 then return false end
 	local def = S.Get(sub)
-	if not def or def.virtual or #def.words == 0 then S.failed[sub] = math.huge return false end
+	if not def or #def.words == 0 or (def.virtual and not cur) then S.failed[sub] = math.huge return false end
+	words = words or def.words
+	if #words == 0 then S.failed[fkey] = math.huge return false end
 	local flat, want = {}, 0
-	for _, w in ipairs(def.words) do
+	for _, w in ipairs(words) do
 		-- a word without a file is skipped, as the engine does; one the module cannot decode: engine
 		if file.Exists("sound/" .. w.file, "GAME") then
 			local ok, _, why = A.Native.EnsureSound(w.file)
 			if not ok then
 				if why == "pending" then return false, nil, "pending" end
-				S.failed[sub] = RealTime()
+				S.failed[fkey] = RealTime()
 				return false
 			end
 			want = want + 1
@@ -194,14 +213,18 @@ function S.Ensure(name)
 		local k = #flat
 		flat[k + 1], flat[k + 2], flat[k + 3], flat[k + 4], flat[k + 5] = w.file, w.vol, w.pitch, w.start, w.finish
 	end
-	if want == 0 then S.failed[sub] = RealTime() return false end
+	if want == 0 then S.failed[fkey] = RealTime() return false end
 	local ok, secs, used = pcall(pba_native.LoadSentence, key, flat)
 	-- (a word evicted meanwhile: retried later rather than played without it)
 	if not ok or not secs or (used or 0) < want then
-		S.failed[sub] = RealTime()
+		S.failed[fkey] = RealTime()
 		return false
 	end
 	S.len[sub] = secs
+	if cur then
+		S.len[cur.key] = secs
+		A.stats.sentencesVirtual = (A.stats.sentencesVirtual or 0) + 1
+	end
 	A.stats.sentencesNative = (A.stats.sentencesNative or 0) + 1
 	return true, key
 end

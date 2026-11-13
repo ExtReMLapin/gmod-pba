@@ -874,6 +874,8 @@ function A.Process(data, relayed)
 	local L, ang = listenerPos()
 	local S = data.Pos
 	if not L or not S then return false end
+	-- a sentence with virtual words (V_...): its words picked now for this sound (cl_sentences_virtual)
+	if A.SentenceVirtual and A.IsSentence(data.SoundName) then A.SentenceVirtual.Begin(data, S, L) end
 	-- a new sound on a replacing channel cuts the earlier copies of that channel, even when this one
 	-- is left to the engine (clear sight, too far): an NPC's new line heard in clear sight played over
 	-- its previous line still coming through the doorway
