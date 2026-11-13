@@ -1240,9 +1240,35 @@ static double WavLoopStart(const void* data, size_t size, uint32_t* rate) {
 
 static std::string Store(const std::string& name, const std::shared_ptr<Sound>& snd);
 
+// A RIFF/WAVE file whose 18-byte "fmt " chunk has a cbSize larger than the 0 bytes that follow it (HL2's
+// sound/combined/*_cc.wav say 18): the decoder reads that missing extension and refuses the file, which the
+// engine plays. Returns a copy with cbSize 0, or an empty string when the file needs no change.
+static std::string FixWavFmt(const void* data, size_t size) {
+	const auto* b = static_cast<const uint8_t*>(data);
+	if (size < 12 || memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) return {};
+	for (size_t i = 12; i + 8 <= size;) {
+		const uint32_t len = (uint32_t)b[i + 4] | (uint32_t)b[i + 5] << 8 | (uint32_t)b[i + 6] << 16 | (uint32_t)b[i + 7] << 24;
+		const size_t body = i + 8;
+		if (len > size - body) return {};
+		if (memcmp(b + i, "fmt ", 4) == 0) {
+			if (len < 18) return {};
+			const uint16_t cb = (uint16_t)(b[body + 16] | b[body + 17] << 8);
+			if (cb <= len - 18) return {};
+			std::string fixed(static_cast<const char*>(data), size);
+			fixed[body + 16] = (char)(len - 18);
+			fixed[body + 17] = 0;
+			return fixed;
+		}
+		i = body + len + (len & 1);
+	}
+	return {};
+}
+
 std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart, bool* stereo) {
 	uint32_t srcRate = 0;
 	const double loopFrames = WavLoopStart(data, size, &srcRate);
+	const std::string fixed = FixWavFmt(data, size);
+	if (!fixed.empty()) { data = fixed.data(); size = fixed.size(); }
 	// the file's own channel count (0), so a stereo file keeps its two channels (Sound::side); more
 	// than two are downmixed to stereo by miniaudio
 	ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, 0, kRate);
