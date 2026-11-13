@@ -587,7 +587,13 @@ steps = [
     # gm_construct first: path_quality field only ends on it (one load less); pba_demo: portal paths
     ("path_perceptual", lambda: py("path_perceptual.py", "--check", "--pairs=15", "gm_construct", "pba_demo")),
     # continuous sounds re-evaluated only on change (pba_reeval_adaptive): still cost, listener move, door
-    ("reeval_adaptive", lambda: py("reeval_adaptive.py")),
+    ("reeval_adaptive", lambda: py("reeval_adaptive.py")),    # T6: relayed sounds carry the door loss and DSP, <= 30 bytes each, relay_rate falls back to the engine (muffled), allow_native 0
+    ("relay_net", lambda: seq(lambda: load(TW), lambda: py("relay_net.py"))),
+    # T8: the native module over 3 map changes, a disconnect / reconnect and stopsound (voices, mirrors, memory)
+    ("native_lifecycle", lambda: py("native_lifecycle.py")),
+    # T9: the engine presets really low-pass (recorded), and a relayed copy behind the closed door is 10 dB duller;
+    # writes wav files and plays loud noise: one instance at a time
+    ("dsp_muffle_real", lambda: seq(lambda: load(TW), lambda: py("dsp_muffle_real.py"))),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
