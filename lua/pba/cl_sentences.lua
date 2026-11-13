@@ -129,10 +129,26 @@ function S.ParseFile(text)
 	return lines
 end
 
+--- The sentence files, in the engine's order (GMod's engine reads Half-Life: Source's lines after HL2's).
+S.FILES = { "scripts/sentences.txt", "scripts/sentences-hl1.txt" }
+
+--- Merges the texts of several sentence files, in order: the first definition of a name wins.
+function S.ParseFiles(texts)
+	local lines = {}
+	for _, text in ipairs(texts) do
+		for name, data in pairs(S.ParseFile(text)) do
+			if not lines[name] then lines[name] = data end
+		end
+	end
+	return lines
+end
+
 --- The definition of sentence NAME (without "!"), parsed on first use; nil if unknown.
 function S.Get(name)
 	if not S.lines then
-		S.lines = S.ParseFile(file.Read("scripts/sentences.txt", "GAME") or "")
+		local texts = {}
+		for i, f in ipairs(S.FILES) do texts[i] = file.Read(f, "GAME") or "" end
+		S.lines = S.ParseFiles(texts)
 		S.defs = {}
 	end
 	name = string.upper(name)
