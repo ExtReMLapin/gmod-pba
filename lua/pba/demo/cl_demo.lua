@@ -389,6 +389,8 @@ local function buttonState(r, i, b)
 		end
 	elseif b.kind == "select" and DM.sel[r.id] and DM.sel[r.id][b.group] == b.id then
 		col = Color(215, 150, 30)
+	elseif b.setting and (A.cfg[b.setting] or 0) >= 0.5 then
+		col = Color(40, 150, 80)
 	end
 	if b.native and not DM.NativeAvailable() then disabled = true end
 	if disabled then col = Color(40, 40, 44) end
@@ -455,7 +457,13 @@ function DM.PressLocal(r, i)
 	DM.pressFlash = { r = r, i = i, t = RealTime() }
 	if (b.id == "mode3" or b.native) and not DM.NativeAvailable() then DM.Toast(L(DM.UI.need_module)) return end
 	if b.client then
-		if b.id == "out" then
+		if b.setting then
+			-- one fix on / off, in memory only (no convar written); the room's Reset gives it back
+			local v = (A.cfg[b.setting] or 0) >= 0.5 and 0 or 1
+			A.SetOverride(b.setting, v)
+			if A.Paths then A.Paths.InvalidateCache() end
+			DM.Toast(L(b.label) .. L(v == 1 and DM.UI.setting_on or DM.UI.setting_off))
+		elseif b.id == "out" then
 			local v = (A.cfg.native_out or 0) >= 0.5 and 0 or 1
 			A.SetOverride("native_out", v, true)
 			if A.Native and A.Native.ApplySettings then A.Native.ApplySettings() end
@@ -470,6 +478,9 @@ function DM.PressLocal(r, i)
 	if b.id == "reset" then
 		DM.cardFolded = false
 		DM.cardRoom = r
+		for _, x in ipairs(r.all) do
+			if x.setting and A.override[x.setting] ~= nil then A.SetOverride(x.setting, nil) end
+		end
 	end
 	net.Start(NET_PRESS)
 	net.WriteUInt(r.index, 5)

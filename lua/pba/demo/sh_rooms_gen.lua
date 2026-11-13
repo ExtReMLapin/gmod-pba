@@ -203,13 +203,65 @@ pba.DemoGen = {
 		},
 		stream_pos = { 6448, -512, 40 }
 	}, {
-		id = "exit",
-		boxes = { { 6544, 0, 0, 7056, 512, 192 } },
-		listen = { 6672, 256, 0 },
+		id = "sentences",
+		boxes = { { 6544, 0, 0, 7312, 512, 192 } },
+		listen = { 6800, 256, 0 },
+		yaw = 90,
+		panel = { 6740, 300, 36 },
+		panel_yaw = -36.3,
+		sources = {
+			radio = "pba_sentences_src"
+		},
+		doors = {
+			door = "pba_sentences_door"
+		},
+		world_pos = { 6764, 820, 64 },
+		citizen = { 6944, 420, 0, 225 }
+	}, {
+		id = "farnear",
+		boxes = { { 7504, 0, 0, 9808, 768, 512 } },
+		listen = { 7632, 384, 0 },
 		yaw = 0,
-		panel = { 6716, 316, 36 },
+		panel = { 7676, 444, 36 },
+		panel_yaw = -126.3,
+		sources = {
+			near = "pba_farnear_near",
+			far = "pba_farnear_far",
+			shooter = "pba_farnear_shooter",
+			buddy = "pba_farnear_buddy"
+		}
+	}, {
+		id = "loops",
+		boxes = { { 10000, 0, 0, 10768, 512, 192 } },
+		listen = { 10256, 256, 0 },
+		yaw = 90,
+		panel = { 10196, 300, 36 },
+		panel_yaw = -36.3,
+		sources = {
+			hidden = "pba_loops_hidden",
+			speaker = "pba_loops_spk"
+		},
+		slider = { 10420, 110, 0 },
+		crate = { 10330, 150, 0 }
+	}, {
+		id = "slime",
+		boxes = { { 10960, 0, -160, 11728, 640, 224 } },
+		listen = { 11344, 520, 0 },
+		yaw = 270,
+		panel = { 11260, 590, 36 },
+		panel_yaw = -39.8,
+		sources = {
+			water = "pba_slime_water",
+			slime = "pba_slime_slime"
+		}
+	}, {
+		id = "exit",
+		boxes = { { 11920, 0, 0, 12432, 512, 192 } },
+		listen = { 12048, 256, 0 },
+		yaw = 0,
+		panel = { 12092, 316, 36 },
 		panel_yaw = -126.3
 	} },
-	portals = 40,
-	doors = 33
+	portals = 49,
+	doors = 42
 }

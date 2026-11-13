@@ -39,6 +39,8 @@ DM.UI = {
 	debug = { en = "Debug overlay: ", fr = "Affichage debug : " },
 	out_hp = { en = "Steam Audio output: headphones (HRTF)", fr = "Sortie Steam Audio : casque (HRTF)" },
 	out_sp = { en = "Steam Audio output: speakers", fr = "Sortie Steam Audio : enceintes" },
+	setting_on = { en = " on (in memory, until Reset)", fr = " actif (en mémoire, jusqu'à Réinit.)" },
+	setting_off = { en = " off (in memory, until Reset)", fr = " coupé (en mémoire, jusqu'à Réinit.)" },
 }
 
 -- ------------------------------------------------------------------ sounds (checked in the base VPKs)
@@ -68,6 +70,17 @@ DM.SND = {
 	kl6 = { "vo/k_lab/kl_dearme.wav", 75, 100 },
 	knock = { "physics/wood/wood_crate_impact_hard2.wav", 85, 100 }, -- short impulse: the tail is heard alone
 	detour = { "music/hl1_song3.mp3", 95, 100 },                  -- 132 s, long sound
+	sniper = { "^npc/sniper/echo1.wav", 140, 100 },               -- stereo ^: near crack (left) / far echo (right)
+	hum = { "ambient/machines/spin_loop.wav", 80, 100 },          -- loop (loop points)
+	alarm = { "ambient/alarms/alarm1.wav", 80, 100 },             -- loop, StartLoopingSound
+	rotor = { "npc/attack_helicopter/aheli_rotor_loop1.wav", 130, 100 }, -- loop, 130 dB: heard 7 000 u away
+}
+-- sentences (scripts/sentences.txt): played with EmitSentence; none has a "virtual" word (V_...), so the
+-- module can assemble them (pba_native_sentences)
+DM.SENT = {
+	radio = "COMBINE_THROW_GRENADE4",   -- on1. six, five, four, three, two, one, flash flash(p105) flash(p110) off1
+	announce = "METROPOLICE_PLAYERHIT7", -- on1, on1, on1, on3 youarechargedwithterminal, completesentencingatwill off2
+	citizen = "COMBINE_LOST_LONG6",     -- on1 readyweapons, stayalert off1
 }
 -- 3D stream of "another addon" (sound.PlayFile, like 3D Stream Radio)
 DM.STREAM = "sound/music/hl2_song26_trainstation1.mp3"
@@ -78,7 +91,9 @@ DM.STREAM_URL_START = 10 -- seconds skipped at the start (and at each loop): slo
 
 -- ------------------------------------------------------------------ buttons
 -- Every room gets A, B, C and Reset first. kind: "push" (default), "toggle", "select" (radio
--- group, highlighted). client = handled on the client only (display options).
+-- group, highlighted). client = handled on the client only (display options). setting = a client
+-- setting (sh_config name) switched on / off in memory (A.SetOverride, no convar written), lit while
+-- on, given back by the room's Reset: the A / B comparison of one fix.
 
 local function T(en, fr) return { en = en, fr = fr } end
 
@@ -244,6 +259,7 @@ DM.ROOMS = {
 		buttons = {
 			{ id = "shot", label = T("Shot", "Tir") },
 			{ id = "explosion", label = T("Explosion", "Explosion") },
+			{ id = "set_dry", label = T("Loud sounds dry", "Sons forts secs"), client = true, native = true, setting = "native_loud_dry" },
 		},
 	},
 	closet = {
@@ -257,6 +273,7 @@ DM.ROOMS = {
 		buttons = {
 			{ id = "shot", label = T("Shot", "Tir") },
 			{ id = "explosion", label = T("Explosion", "Explosion") },
+			{ id = "set_dry", label = T("Loud sounds dry", "Sons forts secs"), client = true, native = true, setting = "native_loud_dry" },
 		},
 	},
 	orbit = {
@@ -341,8 +358,89 @@ DM.ROOMS = {
 		},
 		defaults = { diffuse = "diffuse_on" },
 	},
+	sentences = {
+		num = "15", title = T("THE COMBINE RADIO", "LA RADIO DES COMBINE"),
+		listen = T("the radio's words: beeps, pauses, the countdown.", "les mots de la radio : bips, pauses, compte à rebours."),
+		a = T("the radio goes straight through the wall.", "la radio traverse le mur."),
+		b = T("muffled behind the wall, clearer with the door open.", "sourde derrière le mur, plus claire porte ouverte."),
+		c = T("the sentence is assembled by the module: 3D on headphones and room reverb, like every other sound.",
+			"la phrase est assemblée par le module : 3D au casque et réverb de la pièce, comme tous les autres sons."),
+		try = T("Radio, then Announcement, then Citizen: watch his lips. He learnt the Combine script by heart, sadly.",
+			"Radio, puis Annonce, puis Citoyen : regardez ses lèvres. Il a appris le texte des Combine par cœur, hélas."),
+		note = T("Announcement: a sentence another addon plays on the world (EmitSentence at a position): it must stay behind the wall too. In C, switch 'Native sentences' off to hear the engine's own rendering (pba_native_sentences).",
+			"Annonce : une phrase qu'un autre addon joue sur le monde (EmitSentence à une position) : elle doit rester derrière le mur, elle aussi. En C, coupez « Phrases natives » pour entendre le rendu du moteur (pba_native_sentences)."),
+		main = "radio",
+		buttons = {
+			{ id = "radio", label = T("Radio", "Radio") },
+			{ id = "announce", label = T("Announcement", "Annonce") },
+			{ id = "citizen", label = T("Citizen", "Citoyen") },
+			{ id = "door", label = T("Door", "Porte"), kind = "toggle" },
+			{ id = "set_sentences", label = T("Native sentences", "Phrases natives"), client = true, native = true, setting = "native_sentences" },
+		},
+	},
+	farnear = {
+		num = "16", title = T("NEAR OR FAR", "PRÈS OU LOIN"),
+		listen = T("the same explosion near, then far.", "la même explosion de près, puis de loin."),
+		a = T("near: a sharp crack; far: a dull rumble (the game picks one channel of the file by distance).",
+			"de près : un claquement sec ; de loin : un grondement sourd (le jeu choisit un canal du fichier selon la distance)."),
+		b = T("the same: the engine plays them.", "pareil : c'est le moteur qui les joue."),
+		c = T("the same choice, made by the module; a loud shot keeps little reverb, as in the engine.",
+			"le même choix, fait par le module ; un tir fort garde peu de réverb, comme dans le moteur."),
+		try = T("Near, then far. Then switch 'Stereo channels' off: both mixed at any distance, the old muddled sound. Your buddy's .357 shows the stereo width. He has no ears left.",
+			"Près, puis loin. Puis coupez « Canaux stéréo » : les deux mélangés à toute distance, l'ancien son brouillé. Le .357 de votre voisin montre la largeur stéréo. Il n'a plus d'oreilles."),
+		note = T("Switches (mode C, in memory): Stereo channels = pba_native_stereo, Stereo width = pba_native_stereo_width, Loud sounds dry = pba_native_loud_dry (also in the hangar, indoors).",
+			"Bascules (mode C, en mémoire) : Canaux stéréo = pba_native_stereo, Largeur stéréo = pba_native_stereo_width, Sons forts secs = pba_native_loud_dry (aussi dans le hangar, en intérieur)."),
+		main = "boom_near",
+		buttons = {
+			{ id = "boom_near", label = T("Explosion near", "Explosion près") },
+			{ id = "boom_far", label = T("Explosion far", "Explosion loin") },
+			{ id = "sniper_near", label = T("Sniper near", "Sniper près") },
+			{ id = "sniper_far", label = T("Sniper far", "Sniper loin") },
+			{ id = "magnum", label = T(".357 next to you", ".357 à côté") },
+			{ id = "shots", label = T("Shots (300 u)", "Tirs (300 u)") },
+			{ id = "set_stereo", label = T("Stereo channels", "Canaux stéréo"), client = true, native = true, setting = "native_stereo" },
+			{ id = "set_width", label = T("Stereo width", "Largeur stéréo"), client = true, native = true, setting = "native_stereo_width" },
+			{ id = "set_dry", label = T("Loud sounds dry", "Sons forts secs"), client = true, native = true, setting = "native_loud_dry" },
+		},
+	},
+	loops = {
+		num = "17", title = T("LOOPS THAT MUST STOP", "LES BOUCLES QUI DOIVENT S'ARRÊTER"),
+		listen = T("the silence after each test: nothing may keep playing.", "le silence après chaque essai : rien ne doit continuer à jouer."),
+		a = T("everything stops when it should.", "tout s'arrête quand il faut."),
+		b = T("the same.", "pareil."),
+		c = T("the same (some of these loops used to play on for good).", "pareil (certaines de ces boucles jouaient sans fin)."),
+		try = T("Gravity gun: grab the crate, drop it, put the gun away. Then each button, one at a time. Nothing here is broken. Any more.",
+			"Gravity gun : attrapez la caisse, lâchez-la, rangez l'arme. Puis chaque bouton, un à la fois. Rien n'est cassé ici. Plus maintenant."),
+		note = T("Hidden hum: faded to silence behind the wall, it must stay silent. Slider: its rail rumbles while it moves, then stops. Far rotor: 130 dB, 7 000 u away, it must be heard. Start/Stop looping, FadeOut (3 s) and stopsound cut what PBA plays too.",
+			"Ronronnement caché : baissé jusqu'au silence derrière le mur, il doit rester muet. Glissière : son rail gronde pendant qu'il bouge, puis se tait. Rotor lointain : 130 dB à 7 000 u, il doit s'entendre. Start/Stop looping, FadeOut (3 s) et stopsound coupent aussi ce que joue PBA."),
+		buttons = {
+			{ id = "gravgun", label = T("Gravity gun + crate", "Gravity gun + caisse") },
+			{ id = "hidden", label = T("Hidden hum (fade)", "Ronron caché (fondu)") },
+			{ id = "slider", label = T("Slider", "Glissière") },
+			{ id = "rotor", label = T("Far rotor", "Rotor lointain"), kind = "toggle" },
+			{ id = "looping", label = T("Start/Stop looping", "Start/Stop looping"), kind = "toggle" },
+			{ id = "fadeout", label = T("FadeOut 3 s", "FadeOut 3 s") },
+			{ id = "stopsound", label = T("stopsound", "stopsound") },
+		},
+	},
+	slime = {
+		num = "18", title = T("WATER AND SLIME", "L'EAU ET LE SLIME"),
+		listen = T("the radio at the bottom of each basin.", "la radio au fond de chaque bassin."),
+		a = T("both play as if out of the water.", "les deux jouent comme hors de l'eau."),
+		b = T("both very muffled from the edge: slime is a liquid too.", "les deux très sourdes depuis le bord : le slime est un liquide aussi."),
+		c = T("the same; and with your head in either, the world above goes dull.", "pareil ; et la tête dedans, le monde du dessus devient sourd."),
+		try = T("Compare the two basins. Diving into the slime is not recommended by the health department.",
+			"Comparez les deux bassins. Plonger dans le slime est déconseillé par les services d'hygiène."),
+		main = "play",
+		buttons = {
+			{ id = "water", label = T("Water", "Eau"), kind = "select", group = "src" },
+			{ id = "slime", label = T("Slime", "Slime"), kind = "select", group = "src" },
+			{ id = "play", label = T("Play", "Écouter") },
+		},
+		defaults = { src = "water" },
+	},
 	exit = {
-		num = "15", title = T("THE END", "FIN DU PARCOURS"),
+		num = "19", title = T("THE END", "FIN DU PARCOURS"),
 		listen = T("what you keep from here.", "ce que vous gardez en partant."),
 		a = T("your usual game.", "votre jeu habituel."),
 		b = T("PBA Light: what the Workshop version gives you.", "PBA Light : ce que donne la version Workshop."),

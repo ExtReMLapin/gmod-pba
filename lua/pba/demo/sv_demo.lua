@@ -134,6 +134,7 @@ function DM.StopRoom(r)
 	end
 	st.emitted = {}
 	if st.stream then setStream(r, false) end
+	if DM.roomStop and DM.roomStop[r.id] then DM.roomStop[r.id](r, st) end
 	st.active = false
 end
 
@@ -439,6 +440,240 @@ for _, k in ipairs({ "diffuse_on", "diffuse_off" }) do
 	end
 end
 
+-- ------------------------------------------------------------------ rooms 15-18: today's fixes
+
+DM.roomStop = {}
+
+--- A sentence (DM.SENT[key]) said by an entity, or by the world at pos (EmitSentence: through
+-- EntityEmitSound as "!NAME", which PBA relays and, with pba_native_sentences, has the module assemble).
+local function sentence(r, key, ent, pos)
+	local name = DM.SENT[key]
+	if not name then return end
+	if IsValid(ent) then
+		EmitSentence(name, ent:WorldSpaceCenter(), ent:EntIndex(), CHAN_VOICE, 1, 80, 0, 100)
+		pos = ent:WorldSpaceCenter()
+	else
+		EmitSentence(name, pos, 0, CHAN_AUTO, 1, 80, 0, 100)
+	end
+	local occ = occupants(r)
+	if #occ > 0 then
+		net.Start(NET_EMIT)
+		net.WriteVector(pos)
+		net.WriteBool(false)
+		net.Send(occ)
+	end
+	state(r).active = true
+end
+
+--- The citizen of room 15: a real NPC (its face is a flex model: the lips follow the sentence it says,
+-- a prop_dynamic has none), spawned on first use, standing still (wait for script).
+local function citizen(r, st)
+	if IsValid(st.npc) then return st.npc end
+	local c = r.citizen
+	if not c then return end
+	local e = ents.Create("npc_citizen")
+	if not IsValid(e) then return end
+	e:SetPos(Vector(c[1], c[2], c[3] + 2))
+	e:SetAngles(Angle(0, c[4], 0))
+	e:SetKeyValue("spawnflags", "128")      -- SF_NPC_WAIT_FOR_SCRIPT: no wandering, no following
+	e:SetKeyValue("citizentype", "1")
+	e:Spawn()
+	e:Activate()
+	e.pba_demo = true
+	st.npc = e
+	st.props[#st.props + 1] = e
+	return e
+end
+
+H.sentences = {
+	radio = function(r) sentence(r, "radio", src(r, "radio")) end,
+	announce = function(r) sentence(r, "announce", nil, Vector(unpack(r.world_pos))) end,
+	citizen = function(r, st)
+		local e = citizen(r, st)
+		if not IsValid(e) then return end
+		-- just spawned: let the client create its model (flexes) before it speaks
+		timer.Simple(st.npcSpoke and 0 or 0.5, function() if IsValid(e) then sentence(r, "citizen", e) end end)
+		st.npcSpoke = true
+	end,
+	door = function(r) setDoor(doorEnt(r, "door"), "toggle") end,
+}
+
+-- room 16: near / far ("^" files), a .357 next to the player (")" stereo width), shots 300 u away
+local function burst(r, e)
+	local steps = {}
+	for i = 0, 2 do steps[#steps + 1] = { i * 0.9, function() emit(r, e, "shotgun", true) end } end
+	for i = 0, 4 do steps[#steps + 1] = { 3 + i * 0.1, function() emit(r, e, "ar2", true) end } end
+	sequence(r, steps)
+end
+H.farnear = {
+	boom_near = function(r) emit(r, src(r, "near"), "explosion", true) end,
+	boom_far = function(r) emit(r, src(r, "far"), "explosion", true) end,
+	sniper_near = function(r) emit(r, src(r, "near"), "sniper", true) end,
+	sniper_far = function(r) emit(r, src(r, "far"), "sniper", true) end,
+	magnum = function(r)
+		local e = src(r, "buddy")
+		sequence(r, { { 0, function() emit(r, e, "magnum", true) end }, { 1.5, function() emit(r, e, "magnum", true) end } })
+	end,
+	shots = function(r) burst(r, src(r, "shooter")) end,
+}
+
+-- room 17: loops that must stop
+local function stopPatch(st, key)
+	local p = st[key]
+	if p then p:Stop() end
+	st[key] = nil
+end
+
+--- A crate on a slide constraint along x, with a travel sound (phys_slideconstraint slidesoundfwd /
+-- back): the constraint plays it while the crate moves and destroys it in C++ when it stops.
+local function slider(r, st)
+	if IsValid(st.sliderCrate) then return st.sliderCrate end
+	local b0 = Vector(unpack(r.slider))
+	local a = ents.Create("prop_physics")
+	a:SetModel("models/props_c17/oildrum001.mdl")
+	a:SetName("pba_demo_slider_a")
+	a:SetPos(b0)
+	a:Spawn()
+	a:GetPhysicsObject():EnableMotion(false)
+	local b = ents.Create("prop_physics")
+	b:SetModel("models/props_junk/wood_crate001a.mdl")
+	b:SetName("pba_demo_slider_b")
+	b:SetPos(b0 + Vector(0, 0, 70))
+	b:Spawn()
+	b:GetPhysicsObject():EnableGravity(false)
+	local c = ents.Create("phys_slideconstraint")
+	c:SetKeyValue("attach1", "pba_demo_slider_a")
+	c:SetKeyValue("attach2", "pba_demo_slider_b")
+	c:SetKeyValue("slideaxis", tostring(b0 + Vector(100, 0, 70)))
+	c:SetKeyValue("slidesoundfwd", DM.SND.hum[1])
+	c:SetKeyValue("slidesoundback", DM.SND.hum[1])
+	c:SetKeyValue("minSoundThreshold", "6")
+	c:SetKeyValue("maxSoundThreshold", "80")
+	c:SetPos(b0 + Vector(0, 0, 70))
+	c:Spawn()
+	c:Activate()
+	for _, e in ipairs({ a, b, c }) do e.pba_demo = true st.props[#st.props + 1] = e end
+	st.sliderCrate = b
+	return b
+end
+
+--- A point 7 000 u west of the listening spot, inside the map (a 130 dB loop is still loud there for the
+-- engine: 100 * (130 - 50) = 8 000 u; PBA used to subscribe only the players within lod_dist, 6 000 u).
+local function farPoint(r)
+	local p = r.listenPos + Vector(-7000, 0, 100)
+	for _ = 1, 40 do
+		if bit.band(util.PointContents(p), CONTENTS_SOLID) == 0 then return p end
+		p = p + Vector(24, 0, 0)
+	end
+	return p
+end
+
+H.loops = {
+	gravgun = function(r, st, ply)
+		if IsValid(ply) then
+			ply:Give("weapon_physcannon")
+			ply:SelectWeapon("weapon_physcannon")
+		end
+		if IsValid(st.crate) then st.crate:Remove() end
+		local e = ents.Create("prop_physics") -- not pba_demo: the gravity gun may take it
+		e:SetModel("models/props_junk/wood_crate001a.mdl")
+		e:SetPos(Vector(unpack(r.crate)) + Vector(0, 0, 24))
+		e:Spawn()
+		st.crate = e
+		st.props[#st.props + 1] = e
+		st.active = true
+	end,
+	hidden = function(r, st)
+		stopPatch(st, "hum")
+		local e = src(r, "hidden")
+		if not IsValid(e) then return end
+		local p = CreateSound(e, DM.SND.hum[1])
+		p:SetSoundLevel(DM.SND.hum[2])
+		p:PlayEx(1, 100)
+		st.hum = p
+		st.active = true
+		-- the entity lowers its loop to silence without stopping it (a gravity gun let go, Volume 0)
+		sequence(r, { { 2.5, function() if st.hum == p then p:ChangeVolume(0, 1.5) end end },
+			{ 9, function() if st.hum == p then stopPatch(st, "hum") end end } })
+	end,
+	slider = function(r, st)
+		local b = slider(r, st)
+		if not IsValid(b) then return end
+		st.slideDir = -(st.slideDir or -1)
+		timer.Simple(0.1, function()
+			if not IsValid(b) then return end
+			local ph = b:GetPhysicsObject()
+			ph:EnableMotion(true)
+			ph:Wake()
+			ph:SetVelocity(Vector(220 * st.slideDir, 0, 0))
+			timer.Simple(0.9, function() if IsValid(ph) then ph:SetVelocity(vector_origin) ph:EnableMotion(false) end end)
+		end)
+		st.active = true
+	end,
+	rotor = function(r, st, ply, force)
+		if st.rotor and not force then stopPatch(st, "rotor") return end
+		stopPatch(st, "rotor")
+		if not IsValid(st.rotorEnt) then
+			local e = ents.Create("info_target")
+			e:SetPos(farPoint(r))
+			e:Spawn()
+			st.rotorEnt = e
+		end
+		local p = CreateSound(st.rotorEnt, DM.SND.rotor[1])
+		p:SetSoundLevel(DM.SND.rotor[2])
+		p:Play()
+		st.rotor = p
+		st.active = true
+	end,
+	looping = function(r, st)
+		local e = src(r, "speaker")
+		if not IsValid(e) then return end
+		if st.loopingId then
+			e:StopLoopingSound(st.loopingId)
+			st.loopingId = nil
+			return
+		end
+		st.loopingId = e:StartLoopingSound(DM.SND.alarm[1])
+		st.active = true
+	end,
+	fadeout = function(r, st)
+		stopPatch(st, "fade")
+		local e = src(r, "speaker")
+		if not IsValid(e) then return end
+		local p = CreateSound(e, DM.SND.hum[1])
+		p:SetSoundLevel(DM.SND.hum[2])
+		p:Play()
+		st.fade = p
+		st.active = true
+		sequence(r, { { 1.5, function() if st.fade == p then p:FadeOut(3) end end },
+			{ 5, function() if st.fade == p then st.fade = nil end end } })
+	end,
+	-- everything the room plays, then the player's stopsound (Player:ConCommand: PBA hears it)
+	stopsound = function(r, st, ply)
+		H.loops.hidden(r, st)
+		H.loops.fadeout(r, st)
+		if not st.loopingId then H.loops.looping(r, st) end
+		timer.Simple(1.2, function() if IsValid(ply) then ply:ConCommand("stopsound") end end)
+	end,
+}
+DM.roomStop.loops = function(r, st)
+	for _, k in ipairs({ "hum", "rotor", "fade" }) do stopPatch(st, k) end
+	local e = src(r, "speaker")
+	if st.loopingId and IsValid(e) then e:StopLoopingSound(st.loopingId) end
+	st.loopingId = nil
+end
+
+H.slime = {
+	play = function(r, st) emit(r, src(r, st.sel.src or "water"), "breen1") end,
+}
+for _, k in ipairs({ "water", "slime" }) do
+	H.slime[k] = function(r, st, ply)
+		st.sel.src = k
+		sendSel(r, "src", k)
+		H.slime.play(r, st, ply)
+	end
+end
+
 H.exit = {
 	restart = function(r, st, ply)
 		DM.ResetAll()
@@ -608,6 +843,7 @@ hook.Add("PostCleanupMap", "pba_demo", function()
 	for _, r in ipairs(DM.rooms) do
 		local st = state(r)
 		st.props, st.loop, st.stream, st.active, st.autostarted = {}, nil, nil, false, nil
+		st.hum, st.rotor, st.fade, st.loopingId, st.rotorEnt = nil, nil, nil, nil, nil
 		st.token = st.token + 1
 	end
 	timer.Simple(1, animateProps)
