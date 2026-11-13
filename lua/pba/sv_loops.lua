@@ -592,14 +592,10 @@ do
 	end
 end
 
---- Stops the mirror of `name` on entity e (and of the wave a sound script resolved it to).
+--- Stops the mirror of `name` on entity e (and of the wave a sound script resolved it to: LP.Stop reaches every
+-- wave of a script itself, A.StopFiles; one pass, not one more per wave).
 function LP.StopNamed(e, name)
-	local idx = e:EntIndex()
-	LP.Stop(idx, name)
-	local props = sound.GetProperties(name)
-	local w = props and props.sound
-	if isstring(w) then LP.Stop(idx, w)
-	elseif istable(w) then for _, x in ipairs(w) do LP.Stop(idx, x) end end
+	LP.Stop(e:EntIndex(), name)
 end
 
 -- Entity:StartLoopingSound (GMod): its start reaches EntityEmitSound, StopLoopingSound never does
