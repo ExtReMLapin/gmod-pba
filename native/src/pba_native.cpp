@@ -145,6 +145,12 @@ int g_simulatedGen[render::kEchoSlots] = {}; // last generation simulated per sl
 int g_srcSimulatedGen[render::kSrcSlotsMax] = {};
 IPLVector3 g_srcSimulatedPos[render::kSrcSlotsMax] = {};
 int g_srcSimulatedVer[render::kSrcSlotsMax] = {};
+// the slot's banks, as blended after the last slot pass, render a response for the current listener anchor
+// (its own, or the previous anchor's bridging it). False once the listener has walked two anchors away
+// while the slot was idle (nothing simulated since): a sound bound then would feed silent banks until the
+// slot's next pass (the first shot after walking had no source reverb at all), so SourceReflect makes it
+// wait for a new simulation instead (room-bus stand-in meanwhile, see render.cpp). Under g_stageMtx.
+bool g_srcReady[render::kSrcSlotsMax] = {};
 IPLCoordinateSpace3 g_stageLis{};
 bool g_stageLisOk = false;
 std::thread g_reflThread;
@@ -333,7 +339,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 	render::SrcSlotLive(sLive); // before g_stageMtx (lock order, see SourceReflect)
 	const int sceneVer = g_sceneVersion.load();
 	EchoSlot sl[render::kSrcSlotsMax];
-	bool act[render::kSrcSlotsMax] = {}, pend[render::kSrcSlotsMax] = {};
+	bool act[render::kSrcSlotsMax] = {}, pend[render::kSrcSlotsMax] = {}, waiting = false;
 	{
 		std::lock_guard<std::mutex> lk(g_stageMtx);
 		const double now = Now();
@@ -341,6 +347,8 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 			sl[k] = g_srcSlot[k];
 			act[k] = SrcActive(k, sLive, now) && sl[k].src;
 			pend[k] = act[k] && sl[k].gen > g_srcSimulatedGen[k];
+			// a sound waits for this slot and its banks hold nothing for it (see g_srcReady)
+			if (pend[k] && !g_srcReady[k]) waiting = true;
 		}
 	}
 	SrcAccum& A = g_acc;
@@ -368,7 +376,9 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 		g_srcAnchorDist = d;
 		if (d > R || sceneVer != A.anchorScene) {
 			const int o = 1 - A.cur;
-			if (render::SrcBankSilent(o)) {
+			// a sound waiting with nothing to render does not wait for the fade either: the bank still fading
+			// out is taken over at once (its other slots keep their response until they run again)
+			if (render::SrcBankSilent(o) || waiting) {
 				// the other bank is silent: it starts a fresh average at the new anchor, the current one
 				// becomes the partner it crossfades from. Slots beyond kSrcBankB restart in place.
 				A.cur = o;
@@ -385,6 +395,10 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 			} else {
 				A.retiring = true; // the blend below fades the other bank out
 			}
+		} else if (A.retiring) {
+			// back within the radius before the swap: the anchor stays. Left set, nothing would ever clear it
+			// (the swap needs the listener away again) and the slots, held while retiring, never ran again.
+			A.retiring = false;
 		}
 	}
 
@@ -493,6 +507,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 	// new anchor weighs 1/8 against a converged partner, K passes weigh all (the partner is the
 	// response of another point, up to R away: it only bridges the new average's first noisy passes).
 	const int K = std::max(1, g_srcAccumK.load());
+	bool ready[render::kSrcSlotsMax] = {};
 	for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 		const int c = bankOf(k), o = 1 - c;
 		if (A.retiring && k < render::kSrcBankB) {
@@ -500,17 +515,24 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 			// response (else silent until its run: it may still hold an older anchor's or place's)
 			const float wc = samePlace(c, k) ? 1.0f : 0.0f;
 			render::SetSrcBlend(k, c == 0 ? wc : 0.0f, c == 1 ? wc : 0.0f, false);
+			ready[k] = wc > 0;
 			continue;
 		}
 		const bool hasO = accum && k < render::kSrcBankB && samePlace(o, k) && A.n[o][k] > 0;
 		const int nc = samePlace(c, k) ? A.n[c][k] : 0;
-		if (nc == 0 && !hasO) continue; // nothing simulated here yet: unchanged
+		// nothing simulated here yet: unchanged (the weights left there may point at a bank since restarted)
+		if (nc == 0 && !hasO) continue;
+		ready[k] = true;
 		const float m = hasO ? (float)std::min(A.n[o][k], K) * std::max(0.0f, 1.0f - (float)nc / K) : 0.0f;
 		const float wc = nc > 0 ? (float)nc / ((float)nc + m) : 0.0f;
 		// a new place's first response has nothing to crossfade from (its voices waited for it); a bank
 		// restarted by a swap is not a new place: it crossfades from its partner
 		const bool snap = on[k] && newPlace[k] && !hasO;
 		render::SetSrcBlend(k, c == 0 ? wc : 1 - wc, c == 1 ? wc : 1 - wc, snap);
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		for (int k = 0; k < render::kSrcSlotsMax; ++k) g_srcReady[k] = ready[k];
 	}
 	g_srcCur = A.cur;
 	g_srcRetiring = A.retiring;
@@ -984,6 +1006,7 @@ bool EnsureSimulator() {
 				std::lock_guard<std::mutex> lk(g_stageMtx);
 				g_srcSimulatedGen[k] = 0;
 				g_srcSimulatedVer[k] = -1;
+				g_srcReady[k] = false;
 			}
 			if (!g_slotSim) continue;
 			if (iplSourceCreate(g_slotSim, &rs, &g_srcSlot[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlot[k].src, g_slotSim);
@@ -2039,7 +2062,8 @@ LUA_FUNCTION(SourceReflect) {
 			// kSrcNear: same response, refined by the next runs)
 			if (others(slot) == 0) e.pos = p;
 			const int sg = g_srcSimulatedGen[slot];
-			const bool fresh = sg > 0 && g_srcSimulatedVer[slot] == ver;
+			// a response simulated in this scene, still rendered for where the listener is (g_srcReady)
+			const bool fresh = sg > 0 && g_srcSimulatedVer[slot] == ver && g_srcReady[slot];
 			if (e.gen == 0 || d2(e.genPos, p) > kNear2) {
 				e.genPos = p;
 				e.gen++;
