@@ -293,6 +293,8 @@ local function muffle(m, S, L)
 	return math.min(g, 1), presetFor(lp, tunnel)
 end
 
+local MIRROR = A.Render.Strategy("mirror") -- (its two renderings, below applyNative)
+
 --- Native rendering of a loop: the module plays it (HRTF + EQ) at its apparent position
 -- (the opening it comes through, or the source itself) with the engine's distance law.
 local function applyNative(m, S, L)
@@ -342,21 +344,33 @@ local function applyNative(m, S, L)
 	el, em, eh, pitch = A.Render.Tail(el, em, eh, m.pitch, m.speaker, S, m.ent, L)
 	-- what this evaluation decided, for a quiet far loop to keep following its law (followQuiet)
 	m.lastEval = { d = d, gain = gain, el = el, em = em, eh = eh, pos = pos, pitch = m.pitch, send = send }
-	if m.nativeId then
-		if (A.cfg.continuous_ramp or 0) >= 0.5 then
-			-- glide to the new values over one interval (LP.FollowNative, every frame); the update
-			-- below sends what is heard now (unchanged) and checks the voice is still alive
-			local P, now = A.Paths, RealTime()
-			m.ramp = m.ramp or {}
-			P.RampTo(m.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, gain, el, em, eh, pos, pitch)
-			gain, el, em, eh, pos, pitch = P.RampAt(m.ramp, now, L)
-		else
-			m.ramp = nil
-		end
-		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil
-		else N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m) end
-		return
+	if m.nativeId then return MIRROR.native.update(m, S, L, gain, el, em, eh, pos, pitch, send) end
+	return A.Render.Switch(MIRROR, "native", m, S, L, gain, el, em, eh, pos, pitch, send, trans)
+end
+
+-- A mirror rendered as one of two strategies (refactor step 11, A.Render.Strategy): the module's voice
+-- (m.nativeId) or an engine patch (m.patch). native.update glides the voice to the evaluation's values,
+-- native.start plays it (nil: wait for the file's decoding, false: the engine renders it instead), native.stop
+-- hands it back; engine.start creates the patch, engine.update changes its volume and preset.
+MIRROR.native = {}
+function MIRROR.native.update(m, S, L, gain, el, em, eh, pos, pitch, send)
+	local N = A.Native
+	if (A.cfg.continuous_ramp or 0) >= 0.5 then
+		-- glide to the new values over one interval (LP.FollowNative, every frame); the update
+		-- below sends what is heard now (unchanged) and checks the voice is still alive
+		local P, now = A.Paths, RealTime()
+		m.ramp = m.ramp or {}
+		P.RampTo(m.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, gain, el, em, eh, pos, pitch)
+		gain, el, em, eh, pos, pitch = P.RampAt(m.ramp, now, L)
+	else
+		m.ramp = nil
 	end
+	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil
+	else N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m) end
+end
+
+function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
+	local N = A.Native
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
 	local ok, name, why = N.EnsureSound(m.name)
 	if not ok then
@@ -440,8 +454,7 @@ function apply(m, fade)
 	if m.nativeId and (not nativeOn or ownDSP(m)) then
 		-- mode or native rendering switched off (or pba_keep_dsp switched on for a loop with its own preset):
 		-- hand the loop back to the engine without a double
-		pba_native.StopVoice(m.nativeId)
-		m.nativeId = nil
+		MIRROR.native.stop(m)
 		if m.once then m.done = true return end -- a long one-shot cannot resume midway
 	end
 	-- a far sound's evaluation running in slices (cl_slicer): its values kept until it is ready (sliceReady);
@@ -473,19 +486,30 @@ function apply(m, fade)
 	local g, dsp = muffle(m, S, L)
 	if g == nil then return end
 	if onceEnded(m) then m.done = true return end
-	if not m.patch then
-		if m.once and m.started and not m.handBack then m.done = true return end
-		m.started = true
-		m.patch = LP.origCreateSound(ent, m.name)
-		A.reemitting = true
-		m.patch:SetSoundLevel(m.lvl)
-		m.patch:SetDSP(dsp)
-		m.patch:PlayEx(m.vol * g, m.pitch)
-		A.reemitting = false
-		A.NoteRendered(m.name, m.vol * g)
-		m.g, m.curDsp = g, dsp
-		return
-	end
+	if not m.patch then return MIRROR.engine.start(m, ent, g, dsp) end
+	MIRROR.engine.update(m, g, dsp, fade)
+end
+
+function MIRROR.native.stop(m)
+	pba_native.StopVoice(m.nativeId)
+	m.nativeId = nil
+end
+
+MIRROR.engine = {}
+function MIRROR.engine.start(m, ent, g, dsp)
+	if m.once and m.started and not m.handBack then m.done = true return end
+	m.started = true
+	m.patch = LP.origCreateSound(ent, m.name)
+	A.reemitting = true
+	m.patch:SetSoundLevel(m.lvl)
+	m.patch:SetDSP(dsp)
+	m.patch:PlayEx(m.vol * g, m.pitch)
+	A.reemitting = false
+	A.NoteRendered(m.name, m.vol * g)
+	m.g, m.curDsp = g, dsp
+end
+
+function MIRROR.engine.update(m, g, dsp, fade)
 	if math.abs(g - (m.g or 1)) > 0.01 then
 		A.reemitting = true -- the mirror's own change must not read as the original's (HandleClient)
 		m.patch:ChangeVolume(m.vol * g, fade or 0.2)

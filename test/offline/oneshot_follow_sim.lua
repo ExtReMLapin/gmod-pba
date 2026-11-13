@@ -30,9 +30,12 @@ SND_CHANGE_VOL, SND_CHANGE_PITCH, SND_STOP = 1, 2, 4
 RENDERGROUP_OTHER = 0
 vector_origin = Vector(0, 0, 0)
 local think
-hook.Add = function(ev, id, fn) if id == "pba_oneshots" then think = fn end end
-net = { Receive = function() end, Start = function() end, WriteUInt = function() end, SendToServer = function() end }
-local ENT = { StopSound = function() end }
+hook.Add = function(ev, id, fn) if id == "pba_sched" then think = fn end end -- (the one scheduler, cl_sched)
+net = { Receive = function() end, Start = function() end, WriteUInt = function() end, WriteBool = function() end, SendToServer = function() end }
+local ENT = { StopSound = function() end, ConCommand = function() end }
+RunConsoleCommand = function() end
+isstring = isstring or function(x) return type(x) == "string" end
+sound = sound or {}
 FindMetaTable = function() return ENT end
 LocalPlayer = function() return { IsValid = function() return true end } end
 ErrorNoHaltWithStack = function(e) error(e) end
@@ -62,16 +65,21 @@ A.Emit = function(fn, ...) A.reemitting = true fn(...) A.reemitting = false end
 A.PerfTimed = function(_, fn) return fn end
 A.DebugNote = function() end
 A.Report = function() end
+A.NoteRendered = A.NoteRendered or function() end
 A.ListenerPos = nil -- set per scenario
 A.cfg.update_interval, A.cfg.continuous_ramp, A.cfg.native_gain = 0.25, 1, 1
 A.cfg.max_active, A.cfg.max_anchors, A.cfg.delay, A.cfg.native_all = 24, 48, 0, 1
 A.cfg.oneshot_follow, A.cfg.oneshot_follow_max = 1, 16
 
 local function loadRender()
-	local f = assert(io.open(REPO .. "/lua/pba/cl_render.lua", "rb"))
-	local src = f:read("*a")
-	f:close()
-	assert(loadstring(src, "cl_render.lua"))()
+	-- (cl_render reads the scheduler's rules, A.Sched, and the shared rendering rules, A.Render: loaded first,
+	-- as pba_init does)
+	for _, name in ipairs({ "cl_sched.lua", "cl_renders.lua", "cl_render.lua" }) do
+		local f = assert(io.open(REPO .. "/lua/pba/" .. name, "rb"))
+		local src = f:read("*a")
+		f:close()
+		assert(loadstring(src, name))()
+	end
 end
 
 -- ------------------------------------------------------------------ scene

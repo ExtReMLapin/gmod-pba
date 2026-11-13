@@ -688,6 +688,48 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	return true
 end
 
+-- A followed one-shot's voice rendered as one of two strategies (refactor step 11, A.Render.Strategy): an
+-- engine copy (fv.a, an anchor's EmitSound) or a module voice (fv.id). update sends the ramp's values of now
+-- (false: the voice is gone), stop ends it; start of the module's is the switch from an engine copy at the
+-- same point of the sound (switchNative), the one change of strategy a voice makes (A.Render.Switch).
+local VOICE = A.Render.Strategy("oneshot")
+VOICE.native = {
+	start = switchNative,
+	update = function(rec, fv, now, L, g, e1, e2, e3, pos, pitch)
+		-- baked path field (native_path_fx): a voice played along its path kept its Play-time arrival
+		-- direction while the listener walked round the corner. Sent when it changes (a table: along the
+		-- new path; false: straight line at pos; nil: kept); diffuse and send (args 8, 9) nil: kept.
+		local want = (A.cfg.native_path_fx or 0) >= 0.5 and fv.sh or false
+		local sh = nil
+		if want ~= fv.shSent then sh, fv.shSent = want, want end
+		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch, nil, nil, sh) then return false end
+		if rec.S and A.Native then A.Native.ApplyStereo(fv.id, rec.name, rec.S:Distance(L), rec.dirEnt, rec.S, L, fv) end
+		return true
+	end,
+	stop = function(fv)
+		pba_native.StopVoice(fv.id)
+		OS.native[fv.id] = nil
+	end,
+}
+VOICE.engine = {
+	update = function(rec, fv, now, L, g, e1, e2, e3, pos, pitch)
+		local a = fv.a
+		a:SetPos(pos)
+		-- volume: steps of 0.5 dB at most along the ramp, exact at its end; never close to the end
+		local s = fv.sent or g
+		if rec.wav and now < fv.tEnd - MIN_LEFT and g > 0 and g ~= s
+			and (not fv.ramp.pending or math.abs(g - s) > 0.06 * math.max(g, s)) then
+			A.Emit(a.EmitSound, a, fv.name or rec.name, rec.lvl, rec.pitch, g, fv.chan, SND_CHANGE_VOL, fv.dsp)
+			fv.sent = g
+		end
+		return true
+	end,
+	stop = function(fv)
+		stopCopy(fv) -- its anchor freed, its registry entry ended
+	end,
+}
+local function VOICE_OF(fv) return fv.id and VOICE.native or VOICE.engine end
+
 local evaluate
 -- a followed one-shot's far evaluation is ready (cl_slicer): applied at once, if it still plays
 local function followReady(rec)
@@ -731,7 +773,7 @@ function evaluate(rec, now, L)
 			-- the tunnel choice this copy would need now, held near diffuse_dsp_at (clear sight: none)
 			if fv.a then fv.tunnel = AC.DiffuseHold(t.diffuse or 0, fv.tunnel, hystMargin()) end
 			fv.sh = t.sh or false -- its new path's baked field (none: straight line to its position)
-			if not (wantsNative(rec, fv, t, now) and switchNative(rec, fv, t, L, now, i == 1)) then
+			if not (wantsNative(rec, fv, t, now) and A.Render.Switch(VOICE, "native", rec, fv, t, L, now, i == 1)) then
 				P.RampTo(fv.ramp, now, dur, L, targetValues(rec, fv, t, L))
 			end
 		else
@@ -763,33 +805,10 @@ end
 local function applyVoice(rec, fv, now, L)
 	local g, e1, e2, e3, pos, pitch = A.Paths.RampAt(fv.ramp, now, L)
 	fv.pos = pos
-	if fv.id then
-		-- baked path field (native_path_fx): a voice played along its path kept its Play-time arrival
-		-- direction while the listener walked round the corner. Sent when it changes (a table: along the
-		-- new path; false: straight line at pos; nil: kept); diffuse and send (args 8, 9) nil: kept.
-		local want = (A.cfg.native_path_fx or 0) >= 0.5 and fv.sh or false
-		local sh = nil
-		if want ~= fv.shSent then sh, fv.shSent = want, want end
-		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch, nil, nil, sh) then fv.dead = true return end
-		if rec.S and A.Native then A.Native.ApplyStereo(fv.id, rec.name, rec.S:Distance(L), rec.dirEnt, rec.S, L, fv) end
-	else
-		local a = fv.a
-		a:SetPos(pos)
-		-- volume: steps of 0.5 dB at most along the ramp, exact at its end; never close to the end
-		local s = fv.sent or g
-		if rec.wav and now < fv.tEnd - MIN_LEFT and g > 0 and g ~= s
-			and (not fv.ramp.pending or math.abs(g - s) > 0.06 * math.max(g, s)) then
-			A.Emit(a.EmitSound, a, fv.name or rec.name, rec.lvl, rec.pitch, g, fv.chan, SND_CHANGE_VOL, fv.dsp)
-			fv.sent = g
-		end
-	end
+	local st = VOICE_OF(fv)
+	if not st.update(rec, fv, now, L, g, e1, e2, e3, pos, pitch) then fv.dead = true return end
 	if fv.fading and not fv.ramp.pending then
-		if fv.id then
-			pba_native.StopVoice(fv.id)
-			OS.native[fv.id] = nil
-		else
-			stopCopy(fv) -- its anchor freed, its registry entry ended
-		end
+		st.stop(fv)
 		fv.dead = true
 	end
 end
