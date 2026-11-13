@@ -119,6 +119,7 @@ A.CONFIG = {
 	native_echo     = { 0.25, 0, 4, "cl", "Echo level: reflections simulated for each loud sound (gunfire, explosions), heard in addition to the engine's sound. 0 = off." },
 	native_echo_lvl = { 95, 60, 160, "cl", "Minimum sound level (dB SNDLVL) for a sound to get simulated echoes." },
 	native_loud_dry = { 1, 0, 1, "cl", "Loud sounds stay dry, as in the engine: the reverb of a sound above dsp_db_min (95 dB) is lowered by dsp_db_mixdrop (0.1, -20 dB). Without it, gunfire in the open got as much reverb as direct sound (muddled)." },
+	native_volume_sfx = { 1, 0, 1, "cl", "Natively rendered sounds follow the game's Effects volume (volume_sfx), as the engine's sounds and other addons' streams do (GMod sets BASS's global volume to volume x volume_sfx). 0 = the master volume alone (lowering the effects left the module's sounds at full level)." },
 	native_echo_own = { 0, 0, 1, "cl", "Echoes on your own loud sounds too (your gunfire): the engine plays them, the module adds their reflections." },
 	native_bounces  = { 16, 4, 256, "cl", "Bounces per ray of the reverb simulation: enough to fill the simulated window, or reflective rooms (tile, metal) get a reverb time capped too short. Background thread CPU grows with it." },
 	native_rays     = { 2048, 256, 8192, "cl", "Rays per reflection simulation (quality vs CPU of the background thread). Changing it rebuilds the Steam Audio scene (a few seconds)." },

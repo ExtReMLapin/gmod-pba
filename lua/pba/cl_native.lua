@@ -1231,12 +1231,22 @@ function N.SyncDoors()
 end
 timer.Create("pba_native_doors", 0.1, 0, function() N.SyncDoors() end)
 
+--- Master volume of the module's output: volume x volume_sfx, what the engine applies to every sound it plays
+-- but voice chat (its channel mixing) and what GMod gives BASS's global stream volume, so other addons'
+-- streams too (gmod_audio SetGlobalVolume, measured). pba_native_volume_sfx 0: volume alone.
+local cvVolume, cvVolumeSfx = GetConVar("volume"), GetConVar("volume_sfx")
+function N.MasterVolume()
+	local m = cvVolume:GetFloat()
+	if (A.cfg.native_volume_sfx or 1) >= 0.5 and cvVolumeSfx then m = m * cvVolumeSfx:GetFloat() end
+	return m
+end
+
 hook.Add("Think", "pba_native_listener", function()
 	if not N.render then return end
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
 	local ang = ply:EyeAngles()
-	local master = GetConVar("volume"):GetFloat()
+	local master = N.MasterVolume()
 	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
 	local eL, eR
 	local L, vang = A.ListenerPos()
