@@ -31,3 +31,4 @@ test/phase0/
 dist/
 scenario_results.json
 test/battery_last.log
+native/build-test/

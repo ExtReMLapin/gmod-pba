@@ -184,7 +184,8 @@ local function applyNative(m, S, L)
 		else
 			m.ramp = nil
 		end
-		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil end
+		if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil
+		else N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m) end
 		return
 	end
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
@@ -196,8 +197,10 @@ local function applyNative(m, S, L)
 	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
 	m.started = true
 	m.nativeId = id > 0 and id or nil
+	m.stSel, m.stW = nil, nil
 	-- its source reverb slot at once (else only at the next evaluation)
 	if m.nativeId then
+		N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m)
 		m.srcNext = RealTime() + 0.3
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
 		if m.srcBound then pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, (trans or 0) * m.vol * A.cfg.native_gain) end
@@ -413,6 +416,7 @@ function LP.FollowNative(L)
 					-- clear sight: nothing through walls; the reverb is the slot's (no slot: the room at the gain)
 					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, m.srcBound and 0 or g)
 				end
+				N.ApplyStereo(m.nativeId, m.name, d, ent, S, L, m)
 			end
 			if ramp and ramp.pending then
 				local g, el, em, eh, pos, pitch = P.RampAt(ramp, now, L)

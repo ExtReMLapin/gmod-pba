@@ -96,6 +96,8 @@ function Build.native(panel)
 	dep(sld(panel, "Loudness", "native_gain", 2), R)
 	dep(chk(panel, "Air absorption", "native_air"), R)
 	dep(chk(panel, "Doppler effect", "native_doppler"), R)
+	dep(chk(panel, "Stereo files as Source (near / far channels)", "native_stereo"), R)
+	dep(sld(panel, "Stereo width near the source", "native_stereo_width", 2), R)
 	dep(sld(panel, "Weapon directivity", "native_dir", 2), R)
 
 	panel:Help("Reflections:")
