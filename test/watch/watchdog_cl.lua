@@ -9,6 +9,11 @@
 --   voice_step      a module voice's gain jumps > STEP_DB between two Update calls < 0.5 s apart
 --   louder_vanilla  a module loop at the listener > LOUD_DB above the engine's own law for its level
 --   voices_spike    the module plays more than VOICES_MAX voices
+--   dead_npc_loop   a mirror of an NPC's loop alive more than DEAD_S (1 s) after the NPC died (health <= 0): the game
+--                   switches a dying NPC's loops off at death (a shot manhack lingering with its engine on)
+--   vehicle_silent  the player drives an engine vehicle (airboat, jeep) for more than SILENT_S with no mirror
+--                   of any of its sounds (engine idle: always one while it runs; after a level transition the
+--                   engine's C++ emitted nothing)
 -- Mouth copies: pba drives a face's lip sync with a copy of the line at volume 0.001 on the face (cl_render
 -- mouthCopy; the engine reads visemes from the voice channels it plays on an entity, Lua cannot read them:
 -- GetFlexWeight stays 0 while a face talks, even in vanilla). They are recorded per entity for sweep.py to
@@ -23,6 +28,9 @@ W.mg = W.mg or {}               -- mirror key -> last gain
 local STEP_DB, LOUD_DB, VOICES_MAX, ONCE_MARGIN = 3, 6, 96, 3
 local JUMP_UNITS, JUMP_QUIET = 200, 1.5 -- a listener teleport (the sweeper's) changes paths for real: no step check right after
 local SAMPLES = 6
+local DEAD_S, SILENT_S = 1, 3
+local ENGINE_VEHICLES = { prop_vehicle_airboat = true, prop_vehicle_jeep = true, prop_vehicle_jeep_old = true }
+W.deadT = W.deadT or {}         -- mirror key -> CurTime() its NPC was first seen dead
 
 local function db(x) return 20 * math.log10(math.max(x, 1e-9)) end
 local function note(kind, key, sample)
@@ -133,6 +141,14 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 			note("mirror_step", name, { sound = name, fromG = math.Round(last, 3), toG = math.Round(g, 3), pos = m.pos and tostring(m.pos) or nil })
 		end
 		W.mg[key] = g
+		-- an NPC's loop playing on after its death
+		local e = m.ent
+		if IsValid(e) and e:IsNPC() and e:Health() <= 0 then
+			W.deadT[key] = W.deadT[key] or now
+			if now - W.deadT[key] > DEAD_S then
+				note("dead_npc_loop", key, { sound = name, class = e:GetClass(), since = math.Round(now - W.deadT[key], 1) })
+			end
+		end
 		-- census of loud sounds heard (report only: what the map played, for a human to compare with vanilla)
 		if (m.lvl or 0) >= 100 and m.pos and L then
 			W.census = W.census or {}
@@ -156,7 +172,20 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 			end
 		end
 	end
-	for k in pairs(W.seen) do if not alive[k] then W.seen[k] = nil W.mg[k] = nil end end
+	for k in pairs(W.seen) do if not alive[k] then W.seen[k] = nil W.mg[k] = nil W.deadT[k] = nil end end
+	-- a driven engine vehicle with no mirror of any of its sounds
+	local ply = LocalPlayer()
+	local veh = IsValid(ply) and ply:InVehicle() and ply:GetVehicle() or nil
+	if IsValid(veh) and ENGINE_VEHICLES[veh:GetClass()] then
+		local vi, any = veh:EntIndex(), false
+		for _, m in pairs(LP and LP.mirrors or {}) do if m.idx == vi then any = true break end end
+		if any then W.vehQuietT = nil else W.vehQuietT = W.vehQuietT or now end
+		if W.vehQuietT and now - W.vehQuietT > SILENT_S then
+			note("vehicle_silent", veh:GetClass(), { class = veh:GetClass(), since = math.Round(now - W.vehQuietT, 1), pos = tostring(veh:GetPos()) })
+		end
+	else
+		W.vehQuietT = nil
+	end
 	for k, names in pairs(byChan) do
 		local distinct = {}
 		for _, n in ipairs(names) do distinct[n] = true end
@@ -184,5 +213,5 @@ function W.Report(mouthFor)
 	out.census = util.TableToJSON(W.census or {})
 	return out
 end
-function W.Reset() W.anomalies = {} W.copies = {} W.seen = {} W.mg = {} end
+function W.Reset() W.anomalies = {} W.copies = {} W.seen = {} W.mg = {} W.deadT = {} W.vehQuietT = nil end
 return true
