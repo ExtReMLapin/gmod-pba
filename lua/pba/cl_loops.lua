@@ -209,6 +209,7 @@ local function applyNative(m, S, L)
 		m.srcNext = now + 0.3
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
 	end
+	m.appliedVol = m.vol -- (the volume the voice's values below carry: see the quiet shortcut in apply)
 	gain = gain * m.vol * A.cfg.native_gain
 	local send = N.SlotFadeSend(m, m.srcBound, (trans or 0) * m.vol * A.cfg.native_gain, gain)
 	m.roomSend = send
@@ -289,8 +290,12 @@ function apply(m, fade)
 		return
 	end
 	-- far and quiet (pba_quiet_db): a playing mirror keeps its last values, no new path search (handing
-	-- it to the engine's clear law would jump by the loss of its last routes)
-	if (m.patch or m.nativeId) and not sj and A.TooQuiet and A.TooQuiet(m.lvl, m.vol, S:Distance(L)) then
+	-- it to the engine's clear law would jump by the loss of its last routes). Not when the entity changed
+	-- the volume of a native voice since: faded to 0 (a gravity gun let go, an ambient_generic's Volume 0),
+	-- the new volume reads as "quiet" and the voice stayed at its old level for good. (A patch mirror gets
+	-- volume changes at once, from the update itself.)
+	if (m.patch or m.nativeId) and not sj and (not m.nativeId or m.appliedVol == m.vol)
+		and A.TooQuiet and A.TooQuiet(m.lvl, m.vol, S:Distance(L)) then
 		if m.patch and m.once and not m.patch:IsPlaying() then m.done = true end
 		return
 	end
