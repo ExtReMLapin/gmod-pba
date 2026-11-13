@@ -506,6 +506,13 @@ net.Receive("pba_loop", function()
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	m.vol, m.pitch = vol, pitch
+	-- a long line's start feeds the mixer's ducker as the short lines do (cl_render): a speech ducks the
+	-- other groups in the engine; without it a long line sounded quieter than the short ones around it,
+	-- the ambience left at full under it (pba_long_duck)
+	if op == OP_START and once and (A.cfg.long_duck or 1) >= 0.5 and A.Mix and A.Mix.NoteSound then
+		A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, EntIndex = idx }, A.ListenerPos(),
+			(A.SoundDuration(name) or 0) * 100 / math.max(pitch, 1))
+	end
 	if m.nativeId and op == OP_UPDATE then
 		if m.reeval then m.reeval.force = true end
 		return -- applied at the next tick
