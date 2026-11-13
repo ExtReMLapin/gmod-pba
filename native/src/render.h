@@ -130,6 +130,8 @@ std::vector<float> SoundPcm(const std::string& name);
 bool SetVoiceStereo(int id, float sel, float width);
 // decodes on a worker thread (large files); HasSound() turns true when ready. false if already pending.
 bool LoadSoundAsync(const std::string& name, std::string data);
+// decoding threads held (finished ones are dropped at the next LoadSoundAsync)
+int LoaderThreads();
 // Room reverb times (s, 3 bands, air-corrected) replacing the main simulator's estimate; nullptr = off.
 void SetRoomReverbOverride(const float* rt);
 void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory budget (LRU eviction)

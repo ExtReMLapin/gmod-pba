@@ -242,7 +242,13 @@ constexpr float kStereoSpread = 0.577f;
 std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet consumed
 size_t g_fifoPos = 0;
 std::unordered_set<std::string> g_pending; // under g_mtx
-std::vector<std::thread> g_loaders;       // joined at Stop (the DLL may be unloaded after)
+// decoding threads: joined at Stop (the DLL may be unloaded after); the finished ones are joined and dropped
+// at the next LoadSoundAsync (their handles piled up for the whole session)
+struct Loader {
+	std::thread t;
+	std::shared_ptr<std::atomic<bool>> done;
+};
+std::vector<Loader> g_loaders;
 std::mutex g_loadMtx;
 
 IPLSpeakerLayout Stereo() {
@@ -921,13 +927,18 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 }
 
 void JoinLoaders() {
-	std::vector<std::thread> ts;
+	std::vector<Loader> ts;
 	{
 		std::lock_guard<std::mutex> lk(g_loadMtx);
 		ts.swap(g_loaders);
 	}
-	for (auto& t : ts)
-		if (t.joinable()) t.join();
+	for (auto& l : ts)
+		if (l.t.joinable()) l.t.join();
+}
+
+int LoaderThreads() {
+	std::lock_guard<std::mutex> lk(g_loadMtx);
+	return (int)g_loaders.size();
 }
 
 void Stop() {
@@ -1186,12 +1197,26 @@ bool LoadSoundAsync(const std::string& name, std::string data) {
 		g_pending.insert(name);
 	}
 	std::lock_guard<std::mutex> lk(g_loadMtx);
-	g_loaders.emplace_back([name, data = std::move(data)]() {
+	for (size_t i = 0; i < g_loaders.size();) {
+		if (g_loaders[i].done->load()) {
+			if (g_loaders[i].t.joinable()) g_loaders[i].t.join(); // (finished: returns at once)
+			g_loaders[i] = std::move(g_loaders.back());
+			g_loaders.pop_back();
+		} else {
+			++i;
+		}
+	}
+	auto done = std::make_shared<std::atomic<bool>>(false);
+	std::thread t([name, data = std::move(data), done]() {
 		double secs = 0;
 		LoadSound(name, data.data(), data.size(), &secs); // inserts into g_sounds on success
-		std::lock_guard<std::mutex> lk2(g_mtx);
-		g_pending.erase(name);
+		{
+			std::lock_guard<std::mutex> lk2(g_mtx);
+			g_pending.erase(name);
+		}
+		done->store(true);
 	});
+	g_loaders.push_back(Loader{std::move(t), done});
 	return true;
 }
 
