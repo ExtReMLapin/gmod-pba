@@ -1,7 +1,10 @@
 -- Lip sync of a voice pba re-emits: a citizen speaks behind the glass cell of pba_materials (seen,
 -- heard through the glass). The client animates the mouth from the voices playing ON the entity; a
--- copy played on an anchor or by the native module leaves the mouth still. Server half: speaks twice,
--- pba off then on; the client half (lipsync_client.lua) has recorded the jaw opening of each phase.
+-- copy played on an anchor or by the native module leaves the mouth still, so pba plays the line on the
+-- speaker at an inaudible volume (cl_render mouthCopy, pba_lipsync). Server half: speaks twice, pba off then
+-- on; the client half (lipsync_client.lua) has counted the mouth copies of each phase. (The jaw opening once
+-- measured here proved nothing: GetFlexWeight reads the server's flexes, the AI's expressions; the lip sync
+-- is applied at render time on the client and Lua cannot read it.)
 -- lua_job, server realm, pba_materials. Returns { pass, taken = { vanilla, pba } }: the server's own share
 -- of the A/B: pass = the citizen was spawned and pba really took the line over behind the glass
 -- (relayed or re-emitted muffled: stats.relayed + stats.relayMuffled grow) with pba on, and nothing was
@@ -21,10 +24,11 @@ ply:SendLua([[pba._lip = { phase = "", max = {} }
 hook.Add("Think", "pba_test_lip", function()
 	local L = pba._lip
 	if L.phase == "" then return end
-	for _, e in ipairs(ents.FindByClass("npc_citizen")) do
-		local id = e:GetFlexIDByName("jaw_drop")
-		if id then L.max[L.phase] = math.max(L.max[L.phase] or 0, e:GetFlexWeight(id)) end
-	end
+	local n = pba.stats.mouthCopies or 0
+	L.mc0 = L.mc0 or {}
+	L.mc0[L.phase] = L.mc0[L.phase] or n
+	L.mc = L.mc or {}
+	L.mc[L.phase] = n - L.mc0[L.phase]
 end)]])
 local old = GetConVar("pba_enable"):GetString()
 local LINE = "vo/npc/male01/question06.wav"

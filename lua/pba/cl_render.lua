@@ -838,6 +838,25 @@ end
 
 --- Processes one sound. Returns true when pba took charge of it (the original must
 -- not be played), even if every voice ended up inaudible; false = play it as vanilla.
+-- Lip sync: the client moves a face from the voices the ENGINE plays on that entity (C_BaseFlex::ProcessVisemes
+-- reads MouthInfo's voice sources, attached by the engine's mixer with the line's phonemes). A voice pba plays
+-- itself (native module, a copy elsewhere) leaves the mouth still: the same line plays on the speaker at a
+-- volume nobody hears (-60 dB; 0 could be culled by the mixer), on the same voice channel (a later line cuts it
+-- as it cuts the original).
+local MOUTH_VOL = 0.001
+local function mouthCopy(data, src)
+	if (A.cfg.lipsync or 1) < 0.5 or not IsValid(src) or src:IsWorld() then return end
+	local ch = data.Channel
+	if ch ~= CHAN_VOICE and ch ~= CHAN_VOICE2 then return end
+	if (src.GetFlexNum and src:GetFlexNum() or 0) == 0 then return end
+	local name = data.SoundName or ""
+	if name == "" or string.sub(name, 1, 1) == "!" then return end -- (a sentence: a list of waves, no single line)
+	A.reemitting = true
+	src:EmitSound(name, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch)
+	A.reemitting = false
+	A.stats.mouthCopies = (A.stats.mouthCopies or 0) + 1
+end
+
 function A.Process(data, relayed)
 	local L, ang = listenerPos()
 	local S = data.Pos
@@ -875,11 +894,14 @@ function A.Process(data, relayed)
 			unregister(idx, h)
 			if h.cancelled then return end
 			h.cancelled = true -- (the placeholder's part is over)
-			if not res or not finish(d, relayed, idx, copies, S, L, ang, src, res, RealTime() - tReq, SysTime()) then vanilla(d) end
+			if not res or not finish(d, relayed, idx, copies, S, L, ang, src, res, RealTime() - tReq, SysTime()) then vanilla(d)
+			else mouthCopy(d, src) end
 		end
 		return true
 	end
-	return finish(data, relayed, idx, copies, S, L, ang, src, r, 0, t0)
+	local taken = finish(data, relayed, idx, copies, S, L, ang, src, r, 0, t0)
+	if taken then mouthCopy(data, src) end
+	return taken
 end
 
 --- The rest of A.Process once the sound's evaluation r is there: its voices emitted (waited: seconds since
