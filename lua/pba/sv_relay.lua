@@ -137,24 +137,11 @@ local function writeSound(data, pos, id, full, echoOnly)
 	net.WriteBool(full)
 	net.WriteBool(echoOnly or false)
 	if full then net.WriteString(data.SoundName) end
-	net.WriteVector(pos)
-	net.WriteUInt(math.Clamp(math.floor(data.SoundLevel or 75), 0, 511), 9)
-	net.WriteUInt(math.Clamp(math.floor(data.Pitch or 100), 0, 255), 8)
-	net.WriteUInt(math.Clamp(math.Round((data.Volume or 1) * 255), 0, 255), 8)
-	net.WriteInt(data.Channel or CHAN_AUTO, 10) -- CHAN_REPLACE (-1) to user channels (up to 255)
-	net.WriteUInt(data.Flags or 0, 16)
-	net.WriteUInt(math.Clamp(math.floor(data.DSP or 0), 0, 255), 8)
+	-- the common body (sh_core A.WriteSound, as pba_loop's)
 	local e = data.Entity
-	net.WriteUInt(IsValid(e) and e:EntIndex() or 0, 16)
-	-- its own start time (SoundTime: the shots of a weapon fired between two network updates, each at
-	-- its tick), in ms modulo 65.536 s: the client keeps their spacing (cl_render A.SoundTimeDelay)
-	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
-	net.WriteBool(st ~= 0)
-	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
-	-- a line on a face (a voice channel of an entity with flexes): the client may not have that entity yet
-	-- (never in its view) and could not tell; it still gives it its mouth copy, by index (cl_render mouthCopy)
-	local ch = data.Channel
-	net.WriteBool((ch == CHAN_VOICE or ch == CHAN_VOICE2) and IsValid(e) and not e:IsWorld() and (e.GetFlexNum and e:GetFlexNum() or 0) > 0)
+	A.WriteSound({ pos = pos, lvl = data.SoundLevel, pitch = data.Pitch, vol = data.Volume, chan = data.Channel,
+		flags = data.Flags, dsp = data.DSP, idx = IsValid(e) and e:EntIndex() or 0, st = data.SoundTime,
+		face = A.OnFace(e, data.Channel) })
 end
 
 A.stats = A.stats or { seen = 0, relayed = 0, untouched = 0 }

@@ -1215,16 +1215,13 @@ net.Receive(NET, function()
 	else
 		name = A.dict[id]
 	end
-	local data = {
-		SoundName = name, Pos = net.ReadVector(), SoundLevel = net.ReadUInt(9),
-		Pitch = net.ReadUInt(8), Volume = net.ReadUInt(8) / 255, Channel = net.ReadInt(10),
-		Flags = net.ReadUInt(16), DSP = net.ReadUInt(8), EntIndex = net.ReadUInt(16),
-	}
-	if net.ReadBool() then
-		local d = A.SoundTimeDelay(net.ReadUInt(16), RealTime())
+	local data = A.ReadSound() -- (the common body, sh_core; Face: a line on a face, mouthCopy)
+	data.SoundName = name
+	if data.stMs then
+		local d = A.SoundTimeDelay(data.stMs, RealTime())
 		if d > 0 then data.Delay = d end
+		data.stMs = nil
 	end
-	data.Face = net.ReadBool() -- a line on a face (sv_relay writeSound): mouthCopy
 	if not name then return end -- id never received (lost first packets): drop
 	if A.Native and A.Native.render and A.Enabled() then
 		local lp = LocalPlayer()

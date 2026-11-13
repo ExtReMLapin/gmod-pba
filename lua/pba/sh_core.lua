@@ -101,6 +101,47 @@ function A.PlayEnd(name, pitch, t0, grace)
 	return s and (t0 or RealTime()) + s + (grace or 0) or nil
 end
 
+-- ------------------------------------------------------------------ net format of a sound
+-- One body for every sound the server sends (pba_snd relays, sv_relay; pba_loop mirrors, sv_loops): position,
+-- level, pitch, volume, channel, flags (SND_SPEAKER...), DSP, entity, its own start time (SoundTime) and the
+-- face bit. A relay's body is about 20 bytes (relay_net: a whole pba_snd within 30).
+
+--- True for a line on a face: a voice channel of an entity with flexes (the client may not have that entity
+-- yet, never in its view, and could not tell; it gives it its mouth copy by index).
+function A.OnFace(e, chan)
+	return (chan == CHAN_VOICE or chan == CHAN_VOICE2) and IsValid(e) and not e:IsWorld()
+		and (e.GetFlexNum and e:GetFlexNum() or 0) > 0
+end
+
+--- Writes a sound's body. s: { pos, lvl, pitch, vol, chan, flags, dsp, idx, st (SoundTime, 0/nil none), face }.
+function A.WriteSound(s)
+	net.WriteVector(s.pos)
+	net.WriteUInt(math.Clamp(math.floor(s.lvl or 75), 0, 511), 9)
+	net.WriteUInt(math.Clamp(math.floor(s.pitch or 100), 0, 255), 8)
+	net.WriteUInt(math.Clamp(math.Round((s.vol or 1) * 255), 0, 255), 8)
+	net.WriteInt(s.chan or CHAN_AUTO, 10) -- CHAN_REPLACE (-1) to user channels (up to 255)
+	net.WriteUInt(s.flags or 0, 16)
+	net.WriteUInt(math.Clamp(math.floor(s.dsp or 0), 0, 255), 8)
+	net.WriteUInt(s.idx or 0, 16)
+	-- its own start time (SoundTime: the shots of a weapon fired between two network updates, each at
+	-- its tick), in ms modulo 65.536 s: the client keeps their spacing (cl_render A.SoundTimeDelay)
+	local st = (A.cfg.soundtime or 1) >= 0.5 and s.st or 0
+	net.WriteBool(st ~= 0)
+	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
+	net.WriteBool(s.face or false)
+end
+
+--- Reads a body written by A.WriteSound, as EntityEmitSound data (+ stMs: its SoundTime in ms modulo 65536,
+-- nil when none; Face).
+function A.ReadSound()
+	local d = {
+		Pos = net.ReadVector(), SoundLevel = net.ReadUInt(9), Pitch = net.ReadUInt(8), Volume = net.ReadUInt(8) / 255,
+		Channel = net.ReadInt(10), Flags = net.ReadUInt(16), DSP = net.ReadUInt(8), EntIndex = net.ReadUInt(16),
+	}
+	if net.ReadBool() then d.stMs = net.ReadUInt(16) end
+	d.Face = net.ReadBool()
+	return d
+end
 
 --- Entity index and channel of a new sound the channel rule applies to (nil otherwise).
 local function ruleSlot(data)

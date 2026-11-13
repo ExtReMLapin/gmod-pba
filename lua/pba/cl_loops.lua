@@ -617,11 +617,11 @@ net.Receive("pba_loop", function()
 		if m then stopMirror(m) LP.mirrors[key] = nil end
 		return
 	end
-	local name, idx, pos = net.ReadString(), net.ReadUInt(16), net.ReadVector()
-	local vol, pitch, lvl, dsp = net.ReadUInt(8) / 255, net.ReadUInt(8), net.ReadUInt(9), net.ReadUInt(8)
+	local name = net.ReadString()
+	local d = A.ReadSound() -- (the common body, sh_core: as pba_snd's)
 	local once = net.ReadBool()
-	local speaker = net.ReadBool()
-	local chan = net.ReadInt(10)
+	local idx, pos, vol, pitch, lvl, dsp, chan = d.EntIndex, d.Pos, d.Volume, d.Pitch, d.SoundLevel, d.DSP, d.Channel
+	local speaker = bit.band(d.Flags, SND_SPEAKER or 64) ~= 0
 	local m = LP.mirrors[key]
 	if op == OP_START and m then stopMirror(m) m = nil end
 	-- a change of a long one-shot whose mirror already ended here: it must not start it again from its top
