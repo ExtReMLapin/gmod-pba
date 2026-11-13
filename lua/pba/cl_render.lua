@@ -870,6 +870,25 @@ local function mouthCopy(data, src)
 	A.stats.mouthCopies = (A.stats.mouthCopies or 0) + 1
 end
 
+--- A client-side sound beyond lod_dist (no path search) behind a wall (pba_far_muffle): the cheap muffle in
+-- its own data (DSP preset, the walls' loss; P.MuffleFor) for the hook to return true. It was heard through
+-- the wall as in plain sight. True when it changed the data.
+function A.FarMuffle(data, pos)
+	if (A.cfg.far_muffle or 0) < 0.5 then return false end
+	local L = listenerPos()
+	if not L or pos:DistToSqr(L) <= A.cfg.lod_dist * A.cfg.lod_dist then return false end
+	local P = A.Paths
+	local src = data.Entity
+	local walls = P.Walls(pos, L, 1, P.SourceObject(pos, IsValid(src) and src or nil))
+	if #walls == 0 then return false end
+	local dsp, gain = P.MuffleFor(walls)
+	-- a "#" (dry mix) sound gets no DSP from the engine: the same file without it
+	if dsp > 0 then data.SoundName, data.DSP = A.WithoutDryMix(data.SoundName), dsp end
+	data.Volume = (data.Volume or 1) * gain
+	A.stats.farMuffled = (A.stats.farMuffled or 0) + 1
+	return true
+end
+
 function A.Process(data, relayed)
 	local L, ang = listenerPos()
 	local S = data.Pos
@@ -1067,6 +1086,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if own then return end -- own sounds: always clear (the engine plays them)
 	data.Pos = pos
 	if A.Process(data, false) then return false end
+	if A.FarMuffle(data, pos) then return true end
 end))
 
 -- relayed server sounds: always played by us (the server suppressed the original)

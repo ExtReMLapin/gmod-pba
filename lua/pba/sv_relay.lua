@@ -244,25 +244,8 @@ local function echoToken(ply)
 	return takeToken(ply, "pba_echoBucket", A.cfg.relay_rate or 80, "echoCapped")
 end
 
--- Most a budget-miss fallback lowers a sound (dB). The walls found by the server trace give the loss
--- straight through them, which is the quietest the client could render: its paths may go round
--- (gunfire in the next room heard through an open door ~15 dB down, while the concrete between is
--- 46 dB). Taking the full wall loss would make that gunfire vanish on a budget miss; 24 dB keeps it
--- audible while removing most of the jump towards the relayed render.
-local FALLBACK_MAX_DB = 24
--- Without a usable transmission estimate (no wall entry): a documented conservative cut.
-local FALLBACK_DEFAULT_DB = 12
-
---- Engine muffling for a blocked player over budget: DSP preset and volume factor from the walls the
--- server's own trace found (A.Paths.EvalWalls: low-frequency transmission loss and the material's
--- low-pass level). Example: a pistol behind 16 u of concrete -> lp 4 (preset dsp_lp4) and -24 dB.
-local function muffleFor(walls)
-	local ok, loss, lp = pcall(A.Paths.EvalWalls, walls)
-	if not ok or not loss then loss, lp = FALLBACK_DEFAULT_DB, 4 end
-	-- the strongest preset when the model gives none (a grate is lp 0: its loss is ~0 dB too)
-	local dsp = A.AC.DSPForLevel(lp or 4)
-	return dsp, A.AC.DbToGain(-math.min(loss, FALLBACK_MAX_DB))
-end
+--- Engine muffling for a blocked player over budget (P.MuffleFor): DSP preset and volume factor.
+local function muffleFor(walls) return A.Paths.MuffleFor(walls) end
 
 --- Re-emits the original sound, through the engine, to `plys` only (A.Emit: our hook lets it pass).
 local function reemit(data, pos, lvl, plys, name, vol, dsp)
@@ -319,6 +302,8 @@ local function relay(data)
 	-- player the engine would have sent it to must get it back. A 140 dB explosion is heard to 9000 u;
 	-- a player at 7000 u (beyond lod_dist 6000) lost it as soon as one player near it was behind a wall.
 	local radius = audibleRadius(lvl)
+	-- the object the sound comes from (an impact on the world inside its object): not its own wall
+	local srcObj = A.Paths.SourceObject(pos, data.Entity)
 	local lod = A.cfg.lod_dist
 	local predicted = GetPredictionPlayer()
 	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
@@ -340,16 +325,25 @@ local function relay(data)
 			local d2 = eye:DistToSqr(pos)
 			if d2 <= radius * radius then
 				if d2 > lod * lod then
-					far[#far + 1] = ply
+					-- too far for a path search: the cheap muffle of an over-budget player when the line is
+					-- blocked (pba_far_muffle; it was heard through the wall as in plain sight)
+					local walls = (A.cfg.far_muffle or 0) >= 0.5 and A.Paths.Walls(pos, eye, 1, srcObj) or nil
+					if walls and #walls > 0 then
+						local dsp, gain = muffleFor(walls)
+						muffled[#muffled + 1] = { ply = ply, dsp = dsp, gain = gain }
+						A.stats.farMuffled = (A.stats.farMuffled or 0) + 1
+					else
+						far[#far + 1] = ply
+					end
 				else
 					local all = A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1
-					local walls = not all and A.Paths.Walls(pos, eye, 1, data.Entity) or nil
+					local walls = not all and A.Paths.Walls(pos, eye, 1, srcObj) or nil
 					if (all or #walls > 0) and relayToken(ply) then
 						blocked[#blocked + 1] = ply
 					else
 						-- over budget (or a clear line): the wall test decides, a native-all player
 						-- over budget included (his relay was not conditioned on a wall)
-						walls = walls or A.Paths.Walls(pos, eye, 1, data.Entity)
+						walls = walls or A.Paths.Walls(pos, eye, 1, srcObj)
 						if #walls > 0 then
 							local dsp, gain = muffleFor(walls)
 							muffled[#muffled + 1] = { ply = ply, dsp = dsp, gain = gain }

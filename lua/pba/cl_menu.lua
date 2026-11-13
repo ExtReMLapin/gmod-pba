@@ -166,6 +166,8 @@ function Build.server(panel)
 	chk(panel, "Long sounds (music)", "long_sounds")
 	chk(panel, "NPC sentences (Combine radio)", "sentences")
 	chk(panel, "Water muffles sound", "water")
+	chk(panel, "Impacts come from their object", "source_object")
+	chk(panel, "Far sounds muffled behind walls", "far_muffle")
 	chk(panel, "Merge paths", "merge")
 	chk(panel, "Debug overlay for all", "allow_debug")
 

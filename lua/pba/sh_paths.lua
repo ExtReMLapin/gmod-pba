@@ -453,6 +453,42 @@ end
 
 P.HasDisplacements = mapHasDisplacements
 
+--- The object a sound comes from: srcEnt itself, or for a sound played on the world (srcEnt nil or the
+-- world) at a point inside an object, that object (pba_source_object). The engine plays impacts, breaks and
+-- debris on the world at the physics object's origin (vphysics_sound.h): traced from there, the object was
+-- its own wall (in plain sight, 20 to 70 dB and a relay for every impact). One point trace, entities only.
+local srcObjOut = {}
+local srcObjTr = { mask = MASK_SOLID, ignoreworld = true, output = srcObjOut }
+function P.SourceObject(S, srcEnt)
+	if IsValid(srcEnt) and not srcEnt:IsWorld() then return srcEnt end
+	if (A.cfg.source_object or 1) < 0.5 or not S then return srcEnt end
+	srcObjTr.start, srcObjTr.endpos = S, S
+	util.TraceLine(srcObjTr)
+	local e = srcObjOut.Entity
+	if srcObjOut.StartSolid and IsValid(e) and not e:IsWorld() then return e end
+	return srcEnt
+end
+
+-- Most a budget-miss fallback lowers a sound (dB). The walls found by the server trace give the loss
+-- straight through them, which is the quietest the client could render: its paths may go round
+-- (gunfire in the next room heard through an open door ~15 dB down, while the concrete between is
+-- 46 dB). Taking the full wall loss would make that gunfire vanish on a budget miss; 24 dB keeps it
+-- audible while removing most of the jump towards the relayed render.
+local FALLBACK_MAX_DB = 24
+-- Without a usable transmission estimate (no wall entry): a documented conservative cut.
+local FALLBACK_DEFAULT_DB = 12
+
+--- Engine muffling of a sound without a path search (a relay's player over budget, a sound beyond lod_dist):
+-- DSP preset and volume factor from the walls one trace found (A.Paths.EvalWalls: low-frequency transmission loss and the material's
+-- low-pass level). Example: a pistol behind 16 u of concrete -> lp 4 (preset dsp_lp4) and -24 dB.
+function P.MuffleFor(walls)
+	local ok, loss, lp = pcall(P.EvalWalls, walls)
+	if not ok or not loss then loss, lp = FALLBACK_DEFAULT_DB, 4 end
+	-- the strongest preset when the model gives none (a grate is lp 0: its loss is ~0 dB too)
+	local dsp = A.AC.DSPForLevel(lp or 4)
+	return dsp, A.AC.DbToGain(-math.min(loss, FALLBACK_MAX_DB))
+end
+
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
 -- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
 function P.Walls(S, L, maxWalls, srcEnt, lazy)
@@ -2684,6 +2720,7 @@ local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a s
 local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
+	srcEnt = P.SourceObject(S, srcEnt)
 	S = P.FreeSource(S)
 	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt)
 	local now = RealTime()
