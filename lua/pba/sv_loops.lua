@@ -421,16 +421,55 @@ do
 	end
 	local function ended(p)
 		local i = LP.patchInfo[p]
-		if not (i and IsValid(i.ent)) then return end
-		LP.Stop(i.ent:EntIndex(), i.name)
-		-- the mirror carries the wave a sound script resolved to
-		local props = sound.GetProperties(i.name)
-		local w = props and props.sound
-		if isstring(w) then LP.Stop(i.ent:EntIndex(), w)
-		elseif istable(w) then for _, x in ipairs(w) do LP.Stop(i.ent:EntIndex(), x) end end
+		if i and IsValid(i.ent) then LP.StopNamed(i.ent, i.name) end
 	end
 	function PATCH:Stop() LP.origPatch.Stop(self) ended(self) end
-	function PATCH:FadeOut(t) LP.origPatch.FadeOut(self, t) ended(self) end
+	-- the fade's volume steps reach the hook and carry the mirror down: it stops when the engine
+	-- shuts the patch down at the end (Play again meanwhile: still playing, kept)
+	function PATCH:FadeOut(t)
+		LP.origPatch.FadeOut(self, t)
+		if not (isnumber(t) and t > 0) then ended(self) return end
+		timer.Simple(t + 0.1, function() if not self:IsPlaying() then ended(self) end end)
+	end
+end
+
+--- Stops the mirror of `name` on entity e (and of the wave a sound script resolved it to).
+function LP.StopNamed(e, name)
+	local idx = e:EntIndex()
+	LP.Stop(idx, name)
+	local props = sound.GetProperties(name)
+	local w = props and props.sound
+	if isstring(w) then LP.Stop(idx, w)
+	elseif istable(w) then for _, x in ipairs(w) do LP.Stop(idx, x) end end
+end
+
+-- Entity:StartLoopingSound (GMod): its start reaches EntityEmitSound, StopLoopingSound never does
+do
+	local ENT = FindMetaTable("Entity")
+	LP.origLooping = LP.origLooping or {}
+	for _, k in ipairs({ "StartLoopingSound", "StopLoopingSound" }) do
+		local f = ENT[k]
+		if not LP.origLooping[k] and f and debug.getinfo(f, "S").what == "C" then LP.origLooping[k] = f end
+	end
+	LP.loopingIds = LP.loopingIds or setmetatable({}, { __mode = "k" }) -- entity -> { id -> name }
+	if LP.origLooping.StartLoopingSound and LP.origLooping.StopLoopingSound then
+		function ENT:StartLoopingSound(name)
+			local id = LP.origLooping.StartLoopingSound(self, name)
+			if id then
+				LP.loopingIds[self] = LP.loopingIds[self] or {}
+				LP.loopingIds[self][id] = name
+			end
+			return id
+		end
+		function ENT:StopLoopingSound(id)
+			LP.origLooping.StopLoopingSound(self, id)
+			local t = LP.loopingIds[self]
+			local name = t and t[id]
+			if not name then return end
+			t[id] = nil
+			if IsValid(self) then LP.StopNamed(self, name) end
+		end
+	end
 end
 
 --- A moving brush at rest (no linear nor angular velocity): its movement loop is over.

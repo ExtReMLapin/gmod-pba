@@ -35,10 +35,52 @@ do
 		if i and IsValid(i.ent) and LP.StopClient then LP.StopClient(i.ent:EntIndex(), nil, i.name, p) end
 	end
 	function PATCH:Stop() LP.origPatch.Stop(self) ended(self) end
-	function PATCH:FadeOut(t) LP.origPatch.FadeOut(self, t) ended(self) end
+	-- the fade's volume steps reach the hook and carry the mirror down: it stops when the engine
+	-- shuts the patch down at the end (Play again meanwhile: still playing, kept)
+	function PATCH:FadeOut(t)
+		LP.origPatch.FadeOut(self, t)
+		if not (isnumber(t) and t > 0) then ended(self) return end
+		timer.Simple(t + 0.1, function() if not self:IsPlaying() then ended(self) end end)
+	end
 	-- the patch being started right now: its start event comes synchronously from these calls
 	function PATCH:Play() LP.playing = self LP.origPatch.Play(self) LP.playing = nil end
 	function PATCH:PlayEx(v, p) LP.playing = self LP.origPatch.PlayEx(self, v, p) LP.playing = nil end
+end
+
+-- Entity:StartLoopingSound (GMod) on the client: a loop with no patch; a token stands for it (started
+-- as a registered patch, so its mirror is made) and StopLoopingSound stops that mirror
+do
+	local ENT = FindMetaTable("Entity")
+	LP.origLooping = LP.origLooping or {}
+	for _, k in ipairs({ "StartLoopingSound", "StopLoopingSound" }) do
+		local f = ENT[k]
+		if not LP.origLooping[k] and f and debug.getinfo(f, "S").what == "C" then LP.origLooping[k] = f end
+	end
+	LP.loopingIds = LP.loopingIds or setmetatable({}, { __mode = "k" }) -- entity -> { id -> token }
+	if LP.origLooping.StartLoopingSound and LP.origLooping.StopLoopingSound then
+		function ENT:StartLoopingSound(name)
+			local tok = {}
+			LP.patchInfo[tok] = { ent = self, name = name }
+			LP.playing = tok
+			local ok, id = pcall(LP.origLooping.StartLoopingSound, self, name)
+			LP.playing = nil
+			if not ok then error(id, 2) end
+			if id then
+				LP.loopingIds[self] = LP.loopingIds[self] or {}
+				LP.loopingIds[self][id] = tok
+			end
+			return id
+		end
+		function ENT:StopLoopingSound(id)
+			LP.origLooping.StopLoopingSound(self, id)
+			local t = LP.loopingIds[self]
+			local tok = t and t[id]
+			if not tok then return end
+			t[id] = nil
+			local i = LP.patchInfo[tok]
+			if i and IsValid(self) and LP.StopClient then LP.StopClient(self:EntIndex(), nil, i.name, tok) end
+		end
+	end
 end
 
 --- The registered client patch starting `name` on entity e right now, if any.
