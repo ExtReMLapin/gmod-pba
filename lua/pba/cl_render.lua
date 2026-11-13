@@ -1128,6 +1128,14 @@ end
 -- relayed server sounds: always played by us (the server suppressed the original)
 A.dict = A.dict or {}
 local pendingAcks = {}
+-- the server relays sounds to this player only once his pba client runs (sv_relay clientReady): told now
+-- (this file loads after the player entity exists: on join, and again on a Lua refresh)
+local function sayReady()
+	net.Start("pba_ready")
+	net.SendToServer()
+end
+if IsValid(LocalPlayer()) then sayReady() end
+hook.Add("InitPostEntity", "pba_ready", sayReady)
 timer.Create("pba_ack", 0.2, 0, function()
 	if #pendingAcks == 0 then return end
 	net.Start("pba_snd_ack")

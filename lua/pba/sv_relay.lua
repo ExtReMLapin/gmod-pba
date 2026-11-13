@@ -11,6 +11,16 @@ util.AddNetworkString(NET_ACK)
 util.AddNetworkString("pba_snd_stop")
 util.AddNetworkString("pba_caption")
 util.AddNetworkString("pba_stopall")
+util.AddNetworkString("pba_ready")
+
+-- A player whose pba client runs says so (cl_render, "pba_ready"). One who has not (still joining, or
+-- pba's client Lua broken on his side) would lose every relayed sound: nothing would play it. He is
+-- treated as a player too far for a path search (the engine plays the original for him, muffled by one
+-- trace behind a wall). pba_relay_ready 0: every player gets relays (before).
+net.Receive("pba_ready", function(_, ply) ply.pba_ready = true end)
+local function clientReady(ply)
+	return ply.pba_ready == true or (A.cfg.relay_ready or 1) < 0.5
+end
 
 -- Player:ConCommand("stopsound") from the server (a common way addons silence a player): it runs in his
 -- engine, never in his Lua; he is told so his client stops pba's sounds as well
@@ -399,7 +409,7 @@ local function relay(data)
 			local eye = A.PlayerEar(ply)
 			local d2 = eye:DistToSqr(pos)
 			if d2 <= radius * radius then
-				if d2 > lod * lod then
+				if d2 > lod * lod or not clientReady(ply) then
 					-- too far for a path search: the cheap muffle of an over-budget player when the line is
 					-- blocked (pba_far_muffle; it was heard through the wall as in plain sight)
 					local walls = (A.cfg.far_muffle or 0) >= 0.5 and A.Paths.Walls(pos, eye, 1, srcObj) or nil
