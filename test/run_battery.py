@@ -201,6 +201,43 @@ def volume_sfx_step():
     finally:
         call("console_exec", {"realm": "menu", "cmd": f"volume_sfx {was}"})
 
+def soundtime(reemit=False):
+    """SoundTime kept (audit A-P2-1). The host runs at fps_max 8, so the listen server runs ~8 ticks per frame
+    and a bot's SMG (75 ms cadence) sends 2 shots in one packet. Relayed (reemit False): the client's
+    scheduled starts keep 75 ms (soundtime_probe / _fire / _check). Re-emitted muffled by the engine
+    (reemit True: the host's relay budget kept empty, so every shot falls back): snd_show 2 prints the delay the engine got
+    for each; two shots of one packet must get delays >= 40 ms apart (0 and 0 before the fix)."""
+    load(TW)
+    native_on(True)
+    fps = lua("client", "return GetConVarString('fps_max')") or "0"
+    call("console_exec", {"realm": "menu", "cmd": "fps_max 8"})
+    time.sleep(1)
+    try:
+        if not reemit:
+            job("client", "soundtime_probe.lua")
+            job("server", "soundtime_fire.lua")
+            return job("client", "soundtime_check.lua")
+        cheats()
+        call("console_exec", {"realm": "menu", "cmd": "developer 1"})
+        call("console_exec", {"realm": "menu", "cmd": "snd_show 2"})
+        lua("server", "pba_soundtime_drain = true return true")
+        cur = call("console_read", {"limit": 1}).get("next_cursor", 0)
+        fired = job("server", "soundtime_fire.lua")
+        lines = call("console_read", {"cursor": cur, "regex": "smg1_fire", "limit": 500}).get("lines", [])
+        packets = {}
+        for ln in lines:
+            m = re.search(r"time ([\d.]+) \((-?[\d.]+) delay\)", ln.get("text", ""))
+            if m:
+                packets.setdefault(m.group(1), []).append(float(m.group(2)))
+        pairs = [sorted(d) for d in packets.values() if len(d) >= 2]
+        gaps = [round((d[i] - d[i - 1]) * 1000) for d in pairs for i in range(1, len(d))]
+        return {"pass": len(gaps) >= 2 and min(gaps) >= 40, "fired": fired, "lines": len(lines), "gapsMs": gaps}
+    finally:
+        call("console_exec", {"realm": "menu", "cmd": f"fps_max {fps}"})
+        if reemit:
+            call("console_exec", {"realm": "menu", "cmd": "snd_show 0"})
+            call("console_exec", {"realm": "menu", "cmd": "developer 0"})
+
 def seq(*fns):
     """Runs the setters then the test (last), returns the test's result."""
     out = None
@@ -244,6 +281,10 @@ steps = [
     ("lifecycle", lambda: py("lifecycle.py")),
     # engine-rendered block (pba_native_render 0)
     ("bot_gunfire", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "bot_gunfire.lua"))),
+    ("soundtime_relay", lambda: soundtime(False)),
+    ("soundtime_reemit", lambda: soundtime(True)),
+    ("mp_own_sounds", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "mp_own_sounds.lua"))),
+    ("predicted_others", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "predicted_others.lua"))),
     ("bot_footsteps", lambda: seq(lambda: load(TW), lambda: job("server", "bot_footsteps.lua"))),
     # special sounds: a sentence (metrocop radio) behind a wall is relayed and played muffled by the
     # client (EmitSentence), not left to the engine through the wall; pba_sentences 0: not relayed
@@ -568,7 +609,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state

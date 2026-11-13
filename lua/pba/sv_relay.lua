@@ -127,6 +127,11 @@ local function writeSound(data, pos, id, full, echoOnly)
 	net.WriteUInt(math.Clamp(math.floor(data.DSP or 0), 0, 255), 8)
 	local e = data.Entity
 	net.WriteUInt(IsValid(e) and e:EntIndex() or 0, 16)
+	-- its own start time (SoundTime: the shots of a weapon fired between two network updates, each at
+	-- its tick), in ms modulo 65.536 s: the client keeps their spacing (cl_render A.SoundTimeDelay)
+	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
+	net.WriteBool(st ~= 0)
+	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
 end
 
 A.stats = A.stats or { seen = 0, relayed = 0, untouched = 0 }
@@ -248,15 +253,20 @@ end
 local function muffleFor(walls) return A.Paths.MuffleFor(walls) end
 
 --- Re-emits the original sound, through the engine, to `plys` only (A.Emit: our hook lets it pass).
+-- Its own start time (SoundTime) goes with it: EmitSound takes none, our hook puts it back on the
+-- re-emission (A.reemitTime), so the engine spaces two shots of one update as it would the original.
 local function reemit(data, pos, lvl, plys, name, vol, dsp)
 	local f = RecipientFilter()
 	f:AddPlayers(plys)
 	local e = data.Entity
+	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
+	A.reemitTime = st ~= 0 and st or nil
 	if IsValid(e) and not e:IsWorld() then
 		A.Emit(A.orig.EntEmitSound, e, name, lvl, data.Pitch, vol, data.Channel, data.Flags, dsp, f)
 	else
 		A.Emit(A.orig.EmitSound, name, pos, 0, data.Channel, vol, lvl, data.Flags, data.Pitch, dsp, f)
 	end
+	A.reemitTime = nil
 end
 
 -- Footsteps of other players: the engine sends the server's footstep only to the players of the PAS
@@ -313,6 +323,17 @@ local function stepper(data)
 	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then return e end
 end
 
+--- True when entity e's sound, made during `predicted`'s command, is one his client predicts itself: the
+-- engine leaves him out of it (the suppressed host of a filter using prediction rules: what he and what he
+-- holds emit in shared code). Another entity's sound made during his command (an NPC his bullet hits, a
+-- window it breaks) is sent to him as to anyone.
+local function predictedBy(e, predicted)
+	if not IsValid(predicted) then return false end
+	if (A.cfg.predicted_exact or 1) < 0.5 then return true end
+	if not IsValid(e) then return false end
+	return e == predicted or e:GetOwner() == predicted
+end
+
 local relayedTo -- the players the current sound was relayed to (relay, below)
 local function relay(data)
 	A.stats.seen = A.stats.seen + 1
@@ -351,6 +372,11 @@ local function relay(data)
 	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
 	-- client never sees them (no echoes on his own gunfire). They are his own: clear, as on the client
 	local sp = game.SinglePlayer()
+	-- multiplayer: the sounds the server plays on a player outside his command (pain, fall damage, his
+	-- suit) are his own too; those of his command go to nobody (his client predicts them, below)
+	local ownMP = not sp and (A.cfg.mp_own or 1) >= 0.5
+	-- the player whose command made the sound, when his client predicts it (nobody otherwise)
+	local skip = not sp and predictedBy(data.Entity, predicted) and predicted or nil
 	local step = not sp and stepper(data)
 	-- clear: original re-emitted unchanged; blocked: relayed; muffled: blocked but over the relay
 	-- budget, re-emitted muffled by the engine; far: beyond lod_dist, too far to process (unchanged)
@@ -360,9 +386,9 @@ local function relay(data)
 	-- clients rendering every sound natively (userinfo pba_native_all_want) get the relay
 	-- even with a clear line: their module plays the sound instead of the engine
 	for _, ply in ipairs(player.GetHumans()) do
-		if sp and ply == predicted and data.Entity == ply then
+		if (sp and ply == predicted or ownMP and ply ~= skip) and data.Entity == ply then
 			clear[#clear + 1] = ply
-		elseif (sp or ply ~= predicted) and not (step and ply ~= step and ply:TestPVS(step)) then
+		elseif ply ~= skip and not (step and ply ~= step and ply:TestPVS(step)) then
 			local eye = A.PlayerEar(ply)
 			local d2 = eye:DistToSqr(pos)
 			if d2 <= radius * radius then
@@ -486,7 +512,12 @@ local function relay(data)
 end
 
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
-	if A.reemitting or A.explicitFilter then return end
+	if A.reemitting then
+		-- pba's re-emission: the original's start time put back (reemit)
+		if A.reemitTime then data.SoundTime = A.reemitTime return true end
+		return
+	end
+	if A.explicitFilter then return end
 	relayedTo = nil
 	local ret = relay(data)
 	relayChannelCut(data, relayedTo)
