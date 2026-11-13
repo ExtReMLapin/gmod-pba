@@ -227,6 +227,7 @@ DWORD HandleOf(void* obj, DWORD expectFreq, bool expect3D, BASS_CHANNELINFO* inf
 
 } // namespace
 
+#ifdef _WIN32
 // Fx record of a validated channel, created (without any DSP) if needed. Lock held by the caller.
 static Fx* RecordOf(DWORD h, const BASS_CHANNELINFO& info) {
 	auto it = g_fx.find(h);
@@ -243,6 +244,7 @@ static Fx* RecordOf(DWORD h, const BASS_CHANNELINFO& info) {
 	g_fx.emplace(h, std::move(fx));
 	return raw;
 }
+#endif
 
 std::shared_ptr<StreamBuf> Capture(void* obj, unsigned freq, bool is3D, bool on, std::string* err) {
 #ifdef _WIN32

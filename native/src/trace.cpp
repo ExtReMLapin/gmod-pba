@@ -10,7 +10,9 @@
 #include "GarrysMod/Lua/Interface.h"
 
 #include <cstring>
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 using namespace GarrysMod::Lua;
 
@@ -161,6 +163,14 @@ bool InitStaticProps(CreateInterfaceFn ci) {
 // Init() -> true, staticProps | false, err. staticProps: the traces hit static props as util.Trace*
 // does (false: static prop manager missing or failing its check, world only)
 LUA_FUNCTION(Init) {
+#ifndef _WIN32
+	// (the interface is read from engine.dll's exports and its x64 vtables, checked on Windows only: the Lua
+	// keeps util.TraceLine elsewhere)
+	g_err = "native traces: Windows only";
+	LUA->PushBool(false);
+	LUA->PushString(g_err);
+	return 2;
+#else
 	HMODULE eng = GetModuleHandleA("engine.dll");
 	if (!eng) { g_err = "engine.dll not loaded"; LUA->PushBool(false); LUA->PushString(g_err); return 2; }
 	auto ci = reinterpret_cast<CreateInterfaceFn>(GetProcAddress(eng, "CreateInterface"));
@@ -172,6 +182,7 @@ LUA_FUNCTION(Init) {
 	LUA->PushBool(true);
 	LUA->PushBool(InitStaticProps(ci));
 	return 2;
+#endif
 }
 
 // SetLayout(rayLayout, traceRayIndex, pointContentsIndex, filterMode): experiments only.
