@@ -591,7 +591,9 @@ local function targetValues(rec, fv, t, L)
 		-- Doppler of a moving source or listener, as loops and clear voices (N.UpdateFollowers) have it
 		local el, em, eh = N.VoiceEQ(t.lp, t.len, t.lpDb)
 		local pitch
-		el, em, eh, pitch = A.Render.Tail(el, em, eh, rec.pitch, nil, rec.S, rec.ent, L)
+		-- a speaker's EQ, as at emission (pba_native_speaker_follow)
+		local spk = rec.speaker and (A.cfg.native_speaker_follow or 1) >= 0.5
+		el, em, eh, pitch = A.Render.Tail(el, em, eh, rec.pitch, spk, rec.S, rec.ent, L)
 		local g = rec.vol * N.PhysPath(t.gain, t.len, rec.lvl, t.rawLossDb) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim)
 		-- a speaking face's loudest voice keeps its floor while followed (pba_speech_floor_db)
 		if rec.speech and fv == rec.voices[1] then g = math.max(g, speechFloorAt(rec.vol, rec.S, L, rec.lvl)) end
@@ -813,7 +815,8 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 		clearPath = r.clear or not r.voices or #r.voices == 0, ukey = ukey,
 		-- volume changes need a trusted end (see MIN_LEFT): never for a sound of unknown length
 		wav = not ukey and string.lower(string.GetExtensionFromFilename(name) or "") == "wav", voices = {},
-		speech = speechFloor(data, src, L) ~= nil or nil } -- (pba_speech_floor_db: its loudest voice kept above the floor)
+		speech = speechFloor(data, src, L) ~= nil or nil, -- (pba_speech_floor_db: its loudest voice kept above the floor)
+		speaker = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 or nil } -- (N.SPEAKER_EQ kept while followed)
 	A.Paths.Stable(rec.hyst, r) -- the hysteresis starts from what was emitted
 	local N = A.Native
 	for _, e in ipairs(list) do
@@ -821,6 +824,10 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 		fv.tEnd, fv.pos, fv.ramp = fv.t0 + play, v.epos or v.pos, {}
 		if fv.id then
 			local el, em, eh = N.VoiceEQ(v.lp, v.len, v.lpDb)
+			-- the ramp starts from what was played: a speaker's EQ included (pba_native_speaker_follow)
+			if rec.speaker and (A.cfg.native_speaker_follow or 1) >= 0.5 then
+				el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3]
+			end
 			A.Paths.RampTo(fv.ramp, now, 0, L, v.vol * A.cfg.native_gain, el, em, eh, v.pos, rec.pitch)
 			OS.native[fv.id] = fv
 			-- the path field it was played with (PlayVoice passes it only with native_path_fx)
