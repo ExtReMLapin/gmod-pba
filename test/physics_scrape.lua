@@ -11,14 +11,18 @@ if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return { pass = fals
 ply:SetPos(Vector(256, 256, 0))
 job:sleep(0.5)
 local seen, emitted = {}, {}
+local lastV -- volume of the last original scrape event (the one pba is handling when it re-emits)
 hook.Add("EntityEmitSound", "!pba_test_scrape", function(t)
-	if string.find(t.SoundName, "scrape", 1, true) then seen[#seen + 1] = { f = t.Flags or 0, v = t.Volume } end
+	if string.find(t.SoundName, "scrape", 1, true) then
+		seen[#seen + 1] = { f = t.Flags or 0, v = t.Volume }
+		if not A.reemitting then lastV = t.Volume end
+	end
 end)
 local origEmit = A.Emit
 A.Emit = function(fn, ...)
 	local a = { ... }
 	if fn == A.orig.EntEmitSound and isstring(a[2]) and string.find(a[2], "scrape", 1, true) then
-		emitted[#emitted + 1] = { vol = a[5], flags = a[7], dsp = a[8] }
+		emitted[#emitted + 1] = { vol = a[5], flags = a[7], dsp = a[8], src = lastV }
 	end
 	return origEmit(fn, ...)
 end
@@ -40,7 +44,8 @@ local res = { checks = {}, seen = #seen, emitted = emitted[1] }
 res.checks.scraped = #seen > 0
 local muffled, flagsKept = 0, true
 for _, x in ipairs(emitted) do
-	if (x.dsp or 0) > 0 and (x.vol or 1) < 0.99 * (seen[1] and seen[1].v or 1) then muffled = muffled + 1 end
+	-- against the event it was re-emitted for (the friction volume changes from one event to the next)
+	if (x.dsp or 0) > 0 and (x.vol or 1) < 0.99 * (x.src or 1) then muffled = muffled + 1 end
 	if bit.band(x.flags or 0, SND_CHANGE_VOL) == 0 then flagsKept = false end
 end
 res.checks.muffled = muffled > 0

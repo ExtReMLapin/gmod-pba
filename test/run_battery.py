@@ -80,6 +80,10 @@ def load(m, mp=4):
     st = call("status", {})
     if st.get("map") != m:
         raise RuntimeError(f"map {m} not loaded (current: {st.get('map')})")
+    # a step that killed the host (mp_own_sounds' fall damage, a bot spawned on him: soundtime) leaves him
+    # dead: SetPos then moves nothing and the client listens from the death camera. Respawned here.
+    if lua("server", "local n = 0 for _, p in ipairs(player.GetHumans()) do if not p:Alive() then p:Spawn() n = n + 1 end end return n"):
+        wait_lua("client", "return IsValid(LocalPlayer()) and LocalPlayer():Alive()", 5)
     return "ok"
 
 def fresh(m, mp=4):
