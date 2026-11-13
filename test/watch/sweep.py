@@ -1,7 +1,7 @@
 """Campaign sweeper: plays maps' scripted content under the pba anomaly watchdog and reports anomalies.
 
 Usage: MCP_INSTANCE=<id> python -I -u sweep.py <path to mcp.py> map [map ...] [--secs=240] [--idle=20]
-        [--dwell=3] [--set=pba_x=v,pba_y=w] [--tag=name] [--precl=client_file.lua]
+        [--dwell=3] [--set=pba_x=v,pba_y=w] [--tag=name] [--precl=client_file.lua] [--presv=server_file.lua]
         [--spots=x,y,z;x,y,z --spotwait=30]
 Per map: load it (singleplayer), load watchdog_sv.lua / watchdog_cl.lua into the instance, god mode, wait
 --idle s at the spawn (scenes and speakers that run from map start), then walk the player through the
@@ -104,7 +104,7 @@ def mouth_check(speech, copies, delay_on, enabled):
             continue
         ts = copies.get(str(ev["idx"])) or []
         if not any(ev["t"] - 0.05 <= t <= ev["t"] + 1 + lag for t in ts):
-            found["mouth_missing"].append({"class": ev["class"], "name": ev["name"], "dist": ev["dist"], "t": ev["t"], "pos": ev.get("pos")})
+            found["mouth_missing"].append({"class": ev["class"], "name": ev["name"], "dist": ev["dist"], "t": ev["t"], "pos": ev.get("pos"), "via": ev.get("via")})
     return found
 
 
@@ -182,6 +182,8 @@ def sweep(m):
     lua_file("client", os.path.join(HERE, "watchdog_cl.lua"))
     if opts.get("precl"):  # validation: a client file run after the watchdog (e.g. re-creating a fixed bug)
         lua_file("client", opts["precl"])
+    if opts.get("presv"):  # the same on the server (e.g. a branch's server file over the loaded one)
+        lua_file("server", opts["presv"])
     lua("server", "local p = Entity(1) if IsValid(p) then p:GodEnable() end return true")
     info = lua("server", TRIGGERS)  # (a Lua table without keys comes back as a list)
     info = info if isinstance(info, dict) else {}

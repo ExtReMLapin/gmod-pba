@@ -71,11 +71,21 @@ if pba_native and not pba_native.pbaWatchWrapped then
 	end
 end
 
-local function onSound(data)
-	if data and data.Volume and data.Volume <= 0.002 and (data.Channel == CHAN_VOICE or data.Channel == CHAN_VOICE2) and IsValid(data.Entity) then
-		local i = data.Entity:EntIndex()
-		W.copies[i] = W.copies[i] or {}
-		table.insert(W.copies[i], math.Round(CurTime(), 2))
+-- Every sound the client's engine plays on a face's voice channel drives its mouth: pba's mouth copies
+-- (volume 0.001) and pba's own engine playback of a relayed line (cl_render vanilla(): the module could not
+-- play it yet, e.g. a large file still loading) alike. Counted once the pba handler let it through. A mouth
+-- copy for a speaker this client does not have (by index, pba_lipsync_unseen) has a NULL Entity in the hook:
+-- pba tells it through pba.OnMouthCopy.
+local function addCopy(i)
+	W.copies[i] = W.copies[i] or {}
+	table.insert(W.copies[i], math.Round(CurTime(), 2))
+end
+if pba then pba.OnMouthCopy = addCopy end
+local function onSound(data, ret)
+	local A = pba
+	local ours = A and A.reemitting or (data and (data.Volume or 1) <= 0.002)
+	if data and ret ~= false and ours and (data.Channel == CHAN_VOICE or data.Channel == CHAN_VOICE2) and IsValid(data.Entity) then
+		addCopy(data.Entity:EntIndex()) -- (a copy noted twice, here and by OnMouthCopy: same timestamps)
 	end
 end
 local function wrapHook()
@@ -88,7 +98,7 @@ local function wrapHook()
 	if fn == W.wrapped then return end
 	hook.Remove("EntityEmitSound", "pba_watch")
 	W.orig = fn
-	W.wrapped = function(data) pcall(onSound, data) return W.orig(data) end
+	W.wrapped = function(data) local ret = W.orig(data) pcall(onSound, data, ret) return ret end
 	hook.Add("EntityEmitSound", "pba", W.wrapped)
 end
 wrapHook()

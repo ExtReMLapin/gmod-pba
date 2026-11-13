@@ -64,7 +64,16 @@ local function wrap()
 	W.wrapped = function(data)
 		local n0 = #W.speech
 		pcall(observe, data)
+		local s = pba and pba.stats or {}
+		local r0, u0, m0, f0, l0 = s.relayed or 0, s.untouched or 0, s.relayMuffled or 0, s.farMuffled or 0, s.mouthLong or 0
 		local ret = W.orig(data)
+		-- the path pba took for a new speech event (what to look at when its mouth is missing)
+		local nev = #W.speech > n0 and W.speech[#W.speech]
+		if nev and not pba.reemitting then
+			nev.via = string.format("ret=%s relayed=%d untouched=%d muffled=%d far=%d mouthLong=%d flags=%d",
+				tostring(ret), (s.relayed or 0) - r0, (s.untouched or 0) - u0, (s.relayMuffled or 0) - m0,
+				(s.farMuffled or 0) - f0, (s.mouthLong or 0) - l0, data.Flags or 0)
+		end
 		-- the engine plays this call on the face unless pba suppressed it
 		if ret ~= false then
 			local e = data.Entity

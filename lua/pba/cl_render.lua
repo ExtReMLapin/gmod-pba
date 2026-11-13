@@ -868,23 +868,37 @@ end
 -- itself (native module, a copy elsewhere) leaves the mouth still: the same line plays on the speaker at a
 -- volume nobody hears (-60 dB; 0 could be culled by the mixer), on the same voice channel (a later line cuts it
 -- as it cuts the original).
+-- A speaker this client does not have (never in its view since it joined: out of the PVS, behind a closed
+-- areaportal) gets its copy all the same, by entity index, when the server says the line is on a face
+-- (data.Face): the engine keeps the channel under that index as it keeps the original's in vanilla, and the
+-- face that comes into view during the line moves its mouth (pba_lipsync_unseen).
 local MOUTH_VOL = 0.001
 local function mouthCopy(data, src)
-	if (A.cfg.lipsync or 1) < 0.5 or not IsValid(src) or src:IsWorld() then return end
+	if (A.cfg.lipsync or 1) < 0.5 then return end
 	local ch = data.Channel
 	if ch ~= CHAN_VOICE and ch ~= CHAN_VOICE2 then return end
-	if (src.GetFlexNum and src:GetFlexNum() or 0) == 0 then return end
+	local idx, pos
+	if IsValid(src) then
+		if src:IsWorld() or (src.GetFlexNum and src:GetFlexNum() or 0) == 0 then return end
+		idx, pos = src:EntIndex(), src:GetPos()
+	else
+		if not data.Face or (A.cfg.lipsync_unseen or 1) < 0.5 or (data.EntIndex or 0) <= 0 or not data.Pos then return end
+		idx, pos = data.EntIndex, data.Pos
+	end
 	local name = data.SoundName or ""
 	if name == "" then return end
 	A.reemitting = true
 	if A.IsSentence(name) then
 		-- a sentence: the engine's sentence mixer drives the mouth word by word (played on the speaker)
-		EmitSentence(string.sub(name, 2), src:GetPos(), src:EntIndex(), ch, MOUTH_VOL, data.SoundLevel or 75, 0, data.Pitch or 100)
-	else
+		EmitSentence(string.sub(name, 2), pos, idx, ch, MOUTH_VOL, data.SoundLevel or 75, 0, data.Pitch or 100)
+	elseif IsValid(src) then
 		src:EmitSound(name, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch)
+	else
+		EmitSound(name, pos, idx, ch, MOUTH_VOL, data.SoundLevel or 75, 0, data.Pitch or 100)
 	end
 	A.reemitting = false
 	A.stats.mouthCopies = (A.stats.mouthCopies or 0) + 1
+	if A.OnMouthCopy then A.OnMouthCopy(idx) end -- (test watchdog: copies by index, the entity may be NULL here)
 end
 
 --- A client-side sound beyond lod_dist (no path search) behind a wall (pba_far_muffle): the cheap muffle in
@@ -1177,6 +1191,7 @@ net.Receive(NET, function()
 		local d = A.SoundTimeDelay(net.ReadUInt(16), RealTime())
 		if d > 0 then data.Delay = d end
 	end
+	data.Face = net.ReadBool() -- a line on a face (sv_relay writeSound): mouthCopy
 	if not name then return end -- id never received (lost first packets): drop
 	if A.Native and A.Native.render and A.Enabled() then
 		local lp = LocalPlayer()

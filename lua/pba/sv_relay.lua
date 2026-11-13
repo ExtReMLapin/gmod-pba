@@ -149,6 +149,10 @@ local function writeSound(data, pos, id, full, echoOnly)
 	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
 	net.WriteBool(st ~= 0)
 	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
+	-- a line on a face (a voice channel of an entity with flexes): the client may not have that entity yet
+	-- (never in its view) and could not tell; it still gives it its mouth copy, by index (cl_render mouthCopy)
+	local ch = data.Channel
+	net.WriteBool((ch == CHAN_VOICE or ch == CHAN_VOICE2) and IsValid(e) and not e:IsWorld() and (e.GetFlexNum and e:GetFlexNum() or 0) > 0)
 end
 
 A.stats = A.stats or { seen = 0, relayed = 0, untouched = 0 }
