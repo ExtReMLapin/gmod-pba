@@ -43,11 +43,15 @@ end
 A.recentTo = A.recentTo or {} -- entindex -> { [ply] = time }
 
 -- Sound-name dictionary: a name travels in full until the client acknowledges its id,
--- then as a 16-bit id (~20-byte messages instead of ~50).
+-- then as a 16-bit id (~20-byte messages instead of ~50). Ids 1..65535; once they are all given (a
+-- long-running server), a new name gets id 0: sent in full every time, never stored by the client (an id
+-- past 65535 wrapped on the wire onto an old one, and the client then played the new sound for the old).
 A.dict = A.dict or { ids = {}, names = {}, n = 0 }
+local MAX_ID = 65535
 local function nameId(name)
 	local id = A.dict.ids[name]
 	if not id then
+		if A.dict.n >= MAX_ID then return 0 end
 		A.dict.n = A.dict.n + 1
 		id = A.dict.n
 		A.dict.ids[name], A.dict.names[id] = id, name
@@ -57,7 +61,10 @@ end
 
 net.Receive(NET_ACK, function(_, ply)
 	ply.pba_known = ply.pba_known or {}
-	for _ = 1, math.min(net.ReadUInt(8), 64) do ply.pba_known[net.ReadUInt(16)] = true end
+	for _ = 1, math.min(net.ReadUInt(8), 64) do
+		local id = net.ReadUInt(16)
+		if id > 0 then ply.pba_known[id] = true end
+	end
 end)
 
 -- Lua callers passing an explicit recipient filter: leave those sounds alone (we cannot
@@ -433,7 +440,7 @@ local function relay(data)
 			local id = nameId(data.SoundName)
 			local full = false
 			for _, ply in ipairs(want) do
-				if not (ply.pba_known and ply.pba_known[id]) then full = true break end
+				if id == 0 or not (ply.pba_known and ply.pba_known[id]) then full = true break end
 			end
 			net.Start(NET, true)
 			writeSound(data, pos, id, full, true)
@@ -493,7 +500,7 @@ local function relay(data)
 	local id = nameId(data.SoundName)
 	local full = false
 	for _, ply in ipairs(blocked) do
-		if not (ply.pba_known and ply.pba_known[id]) then full = true break end
+		if id == 0 or not (ply.pba_known and ply.pba_known[id]) then full = true break end
 	end
 	local e = data.Entity
 	if IsValid(e) and not e:IsWorld() then

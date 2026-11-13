@@ -1141,7 +1141,8 @@ net.Receive(NET, function()
 	local name
 	if full then
 		name = net.ReadString()
-		if A.dict[id] ~= name then
+		-- (id 0: the server's dictionary is full, the name always comes in full and is not kept)
+		if id ~= 0 and A.dict[id] ~= name then
 			A.dict[id] = name
 			pendingAcks[#pendingAcks + 1] = id
 		end
