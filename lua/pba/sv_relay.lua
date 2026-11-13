@@ -443,6 +443,74 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	return ret
 end))
 
+-- Cancelled choreographed scenes (audit D3). A scene's line plays on its actor's CHAN_VOICE
+-- (CSceneEntity::DispatchStartSpeak); when the scene is cancelled (a map's Cancel input, the actor's
+-- death or interruption, a new scene: all through CSceneEntity::CancelPlayback) the engine stops the
+-- line with a C++ StopSound Lua never sees (CBaseFlex::ClearSceneEvent): the relayed copy played on to
+-- its end. CancelPlayback fires the scene's OnCanceled output: every scene gets one to a point entity
+-- of ours, its input caught in AcceptInput, and the actor's relayed voice copies stop as the engine's.
+-- The parameter is the actor (instanced scenes: NPC responses, PlayScene; their entity is gone by the
+-- time the output fires) or 0 (a map's logic_choreographed_scene: its targets, read then).
+-- Expression scenes (scenes/expressions/...: faces only, no line) are left out: replaced as an NPC's
+-- mood changes, they would cut a line it is saying meanwhile.
+local SCENE_TARGET, SCENE_INPUT = "pba_scene_events", "PbaSceneCanceled"
+local SCENE_CLASSES = { logic_choreographed_scene = true, instanced_scripted_scene = true, scripted_scene = true }
+
+local function sceneTarget()
+	local t = A.sceneTarget
+	if IsValid(t) then return t end
+	t = ents.Create("info_target")
+	if not IsValid(t) then return nil end
+	t:SetName(SCENE_TARGET)
+	t:Spawn()
+	A.sceneTarget = t
+	return t
+end
+
+local function wireScene(e)
+	if not IsValid(e) then return end
+	local file = string.lower(e:GetInternalVariable("m_iszSceneFile") or "")
+	if string.find(file, "expressions/", 1, true) then return end
+	if not sceneTarget() then return end
+	local o = e:GetInternalVariable("m_hOwner")
+	local actor = IsValid(o) and o:EntIndex() or 0
+	e:Fire("AddOutput", "OnCanceled " .. SCENE_TARGET .. ":" .. SCENE_INPUT .. ":" .. actor .. ":0:-1")
+end
+
+--- The actor's relayed voice copies stop (and a long line followed by sv_loops).
+local function stopActorVoice(actor)
+	if not IsValid(actor) then return end
+	A.RelayStop(actor, "", CHAN_VOICE)
+	local LP = A.Loops
+	if LP and LP.active then
+		local idx = actor:EntIndex()
+		for _, x in pairs(LP.active) do
+			if x.idx == idx and x.chan == CHAN_VOICE then LP.Stop(idx, x.name) end
+		end
+	end
+	A.stats.sceneCancels = (A.stats.sceneCancels or 0) + 1
+end
+
+hook.Add("OnEntityCreated", "pba_scenes", function(e)
+	if SCENE_CLASSES[e:GetClass()] then timer.Simple(0, function() wireScene(e) end) end
+end)
+
+hook.Add("AcceptInput", "pba_scenes", function(ent, input, activator, caller, value)
+	if input ~= SCENE_INPUT or ent ~= A.sceneTarget then return end
+	local idx = tonumber(value) or 0
+	if idx > 0 then
+		stopActorVoice(Entity(idx))
+	elseif IsValid(caller) then
+		for i = 1, 8 do
+			local name = caller:GetInternalVariable("m_iszTarget" .. i)
+			if isstring(name) and name ~= "" and string.byte(name, 1) ~= 33 then
+				for _, a in ipairs(ents.FindByName(name)) do stopActorVoice(a) end
+			end
+		end
+	end
+	return true
+end)
+
 -- entity removed: the engine lets its one-shots play to their end where they were (measured with
 -- snd_dumpclientsounds: a line on CHAN_AUTO, VOICE, WEAPON or STATIC still plays 1.5 s after the
 -- removal, on entity NULL); the relayed copies do the same. Loops are stopped by pba.Loops.
