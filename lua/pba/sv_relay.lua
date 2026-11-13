@@ -131,20 +131,81 @@ end
 
 A.stats = A.stats or { seen = 0, relayed = 0, untouched = 0 }
 
---- The engine stopped `name` on entity e: clients that got relayed copies stop theirs.
-function A.RelayStop(e, name)
+--- The engine stopped `name` on entity e (chan: only that channel's copies; nil, any): clients that got
+-- relayed copies stop theirs. except: players left out (set).
+function A.RelayStop(e, name, chan, except)
 	local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
 	local r = idx > 0 and A.recentTo[idx]
 	if not r then return end
 	local plys, now = {}, CurTime()
 	for p, t in pairs(r) do
-		if IsValid(p) and now - t < 30 then plys[#plys + 1] = p else r[p] = nil end
+		if IsValid(p) and now - t < 30 then
+			if not (except and except[p]) then plys[#plys + 1] = p end
+		else
+			r[p] = nil
+		end
 	end
 	if #plys == 0 then return end
 	net.Start("pba_snd_stop")
 	net.WriteUInt(idx, 16)
-	net.WriteString(name or "")
+	net.WriteInt(chan or CHAN_AUTO, 10) -- CHAN_AUTO (0): any channel
+	-- the waves it stops (a sound script resolved here: the client may not know the script); none: all
+	if not name or name == "" then
+		net.WriteUInt(0, 8)
+	else
+		local waves = A.StopWaves(name)
+		local n = math.min(#waves, 32)
+		net.WriteUInt(n, 8)
+		for i = 1, n do net.WriteString(waves[i]) end
+	end
 	net.Send(plys)
+end
+
+local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+local NEW_ONLY = SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH
+
+--- Engine channel rule for the relayed copies (audit A-P1-1, D7): a new sound on an entity's replacing
+-- channel cuts what that channel played, and the engine does it for its own sounds only. When the new
+-- sound is not relayed to a player (left untouched once nobody is blocked any more, re-emitted to the
+-- clear or muffled players, taken by sv_loops, refused), his client never sees it: the copies of an
+-- earlier line relayed to him play on over it (an NPC's line through a wall over its death cry, after
+-- the player walked round the corner). The players it is relayed to apply the rule themselves
+-- (cl_render beginCopies), in order with the new copy: they are left out.
+-- Only players holding a copy on that channel are told (A.recentChan, filled by the relay; once told,
+-- they hold none): an NPC firing CHAN_WEAPON at a player in plain sight sends nothing per shot.
+A.recentChan = A.recentChan or {} -- entindex -> { [chan] = { [ply] = time relayed } }
+local function relayChannelCut(data, relayedTo)
+	local chan = data.Channel
+	if not replacing(chan) or bit.band(data.Flags or 0, NEW_ONLY) ~= 0 then return end
+	local e = data.Entity
+	if not IsValid(e) or e:IsWorld() then return end
+	local idx = e:EntIndex()
+	local rc = A.recentChan[idx]
+	local held = rc and rc[chan]
+	local plys, now = {}, CurTime()
+	if held then
+		if relayedTo then
+			for _, p in ipairs(relayedTo) do held[p] = nil end
+		end
+		-- (a copy is never longer than max_duration; 30 s as for recentTo)
+		for p, t in pairs(held) do
+			if IsValid(p) and now - t < 30 then plys[#plys + 1] = p end
+		end
+		rc[chan] = nil
+	end
+	if relayedTo and #relayedTo > 0 then
+		if not rc then rc = {} A.recentChan[idx] = rc end
+		local h = {}
+		for _, p in ipairs(relayedTo) do h[p] = now end
+		rc[chan] = h
+	end
+	if #plys == 0 then return end
+	net.Start("pba_snd_stop")
+	net.WriteUInt(idx, 16)
+	net.WriteInt(chan, 10)
+	net.WriteUInt(0, 8) -- every name
+	net.Send(plys)
+	A.stats.chanCuts = (A.stats.chanCuts or 0) + 1
 end
 
 -- (fallback: a partial autorefresh may reload this file before sh_core)
@@ -228,8 +289,8 @@ local function stepper(data)
 	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then return e end
 end
 
-A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
-	if A.reemitting or A.explicitFilter then return end
+local relayedTo -- the players the current sound was relayed to (relay, below)
+local function relay(data)
 	A.stats.seen = A.stats.seen + 1
 	if A.Loops and A.Loops.Handle(data) then return false end
 	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
@@ -383,14 +444,91 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	writeSound(data, pos, id, full)
 	A.stats.bytes = (A.stats.bytes or 0) + net.BytesWritten() * #blocked
 	net.Send(blocked)
+	relayedTo = blocked
 	A.stats.relayed = A.stats.relayed + 1
 	return false
+end
+
+A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
+	if A.reemitting or A.explicitFilter then return end
+	relayedTo = nil
+	local ret = relay(data)
+	relayChannelCut(data, relayedTo)
+	return ret
 end))
+
+-- Cancelled choreographed scenes (audit D3). A scene's line plays on its actor's CHAN_VOICE
+-- (CSceneEntity::DispatchStartSpeak); when the scene is cancelled (a map's Cancel input, the actor's
+-- death or interruption, a new scene: all through CSceneEntity::CancelPlayback) the engine stops the
+-- line with a C++ StopSound Lua never sees (CBaseFlex::ClearSceneEvent): the relayed copy played on to
+-- its end. CancelPlayback fires the scene's OnCanceled output: every scene gets one to a point entity
+-- of ours, its input caught in AcceptInput, and the actor's relayed voice copies stop as the engine's.
+-- The parameter is the actor (instanced scenes: NPC responses, PlayScene; their entity is gone by the
+-- time the output fires) or 0 (a map's logic_choreographed_scene: its targets, read then).
+-- Expression scenes (scenes/expressions/...: faces only, no line) are left out: replaced as an NPC's
+-- mood changes, they would cut a line it is saying meanwhile.
+local SCENE_TARGET, SCENE_INPUT = "pba_scene_events", "PbaSceneCanceled"
+local SCENE_CLASSES = { logic_choreographed_scene = true, instanced_scripted_scene = true, scripted_scene = true }
+
+local function sceneTarget()
+	local t = A.sceneTarget
+	if IsValid(t) then return t end
+	t = ents.Create("info_target")
+	if not IsValid(t) then return nil end
+	t:SetName(SCENE_TARGET)
+	t:Spawn()
+	A.sceneTarget = t
+	return t
+end
+
+local function wireScene(e)
+	if not IsValid(e) then return end
+	local file = string.lower(e:GetInternalVariable("m_iszSceneFile") or "")
+	if string.find(file, "expressions/", 1, true) then return end
+	if not sceneTarget() then return end
+	local o = e:GetInternalVariable("m_hOwner")
+	local actor = IsValid(o) and o:EntIndex() or 0
+	e:Fire("AddOutput", "OnCanceled " .. SCENE_TARGET .. ":" .. SCENE_INPUT .. ":" .. actor .. ":0:-1")
+end
+
+--- The actor's relayed voice copies stop (and a long line followed by sv_loops).
+local function stopActorVoice(actor)
+	if not IsValid(actor) then return end
+	A.RelayStop(actor, "", CHAN_VOICE)
+	local LP = A.Loops
+	if LP and LP.active then
+		local idx = actor:EntIndex()
+		for _, x in pairs(LP.active) do
+			if x.idx == idx and x.chan == CHAN_VOICE then LP.Stop(idx, x.name) end
+		end
+	end
+	A.stats.sceneCancels = (A.stats.sceneCancels or 0) + 1
+end
+
+hook.Add("OnEntityCreated", "pba_scenes", function(e)
+	if SCENE_CLASSES[e:GetClass()] then timer.Simple(0, function() wireScene(e) end) end
+end)
+
+hook.Add("AcceptInput", "pba_scenes", function(ent, input, activator, caller, value)
+	if input ~= SCENE_INPUT or ent ~= A.sceneTarget then return end
+	local idx = tonumber(value) or 0
+	if idx > 0 then
+		stopActorVoice(Entity(idx))
+	elseif IsValid(caller) then
+		for i = 1, 8 do
+			local name = caller:GetInternalVariable("m_iszTarget" .. i)
+			if isstring(name) and name ~= "" and string.byte(name, 1) ~= 33 then
+				for _, a in ipairs(ents.FindByName(name)) do stopActorVoice(a) end
+			end
+		end
+	end
+	return true
+end)
 
 -- entity removed: the engine lets its one-shots play to their end where they were (measured with
 -- snd_dumpclientsounds: a line on CHAN_AUTO, VOICE, WEAPON or STATIC still plays 1.5 s after the
 -- removal, on entity NULL); the relayed copies do the same. Loops are stopped by pba.Loops.
 hook.Add("EntityRemoved", "pba_relay_removed", function(e)
 	local idx = e:EntIndex()
-	if idx > 0 then A.recentTo[idx] = nil end
+	if idx > 0 then A.recentTo[idx] = nil A.recentChan[idx] = nil end
 end)

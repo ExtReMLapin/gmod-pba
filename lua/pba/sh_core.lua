@@ -181,6 +181,41 @@ function A.WithoutDryMix(name)
 	return string.gsub(pre, "#", "") .. string.sub(name, n + 1)
 end
 
+local function fileKey(name) return string.lower(A.SoundFile(name or "")) end
+
+--- The files a StopSound(name) reaches, as a set keyed like A.StopReaches: the name itself and, for a
+-- sound script, each of its waves (the engine resolves the script and stops every wave of it:
+-- SoundEmitterSystem StopSound). Copies and mirrors know their wave only: "Weapon_X.Loop" stopped
+-- none of them. nil for "" or nil: every sound. (Not cached: a script may be redefined, and StopSound
+-- is rare.)
+function A.StopFiles(name)
+	if not name or name == "" then return nil end
+	local set = { [fileKey(name)] = true }
+	local props = not A.IsSentence(name) and sound.GetProperties(name)
+	local w = props and props.sound
+	if isstring(w) then
+		set[fileKey(w)] = true
+	elseif istable(w) then
+		for _, x in ipairs(w) do set[fileKey(x)] = true end
+	end
+	return set
+end
+
+--- The waves of a sound script (the name itself when it is not one): what a StopSound(name) stops.
+function A.StopWaves(name)
+	local props = name and name ~= "" and not A.IsSentence(name) and sound.GetProperties(name)
+	local w = props and props.sound
+	if isstring(w) then return { w } end
+	if istable(w) and #w > 0 then return w end
+	return { name or "" }
+end
+
+--- True when a sound played as `name` (a copy's or a mirror's wave, or the name it was asked by) is
+-- reached by the stop of `files` (A.StopFiles; nil: every sound).
+function A.StopReaches(files, name)
+	return files == nil or (name ~= nil and files[fileKey(name)] == true)
+end
+
 --- Duration of a sound name (s), looked up on its file: nil or 0 when unknown (sentence, missing
 -- file, VBR mp3).
 function A.SoundDuration(name)

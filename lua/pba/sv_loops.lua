@@ -228,19 +228,23 @@ function LP.IsLong(data)
 	return dur > A.cfg.max_duration and dur <= 1800, dur
 end
 
+local function stopReached(files, x) return A.StopReaches(files, x.name) or A.StopReaches(files, x.orig) end
+
 --- Stops the loops / long sounds `name` of entity idx (any channel: a stop may come on another
 -- channel than the start). Returns true when one was running. Capped loops (vanilla) are forgotten
 -- too: the timer must not take over later a CSoundPatch an addon has stopped meanwhile.
 function LP.Stop(idx, name)
 	local found = false
+	-- a sound script reaches each of its waves (A.StopFiles); nil: every sound
+	local files = A.StopFiles(name)
 	for k, x in pairs(LP.released) do
-		if x.idx == idx and (name == nil or name == "" or x.name == name) then LP.released[k] = nil end
+		if x.idx == idx and stopReached(files, x) then LP.released[k] = nil end
 	end
 	for k, x in pairs(LP.capped) do
-		if x.idx == idx and (name == nil or name == "" or x.name == name) then LP.capped[k] = nil end
+		if x.idx == idx and stopReached(files, x) then LP.capped[k] = nil end
 	end
 	for k, x in pairs(LP.active) do
-		if x.idx == idx and (name == nil or name == "" or x.name == name) then
+		if x.idx == idx and stopReached(files, x) then
 			local plys = {}
 			for p in pairs(x.subs) do if IsValid(p) then plys[#plys + 1] = p end end
 			send(OP_STOP, x, plys)
