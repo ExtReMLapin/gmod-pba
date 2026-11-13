@@ -18,8 +18,11 @@ constexpr int kEchoSlots = 4;      // reflection sources simulated per source (l
 // A bound voice sends to its slot in addition to the room bus (the room bus still renders what the
 // listener's own room does with sound transmitted through walls and floors).
 // Slots are shared by position (every sound played within 1.5 m of another one feeds the same
-// response): kSrcSlotsMax buffers exist, the active pool size is set from Lua (SetSourceSlots).
-constexpr int kSrcSlotsMax = 32;
+// response): kSrcSlotsMax buffers exist, the active pool size is set from Lua (SetSourceSlots, up to that).
+// As many buffers as the default pool: the Lua never enlarges it, and 16 more effects (~2.5 MB of impulse
+// response each) and their simulated sources were made for nothing.
+constexpr int kSrcSlotsDefault = 16; // active pool by default (pba_native g_srcPool)
+constexpr int kSrcSlotsMax = kSrcSlotsDefault;
 // the first kSrcBankB slots have a second reflection source and effect (bank 1): the response of the
 // previous listener anchor, crossfaded into the new one (see RunSrcSlots in pba_native.cpp). Slots
 // beyond it have one bank (each bank costs ~2.5 MB of impulse response buffers in Steam Audio)
