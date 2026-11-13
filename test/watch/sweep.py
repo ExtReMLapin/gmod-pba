@@ -10,6 +10,9 @@ trigger_teleport / trigger_hurt), --dwell s in each, until --secs. At the end: c
 Lua errors from pba files (errors_since), and the speech events checked against the mouth drivers:
   mouth_missing  a line on a face that neither the engine nor a pba mouth copy plays on the face (still mouth)
   lip_delay    pba's propagation delay (pba_delay) puts a lip-synced line > 80 ms behind its mouth
+  speech_silent  a line pba took from the engine (no engine channel on the face) that nothing on the client
+               rendered within 1.5 s (+ its delay): no module voice above -60 dB that lived past 0.5 s, no engine
+               emission from the client's Lua, no mirror patch playing (its caption shows, the line is never heard)
 Writes test/watch/last/<map>[__tag].json and prints a one-line summary per map.
 """
 import json, os, subprocess, sys, time
@@ -100,12 +103,34 @@ def mouth_check(speech, copies, delay_on, enabled):
         lag = ev["dist"] / SPEED if (delay_on and enabled and ev["dist"] > 0) else 0
         if lag > 0.08:
             found["lip_delay"].append({"class": ev["class"], "name": ev["name"], "dist": ev["dist"], "lagMs": round(lag * 1000), "t": ev["t"]})
-        if ev.get("engine") or not enabled:
+        if ev.get("engine") or ev.get("mouthSv") or not enabled:
             continue
         ts = copies.get(str(ev["idx"])) or []
         if not any(ev["t"] - 0.05 <= t <= ev["t"] + 1 + lag for t in ts):
             found["mouth_missing"].append({"class": ev["class"], "name": ev["name"], "dist": ev["dist"], "t": ev["t"], "pos": ev.get("pos"), "via": ev.get("via")})
     return found
+
+
+def fkey(name):
+    return name.lstrip("*#@><^)(}$!?&~`+%").replace("\\", "/").lower()
+
+
+def silent_check(speech, rendered, delay_on, enabled):
+    """speech_silent: a line taken from the engine (ev not engine) with no client rendering of its file within
+    [t - 0.1, t + 1.5 + lag] that stayed alive (a module voice dead within 0.5 s does not count)."""
+    out = []
+    if not enabled:
+        return out
+    for ev in speech:
+        if ev.get("engine"):
+            continue
+        lag = ev["dist"] / SPEED if (delay_on and ev["dist"] > 0) else 0
+        f = fkey(ev["name"])
+        hits = [r for r in rendered if r.get("f") == f and ev["t"] - 0.1 <= r.get("t", -1) <= ev["t"] + 1.5 + lag]
+        if not any(not r.get("dead") for r in hits):
+            out.append({"class": ev["class"], "name": ev["name"], "dist": ev["dist"], "t": ev["t"], "pos": ev.get("pos"),
+                        "killed": [r.get("dead") for r in hits if r.get("dead")]})
+    return out
 
 
 def report(m, t_start, cur, info, trig, visited):
@@ -126,6 +151,8 @@ def report(m, t_start, cur, info, trig, visited):
         if "pba" in blob and "watchdog" not in blob:
             pba_errs[msg] = pba_errs.get(msg, 0) + 1
     mc = mouth_check(sv.get("speech") or [], cl.get("mouth") or {}, sv.get("delay", 0) >= 0.5, sv.get("enabled", 1) >= 0.5)
+    rend = json.loads(cl["rendered"]) if isinstance(cl.get("rendered"), str) else []
+    mc["speech_silent"] = silent_check(sv.get("speech") or [], rend, sv.get("delay", 0) >= 0.5, sv.get("enabled", 1) >= 0.5)
     anomalies = {}
     for side in (cl.get("anomalies") or {}, sv.get("anomalies") or {}):
         anomalies.update(side)

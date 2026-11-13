@@ -16,10 +16,16 @@
 --   vehicle_silent  the player drives an engine vehicle (airboat, jeep) for more than SILENT_S with no mirror
 --                   of any of its sounds (engine idle: always one while it runs; after a level transition the
 --                   engine's C++ emitted nothing)
+--   caption_dup     the same caption text shown twice within CAP_DUP_S (the engine shows a line's caption once)
 -- Mouth copies: pba drives a face's lip sync with a copy of the line at volume 0.001 on the face (cl_render
 -- mouthCopy; the engine reads visemes from the voice channels it plays on an entity, Lua cannot read them:
 -- GetFlexWeight stays 0 while a face talks, even in vanilla). They are recorded per entity for sweep.py to
 -- match the server's speech events (mouth_missing).
+-- Rendered lines: every way this client makes a line heard is recorded by file (W.rendered: a module voice
+-- started at a gain above -60 dB, an engine emission from Lua above volume 0.01 (pba's vanilla fallback, its
+-- engine copies), a mirror's engine patch playing), with the time a module voice died if it died within
+-- EARLY_S. sweep.py matches the lines the server took from the engine against them (speech_silent: a line
+-- taken over that nothing on the client played: its caption shows, the face's line is never heard).
 local W = PBA_WATCH_CL or {}
 PBA_WATCH_CL = W
 W.anomalies = W.anomalies or {}
@@ -30,6 +36,9 @@ W.mg = W.mg or {}               -- mirror key -> last gain
 local STEP_DB, LOUD_DB, VOICES_MAX, ONCE_MARGIN, GLIDE_DB, HITCH_S = 3, 6, 96, 3, 12, 0.15
 local ENGINE_CUT_DB = -36 -- the engine's own law below this: vanilla plays nothing (startmovie wav, gm_flatgrass, levels 60-100:
 -- audible down to -35.0 dB, digital silence from -38.4 dB, at volume 0.16 and 1 alike; the quietest steps are coarse: -29.4, -31.9, -35.4)
+W.rendered = W.rendered or {}   -- { t, f (file, lower case), how, id }, in order
+W.caps = W.caps or {}           -- bare caption text -> last CurTime() shown
+local CAP_DUP_S, EARLY_S, MAX_RENDERED, AUDIBLE = 1, 0.5, 2000, 0.001
 local JUMP_UNITS, JUMP_QUIET = 200, 1.5 -- a listener teleport (the sweeper's) changes paths for real: no step check right after
 -- a teleport is also a listener faster than any walk or sprint (the sweeper's trigger centres can be < 200 u apart:
 -- a Breencast mirror stepped 47 dB at a 'still' listener on d2_prison_04, 2026-11-13)
@@ -59,6 +68,26 @@ end
 W.note = note
 
 local function bare(name) return (string.gsub(name or "", "^[%*%#%@%>%<%^%)%(%}%$%!%?%&%~%`%+%%]+", "")) end
+local function fileKey(name) return string.lower((string.gsub(bare(name), "\\", "/"))) end
+local function rendered(name, how, id)
+	if #W.rendered >= MAX_RENDERED then table.remove(W.rendered, 1) end
+	local r = { t = math.Round(CurTime(), 2), f = fileKey(name), how = how, id = id }
+	W.rendered[#W.rendered + 1] = r
+	return r
+end
+W.renderedById = W.renderedById or {}
+W.patchSeen = W.patchSeen or setmetatable({}, { __mode = "k" })
+
+-- captions: the same text twice within CAP_DUP_S (the engine's and pba's, or two of pba's)
+hook.Add("OnCloseCaptionEmit", "pba_watch_caption", function(tok, dur, fromPlayer, text)
+	-- (a token without text is not shown: two doors' doorsound.null in one frame are no duplicate)
+	local t = string.Trim((string.gsub(text or "", "<[^>]*>", "")))
+	if t == "" then return end
+	local now = CurTime()
+	local last = W.caps[t]
+	if last and now - last < CAP_DUP_S then note("caption_dup", t, { text = t, token = tok, dt = math.Round(now - last, 2) }) end
+	W.caps[t] = now
+end)
 
 -- module voices: gain steps between two updates (wrapped outermost, after cl_mix's own wrap)
 if pba_native and not pba_native.pbaWatchWrapped then
@@ -69,10 +98,17 @@ if pba_native and not pba_native.pbaWatchWrapped then
 		if id and id > 0 then
 			W.voices[id] = { n = n, g = gain, t = RealTime(), steps = 0, pos = pos, first = true, by = "Play",
 				L = pba and pba.ListenerPos and pba.ListenerPos() or nil }
+			if (gain or 0) > AUDIBLE then W.renderedById[id] = rendered(n, "module", id) end
 		end
 		return id
 	end
 	pba_native.Update = function(id, pos, gain, ...)
+		local r = W.renderedById[id]
+		if r and not r.dead then
+			local age = CurTime() - r.t
+			if age > EARLY_S then W.renderedById[id] = nil
+			elseif gain and gain <= AUDIBLE then r.dead = math.Round(age, 2) end
+		end
 		local v = W.voices[id]
 		if v and gain then
 			local now = RealTime()
@@ -130,7 +166,10 @@ if pba_native and not pba_native.pbaWatchWrapped then
 			v.d = ok and d or 0
 			v.g, v.t, v.L, v.first, v.by = gain, now, L or v.L, nil, by
 		end
-		return update(id, pos, gain, ...)
+		local ok = update(id, pos, gain, ...)
+		-- a voice that ended within EARLY_S of its start (killed: cut, capped) was not heard
+		if r and not ok and not r.dead and CurTime() - r.t <= EARLY_S then r.dead = math.Round(CurTime() - r.t, 2) end
+		return ok
 	end
 end
 
@@ -145,6 +184,8 @@ local function addCopy(i)
 end
 if pba then pba.OnMouthCopy = addCopy end
 local function onSound(data, ret)
+	-- what the engine plays from this client's Lua (pba's vanilla fallback, its engine copies, an addon's)
+	if data and ret ~= false and (data.Volume or 1) > 0.01 and bit.band(data.Flags or 0, SND_STOP or 4) == 0 then rendered(data.SoundName, "engine") end
 	local A = pba
 	local ours = A and A.reemitting or (data and (data.Volume or 1) <= 0.002)
 	if data and ret ~= false and ours and (data.Channel == CHAN_VOICE or data.Channel == CHAN_VOICE2) and IsValid(data.Entity) then
@@ -188,6 +229,11 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 		local first = W.seen[key]
 		if not first or W.seenM[key] ~= m then first = now W.seen[key] = now W.seenM[key] = m end
 		local name = m.name or ""
+		-- a mirror's engine patch playing: rendered (once per mirror)
+		if m.patch and not W.patchSeen[m] and m.patch:IsPlaying() and (m.g or 1) * (m.vol or 1) > AUDIBLE then
+			W.patchSeen[m] = true
+			rendered(name, "patch")
+		end
 		local dur = 0
 		if m.once then
 			dur = A.SoundDuration and A.SoundDuration(bare(name)) or 0
@@ -310,7 +356,8 @@ function W.Report(mouthFor)
 	end
 	out.mouth = util.TableToJSON(W.copies)
 	out.census = util.TableToJSON(W.census or {})
+	out.rendered = util.TableToJSON(W.rendered)
 	return out
 end
-function W.Reset() W.anomalies = {} W.copies = {} W.seen = {} W.mg = {} W.deadT = {} W.vehQuietT = nil end
+function W.Reset() W.anomalies = {} W.copies = {} W.seen = {} W.mg = {} W.deadT = {} W.vehQuietT = nil W.rendered = {} W.caps = {} end
 return true
