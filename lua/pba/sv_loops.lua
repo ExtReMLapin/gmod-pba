@@ -255,6 +255,16 @@ function LP.IsPatchStart(data)
 	return dur > 0 and dur <= 1800, dur
 end
 
+--- Loops counted against loops_max. C++ code starts many patches at volume 0 and raises them later
+-- (airboat: 6, gravity gun, mounted guns): the engine runs them at 0 at no cost. With loops_cap_audible
+-- only the audible ones count, so silent ones no longer push a new audible loop out to the engine.
+function LP.CapCount()
+	if (A.cfg.loops_cap_audible or 1) < 0.5 then return table.Count(LP.active) end
+	local n = 0
+	for _, l in pairs(LP.active) do if (l.vol or 1) > 0 then n = n + 1 end end
+	return n
+end
+
 local function stopReached(files, x) return A.StopReaches(files, x.name) or A.StopReaches(files, x.orig) end
 
 --- Stops the loops / long sounds `name` of entity idx (any channel: a stop may come on another
@@ -431,6 +441,8 @@ function LP.Handle(data)
 			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then return false end
 		else
 			once, dur = LP.IsLong(data)
+			-- a change of a brief sound the relay took over: not a new patch (dropped, audit B-8)
+			if not once and A.BriefPlaying and A.BriefPlaying(data) then return true end
 			if not once then once, dur = LP.IsPatchStart(data) end
 			if not once then return false end
 		end
@@ -483,7 +495,7 @@ function LP.Handle(data)
 		end
 	end
 	if fresh then
-		if table.Count(LP.active) >= (A.cfg.loops_max or 64) then -- cap: left to the engine for now
+		if LP.CapCount() >= (A.cfg.loops_max or 64) then -- cap: left to the engine for now
 			LP.capped[key] = l
 			return false
 		end
@@ -715,3 +727,17 @@ function LP.Release()
 	-- a later take-over could restart a loop that ended meanwhile: forgotten
 	LP.capped = {}
 end
+
+-- env_microphone Disable (audit B-12): the microphone stops its speaker's copy in C++ (StopSound on the last
+-- routed sound, never seen by Lua); in vanilla it is the only stop of a looped or long copy on the speaker
+-- (the original's SND_STOP has volume 0, the microphone does not route it). The speaker's mirrors stop with it.
+hook.Add("AcceptInput", "pba_mic_disable", function(ent, input)
+	if (A.cfg.loops_mic_disable or 1) < 0.5 or not IsValid(ent) or ent:GetClass() ~= "env_microphone" then return end
+	if string.lower(input or "") ~= "disable" then return end
+	local spk = ent:GetInternalVariable("m_hSpeaker")
+	if not IsValid(spk) then return end
+	local idx = spk:EntIndex()
+	for _, l in pairs(LP.active) do
+		if l.idx == idx and l.speaker then LP.Stop(idx, l.name) end
+	end
+end)

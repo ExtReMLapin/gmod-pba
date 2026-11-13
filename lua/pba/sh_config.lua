@@ -144,6 +144,7 @@ A.CONFIG = {
 	native_all      = { 1, 0, 1, "cl", "With native rendering on: the module plays EVERY sound (HRTF, reverb), not only the obstructed ones. Sounds it cannot decode stay with the engine." },
 	native_doppler  = { 1, 0, 1, "cl", "Doppler effect on moving sources rendered natively (passing cars, projectiles)." },
 	native_stereo   = { 1, 0, 1, "cl", "Stereo files rendered natively as Source does: near / far (^), front / rear (<) and incoming / outgoing (>) channels picked, instead of both summed to mono." },
+	native_dry_prefix = { 1, 0, 1, "cl", "Sounds marked \"#\" (dry mix, mostly music) rendered natively without reverb: no source reverb, no room send, no echoes, as the engine runs no DSP on them." },
 	native_sentences = { 1, 0, 1, "cl", "Sentences (Combine and metrocop radio, HL2 NPC lines from sentences.txt) rendered natively: their words are assembled by the module (HRTF, reverb) instead of being left to the engine. Sentences with virtual words (names, numbers, grid positions) stay with the engine." },
 	native_stereo_width = { 1, 0, 1, "cl", "Stereo image of stereo files rendered natively, kept around the source near it (fades out from 240 to 1320 units). 0: mono at the source." },
 	streams         = { 1, 0, 1, "cl", "Radios and music players of other addons (sound.PlayURL / PlayFile, 3D): heard through openings and walls (transparent detour)." },
@@ -183,6 +184,9 @@ A.CONFIG = {
 	-- safety limits ("just in case"): what happens beyond each is a graceful fallback to the engine
 	relay_rate      = { 80, 5, 1000, "sv", "Max relayed sounds per second to one player (token bucket, burst 1 s). Beyond it the engine re-emits the sound to that player muffled (low-pass preset from the wall, at most 24 dB down), never louder instead of a relay." },
 	loops_max       = { 64, 4, 512, "sv", "Max loops / long sounds followed by the server at once. Beyond it new ones are left to the engine." },
+	loops_cap_audible = { 1, 0, 1, "sv", "Only audible loops count against loops_max: patches started at volume 0 (airboat, gravity gun, mounted guns raise them later) no longer push a new audible loop out to the engine (vanilla through walls)." },
+	loops_mic_disable = { 1, 0, 1, "sv", "A microphone (env_microphone) switched off stops what its speaker plays, as the engine does: the speaker's mirrors were never told and played on." },
+	brief_updates   = { 1, 0, 1, "sv", "A volume / pitch change of a brief sound pba relayed (non-looped ambient_generic with a preset or inputs, rotating or train move sounds) is dropped: the engine started a second, vanilla copy midway at the players who got pba's copy." },
 	soundscape_engine = { 1, 0, 1, "cl", "Soundscape ambience played around the ear (random positions within 64 u) is left to the engine: not muffled nor echoed." },
 	stopsound_watch = { 1, 0, 1, "cl", "stopsound typed in the console or bound to a key (and snd_restart) also stops pba's copies, loop mirrors and native voices: no Lua function sees that command, a silent sound patch reports it (the engine marks it stopped). 0 = only the commands run from Lua (RunConsoleCommand, ConCommand) are caught." },
 	keep_dsp        = { 1, 0, 1, "cl", "A sound with its own DSP preset (radio, loudspeaker effect) keeps it when muffled (then muffled by volume only), and is left to the engine under native rendering (the module has no DSP presets); 0 = pba's muffling preset replaces it, the module may play it." },
