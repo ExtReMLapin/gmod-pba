@@ -550,9 +550,69 @@ function N.EnsureSound(name)
 		N.loading[n] = true
 		return false, nil, "pending"
 	end
-	local okLoad, secs = pcall(pba_native.LoadSound, n, data)
+	local okLoad, secs, _, stereo = pcall(pba_native.LoadSound, n, data)
 	if not okLoad or not secs then N.failed[n] = RealTime() return false end
+	N.stereo[n] = stereo == true -- (nil from a module without stereo support: mono)
 	return true, n
+end
+
+-- ------------------------------------------------------------------ stereo files
+-- The module keeps both channels of a stereo file (pba_native.SetVoiceStereo). Source reads some of them
+-- as two variants, by the sound characters in front of the name (public/soundchars.h):
+--   "^" distance variant: left = near, right = far, crossfaded with the distance (240 -> 1320 u, the range
+--       the engine copies follow too: A.DistVariantPos);
+--   "<" directional: left = front facing, right = rear facing, mixed by the source's facing;
+--   ">" Doppler: left = incoming, right = outgoing;
+-- and plays the other stereo files as stereo ("(" spatialised stereo, or none). Summed to mono (the module
+-- before), a "^" gunshot carried its far tail at 2 m and its near crack at 2000 u, and a stereo file lost
+-- its width. pba_native_stereo 0: the old mono downmix. pba_native_stereo_width: the stereo image kept
+-- around the spatialised centre, near the source only (full up to 240 u, none past 1320 u: far away both
+-- channels come from the same point).
+N.stereo = N.stereo or {} -- clean name -> true (two different channels), false (mono); nil: not known
+local DV_MIN, DV_MAX = 240, 1320
+
+--- Channel mix (sel: 1 left, -1 right, 0 both) and stereo width of a voice playing `name` (with its sound
+-- characters) heard `d` units away. ent, S, L: the source entity and positions (for "<" and ">").
+function N.StereoMix(name, d, ent, S, L)
+	if (A.cfg.native_stereo or 1) < 0.5 then return 0, 0 end
+	name = name or ""
+	local pre = string.sub(name, 1, #name - #A.SoundFile(name))
+	local far = math.Clamp(((d or 0) - DV_MIN) / (DV_MAX - DV_MIN), 0, 1)
+	if string.find(pre, "^", 1, true) then return 1 - 2 * far, 0 end
+	if string.find(pre, "<", 1, true) then
+		if not (IsValid(ent) and S and L) or ent:IsWorld() then return 0, 0 end
+		local u = L - S
+		if u:LengthSqr() < 1 then return 0, 0 end
+		u:Normalize()
+		return math.Clamp(ent:GetForward():Dot(u), -1, 1), 0 -- front facing the listener: the left channel
+	end
+	if string.find(pre, ">", 1, true) then
+		if not (S and L) then return 0, 0 end
+		local u = L - S
+		if u:LengthSqr() < 1 then return 0, 0 end
+		u:Normalize()
+		local closing = (N.VelocityOf(ent) - N.ListenerVelocity()):Dot(u)
+		if math.abs(closing) < 1 then return 0, 0 end
+		return closing > 0 and 1 or -1, 0
+	end
+	return 0, (A.cfg.native_stereo_width or 0) * (1 - far)
+end
+
+--- Sends the stereo mix of voice id (st: a table the last values are kept on, so a followed voice sends only
+-- changes). Mono files (known from their decoding) cost nothing.
+function N.ApplyStereo(id, name, d, ent, S, L, st)
+	if not (id and pba_native.SetVoiceStereo) then return end
+	local n = string.lower(A.SoundFile(name or ""))
+	if N.stereo[n] == false then return end
+	local sel, w = N.StereoMix(name, d, ent, S, L)
+	if st then
+		if st.stSel == nil and sel == 0 and w == 0 then return end -- (the module's defaults)
+		if st.stSel and math.abs(st.stSel - sel) < 0.02 and math.abs(st.stW - w) < 0.02 then return end
+		st.stSel, st.stW = sel, w
+	elseif sel == 0 and w == 0 then
+		return
+	end
+	pba_native.SetVoiceStereo(id, sel, w)
 end
 
 -- Steam Audio's default air absorption model (per metre, low / mid / high)
@@ -826,9 +886,13 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain
 		end
 	end
+	if id and id > 0 and L then
+		N.ApplyStereo(id, name, opt.len or pos:Distance(L), opt.follow and opt.follow.ent, opt.srcPos or pos, L, opt.follow)
+	end
 	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100
+		opt.follow.name = name
 		-- a weapon emission keeps the aim it was fired with (N.Directivity) while it follows the shooter
 		if opt.follow.aim == nil then
 			local _, aim = N.WeaponAim(opt.follow.ent, opt.follow.chan)
@@ -916,7 +980,8 @@ function N.UpdateFollowers(L)
 			local l, m, h = N.VoiceEQ(0, d)
 			local pitch = f.pitch * N.Doppler(S, velocityOf(e), L, vL)
 			-- clear line: the reverb is the source slot's (bound at Play), kept alive while the voice lives
-			if not pba_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil end
+			if not pba_native.Update(id, S, g, l, m, h, pitch) then N.follow[id] = nil
+			elseif f.name then N.ApplyStereo(id, f.name, d, e, S, L, f) end
 		end
 	end
 end
@@ -948,7 +1013,9 @@ function N.Echo(data, pos, enginePlays, own)
 	local w = A.cfg.native_dir or 0
 	local aim = nil
 	if w > 0 then local _, a = N.WeaponAim(e, data.Channel) aim = a end
-	pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, 0, aim, aim and w or 0)
+	local id = pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, 0, aim, aim and w or 0)
+	-- reflections arrive from afar: the far variant of a "^" sound
+	if id and id > 0 then N.ApplyStereo(id, data.SoundName, DV_MAX, e, pos, A.ListenerPos()) end
 	N.echoes = (N.echoes or 0) + 1
 end
 

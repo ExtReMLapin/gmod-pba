@@ -70,7 +70,13 @@ std::atomic<bool> g_rtOvOn{false};
 std::atomic<float> g_roomTailEq[3] = {0, 0, 0};
 
 struct Sound {
-	std::vector<float> pcm; // mono, 48 kHz
+	std::vector<float> pcm; // mono, 48 kHz (a stereo file: its mid channel, (L + R) / 2)
+	// stereo file: its side channel (L - R) / 2, so L = pcm + side, R = pcm - side; empty for a mono one.
+	// Source reads the two channels of some stereo files as two variants (soundchars.h: "^" near / far,
+	// "<" front / rear, ">" incoming / outgoing) and plays the others as stereo: a voice picks its mix
+	// (Voice::sel) and an unspatialised stereo width (Voice::width), see SetVoiceStereo
+	std::vector<float> side;
+	size_t Bytes() const { return (pcm.size() + side.size()) * sizeof(float); }
 	// where a loop restarts (pcm samples): the WAV's own loop marker, as the engine reads it (a vehicle's
 	// start sound plays its starter once, then loops only the engine running), 0 without one
 	double loopStart = 0;
@@ -93,6 +99,13 @@ struct Voice {
 	int fadeIn = 0;     // samples of the start fade-in left (a start offset cuts into the waveform)
 	float rate = 1;
 	bool loop = false;
+	// stereo sound (Sound::side): the voice's signal is pcm + sel x side (0 = the mid, a mono downmix;
+	// 1 = the left channel; -1 = the right one), smoothed over a block like gain. width > 0 (with sel 0):
+	// the two channels are spatialised apart, each at half level through its own binaural effect (slot2),
+	// the left one shifted towards the listener's left and the right one towards the right by up to
+	// kStereoSpread (width 0: both at the source, the sum is the downmix exactly).
+	float sel = 0, selCur = 0, width = 0;
+	int slot2 = -1; // second effect pair of a stereo-width voice (index in the effect pool)
 	std::atomic<bool> alive{true};
 	// targets (set from Lua) and current values (smoothed in the audio thread)
 	IPLVector3 pos{};
@@ -177,6 +190,8 @@ double g_loadSum = 0, g_loadMax = 0; int g_loadN = 0;
 
 // audio-thread scratch buffers
 IPLAudioBuffer g_mono{}, g_mono2{}, g_stereo{}, g_amb{}, g_ambTmp{}, g_ambOut{};
+// the right channel of a stereo-width voice: its signal, a scratch copy, its spatialised output
+IPLAudioBuffer g_mono3{}, g_mono4{}, g_stereo2{};
 // path branch of a voice: its own copy of the source signal and its own output, so that a voice
 // crossfading between the path and the straight line can render both in the same block
 IPLAudioBuffer g_monoP{}, g_stereoP{};
@@ -217,6 +232,10 @@ bool g_paused = false;
 float g_uw = 0, g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: target, current mix, LP states
 float g_roomRt[3] = {0, 0, 0}; // under g_mtx
 std::vector<float> g_mix(kBlock * 2);
+std::vector<float> g_side(kBlock); // the side channel of the voice being rendered (stereo sounds)
+// largest lateral shift of the two channels of a stereo-width voice (tangent of the angle each one moves
+// away from the source seen straight ahead: tan 30 deg, a stereo speaker pair)
+constexpr float kStereoSpread = 0.577f;
 std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet consumed
 size_t g_fifoPos = 0;
 std::unordered_set<std::string> g_pending; // under g_mtx
@@ -242,6 +261,8 @@ IPLCoordinateSpace3 ListenerSpace() {
 
 void ReleaseVoice(Voice& v) {
 	if (v.slot >= 0 && v.slot < (int)g_pool.size()) g_pool[v.slot].used = false;
+	if (v.slot2 >= 0 && v.slot2 < (int)g_pool.size()) g_pool[v.slot2].used = false;
+	v.slot2 = -1;
 	if (v.pathSlot >= 0 && v.pathSlot < (int)g_pathPool.size()) g_pathPool[v.pathSlot].used = false;
 	v.slot = v.pathSlot = -1;
 	v.srcSlot = -1;
@@ -386,7 +407,12 @@ void RenderBlock() {
 			}
 		} else {
 		const auto& pcm = v.snd->pcm;
+		const auto& side = v.snd->side;
+		const bool st = !side.empty();
+		const float k0 = v.selCur, k1 = v.sel;
+		v.selCur = k1;
 		const double len = (double)pcm.size();
+		if (st) std::fill(g_side.begin(), g_side.end(), 0.0f);
 		for (int i = 0; i < kBlock; ++i) {
 			if (v.cursor < 0) {
 				m[i] = 0;
@@ -408,10 +434,19 @@ void RenderBlock() {
 			const size_t k = (size_t)v.cursor;
 			const float f = (float)(v.cursor - (double)k);
 			m[i] = pcm[k] * (1 - f) + pcm[k + 1] * f;
+			if (st) {
+				const float sd = side[k] * (1 - f) + side[k + 1] * f;
+				m[i] += sd * (k0 + (k1 - k0) * (float)i / kBlock);
+				g_side[i] = sd;
+			}
 			// started mid-sound: the first sample is wherever the waveform happens to be, a step
 			// from silence that clicks. Ramp it in here, on the raw signal, so the direct path and
 			// every send (taken before the gain) fade in together.
-			if (v.fadeIn > 0) m[i] *= 1.0f - (float)v.fadeIn-- / kBlock;
+			if (v.fadeIn > 0) {
+				const float fi = 1.0f - (float)v.fadeIn-- / kBlock;
+				m[i] *= fi;
+				if (st) g_side[i] *= fi;
+			}
 			v.cursor += v.rate;
 		}
 		}
@@ -526,6 +561,11 @@ void RenderBlock() {
 				iplDirectEffectReset(g_pool[v.slot].direct);
 				iplBinauralEffectReset(g_pool[v.slot].binaural);
 				iplPanningEffectReset(g_pool[v.slot].pan);
+				if (v.slot2 >= 0) {
+					iplDirectEffectReset(g_pool[v.slot2].direct);
+					iplBinauralEffectReset(g_pool[v.slot2].binaural);
+					iplPanningEffectReset(g_pool[v.slot2].pan);
+				}
 			}
 			// EQ first (linear), then the gain and send ramps: one EQ pass serves both the direct
 			// path and the send (same level and EQ as gain-then-EQ)
@@ -543,17 +583,58 @@ void RenderBlock() {
 			applyGain(bin_in->data[0]);
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
-			if (g_outMode == 0) {
-				IPLBinauralEffectParams bp{};
-				bp.direction = dir;
-				bp.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
-				bp.spatialBlend = 1.0f - 0.8f * dif; // diffuse: the direction blurs towards the centre
-				bp.hrtf = g_hrtf;
-				iplBinauralEffectApply(g_pool[v.slot].binaural, &bp, bin_in, &g_stereo);
+			auto spatialise = [&](int slot, IPLVector3 d, IPLAudioBuffer* in, IPLAudioBuffer* out) {
+				if (g_outMode == 0) {
+					IPLBinauralEffectParams bp{};
+					bp.direction = d;
+					bp.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
+					bp.spatialBlend = 1.0f - 0.8f * dif; // diffuse: the direction blurs towards the centre
+					bp.hrtf = g_hrtf;
+					iplBinauralEffectApply(g_pool[slot].binaural, &bp, in, out);
+				} else {
+					IPLPanningEffectParams pp{};
+					pp.direction = d;
+					iplPanningEffectApply(g_pool[slot].pan, &pp, in, out);
+				}
+			};
+			// stereo width (Voice::width): the left channel = mid + side and the right one = mid - side,
+			// each at half level (their sum at one place is the mid), apart by the width. Steered in the
+			// listener's frame: the left channel stays on the listener's left whatever the source's bearing.
+			if (v.slot2 >= 0 && v.snd && !v.snd->side.empty() && v.sel == 0 && v.selCur == 0) {
+				const float k = v.width * kStereoSpread;
+				auto shifted = [&](float dx) {
+					IPLVector3 d{dir.x + dx, dir.y, dir.z};
+					const float n = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+					return n > 1e-4f ? IPLVector3{d.x / n, d.y / n, d.z / n} : dir;
+				};
+				float* a = bin_in->data[0];
+				float* b = g_mono3.data[0];
+				// the same EQ and gain as the mid (bin_in): side x (eq'd mid / raw mid) is not linear, so the
+				// side goes through the second effect pair's own EQ
+				const float* sd = g_side.data();
+				if (bin_in == &g_mono2) {
+					std::copy(sd, sd + kBlock, g_mono4.data[0]);
+					IPLDirectEffectParams dp{};
+					dp.flags = IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION;
+					for (int q = 0; q < 3; ++q) dp.airAbsorption[q] = v.eq[q];
+					iplDirectEffectApply(g_pool[v.slot2].direct, &dp, &g_mono4, &g_mono3);
+					std::copy(g_mono3.data[0], g_mono3.data[0] + kBlock, g_mono4.data[0]);
+				} else {
+					std::copy(sd, sd + kBlock, g_mono4.data[0]);
+				}
+				applyGain(g_mono4.data[0]);
+				const float* s2 = g_mono4.data[0];
+				for (int i = 0; i < kBlock; ++i) {
+					const float mid = a[i];
+					a[i] = 0.5f * (mid + s2[i]); // left channel
+					b[i] = 0.5f * (mid - s2[i]); // right channel
+				}
+				spatialise(v.slot, shifted(-k), bin_in, &g_stereo);
+				spatialise(v.slot2, shifted(k), &g_mono3, &g_stereo2);
+				for (int c = 0; c < 2; ++c)
+					for (int i = 0; i < kBlock; ++i) g_stereo.data[c][i] += g_stereo2.data[c][i];
 			} else {
-				IPLPanningEffectParams pp{};
-				pp.direction = dir;
-				iplPanningEffectApply(g_pool[v.slot].pan, &pp, bin_in, &g_stereo);
+				spatialise(v.slot, dir, bin_in, &g_stereo);
 			}
 			for (int i = 0; i < kBlock; ++i) g_dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
 		}
@@ -778,6 +859,9 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 	iplAudioBufferAllocate(g_ctx, 2, kBlock, &g_ambOut);
 	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_monoP);
 	iplAudioBufferAllocate(g_ctx, 2, kBlock, &g_stereoP);
+	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_mono3);
+	iplAudioBufferAllocate(g_ctx, 1, kBlock, &g_mono4);
+	iplAudioBufferAllocate(g_ctx, 2, kBlock, &g_stereo2);
 	if (!CreateReflection(g_room, as)) return "reflection effect creation failed";
 	for (auto& e : g_echo)
 		if (!CreateReflection(e, as)) return "reflection effect creation failed";
@@ -863,7 +947,7 @@ void Stop() {
 	for (auto& e : g_srcB) ReleaseReflection(e);
 	if (g_decode) iplAmbisonicsDecodeEffectRelease(&g_decode);
 	if (g_hrtf) {
-		for (IPLAudioBuffer* b : {&g_mono, &g_mono2, &g_stereo, &g_amb, &g_ambTmp, &g_ambOut, &g_monoP, &g_stereoP})
+		for (IPLAudioBuffer* b : {&g_mono, &g_mono2, &g_stereo, &g_amb, &g_ambTmp, &g_ambOut, &g_monoP, &g_stereoP, &g_mono3, &g_mono4, &g_stereo2})
 			if (b->data) iplAudioBufferFree(g_ctx, b);
 		iplHRTFRelease(&g_hrtf);
 	}
@@ -1120,7 +1204,7 @@ static bool EvictTo(uint64_t target) {
 			if (it->second.use_count() == 1 && (victim == g_sounds.end() || it->second->lastUse < victim->second->lastUse))
 				victim = it;
 		if (victim == g_sounds.end()) return false;
-		g_soundBytes -= victim->second->pcm.size() * sizeof(float);
+		g_soundBytes -= victim->second->Bytes();
 		g_sounds.erase(victim);
 	}
 	return true;
@@ -1148,27 +1232,50 @@ static double WavLoopStart(const void* data, size_t size, uint32_t* rate) {
 	return smpl >= 0 ? smpl : cue;
 }
 
-std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart) {
+std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart, bool* stereo) {
 	uint32_t srcRate = 0;
 	const double loopFrames = WavLoopStart(data, size, &srcRate);
-	ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, 1, kRate);
+	// the file's own channel count (0), so a stereo file keeps its two channels (Sound::side); more
+	// than two are downmixed to stereo by miniaudio
+	ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, 0, kRate);
 	ma_decoder dec;
 	if (ma_decoder_init_memory(data, size, &dc, &dec) != MA_SUCCESS) return "cannot decode " + name;
+	if (dec.outputChannels > 2) {
+		ma_decoder_uninit(&dec);
+		dc = ma_decoder_config_init(ma_format_f32, 2, kRate);
+		if (ma_decoder_init_memory(data, size, &dc, &dec) != MA_SUCCESS) return "cannot decode " + name;
+	}
+	const ma_uint32 nch = dec.outputChannels;
+	if (nch != 1 && nch != 2) {
+		ma_decoder_uninit(&dec);
+		return "cannot decode " + name;
+	}
 	auto snd = std::make_shared<Sound>();
 	const uint64_t budget = g_memBudget.load();
-	float buf[4096];
+	float buf[4096 * 2];
 	for (;;) {
 		ma_uint64 got = 0;
 		ma_decoder_read_pcm_frames(&dec, buf, 4096, &got);
 		if (got == 0) break;
-		snd->pcm.insert(snd->pcm.end(), buf, buf + got);
-		if (snd->pcm.size() * sizeof(float) > budget) { // a single sound larger than the whole budget
+		if (nch == 1) snd->pcm.insert(snd->pcm.end(), buf, buf + got);
+		else
+			for (ma_uint64 i = 0; i < got; ++i) {
+				snd->pcm.push_back((buf[i * 2] + buf[i * 2 + 1]) * 0.5f);
+				snd->side.push_back((buf[i * 2] - buf[i * 2 + 1]) * 0.5f);
+			}
+		if (snd->Bytes() > budget) { // a single sound larger than the whole budget
 			ma_decoder_uninit(&dec);
 			return "too long for the memory budget: " + name;
 		}
 	}
 	ma_decoder_uninit(&dec);
 	if (snd->pcm.size() < 2) return "empty sound " + name;
+	// a "stereo" file with identical channels is mono: no side to store or render
+	if (!snd->side.empty()) {
+		float peak = 0;
+		for (float x : snd->side) peak = std::max(peak, std::fabs(x));
+		if (peak < 1e-5f) std::vector<float>().swap(snd->side);
+	}
 	// resampled to kRate with the rest; a marker at or past the end loops the whole sound
 	if (loopFrames > 0 && srcRate > 0) {
 		const double ls = loopFrames * kRate / srcRate;
@@ -1176,13 +1283,14 @@ std::string LoadSound(const std::string& name, const void* data, size_t size, do
 	}
 	if (seconds) *seconds = (double)snd->pcm.size() / kRate;
 	if (loopStart) *loopStart = snd->loopStart / kRate;
-	const uint64_t bytes = snd->pcm.size() * sizeof(float);
+	if (stereo) *stereo = !snd->side.empty();
+	const uint64_t bytes = snd->Bytes();
 	std::lock_guard<std::mutex> lk(g_mtx);
 	// evict least-recently-played sounds that no voice holds until the new one fits
 	if (!EvictTo(budget - bytes)) return "memory budget full (every decoded sound is playing): " + name;
 	snd->lastUse = ++g_useClock;
 	auto old = g_sounds.find(name);
-	if (old != g_sounds.end()) g_soundBytes -= old->second->pcm.size() * sizeof(float);
+	if (old != g_sounds.end()) g_soundBytes -= old->second->Bytes();
 	g_sounds[name] = snd;
 	g_soundBytes += bytes;
 	return "";
@@ -1347,6 +1455,30 @@ void Counters(int* echoDropped, int* pathFallback, int* pathUsed) {
 	int n = 0;
 	for (auto& p : g_pathPool) n += p.used ? 1 : 0;
 	*pathUsed = n;
+}
+
+bool SetVoiceStereo(int id, float sel, float width) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	for (auto& v : g_voices)
+		if (v->id == id && v->alive.load() && !v->dying) {
+			v->sel = std::clamp(sel, -1.0f, 1.0f);
+			// width spreads the two channels: only for a file played as stereo (not a variant pick)
+			v->width = v->sel == 0 ? std::clamp(width, 0.0f, 1.0f) : 0.0f;
+			if (v->gainCur < 0) v->selCur = v->sel; // not rendered yet: start there (no ramp from the defaults)
+			if (v->width > 0 && v->slot2 < 0 && v->snd && !v->snd->side.empty() && v->echoSlot < 0) {
+				// a second effect pair from the pool (none free: the downmix at the source, as before)
+				const int k = FindEffect();
+				if (k >= 0) {
+					g_pool[k].used = true;
+					iplDirectEffectReset(g_pool[k].direct);
+					iplBinauralEffectReset(g_pool[k].binaural);
+					iplPanningEffectReset(g_pool[k].pan);
+					v->slot2 = k;
+				}
+			}
+			return true;
+		}
+	return false;
 }
 
 void StopVoice(int id) {

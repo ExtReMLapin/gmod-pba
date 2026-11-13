@@ -106,7 +106,13 @@ void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir);
 void TestBinaural(IPLVector3 dir, double* eL, double* eR);
 bool HasSound(const std::string& name);
 // loopStart: where a loop restarts (seconds; 0 without a loop marker in the WAV)
-std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart = nullptr);
+// stereo: the file has two different channels (kept: see SetVoiceStereo)
+std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart = nullptr,
+                      bool* stereo = nullptr);
+// stereo sound: the voice spatialises mid + sel x side (sel 1 = left channel, -1 = right, 0 = (L + R) / 2,
+// the default) and adds width x side unspatialised (0 = none, the default; 1 = the file's full width).
+// Ramped over one block. No effect on a mono sound. false if the voice is gone or dying.
+bool SetVoiceStereo(int id, float sel, float width);
 // decodes on a worker thread (large files); HasSound() turns true when ready. false if already pending.
 bool LoadSoundAsync(const std::string& name, std::string data);
 // Room reverb times (s, 3 bands, air-corrected) replacing the main simulator's estimate; nullptr = off.

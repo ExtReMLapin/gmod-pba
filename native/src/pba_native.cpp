@@ -1799,16 +1799,29 @@ LUA_FUNCTION(LoadSound) {
 	const char* data = LUA->GetString(2, &len);
 	if (!data || len == 0) LUA->ThrowError("LoadSound: no data");
 	double secs = 0, loopStart = 0;
-	std::string err = render::LoadSound(name, data, len, &secs, &loopStart);
+	bool stereo = false;
+	std::string err = render::LoadSound(name, data, len, &secs, &loopStart, &stereo);
 	if (!err.empty()) {
 		LUA->PushNil();
 		LUA->PushString(err.c_str());
 		return 2;
 	}
+	// seconds, loop start (nil without a marker), stereo (true: two different channels kept)
 	LUA->PushNumber(secs);
-	if (loopStart <= 0) return 1;
-	LUA->PushNumber(loopStart);
-	return 2;
+	if (loopStart > 0) LUA->PushNumber(loopStart);
+	else LUA->PushNil();
+	LUA->PushBool(stereo);
+	return 3;
+}
+
+// SetVoiceStereo(id, sel, width) -> bool: channel mix and stereo width of a voice playing a stereo
+// sound (render::SetVoiceStereo)
+LUA_FUNCTION(SetVoiceStereo) {
+	const int id = (int)LUA->CheckNumber(1);
+	const float sel = (float)LUA->CheckNumber(2);
+	const float width = LUA->IsType(3, Type::Number) ? (float)LUA->GetNumber(3) : 0.0f;
+	LUA->PushBool(render::SetVoiceStereo(id, sel, width));
+	return 1;
 }
 
 // Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send [, offset]]]]]]])
@@ -2565,6 +2578,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "HasSound");
 	LUA->PushCFunction(LoadSound);
 	LUA->SetField(-2, "LoadSound");
+	LUA->PushCFunction(SetVoiceStereo);
+	LUA->SetField(-2, "SetVoiceStereo");
 	LUA->PushCFunction(Play);
 	LUA->SetField(-2, "Play");
 	LUA->PushCFunction(Update);

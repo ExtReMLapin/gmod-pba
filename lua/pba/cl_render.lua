@@ -599,6 +599,8 @@ local function switchNative(rec, fv, t, L, now, dominant)
 		bound = N.BindSource(id, rec.S, srcSend)
 	end
 	if not bound and roomSend <= 0 then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g * N.LoudWet(rec.lvl)) end
+	fv.stSel, fv.stW = nil, nil
+	if rec.S then N.ApplyStereo(id, rec.name, t.len or rec.S:Distance(L), rec.dirEnt, rec.S, L, fv) end
 	-- the engine copy stops once the module has it (stopCopy without cancelling the handle)
 	local a, name = fv.a, fv.name or rec.name
 	if anchorAlive(fv, name) then a:StopSound(name) a.pbaName = nil end
@@ -698,6 +700,7 @@ local function applyVoice(rec, fv, now, L)
 		local sh = nil
 		if want ~= fv.shSent then sh, fv.shSent = want, want end
 		if not pba_native.Update(fv.id, pos, g, e1, e2, e3, pitch, nil, nil, sh) then fv.dead = true return end
+		if rec.S and A.Native then A.Native.ApplyStereo(fv.id, rec.name, rec.S:Distance(L), rec.dirEnt, rec.S, L, fv) end
 	else
 		local a = fv.a
 		a:SetPos(pos)
