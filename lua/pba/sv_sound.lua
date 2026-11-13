@@ -252,6 +252,7 @@ function S.Audience(snd, ply, scale)
 		local eye = A.PlayerEar(ply)
 		local d2 = eye:DistToSqr(pos)
 		if d2 > snd.r2 then return nil end
+		if A.ClientOff and A.ClientOff(ply) then return "clear" end -- (pba off on his side: untouched)
 		local walls = d2 <= snd.lod2 and A.Paths.Walls(pos, eye, 1, snd.srcObj) or nil
 		if walls and #walls > 0 then
 			local dsp, gain = muffleFor(walls)
