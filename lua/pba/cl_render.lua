@@ -1250,8 +1250,11 @@ hook.Add("OnCloseCaptionEmit", "pba_caption_once", function(tok, dur, fromPlayer
 end)
 net.Receive("pba_caption", function()
 	local tok, dur = net.ReadString(), net.ReadFloat()
+	local file = net.ReadString()
 	local txt = language.GetPhrase(tok)
 	if not txt or txt == tok then return end
+	-- a spoken line (not an <sfx> caption): watched by the silent line safety net (pba_handback_speech)
+	if file ~= "" and A.LineKey and not string.find(string.lower(txt), "<sfx>", 1, true) then A.speechT[A.LineKey(file)] = RealTime() end
 	if (A.cfg.caption_once or 1) >= 0.5 then
 		local key = captionKey(txt)
 		if captionRecent(key) then return end
