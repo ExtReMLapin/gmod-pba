@@ -252,6 +252,7 @@ function N.Start()
 		local ok, err = pcall(require, "pba")
 		if not ok or not pba_native then N.err = "require failed: " .. tostring(err) return end
 	end
+	if N.WrapPlay then N.WrapPlay() end
 	local compatible, why, ver, api = N.CheckModule(pba_native)
 	N.moduleVersion, N.moduleApi = ver, api
 	if not compatible then
@@ -862,13 +863,40 @@ end
 
 -- voices bound to an entity (clear line): position and distance law updated every frame
 N.follow = N.follow or {}
+
+-- Every voice the module starts (pba_native.Play), for stopsound: the engine stops all its channels,
+-- the module's voices must stop too (A.StopAllSounds). Ids of ended voices are harmless to stop;
+-- entries are dropped after a while (long sounds are mirrors, which keep their own id).
+N.started = N.started or {}
+function N.WrapPlay()
+	if not pba_native or pba_native.pbaPlayWrapped then return end
+	local play = pba_native.Play
+	pba_native.pbaPlayWrapped = true
+	pba_native.Play = function(...)
+		local id = play(...)
+		if id and id > 0 then N.started[id] = RealTime() end
+		return id
+	end
+end
+N.WrapPlay()
+timer.Create("pba_native_started_gc", 10, 0, function()
+	local now = RealTime()
+	for id, t in pairs(N.started) do if now - t > 120 then N.started[id] = nil end end
+end)
+
+--- Stops every voice the module plays (streams of BASS channels excepted: stopsound leaves them).
+function N.StopAllVoices()
+	if not pba_native then return end
+	for id in pairs(N.started) do pba_native.StopVoice(id) end
+	N.started = {}
+	table.Empty(N.follow)
+end
 function N.UpdateFollowers(L)
 	local vL = N.ListenerVelocity()
 	for id, f in pairs(N.follow) do
 		local e = f.ent
 		if not IsValid(e) then
-			-- the entity is gone: the engine would stop its sound, so do we
-			pba_native.StopVoice(id)
+			-- the entity is gone: the engine plays its sound to the end where it was, so do we
 			N.follow[id] = nil
 		else
 			local S = A.SoundPos({ Entity = e })

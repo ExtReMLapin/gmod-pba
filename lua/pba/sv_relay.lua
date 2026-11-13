@@ -10,6 +10,23 @@ util.AddNetworkString(NET)
 util.AddNetworkString(NET_ACK)
 util.AddNetworkString("pba_snd_stop")
 util.AddNetworkString("pba_caption")
+util.AddNetworkString("pba_stopall")
+
+-- Player:ConCommand("stopsound") from the server (a common way addons silence a player): it runs in his
+-- engine, never in his Lua; he is told so his client stops pba's sounds as well
+do
+	local PLY = FindMetaTable("Player")
+	A.origPlyCmd = A.origPlyCmd or (debug.getinfo(PLY.ConCommand, "S").what == "C" and PLY.ConCommand or nil)
+	if A.origPlyCmd then
+		function PLY:ConCommand(cmd, ...)
+			A.origPlyCmd(self, cmd, ...)
+			if A.StopsAllSounds(cmd) and IsValid(self) and not self:IsBot() then
+				net.Start("pba_stopall")
+				net.Send(self)
+			end
+		end
+	end
+end
 
 -- The engine captions a sound script when it emits the ORIGINAL; suppressed (relayed, or the .wav
 -- re-emitted for clear listeners, which has no caption token), its caption is sent on its own.
@@ -198,6 +215,19 @@ local function reemit(data, pos, lvl, plys, name, vol, dsp)
 	end
 end
 
+-- Footsteps of other players: the engine sends the server's footstep only to the players of the PAS
+-- outside the stepping player's PVS (CBasePlayer::PlayStepSound: RemoveRecipientsByPVS); the players
+-- who see him generate the footstep on their own client. PlayerFootstep runs right before that
+-- emission: the stepping player is noted for this tick, and the players whose PVS holds him are left
+-- out (relaying to them too doubled every step).
+hook.Add("PlayerFootstep", "pba_step", function(ply)
+	A.stepPly, A.stepTick = ply, engine.TickCount()
+end)
+local function stepper(data)
+	local e = data.Entity
+	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then return e end
+end
+
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
 	if A.reemitting or A.explicitFilter then return end
 	A.stats.seen = A.stats.seen + 1
@@ -233,6 +263,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
 	-- client never sees them (no echoes on his own gunfire). They are his own: clear, as on the client
 	local sp = game.SinglePlayer()
+	local step = not sp and stepper(data)
 	-- clear: original re-emitted unchanged; blocked: relayed; muffled: blocked but over the relay
 	-- budget, re-emitted muffled by the engine; far: beyond lod_dist, too far to process (unchanged)
 	local clear, blocked, muffled, far = {}, {}, {}, {}
@@ -243,7 +274,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	for _, ply in ipairs(player.GetHumans()) do
 		if sp and ply == predicted and data.Entity == ply then
 			clear[#clear + 1] = ply
-		elseif sp or ply ~= predicted then
+		elseif (sp or ply ~= predicted) and not (step and ply ~= step and ply:TestPVS(step)) then
 			local eye = A.PlayerEar(ply)
 			local d2 = eye:DistToSqr(pos)
 			if d2 <= radius * radius then
@@ -356,17 +387,10 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	return false
 end))
 
--- entity removed: the engine stops its sounds; clients that got relayed copies stop theirs
+-- entity removed: the engine lets its one-shots play to their end where they were (measured with
+-- snd_dumpclientsounds: a line on CHAN_AUTO, VOICE, WEAPON or STATIC still plays 1.5 s after the
+-- removal, on entity NULL); the relayed copies do the same. Loops are stopped by pba.Loops.
 hook.Add("EntityRemoved", "pba_relay_removed", function(e)
 	local idx = e:EntIndex()
-	local r = idx > 0 and A.recentTo[idx]
-	if not r then return end
-	A.recentTo[idx] = nil
-	local plys, now = {}, CurTime()
-	for p, t in pairs(r) do if IsValid(p) and now - t < 30 then plys[#plys + 1] = p end end
-	if #plys == 0 then return end
-	net.Start("pba_snd_stop")
-	net.WriteUInt(idx, 16)
-	net.WriteString("")
-	net.Send(plys)
+	if idx > 0 then A.recentTo[idx] = nil end
 end)

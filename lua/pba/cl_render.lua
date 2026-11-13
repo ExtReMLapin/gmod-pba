@@ -1115,15 +1115,47 @@ do
 	end
 end
 
+--- stopsound / snd_restart: the engine stops every channel; pba's copies, mirrors and native voices
+-- stop with them.
+function A.StopAllSounds()
+	for idx in pairs(A.emitted) do A.StopCopies(idx, "") end
+	for _, fv in pairs(OS.native) do fv.dead = true end
+	table.Empty(OS.native)
+	if A.Loops and A.Loops.StopAll then A.Loops.StopAll() end
+	if A.Native and A.Native.StopAllVoices then A.Native.StopAllVoices() end
+	A.stats.stopAll = (A.stats.stopAll or 0) + 1
+end
+
+-- seen from Lua: RunConsoleCommand / Player:ConCommand on the client (also what SendLua and
+-- BroadcastLua run), and Player:ConCommand on the server (pba_stopall). Typed in the console or bound
+-- to a key, the command never reaches Lua.
+do
+	local PLY = FindMetaTable("Player")
+	A.origCmd = A.origCmd or {}
+	if not A.origCmd.run and debug.getinfo(RunConsoleCommand, "S").what == "C" then A.origCmd.run = RunConsoleCommand end
+	if not A.origCmd.ply and debug.getinfo(PLY.ConCommand, "S").what == "C" then A.origCmd.ply = PLY.ConCommand end
+	if A.origCmd.run then
+		function RunConsoleCommand(cmd, ...)
+			A.origCmd.run(cmd, ...)
+			if A.StopsAllSounds(cmd) then A.StopAllSounds() end
+		end
+	end
+	if A.origCmd.ply then
+		function PLY:ConCommand(cmd, ...)
+			A.origCmd.ply(self, cmd, ...)
+			if A.StopsAllSounds(cmd) then A.StopAllSounds() end
+		end
+	end
+end
+net.Receive("pba_stopall", function() A.StopAllSounds() end)
+
 -- server-side StopSound on a relayed sound: stop our copies
 net.Receive("pba_snd_stop", function()
 	local idx, name = net.ReadUInt(16), net.ReadString()
 	A.StopCopies(idx, name)
 end)
 
--- entity removed on the client (not a full network update): its copies stop with it
-hook.Add("EntityRemoved", "pba_copies_removed", function(e, fullUpdate)
-	if fullUpdate then return end
-	local idx = e:EntIndex()
-	if idx > 0 then A.StopCopies(idx, "") end
-end)
+-- entity removed: its copies play on to their end where they were, as the engine's own sounds do
+-- (sv_relay "pba_relay_removed"). They stay registered under the index: a new entity taking it over
+-- replaces them on their channel, as the engine's channels (keyed by the index) would.
+hook.Remove("EntityRemoved", "pba_copies_removed")
