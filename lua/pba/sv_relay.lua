@@ -210,6 +210,17 @@ local function relayChannelCut(data, relayedTo)
 	local rc = A.recentChan[idx]
 	local held = rc and rc[chan]
 	local plys, now = {}, CurTime()
+	-- SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps what plays on the channel (A.KeepsChannel,
+	-- as sh_core / cl_render / cl_loops): nothing cut, the new copies held besides the earlier ones
+	if A.KeepsChannel(data.Flags) then
+		if relayedTo and #relayedTo > 0 then
+			if not rc then rc = {} A.recentChan[idx] = rc end
+			held = held or {}
+			for _, p in ipairs(relayedTo) do held[p] = now end
+			rc[chan] = held
+		end
+		return
+	end
 	if held then
 		if relayedTo then
 			for _, p in ipairs(relayedTo) do held[p] = nil end

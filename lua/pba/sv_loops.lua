@@ -441,7 +441,9 @@ function LP.Handle(data)
 	end
 	-- a new sound on a replacing channel (CHAN_VOICE...) cuts what that channel played, a followed long
 	-- line included (the engine replaces it; the mirror must go too, and a capped one is over)
-	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 and replacing(data.Channel) then
+	-- (not with SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps both, A.KeepsChannel)
+	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 and replacing(data.Channel)
+		and not A.KeepsChannel(flags) then
 		for k, x in pairs(LP.active) do
 			if x.idx == idx and x.chan == data.Channel and k ~= key then LP.Stop(idx, x.name) end
 		end
