@@ -299,6 +299,17 @@ local function stepper(data)
 	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then return e end
 end
 
+--- True when entity e's sound, made during `predicted`'s command, is one his client predicts itself: the
+-- engine leaves him out of it (the suppressed host of a filter using prediction rules: what he and what he
+-- holds emit in shared code). Another entity's sound made during his command (an NPC his bullet hits, a
+-- window it breaks) is sent to him as to anyone.
+local function predictedBy(e, predicted)
+	if not IsValid(predicted) then return false end
+	if (A.cfg.predicted_exact or 1) < 0.5 then return true end
+	if not IsValid(e) then return false end
+	return e == predicted or e:GetOwner() == predicted
+end
+
 local relayedTo -- the players the current sound was relayed to (relay, below)
 local function relay(data)
 	A.stats.seen = A.stats.seen + 1
@@ -337,6 +348,8 @@ local function relay(data)
 	-- multiplayer: the sounds the server plays on a player outside his command (pain, fall damage, his
 	-- suit) are his own too; those of his command go to nobody (his client predicts them, below)
 	local ownMP = not sp and (A.cfg.mp_own or 1) >= 0.5
+	-- the player whose command made the sound, when his client predicts it (nobody otherwise)
+	local skip = not sp and predictedBy(data.Entity, predicted) and predicted or nil
 	local step = not sp and stepper(data)
 	-- clear: original re-emitted unchanged; blocked: relayed; muffled: blocked but over the relay
 	-- budget, re-emitted muffled by the engine; far: beyond lod_dist, too far to process (unchanged)
@@ -346,9 +359,9 @@ local function relay(data)
 	-- clients rendering every sound natively (userinfo pba_native_all_want) get the relay
 	-- even with a clear line: their module plays the sound instead of the engine
 	for _, ply in ipairs(player.GetHumans()) do
-		if (sp and ply == predicted or ownMP and ply ~= predicted) and data.Entity == ply then
+		if (sp and ply == predicted or ownMP and ply ~= skip) and data.Entity == ply then
 			clear[#clear + 1] = ply
-		elseif (sp or ply ~= predicted) and not (step and ply ~= step and ply:TestPVS(step)) then
+		elseif ply ~= skip and not (step and ply ~= step and ply:TestPVS(step)) then
 			local eye = A.PlayerEar(ply)
 			local d2 = eye:DistToSqr(pos)
 			if d2 <= radius * radius then
