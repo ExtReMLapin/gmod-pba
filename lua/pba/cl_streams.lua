@@ -218,17 +218,10 @@ local function evaluate(ch, r, L)
 	if not r.emitterPos or r.emitterPos:DistToSqr(S) > 1 or (r.emitter ~= nil and not IsValid(r.emitter)) then
 		r.emitter, r.emitterPos = emitterAt(S) or false, S
 	end
-	r.hyst = r.hyst or {}
 	-- a far sound's evaluation may run in slices (cl_slicer): the stream keeps its values meanwhile, and is
 	-- evaluated again once it is ready (streamReady)
-	local raw
-	if A.Slicer then
-		raw = A.Slicer.Held(r, S, L, 75, r.emitter or nil, function() ST.Ready(ch) end)
-	else
-		raw = A.Paths.Compute(S, L, 75, nil, r.emitter or nil)
-	end
-	if not raw then return "pending" end
-	local res = A.Paths.Stable(r.hyst, raw)
+	local res = A.Paths.Evaluate(r, S, L, 75, r.emitter or nil, false, function() ST.Ready(ch) end)
+	if not res then return "pending" end
 	A.DebugNote(ch, S, L, res, r.file or "stream", "stream")
 	if res.clear or not res.voices or #res.voices == 0 then
 		r.apparent, r.g, r.eq, r.gRel, r.lp, r.lpDb, r.len, r.diffuse = nil, 1, { 1, 1, 1 }, 1, 0, nil, nil, 0

@@ -241,12 +241,7 @@ local function pathOf(m, S, L)
 	-- beyond lod_dist no path search (a 130 dB rotor 7000 u away is subscribed since the server suppresses
 	-- it for everyone): heard as the original, or muffled when a wall stands in the straight line (farPath)
 	if S:DistToSqr(L) > A.cfg.lod_dist * A.cfg.lod_dist then return farPath(m, S, L) end
-	m.hyst = m.hyst or {}
-	local raw
-	if A.Slicer then raw = A.Slicer.Held(m, S, L, m.lvl, m.ent, sliceReady) else raw = A.Paths.Compute(S, L, m.lvl, nil, m.ent) end
-	if not raw then return nil end
-	local r = A.Paths.Stable(m.hyst, raw)
-	return r
+	return A.Paths.Evaluate(m, S, L, m.lvl, m.ent, false, sliceReady)
 end
 
 --- Adaptive re-evaluation (reeval_adaptive, P.ReevalDue): a playing mirror whose source, listener
