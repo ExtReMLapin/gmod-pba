@@ -59,3 +59,24 @@ function R.Tail(el, em, eh, pitch, speaker, S, ent, L, vL)
 	if N.Doppler and S then pitch = pitch * N.Doppler(S, N.VelocityOf(ent), L, vL or N.ListenerVelocity()) end
 	return el, em, eh, pitch
 end
+
+-- Strategies (refactor step 11): each owner of followed sounds keeps its renderings in one table,
+-- A.Render.Strategy(owner) = { engine = { start, update, stop }, native = { start, update, stop } }, filled by
+-- the owner's file (cl_render: "oneshot", its voices; cl_loops: "mirror", the loop and long mirrors). The relay
+-- has no client strategy: the server left the original to the engine. A change of rendering of a playing sound
+-- (the engine copy handed to the module at the same point of the sound) goes through A.Render.Switch, for every
+-- owner alike.
+R.strategies = R.strategies or {}
+
+--- The strategy table of owner `name` (created empty, kept across an autorefresh of this file).
+function R.Strategy(name)
+	local s = R.strategies[name] or {}
+	R.strategies[name] = s
+	return s
+end
+
+--- Starts the rendering `to` of a playing sound in place of its current one (its start stops the former):
+-- returns what that start returns (true / a voice: switched; false / nil: kept as it was).
+function R.Switch(strategies, to, ...)
+	return strategies[to].start(...)
+end

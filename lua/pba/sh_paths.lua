@@ -2852,22 +2852,20 @@ end
 local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (pba_trans_leaf_fade)
 local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a same-way route at its own loss (pba_edge_dup_mix)
 local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
-function P.Compute(S, L, sndlvl, cfg, srcEnt)
-	cfg = cfg or A.cfg
-	srcEnt = P.SourceObject(S, srcEnt, cfg)
-	S = P.FreeSource(S)
-	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt, cfg)
-	local now = RealTime()
+-- P.Compute in stages (refactor step 14): each stage below is one part of the computation, called once in
+-- this order by P.Compute; they read and fill the result r. Same operations in the same order as the former
+-- single function (paths_golden: bit for bit).
+
+-- Stage 1, the caches: the same cell pair's result while it is younger than cache_ttl, else (pba_group_time)
+-- the same emitter's last result, while neither it nor the listener moved more than reeval_move, the world
+-- model did not change (P.cacheGen), its straight line is in the same state and it is at most reeval_max_s
+-- old: the rule a loop's adaptive re-evaluation already follows (P.ReevalDue), for the repeated one-shots of
+-- one emitter (a gun's shots 0.1-1 s apart missed the 0.25 s cache). The emitter is the entity when the client
+-- has it, else the position alone: a far emitter is often out of the client's view (no entity: the sound comes
+-- with its position only), and its shots are just as alike.
+local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emitter)
 	local c = P.cache[key]
 	if c and now - c.t < cfg.cache_ttl then return c.r end
-	-- pba_group_time: the same emitter's last result, while neither it nor the listener moved more than
-	-- reeval_move, the world model did not change (P.cacheGen), its straight line is in the same state and
-	-- it is at most reeval_max_s old: the rule a loop's adaptive re-evaluation already follows (P.ReevalDue),
-	-- for the repeated one-shots of one emitter (a gun's shots 0.1-1 s apart missed the 0.25 s cache).
-	-- The emitter is the entity when the client has it, else the position alone: a far emitter is often out of
-	-- the client's view (no entity: the sound comes with its position only), and its shots are just as alike.
-	local timeOn = (cfg.group_time or 0) >= 0.5
-	local emitter = IsValid(srcEnt) and srcEnt or false
 	if timeOn then
 		local mv2 = (cfg.reeval_move or 8) ^ 2
 		local maxAge = cfg.reeval_max_s or 1
@@ -2881,328 +2879,12 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 			end
 		end
 	end
+end
 
-	local r = { S = S, L = L }
-	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
-	if (cfg.door_3d or 0) >= 0.5 then
-		P.WallDetours(walls)
-		P.LineLeaves(S, L, walls, cfg)
-	end
-	if #walls == 0 then
-		r.clear = true
-	else
-		r.clear = false
-		r.paths = {}
-		-- the probes describe the world geometry only: their routes are used only when the world itself
-		-- blocks the direct line (not when a prop... does). A door leaf belongs to its doorway: crossing it
-		-- also reads the routes, whose door costs model the leaf
-		local worldBlocked, leafBlocked = false, false
-		local oneModel = (cfg.door_leaf_portal or 1) >= 0.5
-		for _, w in ipairs(walls) do
-			if not w.ent and not w.water then worldBlocked = true end
-			if oneModel and w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
-		end
-		r.worldBlocked = worldBlocked
-		-- the listener field over the probe graph is the one topology (doors and portals are costs of its
-		-- links, cl_probes): its routes, read at once, beside the way over the edge and the transmission; no
-		-- search per sound, nothing provisional (the answer does not depend on the frame budget nor on the
-		-- sounds evaluated before)
-		local field = CLIENT and A.Probes and A.Probes.FieldRoutes and true or false
-		if field and (worldBlocked or leafBlocked) and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
-			r.paths = P.KeepLoudest(A.Probes.FieldRoutes(S, L, cfg.max_paths, cfg, srcEnt), cfg.max_paths, sndlvl, cfg)
-			r.viaProbes = #r.paths > 0
-		end
-		SLICE.hold = false -- (no listener field read from here on: cl_slicer may take the frame back)
-		P.WallDetours(walls)
-		-- a leaf whose doorway a portal path goes through is modelled by that portal (state, gap, closed
-		-- loss, position in the doorway): not a second time as a wall (closed) or as an object (open). One
-		-- model whether the line crosses the leaf or the wall beside it (door_sweep_real: the voice keeps its
-		-- kind at the leaf's edge); the line's own model (P.EvalWalls, leafLoss) stands where no portal
-		-- path exists (maps without areaportals: the probes' routes). Known limit: the portal's aperture
-		-- is the leaf's projection on the doorway's plane; a leaf swung into the room still shadows the
-		-- plane where the ray passes its free edge in 3-D (pba_twodoors: 9.5 dB to 0 at that edge).
-		local tw = walls
-		if leafBlocked and #r.paths > 0 then
-			tw = {}
-			for _, w in ipairs(walls) do
-				if not (w.ent and OPENABLE[w.ent:GetClass()] and leafOfPaths(w.ent, r.paths, field and not worldBlocked)) then tw[#tw + 1] = w end
-			end
-			r.leafByPortal = #tw < #walls
-		end
-		if #tw > 0 then
-			local loss, lp, mid, tilt = P.EvalWalls(tw, cfg)
-			-- Lua backend: the world walls' part over a bundle of parallel lines (P.BundleWalls)
-			if (cfg.trans_bundle or 0) >= 0.5 and not (CLIENT and A.Native and A.Native.ready) then
-				local world, rest = {}, {}
-				for _, w in ipairs(tw) do if w.ent or w.water then rest[#rest + 1] = w else world[#world + 1] = w end end
-				if #world > 0 then
-					local wl, wlp, wm, wt = P.EvalWalls(world, cfg, true)
-					wl, wlp, wm, wt = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepWorldWall, nil, wt)
-					local el, elp, em, et = 0, 0, 0, 0
-					if #rest > 0 then el, elp, em, et = P.EvalWalls(rest, cfg, true) end
-					loss, mid, lp = math.min(wl + el, cfg.trans_max), math.min(wm + em, cfg.trans_max), math.max(wlp, elp)
-					tilt = math.min(wt + et, cfg.trans_max)
-				end
-			end
-			-- native backend: volumetric occlusion of the direct line by the WORLD (Steam Audio
-			-- knows the map, not the props / doors). Near a door frame part of the source is still
-			-- visible: blend the clear part into the world share of the loss.
-			if CLIENT and A.Native and A.Native.ready then
-				local worldWalls, entWalls, water = {}, {}, false
-				for _, w in ipairs(tw) do
-					if w.ent or w.water then entWalls[#entWalls + 1] = w else worldWalls[#worldWalls + 1] = w end
-					water = water or w.water
-				end
-				-- a water surface on the line: Steam Audio's scene has it too (pba_native_water) and
-				-- would count it in its occlusion; the interface keeps pba's own model only (also when
-				-- that model puts no wall there, P.WaterWall: the listener's water filter, a shallow source)
-				if #worldWalls > 0 and not water then water = select(2, P.WaterWall(S, L, cfg)) end
-				if #worldWalls > 0 and not water then
-					local d = A.Native.Direct(S, L)
-					-- its occlusion is trusted fully, for the world walls its scene holds; those it
-					-- lacks (static props, displacements it could not read: P.NativeLacks) keep their
-					-- whole Lua loss, added like the entities'. Decided by the surface hit, not by a
-					-- threshold on o: the former 0.01 < o < 0.99 window jumped 46 dB at a door frame.
-					if d and d.occlusion then
-						local known, other = {}, {}
-						local nativeDisp = (A.Native.dispTris or 0) > 0
-						for _, w in ipairs(worldWalls) do
-							if P.NativeLacks(w, nativeDisp) then other[#other + 1] = w else known[#known + 1] = w end
-						end
-						if #known > 0 then
-							for _, w in ipairs(entWalls) do other[#other + 1] = w end
-							local wl, wlp, wm, wt = P.EvalWalls(known, cfg, true)
-							wl, wlp, wm, wt = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepNativeWorldWall, nativeDisp, wt)
-							local el, elp, em, et = 0, 0, 0, 0
-							if #other > 0 then el, elp, em, et = P.EvalWalls(other, cfg, true) end
-							local bl, blp, bm = P.NativeBlend(d.occlusion, wl, wlp, wm)
-							loss = math.min(bl + el, cfg.trans_max)
-							mid = math.min(bm + em, cfg.trans_max)
-							lp = math.max(blp, elp)
-							-- the continuous muffling (pba_trans_tilt): the part Steam Audio sees unmuffled, the rest
-							-- through the walls it holds, mixed by energy; then the walls it lacks, in series
-							local o = math.Clamp(d.occlusion, 0, 1)
-							tilt = math.min(AC.MixTilt2(o * o, 0, ((1 - o) * 10 ^ (-wl / 20)) ^ 2, wt) + et, cfg.trans_max)
-						end
-					end
-					r.nativeOcclusion = d and d.occlusion
-				end
-			end
-			local last = tw[#tw]
-			local dir = (L - S):GetNormalized()
-			local tpos = last.exit + dir * 2
-			-- pba_trans_pos_clamp: never past the listener (a wall exit within 2 u of L put the voice behind the
-			-- listener, and its direction flipped by 150-177 degrees along a wall: rp_downtown's street walk)
-			if (cfg.trans_pos_clamp or 0) >= 0.5 then
-				local rem = (L - last.exit):Dot(dir)
-				if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
-			end
-			r.trans = { walls = tw, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
-			-- pba_trans_tilt: the transmission's muffling is its walls' in series, continuous (dB), not the level of its
-			-- most muffling wall read back as a step: a voice through three walls was mixed as one through a single one
-			-- (it seemed to carry the highs), and its own level steps moved the one-voice low-pass by 3.9 dB in 0.25 u
-			-- (pba_demo's source walk)
-			if (cfg.trans_tilt or 0) >= 0.5 then r.trans.lpDb = tilt end
-			-- pba_trans_leaf_fade: a line through the world AND through leaves a route owns (the route through
-			-- those doorways) is that route's way plus the world it grazes. Where the world part thins out (the
-			-- line clipping a wall's end or a door's jamb) the line becomes the route's own way, which the route
-			-- already carries: the transmission fades in with the world depth crossed (0 -> TRANS_FADE_U) instead
-			-- of appearing at full level (pba_demo: a voice 11 dB under the route in and out from one step to the
-			-- next, the one-voice low-pass jumping 11-16 dB; rp_downtown's shut radio door: +3 dB as the line
-			-- touched the jamb, line and route paying the same leaf)
-			if worldBlocked and (cfg.trans_leaf_fade or 0) >= 0.5 then
-				local owned, depth = false, 0
-				for _, w in ipairs(walls) do
-					if not w.ent and not w.water then depth = depth + (w.thickness or 0)
-					elseif w.ent and OPENABLE[w.ent:GetClass()] and #r.paths > 0 and leafOfPaths(w.ent, r.paths, true) then owned = true end
-				end
-				local onLine = owned
-				-- (or a leaf the line passes beside, within reach of its doorway: the line clipping the jamb of a shut
-				-- door is the way through that door one step back)
-				if not owned and #r.paths > 0 then
-					for _, h in ipairs(P.SegmentDoors(S, L, true) or {}) do
-						if OPENABLE[h[1]:GetClass()] and leafOfPaths(h[1], r.paths, true) then owned = true break end
-					end
-				end
-				if owned then
-					local fade = ramp(depth, 0, TRANS_FADE_U)
-					-- pba_trans_bundle_edge: and with how far inside the world the line runs across the Fresnel zone,
-					-- so it is out before the line leaves the wall (pba_demo: 14 dB under the route, the one voice
-					-- carrying the highs, gone in one step at a jamb: one-voice low-pass 27.7 -> 40.5 dB)
-					-- (only for leaves on the line: past the wall it still goes through them, not into the open, where
-					-- the clear line takes over from the transmission instead)
-					if fade > 0 and onLine and (cfg.trans_bundle_edge or 0) >= 0.5 then
-						local e = P.BundleEdge(S, L, srcEnt, cfg, P.KeepWorldWall)
-						-- linear in dB: the voice often carries the highs (the route's leaves muffle more than the
-						-- wall), which its level sets until it is some 30 dB under the route
-						fade = e > 0 and fade * 10 ^ (-TRANS_EDGE_DB * (1 - e) / 10) or 0
-					end
-					if fade <= 0 then
-						r.trans = nil
-					elseif fade < 1 then
-						local add = -10 * math.log10(fade)
-						r.trans.lossDb = r.trans.lossDb + add
-						if r.trans.midDb then r.trans.midDb = r.trans.midDb + add end
-					end
-				end
-			end
-		end
-		-- experimental: Steam Audio baked pathing replaces the probe graph
-		if worldBlocked and #r.paths == 0 and CLIENT and A.Native and A.Native.pathsReady then
-			local np = A.Native.Path(S, L)
-			if np and np.dx and (np.w or 0) > 1e-4 then
-				local dir = Vector(np.dx, np.dy, np.dz)
-				dir:Normalize()
-				local dist = math.min(S:Distance(L), 192)
-				local loss = -AC.GainToDb(math.max(np.em, 1e-4))
-				r.paths[1] = { points = {}, length = S:Distance(L) * 1.2, diffDb = loss, doorDb = 0,
-					lossDb = loss, pos = L + dir * dist, lp = AC.LowpassLevel(-AC.GainToDb(math.max(np.eh, 1e-4)), cfg),
-					lpDb = -AC.GainToDb(math.max(np.eh, 1e-4)),
-					native = true }
-				-- first-order field of the baked paths, normalized to a unit omni component (the
-				-- level is carried by the voice gain): several arrival directions blur the field
-				if np.sh1 then
-					local k = 0.2820948 / np.w
-					r.paths[1].sh = { 0.2820948, np.sh1 * k, np.sh2 * k, np.sh3 * k }
-				end
-				r.viaNative = true
-			end
-		end
-		-- the way over the world obstacle's edge (P.WorldEdge), in power with the transmission, so that a
-		-- ridge, a low wall or a jamb shadows by degrees. Always looked for when the world cuts the line, not
-		-- only without a route: a route that bends round that very edge (homotopic to the one-bend way over
-		-- it, P.SameRoute) IS that way, evaluated on the same edge (P.RefineCorners), and is kept alone; a
-		-- route through another opening is not, and the edge is added beside it. Before, any route found
-		-- switched the edge off, so a listener stepping past a jamb heard the route's clearance vertex
-		-- (12 dB) where the edge gave 1, and the edge was heard only where the probes found nothing.
-		sliceCheck()
-		if worldBlocked and r.trans then
-			local e = P.WorldEdge(S, L, r.trans.walls, cfg)
-			if e then
-				local way = { S, e.apex, L }
-				local dup, near, nearD = false, nil, math.huge
-				for _, p in ipairs(r.paths) do
-					if p.points and #p.points > 0 and not p.native then
-						sliceCheck()
-						local pts = { S }
-						for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-						pts[#pts + 1] = L
-						if P.SameRoute(way, pts) then dup = p break end
-						-- how far this route passes from the edge's apex (pba_edge_dup_blend)
-						for i = 1, #pts - 1 do
-							local a, ab = pts[i], pts[i + 1] - pts[i]; local t = math.Clamp((e.apex - a):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1); local d = e.apex:Distance(a + ab * t)
-							if d < nearD then near, nearD = p, d end
-						end
-					end
-				end
-				-- pba_edge_dup_best: a route of the same way (homotopic) that its own corners cost more than
-				-- the way over the edge is not the tightest way of that class (it bends at a farther corner):
-				-- the edge stands for it. Else the route kept alone and the edge, once the zipper finds the two
-				-- distinct, added in full beside it: gm_melancholia's stairs, 3.7 dB (route) then route 3.6 +
-				-- edge 1.6 one 4 u step on, 6.7 dB louder.
-				if dup and (cfg.edge_dup_best or 1) >= 0.5 and e.db < (dup.lossDb or math.huge) then
-					-- pba_edge_dup_mix: the one estimate takes the route's loss moved toward the edge's by how much
-					-- cheaper the edge is (in full from EDGE_MIX_DB): the edge's search finds it from one step to the
-					-- next (the obstacle's middle moving with a wall the line grazes) already cheaper than the route,
-					-- and the swap was a step (gm_melancholia's stairs 16 u up: 1.5 dB in 4 u)
-					if (cfg.edge_dup_mix or 0) >= 0.5 and dup.lossDb then
-						local diff = dup.lossDb - e.db
-						local w = ramp(diff, 0, EDGE_MIX_DB)
-						if w < 1 then
-							e = table.Copy(e)
-							e.db = dup.lossDb - diff * w
-							e.mixDb = e.db - (dup.lossDb - diff)
-						end
-					end
-					for x = #r.paths, 1, -1 do if r.paths[x] == dup then table.remove(r.paths, x) end end
-					dup = false
-				end
-				-- pba_edge_dup_blend: the zipper's answer (one way or two) is all or nothing, and where it turns
-				-- from "the same way" to "distinct" the two estimates of what is still one way were summed at once
-				-- (gm_melancholia's stairs, 16 u above the eyes: 2.2-2.6 dB in one 4 u step). A route passing
-				-- within edge_dup_blend_u of the apex is that much the same way: the weaker of the two keeps
-				-- (1 - w) of its power, w = 1 at the apex, 0 at edge_dup_blend_u.
-				if not dup and near and (cfg.edge_dup_blend or 1) >= 0.5 then
-					local span = math.max(cfg.edge_dup_blend_u or 64, 1)
-					local w = math.Clamp(1 - nearD / span, 0, 0.999)
-					if w > 0 then
-						local cut = -10 * math.log10(1 - w)
-						if e.db <= (near.lossDb or math.huge) then
-							near.lossDb = near.lossDb + cut
-							near.blendDb = cut
-						else
-							e = table.Copy(e)
-							e.db = e.db + cut
-							e.blendDb = cut
-						end
-					end
-				end
-				r.edge, r.edgeDup, r.edgePath = e, dup and true or nil, dup or nil
-				if not dup then P.AddEdge(r.trans, e, L, cfg) end
-			end
-		end
-		if (cfg.path_props or 1) >= 0.5 then
-			for _, p in ipairs(r.paths) do
-				sliceCheck()
-				if p.points and #p.points > 0 then pathProps(p, S, L, cfg, srcEnt) end
-			end
-		end
-		-- one end under water: every path crosses the surface, like the transmission voice (which has
-		-- it as a wall). Paths ignored it: a dry point heard an underwater one 44 dB louder one way than
-		-- the other (gm_construct, perceptual bench reciprocity)
-		if #r.paths > 0 then
-			if P.WaterWall(S, L, cfg) then
-				local add, lpAdd = AC.WallLoss(nil, "pba_water", 0)
-				for _, p in ipairs(r.paths) do
-					if not p.waterDb then p.lossDb, p.waterDb, p.lp = p.lossDb + add, add, math.max(p.lp or 0, lpAdd) end
-				end
-			end
-		end
-		-- pba_edge_bound: the route that bends round the very obstacle the line goes through (r.edgePath: the
-		-- way over its edge, kept alone) and the transmission through that obstacle are two parts of one
-		-- field, bounded together by the clear line, as the way over an edge and the transmission are in
-		-- P.AddEdge. At a door jamb's edge the route is 0 dB and the transmission through the jamb's sliver
-		-- (Steam Audio still seeing most of the source) 2 dB: summed, 2.2 dB LOUDER than in clear sight one
-		-- step before, the low-pass jumping with it (rp_downtown, outside the radio room's doorway).
-		if r.edgePath and r.trans and (cfg.edge_bound or 1) >= 0.5 then P.BoundBeside(r.trans, r.edgePath, cfg) end
-		-- the way over the edge found distinct from the routes (added to the transmission) and the loudest
-		-- route are still ways round the obstacle the line goes through: bounded together by the clear line too.
-		-- gm_melancholia's stairs: the edge 1.9 dB alone, one step on the edge 1.6 dB beside a 3.6 dB route
-		-- once a fixed ajar door slab separates them, -0.5 dB (louder than clear sight).
-		if r.edge and not r.edgePath and r.trans and r.trans.edgeDb and (cfg.edge_bound or 1) >= 0.5 then
-			local best
-			for _, p in ipairs(r.paths) do if p.lossDb and (not best or p.lossDb < best.lossDb) then best = p end end
-			if best then P.BoundBeside(r.trans, best, cfg) end
-		end
-		-- pba_trans_route: through the walls nearest the source, then round the others (after the edges' and the
-		-- bounds' bookkeeping, which compare routes clear from S: this one is not)
-		if field and worldBlocked and (cfg.trans_route or 0) >= 0.5 and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
-			local bound = r.trans and r.trans.lossDb or nil
-			for _, q in ipairs(r.paths) do if q.lossDb and (not bound or q.lossDb < bound) then bound = q.lossDb end end
-			for x, p in ipairs(P.ThroughRoute(S, L, tw, cfg, bound) or {}) do
-				if (cfg.path_props or 1) >= 0.5 then pathProps(p, S, L, cfg, srcEnt) end
-				r.paths[#r.paths + 1] = p
-				if x == 1 then r.throughRoute = p end
-			end
-		end
-		-- pba_bend_final: the diffuse model reads the bend of the route as heard (its final points, corners on the
-		-- real edges), not the bend of the coarse polyline the route was evaluated on (probe positions, before the
-		-- corners are refined): that one jumped by 90-120 deg in 8 u while the route did not change (rp_downtown
-		-- street walk: diffuse share 0.13 -> 0.47 in one step)
-		local bendFinal = (cfg.bend_final or 0) >= 0.5
-		for _, p in ipairs(r.paths or {}) do
-			if bendFinal and p.points then
-				local _, b = P.PathShape(S, p.bendPts or p.points, L)
-				p.bendUse = b
-			else
-				p.bendUse = nil
-			end
-		end
-		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
-		r.shadowDb = P.ShadowOf(r.voices, r.edge and math.max(r.edge.db - (r.edge.doorDb or 0), 0) or nil)
-	end
-	-- dead entries swept (older than cache_ttl: never served again); only P.InvalidateCache emptied the cache,
-	-- one entry per cell pair, level, emitter and line state, for good on a map whose doors never move
+-- Stage 1b, the result kept: dead entries swept (older than cache_ttl: never served again); only
+-- P.InvalidateCache emptied the cache, one entry per cell pair, level, emitter and line state, for good on a
+-- map whose doors never move
+local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L)
 	if now >= (P.cacheSweepT or 0) then
 		P.cacheSweepT = now + CACHE_SWEEP_S
 		local ttl = cfg.cache_ttl
@@ -3215,5 +2897,390 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if #list >= TIME_KEEP then table.remove(list, 1) end
 		list[#list + 1] = { t = now, r = r, gen = P.cacheGen, lvl = sndlvl, state = lineState, S = Vector(S), L = Vector(L), ent = emitter }
 	end
+end
+
+-- Stage 2, what blocks the line: the probes describe the world geometry only: their routes are used only
+-- when the world itself blocks the direct line (not when a prop... does). A door leaf belongs to its
+-- doorway: crossing it also reads the routes, whose door costs model the leaf
+local function lineBlockers(walls, cfg)
+	local worldBlocked, leafBlocked = false, false
+	local oneModel = (cfg.door_leaf_portal or 1) >= 0.5
+	for _, w in ipairs(walls) do
+		if not w.ent and not w.water then worldBlocked = true end
+		if oneModel and w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
+	end
+	return worldBlocked, leafBlocked
+end
+
+-- Stage 3, the routes: the listener field over the probe graph is the one topology (doors and portals are
+-- costs of its links, cl_probes): its routes, read at once, beside the way over the edge and the
+-- transmission; no search per sound, nothing provisional (the answer does not depend on the frame budget nor
+-- on the sounds evaluated before)
+local function fieldRoutes(r, S, L, sndlvl, cfg, srcEnt, worldBlocked, leafBlocked)
+	local field = CLIENT and A.Probes and A.Probes.FieldRoutes and true or false
+	if field and (worldBlocked or leafBlocked) and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+		r.paths = P.KeepLoudest(A.Probes.FieldRoutes(S, L, cfg.max_paths, cfg, srcEnt), cfg.max_paths, sndlvl, cfg)
+		r.viaProbes = #r.paths > 0
+	end
+	return field
+end
+
+-- Stage 4, the walls the transmission goes through: a leaf whose doorway a portal path goes through is
+-- modelled by that portal (state, gap, closed loss, position in the doorway): not a second time as a wall
+-- (closed) or as an object (open). One model whether the line crosses the leaf or the wall beside it
+-- (door_sweep_real: the voice keeps its kind at the leaf's edge); the line's own model (P.EvalWalls,
+-- leafLoss) stands where no portal path exists (maps without areaportals: the probes' routes). Known limit:
+-- the portal's aperture is the leaf's projection on the doorway's plane; a leaf swung into the room still
+-- shadows the plane where the ray passes its free edge in 3-D (pba_twodoors: 9.5 dB to 0 at that edge).
+local function transWalls(r, walls, leafBlocked, field, worldBlocked)
+	local tw = walls
+	if leafBlocked and #r.paths > 0 then
+		tw = {}
+		for _, w in ipairs(walls) do
+			if not (w.ent and OPENABLE[w.ent:GetClass()] and leafOfPaths(w.ent, r.paths, field and not worldBlocked)) then tw[#tw + 1] = w end
+		end
+		r.leafByPortal = #tw < #walls
+	end
+	return tw
+end
+
+-- Stage 5a, the walls' loss: Lua backend, the world walls' part over a bundle of parallel lines
+-- (P.BundleWalls)
+local function bundleLoss(S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
+	local world, rest = {}, {}
+	for _, w in ipairs(tw) do if w.ent or w.water then rest[#rest + 1] = w else world[#world + 1] = w end end
+	if #world > 0 then
+		local wl, wlp, wm, wt = P.EvalWalls(world, cfg, true)
+		wl, wlp, wm, wt = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepWorldWall, nil, wt)
+		local el, elp, em, et = 0, 0, 0, 0
+		if #rest > 0 then el, elp, em, et = P.EvalWalls(rest, cfg, true) end
+		loss, mid, lp = math.min(wl + el, cfg.trans_max), math.min(wm + em, cfg.trans_max), math.max(wlp, elp)
+		tilt = math.min(wt + et, cfg.trans_max)
+	end
+	return loss, lp, mid, tilt
+end
+
+-- Stage 5b, the walls' loss: native backend, volumetric occlusion of the direct line by the WORLD (Steam
+-- Audio knows the map, not the props / doors). Near a door frame part of the source is still visible: blend
+-- the clear part into the world share of the loss.
+local function nativeLoss(r, S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
+	local worldWalls, entWalls, water = {}, {}, false
+	for _, w in ipairs(tw) do
+		if w.ent or w.water then entWalls[#entWalls + 1] = w else worldWalls[#worldWalls + 1] = w end
+		water = water or w.water
+	end
+	-- a water surface on the line: Steam Audio's scene has it too (pba_native_water) and
+	-- would count it in its occlusion; the interface keeps pba's own model only (also when
+	-- that model puts no wall there, P.WaterWall: the listener's water filter, a shallow source)
+	if #worldWalls > 0 and not water then water = select(2, P.WaterWall(S, L, cfg)) end
+	if #worldWalls > 0 and not water then
+		local d = A.Native.Direct(S, L)
+		-- its occlusion is trusted fully, for the world walls its scene holds; those it
+		-- lacks (static props, displacements it could not read: P.NativeLacks) keep their
+		-- whole Lua loss, added like the entities'. Decided by the surface hit, not by a
+		-- threshold on o: the former 0.01 < o < 0.99 window jumped 46 dB at a door frame.
+		if d and d.occlusion then
+			local known, other = {}, {}
+			local nativeDisp = (A.Native.dispTris or 0) > 0
+			for _, w in ipairs(worldWalls) do
+				if P.NativeLacks(w, nativeDisp) then other[#other + 1] = w else known[#known + 1] = w end
+			end
+			if #known > 0 then
+				for _, w in ipairs(entWalls) do other[#other + 1] = w end
+				local wl, wlp, wm, wt = P.EvalWalls(known, cfg, true)
+				wl, wlp, wm, wt = P.BundleWalls(S, L, srcEnt, cfg, wl, wlp, wm, P.KeepNativeWorldWall, nativeDisp, wt)
+				local el, elp, em, et = 0, 0, 0, 0
+				if #other > 0 then el, elp, em, et = P.EvalWalls(other, cfg, true) end
+				local bl, blp, bm = P.NativeBlend(d.occlusion, wl, wlp, wm)
+				loss = math.min(bl + el, cfg.trans_max)
+				mid = math.min(bm + em, cfg.trans_max)
+				lp = math.max(blp, elp)
+				-- the continuous muffling (pba_trans_tilt): the part Steam Audio sees unmuffled, the rest
+				-- through the walls it holds, mixed by energy; then the walls it lacks, in series
+				local o = math.Clamp(d.occlusion, 0, 1)
+				tilt = math.min(AC.MixTilt2(o * o, 0, ((1 - o) * 10 ^ (-wl / 20)) ^ 2, wt) + et, cfg.trans_max)
+			end
+		end
+		r.nativeOcclusion = d and d.occlusion
+	end
+	return loss, lp, mid, tilt
+end
+
+-- Stage 5c, pba_trans_leaf_fade: a line through the world AND through leaves a route owns (the route through
+-- those doorways) is that route's way plus the world it grazes. Where the world part thins out (the line
+-- clipping a wall's end or a door's jamb) the line becomes the route's own way, which the route already
+-- carries: the transmission fades in with the world depth crossed (0 -> TRANS_FADE_U) instead of appearing at
+-- full level (pba_demo: a voice 11 dB under the route in and out from one step to the next, the one-voice
+-- low-pass jumping 11-16 dB; rp_downtown's shut radio door: +3 dB as the line touched the jamb, line and route
+-- paying the same leaf)
+local function leafFade(r, S, L, walls, cfg, srcEnt)
+	local owned, depth = false, 0
+	for _, w in ipairs(walls) do
+		if not w.ent and not w.water then depth = depth + (w.thickness or 0)
+		elseif w.ent and OPENABLE[w.ent:GetClass()] and #r.paths > 0 and leafOfPaths(w.ent, r.paths, true) then owned = true end
+	end
+	local onLine = owned
+	-- (or a leaf the line passes beside, within reach of its doorway: the line clipping the jamb of a shut
+	-- door is the way through that door one step back)
+	if not owned and #r.paths > 0 then
+		for _, h in ipairs(P.SegmentDoors(S, L, true) or {}) do
+			if OPENABLE[h[1]:GetClass()] and leafOfPaths(h[1], r.paths, true) then owned = true break end
+		end
+	end
+	if owned then
+		local fade = ramp(depth, 0, TRANS_FADE_U)
+		-- pba_trans_bundle_edge: and with how far inside the world the line runs across the Fresnel zone,
+		-- so it is out before the line leaves the wall (pba_demo: 14 dB under the route, the one voice
+		-- carrying the highs, gone in one step at a jamb: one-voice low-pass 27.7 -> 40.5 dB)
+		-- (only for leaves on the line: past the wall it still goes through them, not into the open, where
+		-- the clear line takes over from the transmission instead)
+		if fade > 0 and onLine and (cfg.trans_bundle_edge or 0) >= 0.5 then
+			local e = P.BundleEdge(S, L, srcEnt, cfg, P.KeepWorldWall)
+			-- linear in dB: the voice often carries the highs (the route's leaves muffle more than the
+			-- wall), which its level sets until it is some 30 dB under the route
+			fade = e > 0 and fade * 10 ^ (-TRANS_EDGE_DB * (1 - e) / 10) or 0
+		end
+		if fade <= 0 then
+			r.trans = nil
+		elseif fade < 1 then
+			local add = -10 * math.log10(fade)
+			r.trans.lossDb = r.trans.lossDb + add
+			if r.trans.midDb then r.trans.midDb = r.trans.midDb + add end
+		end
+	end
+end
+
+-- Stage 5, the transmission through the walls tw (r.trans)
+local function transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked)
+	local loss, lp, mid, tilt = P.EvalWalls(tw, cfg)
+	if (cfg.trans_bundle or 0) >= 0.5 and not (CLIENT and A.Native and A.Native.ready) then
+		loss, lp, mid, tilt = bundleLoss(S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
+	end
+	if CLIENT and A.Native and A.Native.ready then
+		loss, lp, mid, tilt = nativeLoss(r, S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
+	end
+	local last = tw[#tw]
+	local dir = (L - S):GetNormalized()
+	local tpos = last.exit + dir * 2
+	-- pba_trans_pos_clamp: never past the listener (a wall exit within 2 u of L put the voice behind the
+	-- listener, and its direction flipped by 150-177 degrees along a wall: rp_downtown's street walk)
+	if (cfg.trans_pos_clamp or 0) >= 0.5 then
+		local rem = (L - last.exit):Dot(dir)
+		if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
+	end
+	r.trans = { walls = tw, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
+	-- pba_trans_tilt: the transmission's muffling is its walls' in series, continuous (dB), not the level of its
+	-- most muffling wall read back as a step: a voice through three walls was mixed as one through a single one
+	-- (it seemed to carry the highs), and its own level steps moved the one-voice low-pass by 3.9 dB in 0.25 u
+	-- (pba_demo's source walk)
+	if (cfg.trans_tilt or 0) >= 0.5 then r.trans.lpDb = tilt end
+	if worldBlocked and (cfg.trans_leaf_fade or 0) >= 0.5 then leafFade(r, S, L, walls, cfg, srcEnt) end
+end
+
+-- Stage 6, experimental: Steam Audio baked pathing replaces the probe graph
+local function nativePath(r, S, L, cfg)
+	local np = A.Native.Path(S, L)
+	if np and np.dx and (np.w or 0) > 1e-4 then
+		local dir = Vector(np.dx, np.dy, np.dz)
+		dir:Normalize()
+		local dist = math.min(S:Distance(L), 192)
+		local loss = -AC.GainToDb(math.max(np.em, 1e-4))
+		r.paths[1] = { points = {}, length = S:Distance(L) * 1.2, diffDb = loss, doorDb = 0,
+			lossDb = loss, pos = L + dir * dist, lp = AC.LowpassLevel(-AC.GainToDb(math.max(np.eh, 1e-4)), cfg),
+			lpDb = -AC.GainToDb(math.max(np.eh, 1e-4)),
+			native = true }
+		-- first-order field of the baked paths, normalized to a unit omni component (the
+		-- level is carried by the voice gain): several arrival directions blur the field
+		if np.sh1 then
+			local k = 0.2820948 / np.w
+			r.paths[1].sh = { 0.2820948, np.sh1 * k, np.sh2 * k, np.sh3 * k }
+		end
+		r.viaNative = true
+	end
+end
+
+-- Stage 7, the way over the world obstacle's edge (P.WorldEdge), in power with the transmission, so that a
+-- ridge, a low wall or a jamb shadows by degrees. Always looked for when the world cuts the line, not only
+-- without a route: a route that bends round that very edge (homotopic to the one-bend way over it,
+-- P.SameRoute) IS that way, evaluated on the same edge (P.RefineCorners), and is kept alone; a route through
+-- another opening is not, and the edge is added beside it. Before, any route found switched the edge off, so
+-- a listener stepping past a jamb heard the route's clearance vertex (12 dB) where the edge gave 1, and the
+-- edge was heard only where the probes found nothing.
+local function edgeWay(r, S, L, cfg)
+	local e = P.WorldEdge(S, L, r.trans.walls, cfg)
+	if not e then return end
+	local way = { S, e.apex, L }
+	local dup, near, nearD = false, nil, math.huge
+	for _, p in ipairs(r.paths) do
+		if p.points and #p.points > 0 and not p.native then
+			sliceCheck()
+			local pts = { S }
+			for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+			pts[#pts + 1] = L
+			if P.SameRoute(way, pts) then dup = p break end
+			-- how far this route passes from the edge's apex (pba_edge_dup_blend)
+			for i = 1, #pts - 1 do
+				local a, ab = pts[i], pts[i + 1] - pts[i]; local t = math.Clamp((e.apex - a):Dot(ab) / math.max(ab:LengthSqr(), 1e-6), 0, 1); local d = e.apex:Distance(a + ab * t)
+				if d < nearD then near, nearD = p, d end
+			end
+		end
+	end
+	-- pba_edge_dup_best: a route of the same way (homotopic) that its own corners cost more than
+	-- the way over the edge is not the tightest way of that class (it bends at a farther corner):
+	-- the edge stands for it. Else the route kept alone and the edge, once the zipper finds the two
+	-- distinct, added in full beside it: gm_melancholia's stairs, 3.7 dB (route) then route 3.6 +
+	-- edge 1.6 one 4 u step on, 6.7 dB louder.
+	if dup and (cfg.edge_dup_best or 1) >= 0.5 and e.db < (dup.lossDb or math.huge) then
+		-- pba_edge_dup_mix: the one estimate takes the route's loss moved toward the edge's by how much
+		-- cheaper the edge is (in full from EDGE_MIX_DB): the edge's search finds it from one step to the
+		-- next (the obstacle's middle moving with a wall the line grazes) already cheaper than the route,
+		-- and the swap was a step (gm_melancholia's stairs 16 u up: 1.5 dB in 4 u)
+		if (cfg.edge_dup_mix or 0) >= 0.5 and dup.lossDb then
+			local diff = dup.lossDb - e.db
+			local w = ramp(diff, 0, EDGE_MIX_DB)
+			if w < 1 then
+				e = table.Copy(e)
+				e.db = dup.lossDb - diff * w
+				e.mixDb = e.db - (dup.lossDb - diff)
+			end
+		end
+		for x = #r.paths, 1, -1 do if r.paths[x] == dup then table.remove(r.paths, x) end end
+		dup = false
+	end
+	-- pba_edge_dup_blend: the zipper's answer (one way or two) is all or nothing, and where it turns
+	-- from "the same way" to "distinct" the two estimates of what is still one way were summed at once
+	-- (gm_melancholia's stairs, 16 u above the eyes: 2.2-2.6 dB in one 4 u step). A route passing
+	-- within edge_dup_blend_u of the apex is that much the same way: the weaker of the two keeps
+	-- (1 - w) of its power, w = 1 at the apex, 0 at edge_dup_blend_u.
+	if not dup and near and (cfg.edge_dup_blend or 1) >= 0.5 then
+		local span = math.max(cfg.edge_dup_blend_u or 64, 1)
+		local w = math.Clamp(1 - nearD / span, 0, 0.999)
+		if w > 0 then
+			local cut = -10 * math.log10(1 - w)
+			if e.db <= (near.lossDb or math.huge) then
+				near.lossDb = near.lossDb + cut
+				near.blendDb = cut
+			else
+				e = table.Copy(e)
+				e.db = e.db + cut
+				e.blendDb = cut
+			end
+		end
+	end
+	r.edge, r.edgeDup, r.edgePath = e, dup and true or nil, dup or nil
+	if not dup then P.AddEdge(r.trans, e, L, cfg) end
+end
+
+-- Stage 8, objects and water on the routes
+local function routesObjectsWater(r, S, L, cfg, srcEnt)
+	if (cfg.path_props or 1) >= 0.5 then
+		for _, p in ipairs(r.paths) do
+			sliceCheck()
+			if p.points and #p.points > 0 then pathProps(p, S, L, cfg, srcEnt) end
+		end
+	end
+	-- one end under water: every path crosses the surface, like the transmission voice (which has
+	-- it as a wall). Paths ignored it: a dry point heard an underwater one 44 dB louder one way than
+	-- the other (gm_construct, perceptual bench reciprocity)
+	if #r.paths > 0 then
+		if P.WaterWall(S, L, cfg) then
+			local add, lpAdd = AC.WallLoss(nil, "pba_water", 0)
+			for _, p in ipairs(r.paths) do
+				if not p.waterDb then p.lossDb, p.waterDb, p.lp = p.lossDb + add, add, math.max(p.lp or 0, lpAdd) end
+			end
+		end
+	end
+end
+
+-- Stage 9, the bounds by the clear line
+local function edgeBounds(r, cfg)
+	-- pba_edge_bound: the route that bends round the very obstacle the line goes through (r.edgePath: the
+	-- way over its edge, kept alone) and the transmission through that obstacle are two parts of one
+	-- field, bounded together by the clear line, as the way over an edge and the transmission are in
+	-- P.AddEdge. At a door jamb's edge the route is 0 dB and the transmission through the jamb's sliver
+	-- (Steam Audio still seeing most of the source) 2 dB: summed, 2.2 dB LOUDER than in clear sight one
+	-- step before, the low-pass jumping with it (rp_downtown, outside the radio room's doorway).
+	if r.edgePath and r.trans and (cfg.edge_bound or 1) >= 0.5 then P.BoundBeside(r.trans, r.edgePath, cfg) end
+	-- the way over the edge found distinct from the routes (added to the transmission) and the loudest
+	-- route are still ways round the obstacle the line goes through: bounded together by the clear line too.
+	-- gm_melancholia's stairs: the edge 1.9 dB alone, one step on the edge 1.6 dB beside a 3.6 dB route
+	-- once a fixed ajar door slab separates them, -0.5 dB (louder than clear sight).
+	if r.edge and not r.edgePath and r.trans and r.trans.edgeDb and (cfg.edge_bound or 1) >= 0.5 then
+		local best
+		for _, p in ipairs(r.paths) do if p.lossDb and (not best or p.lossDb < best.lossDb) then best = p end end
+		if best then P.BoundBeside(r.trans, best, cfg) end
+	end
+end
+
+-- Stage 10, pba_trans_route: through the walls nearest the source, then round the others (after the edges'
+-- and the bounds' bookkeeping, which compare routes clear from S: this one is not)
+local function throughRoutes(r, S, L, tw, cfg, srcEnt)
+	local bound = r.trans and r.trans.lossDb or nil
+	for _, q in ipairs(r.paths) do if q.lossDb and (not bound or q.lossDb < bound) then bound = q.lossDb end end
+	for x, p in ipairs(P.ThroughRoute(S, L, tw, cfg, bound) or {}) do
+		if (cfg.path_props or 1) >= 0.5 then pathProps(p, S, L, cfg, srcEnt) end
+		r.paths[#r.paths + 1] = p
+		if x == 1 then r.throughRoute = p end
+	end
+end
+
+-- Stage 11, the voices heard. pba_bend_final: the diffuse model reads the bend of the route as heard (its
+-- final points, corners on the real edges), not the bend of the coarse polyline the route was evaluated on
+-- (probe positions, before the corners are refined): that one jumped by 90-120 deg in 8 u while the route did
+-- not change (rp_downtown street walk: diffuse share 0.13 -> 0.47 in one step)
+local function selectVoices(r, S, L, sndlvl, cfg)
+	local bendFinal = (cfg.bend_final or 0) >= 0.5
+	for _, p in ipairs(r.paths or {}) do
+		if bendFinal and p.points then
+			local _, b = P.PathShape(S, p.bendPts or p.points, L)
+			p.bendUse = b
+		else
+			p.bendUse = nil
+		end
+	end
+	r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
+	r.shadowDb = P.ShadowOf(r.voices, r.edge and math.max(r.edge.db - (r.edge.doorDb or 0), 0) or nil)
+end
+
+function P.Compute(S, L, sndlvl, cfg, srcEnt)
+	cfg = cfg or A.cfg
+	srcEnt = P.SourceObject(S, srcEnt, cfg)
+	S = P.FreeSource(S)
+	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt, cfg)
+	local now = RealTime()
+	local timeOn = (cfg.group_time or 0) >= 0.5
+	local emitter = IsValid(srcEnt) and srcEnt or false
+	local hit = cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emitter)
+	if hit then return hit end
+
+	local r = { S = S, L = L }
+	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
+	if (cfg.door_3d or 0) >= 0.5 then
+		P.WallDetours(walls)
+		P.LineLeaves(S, L, walls, cfg)
+	end
+	if #walls == 0 then
+		r.clear = true
+	else
+		r.clear = false
+		r.paths = {}
+		local worldBlocked, leafBlocked = lineBlockers(walls, cfg)
+		r.worldBlocked = worldBlocked
+		local field = fieldRoutes(r, S, L, sndlvl, cfg, srcEnt, worldBlocked, leafBlocked)
+		SLICE.hold = false -- (no listener field read from here on: cl_slicer may take the frame back)
+		P.WallDetours(walls)
+		local tw = transWalls(r, walls, leafBlocked, field, worldBlocked)
+		if #tw > 0 then transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked) end
+		if worldBlocked and #r.paths == 0 and CLIENT and A.Native and A.Native.pathsReady then nativePath(r, S, L, cfg) end
+		sliceCheck()
+		if worldBlocked and r.trans then edgeWay(r, S, L, cfg) end
+		routesObjectsWater(r, S, L, cfg, srcEnt)
+		edgeBounds(r, cfg)
+		if field and worldBlocked and (cfg.trans_route or 0) >= 0.5 and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+			throughRoutes(r, S, L, tw, cfg, srcEnt)
+		end
+		selectVoices(r, S, L, sndlvl, cfg)
+	end
+	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L)
 	return r
 end
