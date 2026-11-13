@@ -253,6 +253,7 @@ function N.Start()
 		if not ok or not pba_native then N.err = "require failed: " .. tostring(err) return end
 	end
 	if N.WrapPlay then N.WrapPlay() end
+	if A.Mix and A.Mix.Wrap then A.Mix.Wrap() end -- mix groups and ducking on every voice (cl_mix)
 	local compatible, why, ver, api = N.CheckModule(pba_native)
 	N.moduleVersion, N.moduleApi = ver, api
 	if not compatible then
@@ -874,7 +875,8 @@ timer.Remove("pba_native_enclosure") -- the former one-trace enclosure guess (au
 -- sh = baked path field {w, sh1, sh2, sh3}, eq = {l, m, h} override, delay = seconds, diffuse = share
 -- of the energy arriving diffuse (module: less direct, more room reverb, blurred direction),
 -- lpDb = the voice's continuous loss behind lp (path.lpDb: N.LowpassDb), follow = { ent, vol, lvl, chan }
--- to follow a moving entity, wet = share of the reverb kept (N.LoudWet) for the room bus without a slot }.
+-- to follow a moving entity, wet = share of the reverb kept (N.LoudWet) for the room bus without a slot,
+-- mix = the sound's mix groups (A.Mix.GroupsOf: the engine's mix value and ducking, cl_mix) }.
 -- Returns true on success.
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
@@ -892,7 +894,9 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local roomSend
 	if opt.roomSend then roomSend = opt.roomSend * A.cfg.native_gain
 	elseif opt.srcPos or opt.noRoom then roomSend = 0 end
-	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
+	local id
+	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
+	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend) end
 	if id and id > 0 and opt.srcPos and L then
 		if not N.BindSource(id, opt.srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain
@@ -1019,6 +1023,8 @@ function N.Echo(data, pos, enginePlays, own)
 	-- carries the distance and the room
 	local gain = (data.Volume or 1) * A.AC.EngineGain(52.5, lvl)
 	local e = data.Entity
+	-- the engine's mix value of this sound (cl_mix): its reverb is the sound's, scaled as the sound is
+	if A.Mix then gain = gain * A.Mix.Value(A.Mix.GroupsOf(data.SoundName, IsValid(e) and e or data.EntIndex, data.Channel, lvl)) end
 	local key = IsValid(e) and e:EntIndex() or (data.EntIndex or 0)
 	-- a weapon emission: the echoes are louder where the shooter aims (same rule as N.Directivity: an NPC's
 	-- shout or a player's footstep is not aimed)

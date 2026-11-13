@@ -259,7 +259,10 @@ local function applyNative(m, S, L)
 		if why == "pending" then return nil end -- decoding: wait for it (no engine fallback meanwhile)
 		return false
 	end
-	local id = pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
+	-- the engine's mix value and ducking (cl_mix): the loop's groups, found once
+	if A.Mix and not m.mixG then m.mixG = A.Mix.GroupsOf(m.name, m.ent, m.chan, m.lvl) end
+	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
+		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
 	m.started = true
 	m.nativeId = id > 0 and id or nil
 	m.stSel, m.stW = nil, nil
