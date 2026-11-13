@@ -365,6 +365,14 @@ local function onceEnded(m)
 	return m.nativeId ~= nil and m.endT ~= nil and (A.cfg.loops_once_native_end or 1) >= 0.5 and RealTime() > m.endT
 end
 
+--- The mirror's own DSP preset keeps it on an engine patch (A.OwnDSP, pba_keep_dsp). A speaker's preset is not
+-- the sound's own: sv_loops writes dsp_speaker for the SND_SPEAKER flag a patch cannot carry, and the module
+-- renders that flag with N.SPEAKER_EQ, as the short speaker lines (pba_loops_speaker_native).
+local function ownDSP(m)
+	if m.speakerDsp and (A.cfg.loops_speaker_native or 1) >= 0.5 then return false end
+	return A.OwnDSP(m.dsp)
+end
+
 function apply(m, fade)
 	if m.done then return end
 	local ent = m.ent
@@ -387,7 +395,7 @@ function apply(m, fade)
 	if not L then return end
 	local S = ent == m.anchor and m.pos or ent:WorldSpaceCenter()
 	local nativeOn = A.Native and A.Native.render and A.Enabled()
-	if m.nativeId and (not nativeOn or A.OwnDSP(m.dsp)) then
+	if m.nativeId and (not nativeOn or ownDSP(m)) then
 		-- mode or native rendering switched off (or pba_keep_dsp switched on for a loop with its own preset):
 		-- hand the loop back to the engine without a double
 		pba_native.StopVoice(m.nativeId)
@@ -417,7 +425,7 @@ function apply(m, fade)
 		return
 	end
 	-- (a loop with its own DSP preset stays an engine patch: the module has no presets, A.OwnDSP)
-	if nativeOn and not m.patch and not A.OwnDSP(m.dsp) then
+	if nativeOn and not m.patch and not ownDSP(m) then
 		if applyNative(m, S, L) ~= false then return end
 	end
 	local g, dsp = muffle(m, S, L)
@@ -574,6 +582,13 @@ net.Receive("pba_loop", function()
 	if not m and once and op == OP_UPDATE and (A.cfg.loops_once_end or 1) >= 0.5 then return end
 	if not m then
 		m = { key = key, name = name, idx = idx, chan = chan, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
+		-- a speaker line: its DSP is the speaker preset sv_loops wrote for the flag (none on a server without
+		-- dsp_speaker: this client's own then, for its engine patch)
+		if speaker then
+			local cv = GetConVar("dsp_speaker")
+			local sp = cv and cv:GetInt() or 0
+			if dsp == 0 or dsp == sp then m.speakerDsp, m.dsp = true, sp end
+		end
 		-- its end: the file's length at its start pitch (onceEnded). Without it a server long one-shot's
 		-- engine patch, which reads "playing" long after its file ended, lived on for good, and the next
 		-- volume change replayed it from the top (the Breencast looping, d1_trainstation_02, 2026-11-13)
