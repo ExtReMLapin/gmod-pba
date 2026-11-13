@@ -216,8 +216,118 @@ function A.StopReaches(files, name)
 	return files == nil or (name ~= nil and files[fileKey(name)] == true)
 end
 
+A.lengthCache = A.lengthCache or {}
+
+local MP3_KBPS = {
+	[3] = { 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320 }, -- MPEG-1 layer III
+	[2] = { 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160 },    -- MPEG-2 / 2.5
+}
+local MP3_RATE = { [3] = { 44100, 48000, 32000 }, [2] = { 22050, 24000, 16000 }, [0] = { 11025, 12000, 8000 } }
+
+-- An MPEG layer III frame header at byte i of s: its length in bytes, sample rate, samples per frame,
+-- bitrate (bit/s) and version; nil when the four bytes are not one.
+local function mp3Frame(s, i)
+	local b1, b2, b3, b4 = string.byte(s, i, i + 3)
+	if not b4 or b1 ~= 0xFF or bit.band(b2, 0xE0) ~= 0xE0 then return nil end
+	local ver, layer = bit.band(bit.rshift(b2, 3), 3), bit.band(bit.rshift(b2, 1), 3)
+	local bri, sri = bit.rshift(b3, 4), bit.band(bit.rshift(b3, 2), 3)
+	if ver == 1 or layer ~= 1 or bri == 0 or bri == 15 or sri == 3 then return nil end
+	local kbps = MP3_KBPS[ver == 3 and 3 or 2][bri]
+	local rate = MP3_RATE[ver][sri + 1]
+	local spf = ver == 3 and 1152 or 576
+	local len = math.floor(spf / 8 * kbps * 1000 / rate) + bit.band(bit.rshift(b3, 1), 1)
+	return len, rate, spf, kbps * 1000, ver, bit.rshift(b4, 6)
+end
+
+-- Seconds an MP3 plays: the frame count of a Xing/Info or VBRI header, else (constant bitrate) its audio
+-- bytes over the bitrate of its first real frame, one followed by two more where it says they are (the
+-- engine trusts the first sync it finds: junk after an ID3 tag gave hl2_song6.mp3 72 s for its 45).
+local function mp3Length(f, size)
+	local s = f:Read(math.min(size, 65536)) or ""
+	local i = 1
+	if string.sub(s, 1, 3) == "ID3" and #s >= 10 then
+		local b6, b7, b8, b9 = string.byte(s, 7, 10)
+		i = 11 + b6 * 2097152 + b7 * 16384 + b8 * 128 + b9
+	end
+	-- (read again from the end of the tag: it may hold pictures larger than the first read)
+	local base = i - 1
+	if base > 0 then
+		if base >= size then return nil end
+		f:Seek(base)
+		s, i = f:Read(math.min(size - base, 65536)) or "", 1
+	end
+	while i + 4 <= #s do
+		local len, rate, spf, bps, ver, mode = mp3Frame(s, i)
+		local len2 = len and mp3Frame(s, i + len)
+		if len2 and mp3Frame(s, i + len + len2) then
+			local side = ver == 3 and (mode == 3 and 17 or 32) or (mode == 3 and 9 or 17)
+			local tag = string.sub(s, i + 4 + side, i + 7 + side)
+			if (tag == "Xing" or tag == "Info") and bit.band(string.byte(s, i + 11 + side) or 0, 1) == 1 then
+				local a, b, c, d = string.byte(s, i + 12 + side, i + 15 + side)
+				if d then return (((a * 256 + b) * 256 + c) * 256 + d) * spf / rate end
+			end
+			if string.sub(s, i + 36, i + 39) == "VBRI" then
+				local a, b, c, d = string.byte(s, i + 50, i + 53)
+				if d then return (((a * 256 + b) * 256 + c) * 256 + d) * spf / rate end
+			end
+			local stop = size
+			f:Seek(size - 128)
+			if size >= 128 and f:Read(3) == "TAG" then stop = size - 128 end
+			return (stop - (base + i - 1)) * 8 / bps
+		end
+		i = i + 1
+	end
+	return nil
+end
+
+-- Seconds a compressed WAV plays from its "fact" chunk (its length in samples): GMod's SoundDuration
+-- counts whole MS-ADPCM blocks, up to a block too long (kl_careful.wav 1.24 s for 1.19). nil for PCM.
+local function wavLength(f, size)
+	if f:Read(4) ~= "RIFF" then return nil end
+	f:Skip(4)
+	if f:Read(4) ~= "WAVE" then return nil end
+	local tag, rate, fact
+	while f:Tell() + 8 <= size do
+		local id, len = f:Read(4), f:ReadULong()
+		local nextPos = f:Tell() + len + len % 2
+		if id == "fmt " and len >= 8 then
+			tag = f:ReadUShort()
+			f:Skip(2)
+			rate = f:ReadULong()
+		elseif id == "fact" and len >= 4 then
+			fact = f:ReadULong()
+		elseif id == "data" then
+			break
+		end
+		f:Seek(nextPos)
+	end
+	-- PCM (1), float (3), extensible (0xFFFE): SoundDuration is right
+	if not tag or tag == 1 or tag == 3 or tag == 0xFFFE or not fact or not rate or rate <= 0 then return nil end
+	return fact / rate
+end
+
+-- The length of a sound file read from its own header where SoundDuration only estimates it (compressed
+-- WAVs, MP3s); nil to use SoundDuration. Cached per file.
+local function fileLength(file_)
+	local key = string.lower(file_)
+	local c = A.lengthCache[key]
+	if c ~= nil then return c or nil end
+	local len
+	local wav, mp3 = string.EndsWith(key, ".wav"), string.EndsWith(key, ".mp3")
+	if wav or mp3 then
+		local f = file.Open("sound/" .. key, "rb", "GAME")
+		if f then
+			local size = f:Size()
+			len = wav and wavLength(f, size) or mp3 and mp3Length(f, size) or nil
+			f:Close()
+		end
+	end
+	A.lengthCache[key] = len or false
+	return len
+end
+
 --- Duration of a sound name (s), looked up on its file: nil or 0 when unknown (sentence, missing
--- file, VBR mp3).
+-- file). Compressed WAVs and MP3s: their length read from the file's header (fileLength).
 function A.SoundDuration(name)
 	if A.IsSentence(name) then
 		-- rendered by the module (cl_sentences): its real length; else the engine's own {len}
@@ -225,7 +335,8 @@ function A.SoundDuration(name)
 		if s then return s end
 		return SentenceDuration(string.sub(name, 2))
 	end
-	return SoundDuration(A.SoundFile(name))
+	local f = A.SoundFile(name)
+	return fileLength(f) or SoundDuration(f)
 end
 
 --- Sentences (scripts/sentences.txt: Combine radio, metrocops...) reach EntityEmitSound as
