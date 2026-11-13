@@ -382,14 +382,14 @@ function A.NoteBrief(data, took)
 	if bit.band(data.Flags or 0, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return end
 	local e = data.Entity
 	if not IsValid(e) or e:IsWorld() or not isstring(data.SoundName) then return end
-	local dur = A.SoundDuration(data.SoundName) or 0
-	if dur <= 0 then return end
+	local now = CurTime()
+	local tEnd = A.PlayEnd(data.SoundName, data.Pitch, now, 0.1) -- (the end-of-file rule, sh_core)
+	if not tEnd then return end
 	local idx = e:EntIndex()
 	local r = A.recentBrief[idx]
 	if not r then r = {} A.recentBrief[idx] = r end
-	local now = CurTime()
 	for k, x in pairs(r) do if x.t < now then r[k] = nil end end
-	r[briefKey(data.SoundName)] = { t = now + dur * 100 / math.max(data.Pitch or 100, 1) + 0.1, took = took and true or false }
+	r[briefKey(data.SoundName)] = { t = tEnd, took = took and true or false }
 end
 --- True when data is a volume / pitch change of a brief sound that still plays; second value: pba took it
 -- over (else the engine plays it).

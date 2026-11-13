@@ -484,7 +484,7 @@ function LP.Handle(data)
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
 			orig = data.OriginalSoundName, posGiven = data.Pos }
 		-- sounds play in real time whatever the time scale (game.SetTimeScale, host_timescale): ends in real time
-		if once then l.once, l.endT = true, RealTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
+		if once then l.once, l.endT = true, A.PlayEnd(data.SoundName, data.Pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE end
 		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...) and model doors:
 		-- their C++ stops the loop with a StopSound that never reaches Lua; the mirror stops with the
 		-- motion. Brush models only ("*N"): a prop_dynamic is MOVETYPE_PUSH too, and a still machine
@@ -516,7 +516,7 @@ function LP.Handle(data)
 		l.pos = data.Pos or (IsValid(e) and e:WorldSpaceCenter()) or Vector()
 		-- a long line started again (same key): it plays from its top again, so it ends later
 		if l.once and not fresh then
-			l.endT = RealTime() + (A.SoundDuration(data.SoundName) or 0) * 100 / math.max(l.pitch, 1) + 0.5
+			l.endT = A.PlayEnd(data.SoundName, l.pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE
 		end
 	end
 	if fresh then

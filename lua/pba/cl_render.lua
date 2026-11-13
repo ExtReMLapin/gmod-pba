@@ -277,7 +277,7 @@ A.lengthProbe = A.lengthProbe or {} -- file -> seconds; false = unreadable; true
 
 local function setLength(h, secs)
 	h.ukey = nil
-	h.tEnd = h.t0 + secs * 100 / math.max(h.pitch or 100, 1)
+	h.tEnd = h.t0 + A.AtPitch(secs, h.pitch) -- (the end-of-file rule, sh_core)
 	if IsValid(h.a) and h.a.pbaSeqNext == h.seq then h.a.pbaEnd = h.tEnd end
 end
 
@@ -298,16 +298,14 @@ local function onLength(key, secs)
 	end
 end
 
---- Seconds `name` plays at `pitch`, and the key of its file while its length is unknown (then the
--- seconds are UNKNOWN_CAP).
+--- Seconds `name` plays at `pitch` (A.PlaySeconds, the end-of-file rule of sh_core), and the key of its file
+-- while its length is unknown (then the seconds are UNKNOWN_CAP and BASS reads its length once).
 local function playLength(name, pitch)
-	local secs = A.SoundDuration(name)
-	if secs and secs > 0 then return math.max(secs, 0.1) * 100 / math.max(pitch or 100, 1) end
+	local secs = A.PlaySeconds(name, pitch)
+	if secs then return secs end
 	if A.IsSentence(name) then return UNKNOWN_CAP, "!" end -- not a file: no length to read
 	local key = string.lower(A.SoundFile(name))
-	local p = A.lengthProbe[key]
-	if type(p) == "number" then return math.max(p, 0.1) * 100 / math.max(pitch or 100, 1) end
-	if p == nil and sound and sound.PlayFile then
+	if A.lengthProbe[key] == nil and sound and sound.PlayFile then
 		A.lengthProbe[key] = true
 		sound.PlayFile("sound/" .. key, "noplay", function(ch)
 			local len = IsValid(ch) and ch:GetLength() or -1
@@ -316,8 +314,8 @@ local function playLength(name, pitch)
 			if len and len > 0 then onLength(key, len) end
 		end)
 		-- (a callback run at once: the length is already known)
-		p = A.lengthProbe[key]
-		if type(p) == "number" then return math.max(p, 0.1) * 100 / math.max(pitch or 100, 1) end
+		secs = A.PlaySeconds(name, pitch)
+		if secs then return secs end
 	end
 	return UNKNOWN_CAP, key
 end

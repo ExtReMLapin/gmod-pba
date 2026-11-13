@@ -72,6 +72,36 @@ end
 -- Volume of a mouth copy (lip sync only): -60 dB, nobody hears it.
 A.MOUTH_VOL = 0.001
 
+-- ------------------------------------------------------------------ end of file
+-- One end-of-file rule for every copy, mirror and voice (engine copies and module voices of cl_render, long
+-- one-shot mirrors of cl_loops, the server's long lines of sv_loops): a sound ends when its file has played
+-- at its start pitch. A mirror is told ended END_GRACE after it (its start's latency).
+A.END_GRACE = 0.5
+
+--- Seconds `secs` of file play at `pitch` (at least 0.1 s of file).
+function A.AtPitch(secs, pitch)
+	return math.max(secs, 0.1) * 100 / math.max(pitch or 100, 1)
+end
+
+--- Seconds `name` plays at `pitch`; nil when its length is unknown (SoundDuration 0 for a VBR mp3, a missing
+-- file, a sentence) and was not read yet by the client's BASS probe (cl_render playLength, A.lengthProbe).
+function A.PlaySeconds(name, pitch)
+	local secs = A.SoundDuration(name)
+	if not (secs and secs > 0) and A.lengthProbe and not A.IsSentence(name) then
+		secs = A.lengthProbe[string.lower(A.SoundFile(name))]
+		if type(secs) ~= "number" then secs = nil end
+	end
+	if secs and secs > 0 then return A.AtPitch(secs, pitch) end
+end
+
+--- When `name`, started at t0 (RealTime when nil) at `pitch`, has played its file, plus `grace` seconds;
+-- nil when its length is unknown.
+function A.PlayEnd(name, pitch, t0, grace)
+	local s = A.PlaySeconds(name, pitch)
+	return s and (t0 or RealTime()) + s + (grace or 0) or nil
+end
+
+
 --- Entity index and channel of a new sound the channel rule applies to (nil otherwise).
 local function ruleSlot(data)
 	local chan, e = data.Channel, data.Entity
