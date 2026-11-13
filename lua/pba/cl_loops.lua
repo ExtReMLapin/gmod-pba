@@ -404,7 +404,7 @@ function LP.HandleClient(data)
 		if m.nativeId and m.reeval then m.reeval.force = true end -- applied at its next turn
 		return true
 	end
-	if replacing(chan) then LP.StopClient(idx, chan) end
+	if replacing(chan) and not A.KeepsChannel(flags) then LP.StopClient(idx, chan) end
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl >= 256 then return false end
 	if src or cpp then

@@ -172,7 +172,8 @@ local function beginCopies(data, idx)
 	local chan = data.Channel or CHAN_AUTO
 	if not idx or not replaces(chan) then return nil end
 	local list = A.emitted[idx]
-	if list then
+	-- SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps what plays on the channel (both play)
+	if list and not A.KeepsChannel(data.Flags) then
 		for i = #list, 1, -1 do
 			if list[i].srcChan == chan then stopCopy(list[i]) table.remove(list, i) end
 		end
