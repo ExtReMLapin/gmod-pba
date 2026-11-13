@@ -491,6 +491,28 @@ end
 --- cfg of a sound whose file is already muffled by water (P.Compute(S, L, lvl, P.DRY_SOURCE_CFG, ent)).
 P.DRY_SOURCE_CFG = setmetatable({ water_skip = true }, { __index = function(_, k) return A.cfg[k] end })
 
+--- THE evaluation entry of every sound kind (refactor step 9): a short copy at its birth (o nil: cl_render
+-- A.Process), a followed one-shot (cl_render OS), a loop or long mirror (cl_loops), a stream (cl_streams).
+-- One call: the routes, walls and gains (P.Compute), spread over frames when far (cl_slicer: SL.Compute at a
+-- birth, SL.Held for a playing sound), the source's dry rule (dry: a file already muffled by water gets no
+-- water surface wall, P.DRY_SOURCE_CFG), then a playing sound's hysteresis (P.Stable on o.hyst).
+-- ready(o): called once a playing sound's sliced evaluation is done.
+-- Returns the result (nil while a playing sound's slice runs), and at a birth the slicer's job when held.
+function P.Evaluate(o, S, L, lvl, ent, dry, ready)
+	local cfg = dry and P.DRY_SOURCE_CFG or nil
+	local SL = CLIENT and A.Slicer or nil
+	if not o then
+		if SL then return SL.Compute(S, L, lvl, ent, cfg) end
+		return P.Compute(S, L, lvl, cfg, ent)
+	end
+	o.pbaCfg = cfg
+	local raw
+	if SL then raw = SL.Held(o, S, L, lvl, ent, ready) else raw = P.Compute(S, L, lvl, cfg, ent) end
+	if not raw then return nil end
+	o.hyst = o.hyst or {}
+	return P.Stable(o.hyst, raw)
+end
+
 -- water surface between source and listener: the air / water interface reflects most of the sound
 -- (one fixed, heavily low-passed "wall"; no detour through the air exists)
 local function addWater(walls, S, L, cfg)

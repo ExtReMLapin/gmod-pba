@@ -115,6 +115,18 @@ probe_ok, gset_hits = L.execute(gset_code, L.table_from(srcs))
 ok_gset = probe_ok == "true" and gset_hits == ""
 print("%s static: no write to the global `_` (GSET opcode found %s; writes at %s)" % ("PASS" if ok_gset else "FAIL", probe_ok, gset_hits or "none"))
 
+# Static lock (offline only): one evaluation entry for every sound kind (refactor step 9). The client's sound
+# paths (short copies at their birth, followed one-shots, loop and long mirrors, streams) compute their routes
+# through P.Evaluate only (sh_paths): no direct P.Compute / Slicer.Held / Slicer.Compute in their files.
+eval_calls = []
+for f in ("cl_render.lua", "cl_loops.lua", "cl_streams.lua", "cl_native.lua"):
+    for i, line in enumerate(srcs.get("lua/pba/" + f, "").splitlines(), 1):
+        code = line.split("--", 1)[0]
+        if re.search(r"(Paths|(?<![\w.])P)\.Compute\(|Slicer\.(Held|Compute)\(", code):
+            eval_calls.append("%s:%d" % (f, i))
+print("%s static: one evaluation entry, P.Evaluate (direct route computations in the sound paths: %s)"
+      % ("PASS" if not eval_calls else "FAIL", eval_calls or "none"))
+
 # Static lock (offline only): every option of A.CONFIG is read somewhere (cfg.<name>, or its name quoted
 # outside sh_config.lua); the low-pass tables are read by a built name (cfg["dsp_lp" .. level], "lp" .. n .. "_db").
 cfg_src = open(os.path.join(repo, "lua", "pba", "sh_config.lua"), encoding="utf-8").read()

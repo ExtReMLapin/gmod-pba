@@ -165,7 +165,16 @@ end
 function A.WithChannelRule(fn)
 	return function(data)
 		local idx, chan = ruleSlot(data)
-		if not idx then return fn(data) end
+		if not idx then
+			-- pba_channel_one_rule 0: the server's followed long lines of the world were cut as well
+			if SERVER and (A.cfg.channel_one_rule or 1) < 0.5 and not A.reemitting and A.CutsChannel(data.Channel, data.Flags)
+				and (not IsValid(data.Entity) or data.Entity:IsWorld()) and A.Loops and A.Loops.CutChannel then
+				local ret = fn(data)
+				A.Loops.CutChannel(0, data.Channel, data.SoundName)
+				return ret
+			end
+			return fn(data)
+		end
 		if A.reemitting then
 			-- pba's own emission (the original re-emitted to clear or muffled listeners): the engine
 			-- plays it, on this channel, for those players
@@ -181,7 +190,8 @@ function A.WithChannelRule(fn)
 		end
 		-- the client's copies and mirrors on that channel stop before the new sound plays (cl_render
 		-- A.CutChannel; a relayed sound, which never reaches this hook, cuts them in A.Process)
-		if CLIENT and A.CutChannel then A.CutChannel(idx, chan) end
+		-- (pba_channel_one_rule 0: none, the sound left to the engine cut nothing of pba's)
+		if CLIENT and A.CutChannel and (A.cfg.channel_one_rule or 1) >= 0.5 then A.CutChannel(idx, chan) end
 		-- what the engine played before this sound; the handler's re-emissions record themselves anew
 		local per = A.vanillaOn[idx]
 		local prev = per and per[chan]
@@ -247,6 +257,8 @@ function A.OnConfigChanged(name)
 		if (A.cfg.loops or 0) < 0.5 then A.Loops.Release() else timer.Simple(0, A.Loops.AdoptAmbients) end
 	end
 	-- pba_compat_auto switched: Sound Muffling Effect is turned off, or given back its value
+	-- the player's lip sync choice reaches the server (sv_loops MouthStart, the long lines' mouth copy)
+	if name == "lipsync" and CLIENT and A.SendLipsyncPref then A.SendLipsyncPref() end
 	if name == "compat_auto" and A.Compat and A.Compat.Check then A.Compat.Check() end
 	if name == "update_interval" and CLIENT then
 		for _, t in ipairs({ "pba_streams" }) do
@@ -505,6 +517,17 @@ function A.IsLooping(name)
 	return loop
 end
 
+--- One SoundTime rule for short and long sounds (refactor step 8): a sound stamped away from "now" (more than
+-- 0.25 s) was left to the engine; on the server with pba_soundtime its stamp goes with the relay and the
+-- re-emission (short), and a long line is taken over as well (started at once: a long line's start within a
+-- few tenths is not heard, crossing every wall is), pba_long_soundtime. long: asked for a long sound.
+function A.SoundTimeTaken(data, long)
+	local st = data.SoundTime or 0
+	if st == 0 or math.abs(st - CurTime()) <= 0.25 then return true end
+	if not SERVER or (A.cfg.soundtime or 1) < 0.5 then return false end
+	return not long or (A.cfg.long_soundtime or 1) >= 0.5
+end
+
 --- Common eligibility rules for an EntityEmitSound table. Returns true when pba may
 -- process the sound.
 function A.Eligible(data)
@@ -515,8 +538,7 @@ function A.Eligible(data)
 	-- time; sounds scheduled away from "now" were left alone (re-emission played them immediately). On the
 	-- server with pba_soundtime their stamp goes with the relay (the client schedules them as the engine
 	-- would, A.SoundTimeDelay) and with the re-emission (sv_relay reemit): taken like any other
-	local st = data.SoundTime or 0
-	if st ~= 0 and math.abs(st - CurTime()) > 0.25 and not (SERVER and (A.cfg.soundtime or 1) >= 0.5) then return false end
+	if not A.SoundTimeTaken(data) then return false end
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
 	if A.IsLooping(data.SoundName) then return false end

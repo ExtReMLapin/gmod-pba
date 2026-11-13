@@ -180,15 +180,22 @@ end
 -- on channel chan stops, every copy (anchors, native voices, those at a fixed position past the anchor
 -- cap, mouth copies) and every client-side long sound mirror (whichever started it: a long line cut the
 -- brief copies of its channel, a brief one the long mirror).
-function A.CutChannel(idx, chan)
-	local list = A.emitted[idx]
+-- only: "copies" or "mirrors" restricts the cut to one kind (pba_channel_one_rule 0: each path cut its own).
+function A.CutChannel(idx, chan, only)
+	local list = only ~= "mirrors" and A.emitted[idx]
 	if list then
 		for i = #list, 1, -1 do
 			if list[i].srcChan == chan then stopCopy(list[i]) table.remove(list, i) end
 		end
 		if #list == 0 then A.emitted[idx] = nil end
 	end
-	if A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
+	if only ~= "copies" and A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
+end
+
+--- The kind a path cuts under pba_channel_one_rule 0 (nil: everything, the one rule).
+function A.ChannelCutOnly(kind)
+	if (A.cfg.channel_one_rule or 1) >= 0.5 then return nil end
+	return kind
 end
 
 --- Copy set of a sound's source on a replacing channel; a new sound there cuts every earlier copy of
@@ -196,7 +203,7 @@ end
 local function beginCopies(data, idx)
 	local chan = data.Channel or CHAN_AUTO
 	if not idx or not replaces(chan) then return nil end
-	if A.CutsChannel(chan, data.Flags) then A.CutChannel(idx, chan) end
+	if A.CutsChannel(chan, data.Flags) then A.CutChannel(idx, chan, A.ChannelCutOnly("copies")) end
 	local key = idx .. ":" .. chan
 	local c = A.copies[key]
 	if not c then
@@ -699,12 +706,8 @@ function evaluate(rec, now, L)
 	-- a far sound's evaluation may run in slices (cl_slicer): its voices keep their course until it is ready
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
 	if rec.waterDry == nil then rec.waterDry = A.WaterMuffledFile(rec.name) end
-	local cfg = rec.waterDry and P.DRY_SOURCE_CFG or nil
-	rec.pbaCfg = cfg
-	local raw
-	if A.Slicer then raw = A.Slicer.Held(rec, S, L, rec.lvl, ent, followReady) else raw = P.Compute(S, L, rec.lvl, cfg, ent) end
-	if not raw then return end
-	local r = P.Stable(rec.hyst, raw)
+	local r = P.Evaluate(rec, S, L, rec.lvl, ent, rec.waterDry, followReady)
+	if not r then return end
 	A.DebugNote("os:" .. rec.key, S, L, r, rec.name, "oneshot")
 	local vs
 	rec.clearPath = r.clear or not r.voices or #r.voices == 0
@@ -920,6 +923,18 @@ end
 -- (data.Face): the engine keeps the channel under that index as it keeps the original's in vanilla, and the
 -- face that comes into view during the line moves its mouth (pba_lipsync_unseen).
 local MOUTH_VOL = A.MOUTH_VOL
+
+--- Tells the server this player's lip sync choice: it also picks the long lines' mouth copy, which the
+-- server plays (sv_loops MouthStart), as pba_lipsync picks the short lines' one below.
+function A.SendLipsyncPref()
+	if not IsValid(LocalPlayer()) then return end
+	net.Start("pba_lipsync_pref")
+	net.WriteBool((A.cfg.lipsync or 1) >= 0.5)
+	net.SendToServer()
+end
+hook.Add("InitPostEntity", "pba_lipsync_pref", A.SendLipsyncPref)
+timer.Simple(0, A.SendLipsyncPref) -- (a reload after InitPostEntity)
+
 local function mouthCopy(data, src)
 	if (A.cfg.lipsync or 1) < 0.5 then return end
 	local ch = data.Channel
@@ -998,9 +1013,7 @@ function A.Process(data, relayed)
 	local tReq = RealTime()
 	local r, job
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
-	local cfg = A.WaterMuffledFile(data.SoundName) and A.Paths.DRY_SOURCE_CFG or nil
-	if A.Slicer then r, job = A.Slicer.Compute(S, L, lvl, IsValid(src) and src or nil, cfg)
-	else r = A.Paths.Compute(S, L, lvl, cfg, IsValid(src) and src or nil) end
+	r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.WaterMuffledFile(data.SoundName))
 	if not r and job then
 		-- a far sound whose routes are computed in slices (cl_slicer): taken now (the original is not
 		-- played), emitted once they are ready, by the time the sound would reach the listener at the
