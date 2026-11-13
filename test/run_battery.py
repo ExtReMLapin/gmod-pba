@@ -239,6 +239,10 @@ steps = [
     ("caption_check", lambda: py("caption_check.py")),
     # a parked vehicle between source and listener stands in the way like a big prop (was ignored)
     ("vehicle_obstacle", lambda: seq(lambda: load(TW), lambda: job("server", "vehicle_obstacle.lua", 15))),
+    # an impact / break sound the engine plays on the world inside its object: the object is not its own
+    # wall (in plain sight: left to the engine, clear on the client; behind a wall: still taken)
+    ("impact_inside_prop", lambda: seq(lambda: load(TW), lambda: native_on(False),
+                                       lambda: [job("server", "impact_inside_prop.lua", 30), job("client", "impact_inside_prop_client.lua", 10)])),
     # a sentence an addon plays on the world (no position in EntityEmitSound): taken behind a wall
     ("sentence_pos", lambda: seq(lambda: load(TW), lambda: job("server", "sentence_pos.lua"))),
     # singleplayer: the player's own gunfire gets its native echoes (no prediction: only the server sees it)
@@ -525,7 +529,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos",
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "impact_inside_prop", "sentence_pos",
          "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors",
          "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed"}
 if "--quick" in opts:

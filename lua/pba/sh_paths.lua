@@ -453,6 +453,22 @@ end
 
 P.HasDisplacements = mapHasDisplacements
 
+--- The object a sound comes from: srcEnt itself, or for a sound played on the world (srcEnt nil or the
+-- world) at a point inside an object, that object (pba_source_object). The engine plays impacts, breaks and
+-- debris on the world at the physics object's origin (vphysics_sound.h): traced from there, the object was
+-- its own wall (in plain sight, 20 to 70 dB and a relay for every impact). One point trace, entities only.
+local srcObjOut = {}
+local srcObjTr = { mask = MASK_SOLID, ignoreworld = true, output = srcObjOut }
+function P.SourceObject(S, srcEnt)
+	if IsValid(srcEnt) and not srcEnt:IsWorld() then return srcEnt end
+	if (A.cfg.source_object or 1) < 0.5 or not S then return srcEnt end
+	srcObjTr.start, srcObjTr.endpos = S, S
+	util.TraceLine(srcObjTr)
+	local e = srcObjOut.Entity
+	if srcObjOut.StartSolid and IsValid(e) and not e:IsWorld() then return e end
+	return srcEnt
+end
+
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
 -- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
 function P.Walls(S, L, maxWalls, srcEnt, lazy)
@@ -2684,6 +2700,7 @@ local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a s
 local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
 function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	cfg = cfg or A.cfg
+	srcEnt = P.SourceObject(S, srcEnt)
 	S = P.FreeSource(S)
 	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt)
 	local now = RealTime()

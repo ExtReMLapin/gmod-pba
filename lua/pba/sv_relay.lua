@@ -319,6 +319,8 @@ local function relay(data)
 	-- player the engine would have sent it to must get it back. A 140 dB explosion is heard to 9000 u;
 	-- a player at 7000 u (beyond lod_dist 6000) lost it as soon as one player near it was behind a wall.
 	local radius = audibleRadius(lvl)
+	-- the object the sound comes from (an impact on the world inside its object): not its own wall
+	local srcObj = A.Paths.SourceObject(pos, data.Entity)
 	local lod = A.cfg.lod_dist
 	local predicted = GetPredictionPlayer()
 	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
@@ -343,13 +345,13 @@ local function relay(data)
 					far[#far + 1] = ply
 				else
 					local all = A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1
-					local walls = not all and A.Paths.Walls(pos, eye, 1, data.Entity) or nil
+					local walls = not all and A.Paths.Walls(pos, eye, 1, srcObj) or nil
 					if (all or #walls > 0) and relayToken(ply) then
 						blocked[#blocked + 1] = ply
 					else
 						-- over budget (or a clear line): the wall test decides, a native-all player
 						-- over budget included (his relay was not conditioned on a wall)
-						walls = walls or A.Paths.Walls(pos, eye, 1, data.Entity)
+						walls = walls or A.Paths.Walls(pos, eye, 1, srcObj)
 						if #walls > 0 then
 							local dsp, gain = muffleFor(walls)
 							muffled[#muffled + 1] = { ply = ply, dsp = dsp, gain = gain }
