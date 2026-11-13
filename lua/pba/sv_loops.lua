@@ -29,7 +29,7 @@ local LEAVE_SCALE = 1.1
 -- The engine's attenuated PAS radius, NOT capped by lod_dist: the hook suppresses a loop for everyone, so a
 -- player beyond lod_dist must get the mirror too (130-150 dB rotors and sirens, still loud at 7000-10000 u,
 -- went silent there). His client renders it clear, without any path search (cl_loops pathOf).
-local function radiusFor(lvl) return lvl > 50 and 100 * (lvl - 50) or 500 end
+local function radiusFor(lvl) return A.AudibleRadius(lvl) end
 
 local function send(op, l, plys)
 	if #plys == 0 then return end
@@ -46,11 +46,14 @@ local function send(op, l, plys)
 	net.Send(plys)
 end
 
-local function inRange(l, ply, scale)
+--- True when player ply is within the audible radius of followed sound l (scale: the leaving hysteresis).
+-- (sv_sound Audience, kind "mirror")
+function LP.InRange(l, ply, scale)
 	local pos = IsValid(l.ent) and l.ent:WorldSpaceCenter() or l.pos
 	local r = radiusFor(l.lvl) * (scale or 1)
 	return A.PlayerEar(ply):DistToSqr(pos) <= r * r
 end
+local function inRange(l, ply, scale) return A.Sound.Audience(l, ply, scale) == "mirror" end
 
 -- ------------------------------------------------------------------ sound sets
 
@@ -420,70 +423,41 @@ function LP.CutChannel(idx, chan, name)
 	end
 end
 
---- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
-function LP.Handle(data)
-	if A.cfg.loops < 0.5 then return false end
-	local e = data.Entity
-	-- players' own loops (underwater ambience...) are started and stopped by the engine's C++
-	-- code: that StopSound never reaches Lua, a mirror would play forever. Left to the engine.
-	if IsValid(e) and e:IsPlayer() then return false end
-	-- same for the loops of a weapon a player holds: the gravity gun's hold loop is a CSoundPatch on the
-	-- weapon, faded and destroyed by its C++ (weapon_physcannon); a mirror rendered it to its holder as
-	-- a foreign source and could outlive the destroy
-	if IsValid(e) and e:IsWeapon() then
-		local o = e:GetOwner()
-		if IsValid(o) and o:IsPlayer() then return false end
+--- True when a long sound or loop `name` of entity idx is followed (a stop of it is pba's: LP.Stop finds it).
+function LP.Following(idx, name)
+	local files = A.StopFiles(name)
+	for _, x in pairs(LP.active) do
+		if x.idx == idx and stopReached(files, x) then return true end
 	end
-	local idx = IsValid(e) and e:EntIndex() or 0
-	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
-	local l = LP.active[key]
-	local flags = data.Flags or 0
-	-- SND_STOP_LOOPING ("stop all looping sounds on the entity") comes on any name (common/null.wav)
-	if bit.band(flags, SND_STOP_LOOPING or 32) ~= 0 and idx ~= 0 then
-		LP.Stop(idx, nil)
-		return false
-	end
-	-- left to the engine by the cap: its changes stay the engine's too (else a mirror doubles it);
-	-- they are kept so a later take-over (timer) starts at the current volume / pitch
-	local c = LP.capped[key]
-	if c then
-		if bit.band(flags, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then
-			LP.capped[key] = nil
-		else
-			c.t = CurTime()
-			if bit.band(flags, SND_CHANGE_VOL) ~= 0 then c.vol = data.Volume or c.vol end
-			if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then c.pitch = data.Pitch or c.pitch end
-		end
-		return false
-	end
-	local once, dur = false, 0
-	if not l then
-		if A.IsLooping(data.SoundName) then
-			-- engine-driven physics loops (scraping / rolling friction): their envelope lives in the
-			-- physics engine; leave them to it
-			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then return false end
-		else
-			once, dur = LP.IsLong(data)
-			-- a change of a brief sound still playing: not a new patch (audit B-8). Taken over by pba:
-			-- dropped; played by the engine: its change is the engine's
-			if not once and A.BriefPlaying then
-				local playing, took = A.BriefPlaying(data)
-				if playing then return took end
-			end
-			if not once then once, dur = LP.IsPatchStart(data) end
-			if not once then return false end
-		end
-	end
+	return false
+end
 
-	-- stop events carry no sound level: test them first (SND_STOP_LOOPING ends a loop the same way)
+--- A loop left to the engine by the cap: its changes stay the engine's too (else a mirror doubles it); they are
+-- kept so a later take-over (timer) starts at the current volume / pitch. (sv_sound, step "capped")
+function LP.NoteCapped(key, data)
+	local c = LP.capped[key]
+	if not c then return end
+	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then
-		return LP.Stop(idx, data.SoundName)
+		LP.capped[key] = nil
+	else
+		c.t = CurTime()
+		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then c.vol = data.Volume or c.vol end
+		if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then c.pitch = data.Pitch or c.pitch end
 	end
-	if not l and (data.SoundLevel or 75) <= 0 then return false end -- 2D loops: leave to the engine
+end
+
+--- Takes over a sound sv_sound classified "follow" (snd: key, idx, l = the followed entry or nil, once = a long
+-- one-shot or a patch start): a new mirror, or an update of a followed one, sent to its audience. Returns true
+-- when taken over, false when the cap leaves a new one to the engine (LP.capped). LP.Handle (sv_sound) is the
+-- whole entry: classification, then this.
+function LP.Take(data, snd)
+	local e, idx, key, l, once = data.Entity, snd.idx, snd.key, snd.l, snd.once
+	local flags = data.Flags or 0
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	local fresh = l == nil
 	if fresh then
-		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
+		l = { kind = "mirror", key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
 			orig = data.OriginalSoundName, posGiven = data.Pos }
 		-- sounds play in real time whatever the time scale (game.SetTimeScale, host_timescale): ends in real time
 		if once then l.once, l.endT = true, A.PlayEnd(data.SoundName, data.Pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE end

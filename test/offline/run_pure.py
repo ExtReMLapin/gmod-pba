@@ -160,8 +160,8 @@ sh_paths.lua:portal_diffuse_db=60 sh_paths.lua:portal_diffuse_lp=4 sh_paths.lua:
 sh_paths.lua:trans_bundle=0 sh_paths.lua:trans_bundle_edge=0 sh_paths.lua:trans_leaf_fade=0
 sh_paths.lua:trans_pos_clamp=0 sh_paths.lua:trans_route=0 sh_paths.lua:trans_tilt=0 sh_paths.lua:trans_window_soft=0
 sh_paths.lua:wall_merge_graze=0 sh_paths.lua:water_margin=0 sv_loops.lua:long_lipsync=0 sv_loops.lua:long_sounds=0
-sv_loops.lua:loops=0 sv_loops.lua:patch_oneshots=0 sv_loops.lua:phys_loops_muffle=0 sv_relay.lua:far_muffle=0
-sv_relay.lua:sentences=0
+sv_loops.lua:loops=0 sv_loops.lua:patch_oneshots=0 sv_loops.lua:phys_loops_muffle=0 sv_sound.lua:far_muffle=0
+sv_sound.lua:sentences=0
 """.split())
 cfg_defaults = {n: float(v) for n, v in re.findall(r"^\t(\w+)\s*=\s*\{\s*(-?[\d.]+)", cfg_src, re.M)}
 fb_seen = set()
