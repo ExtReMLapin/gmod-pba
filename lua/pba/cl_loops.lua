@@ -21,6 +21,21 @@ local HANDBACK_S, AUDIBLE = 0.2, 1e-3
 A.renderedT = A.renderedT or {} -- file (lower case, no sound chars) -> RealTime() of its last audible rendering
 A.handedBack = A.handedBack or {} -- the lines handed back, last 16 (tests, pba_status)
 local function lineKey(name) return string.lower((string.gsub(A.SoundFile(name or ""), "\\", "/"))) end
+A.LineKey = lineKey
+-- Only speech is watched (pba_handback_speech): a line whose caption the server sent (sv_relay sendCaption, with its
+-- file) and whose text is a line, not a sound effect (<sfx> captions: zaps, doors), or a file under vo/. A relayed
+-- zap on a face (d1_trainstation_05, ambient/energy/zap*.wav on CHAN_VOICE) and a long mirror of common/null.wav
+-- (silence, sent to stop sounds) were handed back by the first version: the engine then played sounds pba had
+-- muffled or that are nothing.
+A.speechT = A.speechT or {} -- file key -> RealTime() its speech caption arrived
+local SPEECH_CAP_S = 1
+local function isSpeech(key, t0)
+	if (A.cfg.handback_speech or 1) < 0.5 then return true end
+	if string.find(key, "null.wav", 1, true) then return false end -- (common/null.wav: silence)
+	local c = A.speechT[key]
+	if c and c >= t0 - SPEECH_CAP_S then return true end
+	return string.sub(key, 1, 3) == "vo/"
+end
 --- A rendering of `name` at linear gain / volume `g` (module voice, engine emission, mirror patch).
 function A.NoteRendered(name, g)
 	if name and (g or 1) > AUDIBLE then A.renderedT[lineKey(name)] = RealTime() end
@@ -33,7 +48,7 @@ function A.WatchLine(name, lag, why, handback)
 	timer.Simple(HANDBACK_S + (lag or 0), function()
 		local t = A.renderedT[key]
 		if t and t >= t0 - 0.05 then return end
-		if (A.cfg.silent_handback or 1) < 0.5 then return end
+		if (A.cfg.silent_handback or 1) < 0.5 or not isSpeech(key, t0) then return end
 		local ok = handback()
 		if ok == false then return end -- (stopped meanwhile: nothing to give back)
 		MsgN("[PBA] silent line handed back to the engine: ", name, " (", why, ")")
