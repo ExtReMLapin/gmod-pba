@@ -302,6 +302,11 @@ local function applyNative(m, S, L)
 	m.started = true
 	m.nativeId = id > 0 and id or nil
 	m.stSel, m.stW = nil, nil
+	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
+	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_native_end or 1) >= 0.5 then
+		local dur = A.SoundDuration(m.name) or 0
+		if dur > 0 then m.endT = math.max(m.endT, RealTime() + dur * 100 / math.max(m.pitch or 100, 1) + 0.5) end
+	end
 	-- its source reverb slot at once (else only at the next evaluation)
 	if m.nativeId then
 		N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m)
@@ -318,11 +323,16 @@ local function applyNative(m, S, L)
 	return m.nativeId ~= nil
 end
 
---- A one-shot engine patch mirror that has played its file: the engine reports a CreateSound patch as
--- playing long after a file without loop points ended (measured 2026-11-13, the stopsound sentinel relies on
--- it), so its end is also its length at its start pitch (m.endT).
+--- A one-shot mirror that has played its file: the engine reports a CreateSound patch as playing long after
+-- a file without loop points ended (measured 2026-11-13, the stopsound sentinel relies on it), so its end is
+-- also its length at its start pitch (m.endT). A mirror rendered by the module (pba_loops_once_native_end)
+-- ends the same way: it was dropped only when an update found its voice gone, and a far quiet one (the quiet
+-- shortcut) or one the adaptive re-evaluation left alone got no update and lived on past its file (sweep
+-- 2026-11-13: vehicle_rollover2, 1.6 s, alive 4.8 s on d3_c17_06a; it also counted as playing on its channel).
 local function onceEnded(m)
-	return m.patch and m.once and (not m.patch:IsPlaying() or (m.endT ~= nil and RealTime() > m.endT)) or false
+	if not m.once then return false end
+	if m.patch then return not m.patch:IsPlaying() or (m.endT ~= nil and RealTime() > m.endT) end
+	return m.nativeId ~= nil and m.endT ~= nil and (A.cfg.loops_once_native_end or 1) >= 0.5 and RealTime() > m.endT
 end
 
 function apply(m, fade)
@@ -356,7 +366,10 @@ function apply(m, fade)
 	-- a far sound's evaluation running in slices (cl_slicer): its values kept until it is ready (sliceReady);
 	-- a finished one is applied whatever reevalDue says (it stamped this request already)
 	local sj = m.pbaSlice
-	if sj and not sj.finished then return end
+	if sj and not sj.finished then
+		if onceEnded(m) then m.done = true end -- (its file ended meanwhile)
+		return
+	end
 	if (m.patch or m.nativeId) and not sj and not reevalDue(m, S, L) then
 		if onceEnded(m) then m.done = true end
 		return
