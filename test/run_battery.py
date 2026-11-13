@@ -191,6 +191,16 @@ def pure(name="pba_pure_test.lua"):
     return call("lua_job", {"realm": "client", "code": "local PBA_PURE_SRC = [=======[" + src + "]=======]" + chr(10) + code,
                             "timeout_s": 600}, timeout=700).get("values")
 
+def volume_sfx_step():
+    """native_volume_sfx.lua with the game's volume_sfx at 0.25 (Lua cannot set it: console), restored after."""
+    was = lua("client", "return GetConVar('volume_sfx'):GetString()") or "1"
+    native_on(True)
+    call("console_exec", {"realm": "menu", "cmd": "volume_sfx 0.25"})
+    try:
+        return job("client", "native_volume_sfx.lua")
+    finally:
+        call("console_exec", {"realm": "menu", "cmd": f"volume_sfx {was}"})
+
 def seq(*fns):
     """Runs the setters then the test (last), returns the test's result."""
     out = None
@@ -281,6 +291,8 @@ steps = [
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                     lambda: job("client", "native_features.lua"))),
     ("native_stereo", lambda: seq(lambda: native_on(True), lambda: job("client", "native_stereo.lua"))),
+    ("native_volume_sfx", lambda: volume_sfx_step()),
+    ("native_law", lambda: job("client", "native_law.lua")),
     # sentences (scripts/sentences.txt, HL2 mounted): the line parser, then the words rendered by the module
     ("sentence_parse", lambda: job("client", "sentence_parse.lua")),
     ("sentence_files", lambda: job("client", "sentence_files.lua")),
@@ -535,8 +547,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop",
-         "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors",
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law",
          "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]

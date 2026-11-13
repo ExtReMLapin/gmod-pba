@@ -692,11 +692,21 @@ N.REF_UNITS = 52.49 -- 1 m
 -- level above the engine's full scale (pba_fullscale_db) stays at full scale until spreading brings it down
 -- (a level 140 gunshot is full scale up to ~300 m). Light (engine rendering) keeps the engine's law, and
 -- other addons' BASS streams the law their channel was given (cl_streams).
+-- pba_native_law_engine (0..1, parity audit C-9) moves it toward the engine's own law, in dB: for levels
+-- 80-110 the 1/r law is 10-20 dB under the engine's (a level 85 machine at 500 u: -19.6 dB against -0.7 dB),
+-- so sounds placed for the engine (distant ambience, a soundscape's far battle) fade much sooner and gunfire
+-- (full scale in both) dominates. 0 = 1/r (default), 1 = the engine's gain (AC.EngineGain), in between the
+-- dB interpolation of the two. Everything derived from the law (reverb sends, entry points) follows it.
 local function spread(lvl, d)
 	local AC = A.AC
 	lvl = lvl or 75
 	local fs = A.cfg.fullscale_db or 90
-	return AC.EngineGain(N.REF_UNITS, lvl) * 10 ^ (math.max(lvl - fs, 0) / 20) * N.REF_UNITS / math.max(d or 0, N.REF_UNITS)
+	local g = AC.EngineGain(N.REF_UNITS, lvl) * 10 ^ (math.max(lvl - fs, 0) / 20) * N.REF_UNITS / math.max(d or 0, N.REF_UNITS)
+	local k = A.cfg.native_law_engine or 0
+	if k <= 0 then return g end
+	local e = AC.EngineGain(math.max(d or 0, 1), lvl)
+	if k >= 1 then return e end
+	return g ^ (1 - k) * e ^ k
 end
 --- Direct gain (before volume and native_gain) of a source of level lvl at distance d in clear sight.
 function N.PhysClear(lvl, d) return math.min(spread(lvl, d), 1) end
@@ -1231,12 +1241,22 @@ function N.SyncDoors()
 end
 timer.Create("pba_native_doors", 0.1, 0, function() N.SyncDoors() end)
 
+--- Master volume of the module's output: volume x volume_sfx, what the engine applies to every sound it plays
+-- but voice chat (its channel mixing) and what GMod gives BASS's global stream volume, so other addons'
+-- streams too (gmod_audio SetGlobalVolume, measured). pba_native_volume_sfx 0: volume alone.
+local cvVolume, cvVolumeSfx = GetConVar("volume"), GetConVar("volume_sfx")
+function N.MasterVolume()
+	local m = cvVolume:GetFloat()
+	if (A.cfg.native_volume_sfx or 1) >= 0.5 and cvVolumeSfx then m = m * cvVolumeSfx:GetFloat() end
+	return m
+end
+
 hook.Add("Think", "pba_native_listener", function()
 	if not N.render then return end
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
 	local ang = ply:EyeAngles()
-	local master = GetConVar("volume"):GetFloat()
+	local master = N.MasterVolume()
 	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
 	local eL, eR
 	local L, vang = A.ListenerPos()
