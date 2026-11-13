@@ -271,6 +271,9 @@ steps = [
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                     lambda: job("client", "native_features.lua"))),
     ("native_stereo", lambda: seq(lambda: native_on(True), lambda: job("client", "native_stereo.lua"))),
+    # a source reverb slot reused after a pause, after walking away, after stepping across the anchor radius
+    ("source_slot_reuse", lambda: seq(lambda: load("gm_construct", 1), cheats, lambda: native_on(True),
+                                      lambda: job("client", "source_slot_reuse.lua", 200))),
     # sentences (scripts/sentences.txt, HL2 mounted): the line parser, then the words rendered by the module
     ("sentence_parse", lambda: job("client", "sentence_parse.lua")),
     ("sentence_files", lambda: job("client", "sentence_files.lua")),
@@ -526,7 +529,7 @@ if "--special" in opts:
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
 QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos",
-         "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors",
+         "client_loop", "native_doors", "native_features", "native_stereo", "source_slot_reuse", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors",
          "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]

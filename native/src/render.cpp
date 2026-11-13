@@ -161,7 +161,7 @@ struct Reflection {
 	// this bus's own tail length (blocks), from the reverb times of its own response: an echo slot
 	// in a cathedral rings longer than the listener's small room (it was cut at the room's length)
 	int tailBlocks = kTailMinBlocks;
-	bool silent = true; // the effect was reset after its tail faded out (nothing stale left inside)
+	bool silent = true; // its tail has faded out on silent input (nothing stale left inside)
 	// fed but not convolved (a source slot bank weighted out): its input history is missing, so it
 	// restarts from silence when weighted in again instead of replaying input from long ago
 	bool stale = false;
@@ -272,8 +272,14 @@ void ReleaseVoice(Voice& v) {
 // Simulation outputs are only ever read here, on the audio thread (single consumer).
 // minTail: floor of the tail length (the room's for echo and source slots: their own reverb time
 // comes from the 0.5 s main simulation window, which underestimates long reverbs; the room's has
-// the long-window estimate). The tail fades out over kTailFadeBlocks, then the effect is reset so
-// that a later sound does not restart the frozen remains of the old tail.
+// the long-window estimate). The tail fades out over kTailFadeBlocks, then the effect stops being
+// applied until the next input. It is NOT reset there: Steam Audio's reset also clears the impulse
+// response the effect holds (OverlapSaveConvolutionEffect::reset), and the effect only receives one again
+// when that source is simulated anew. A source slot reused without a new simulation (every shot near a
+// previous one) then had no reverb at all after a pause of ~3 s, and the room bus none until its next
+// pass (up to 1 s while still). Nothing stale is left inside anyway: the effect ran on silent input for
+// the whole tail (>= 2.5 s, longer than the 0.5 s convolution; the parametric tail >= 1.2 x its reverb
+// time, -72 dB).
 // w0 / w1: extra weight at the start / end of the block (source slot banks; both 0: not convolved).
 // wOut: the W (omni) channel of what was added, accumulated there (per-slot level meter).
 void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTail = 0, float w0 = 1, float w1 = 1,
@@ -284,10 +290,7 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	if (!r.src || !r.fx || r.simGen.load() == 0) return;
 	const int tail = std::max(r.tailBlocks, minTail);
 	const bool over = r.idle > tail + kTailFadeBlocks;
-	if (over && !r.silent && r.fx) {
-		iplReflectionEffectReset(r.fx);
-		r.silent = true;
-	}
+	if (over) r.silent = true;
 	if (!rtOut && (wet <= 0 || over)) return;
 	IPLSimulationOutputs out{};
 	iplSourceGetOutputs(r.src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
