@@ -283,6 +283,26 @@ function LP.VehicleStatePlayed(e, l, key)
 end
 LP.vehState = LP.vehState or setmetatable({}, { __mode = "k" })
 
+--- A C++ fade to silence (CSoundPatch FadeOut / SoundFadeOut: the jeep's gauss charge, SDK
+-- soundenvelope.cpp) stops its sound when the time is up, tested BEFORE the ramp's last update: the last
+-- volume emitted is one step above 0, then an invisible StopSound. The mirror stayed at that step (the
+-- gauss charge whistling at 10 %, pitch 160, until the next charge). When a falling ramp stops with less
+-- than one step left, the next update would have reached 0: the mirror goes to 0 (silent in both cases:
+-- stopped or at 0). A ramp still running sends its next step within a tick and pushes the check back.
+local FADE_WAIT = 0.2
+function LP.WatchFade(l, step)
+	if l.vol > step * 1.01 then return end
+	local key, vol = l.key, l.vol
+	timer.Create("pba_loopfade:" .. key, FADE_WAIT, 1, function()
+		local x = LP.active[key]
+		if x ~= l or x.vol ~= vol or CurTime() - x.t < FADE_WAIT * 0.9 then return end
+		x.vol = 0
+		local plys = {}
+		for p in pairs(x.subs) do if IsValid(p) then plys[#plys + 1] = p end end
+		send(OP_UPDATE, x, plys)
+	end)
+end
+
 --- Handles an EntityEmitSound table if it belongs to a loop. Returns true when taken over.
 local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
 
@@ -368,7 +388,9 @@ function LP.Handle(data)
 		l.vehicle = IsValid(e) and e:IsVehicle() and LP.IsVehicleSound(e, data.SoundName, l.orig) or nil
 	end
 	l.t = CurTime()
+	local prevVol = l.vol
 	if not update or bit.band(flags, SND_CHANGE_VOL) ~= 0 then l.vol = data.Volume or 1 end
+	if update and prevVol and l.vol < prevVol and l.vol > 0 then LP.WatchFade(l, prevVol - l.vol) end
 	if not update or bit.band(flags, SND_CHANGE_PITCH) ~= 0 then l.pitch = data.Pitch or 100 end
 	if not update then
 		l.lvl, l.dsp = data.SoundLevel or 75, data.DSP or 0
