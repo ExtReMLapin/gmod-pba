@@ -266,10 +266,10 @@ local function leafOfPaths(ent, paths, routeLeaves)
 end
 P.LeafOfPaths = leafOfPaths
 
--- current source entity (never obstructs its own sound)
-local ignoreEnt
+-- current source entity (never obstructs its own sound); the object holding the listener (P.Walls)
+local ignoreEnt, ignoreLis
 local function traceFilter(ent)
-	if ent == ignoreEnt then return false end
+	if ent == ignoreEnt or ent == ignoreLis then return false end
 	local cls = ent:GetClass()
 	if DOOR_CLASSES[cls] then return true end
 	if PROP_CLASSES[cls] and A.cfg.trans_props >= 0.5 then
@@ -335,17 +335,28 @@ local function objectDetour(ent, S, L)
 	return P.DetourDelta(lS, lL, mn, mx, objectWayClear, true, ent, S, L)
 end
 
---- Walls crossed by the straight line S -> L, traced from S only (see P.Walls).
-local function wallsOneWay(S, L, maxWalls, srcEnt, lazy)
+--- Walls crossed by the straight line S -> L, traced from S only (see P.Walls). lisAt: the listener's end of
+-- the line, S or L (pba_listener_object: the object holding it is no wall; the line's other end is the
+-- source's, P.SourceObject).
+local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt)
 	local walls, detours = {}, nil
 	local dir = (L - S):GetNormalized()
 	local start = S
-	ignoreEnt = srcEnt
-	for _ = 1, maxWalls or 6 do
+	ignoreEnt, ignoreLis = srcEnt, nil
+	local lisObj = lisAt and (A.cfg.listener_object or 1) >= 0.5
+	for i = 1, maxWalls or 6 do
 		wallTr.start, wallTr.endpos = start, L
 		util.TraceLine(wallTr)
 		local tr = wallOut
 		if not tr.Hit or tr.Fraction >= 1 then break end
+		local trEnt = IsValid(tr.Entity) and not tr.Entity:IsWorld() and tr.Entity or nil
+		if lisObj and lisAt == S and i == 1 and tr.StartSolid and trEnt then
+			-- the line starts inside an object at the listener's end: that object is ignored, traced again
+			ignoreLis = trEnt
+			util.TraceLine(wallTr)
+			tr = wallOut
+			if not tr.Hit or tr.Fraction >= 1 then break end
+		end
 		local entry = tr.HitPos
 		local surf = util.GetSurfacePropName(tr.SurfaceProps)
 		local hitEnt = IsValid(tr.Entity) and not tr.Entity:IsWorld() and tr.Entity or nil
@@ -362,6 +373,12 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy)
 			backEnt, backTr.start, backTr.endpos = hitEnt, far, entry
 			util.TraceLine(backTr)
 			local back = backOut
+			if lisObj and lisAt == L and back.StartSolid and far:DistToSqr(L) < 1 then
+				-- the line ends inside this object at the listener: no wall (traced from inside it, the line
+				-- re-hit it every 0.5 u, StartSolid: up to 6 walls for one crate around the listener)
+				ignoreLis = hitEnt
+				break
+			end
 			exit = (back.Hit and not back.StartSolid) and back.HitPos or entry
 		elseif inside.StartSolid then
 			if inside.AllSolid or inside.FractionLeftSolid >= 1 then
@@ -411,6 +428,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy)
 		if exit == L then break end
 		start = exit + dir * 0.5
 	end
+	ignoreLis = nil
 	walls.detours = detours
 	if not lazy then P.WallDetours(walls) end
 	return walls
@@ -524,10 +542,10 @@ end
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
 -- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
 function P.Walls(S, L, maxWalls, srcEnt, lazy, cfg)
-	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy)
+	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy, L)
 	-- a trace crosses a displacement only going up through it (its face looks up): from below
 	if #w >= (maxWalls or 6) or S.z >= L.z or not mapHasDisplacements() then return addWater(w, S, L, cfg) end
-	local r = wallsOneWay(L, S, maxWalls, srcEnt, true)
+	local r = wallsOneWay(L, S, maxWalls, srcEnt, true, L)
 	if #r <= #w then return addWater(w, S, L, cfg) end
 	-- reversed: ordered from S, entry and exit swapped
 	local out = { detours = r.detours }
