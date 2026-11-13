@@ -1315,6 +1315,35 @@ local SUITE = {
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Compute cache: entries past cache_ttl are swept (it grew without limit on a map whose doors never move)", func = function()
+			local savedWalls, savedGet, savedRT = P.Walls, A.Graph.Get, _G.RealTime
+			P.Walls = function() return {} end
+			A.Graph.Get = function() return nil end
+			local T = 1000
+			_G.RealTime = function() return T end -- (_G: this suite runs in its own environment)
+			local cfg = setmetatable({ probes = 0, path_props = 0, cache_ttl = 0.25 }, { __index = CFG })
+			local ok, err = pcall(function()
+				P.InvalidateCache()
+				-- 500 results an hour old (dead: older than cache_ttl), as a long session leaves them
+				for i = 1, 500 do P.cache["stale" .. i] = { t = T - 3600, r = {} } end
+				-- a few minutes of sounds later
+				for i = 1, 40 do
+					T = T + 5
+					P.Compute(Vector(i * 64, 0, 0), Vector(i * 64 + 300, 0, 0), 75, cfg)
+				end
+				local stale, n = 0, 0
+				for k in pairs(P.cache) do
+					n = n + 1
+					if tostring(k):sub(1, 5) == "stale" then stale = stale + 1 end
+				end
+				expect(stale).to.equal(0)
+				expect(n <= 2).to.beTrue()
+			end)
+			P.Walls, A.Graph.Get, _G.RealTime = savedWalls, savedGet, savedRT
+			P.cacheSweepT = nil
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Follow: a one-shot is followed when it still plays min_left after its first update", func = function()
 			expect(P.FollowWorth(3.4, 0.25, 0.5)).to.beTrue()       -- the courtyard radio line
 			expect(P.FollowWorth(0.6, 0.25, 0.5)).to.equal(false)   -- a gunshot: over before it would matter

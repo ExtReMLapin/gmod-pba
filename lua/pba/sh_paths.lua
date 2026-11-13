@@ -2528,6 +2528,7 @@ end
 
 P.cache = P.cache or {}
 P.cacheGen = P.cacheGen or 0
+local CACHE_SWEEP_S = 2 -- seconds between two sweeps of the dead results (P.Compute)
 
 -- pba_group_time: the last TIME_KEEP results (newest last), and how often one served again
 local TIME_KEEP = 64
@@ -3144,6 +3145,13 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		end
 		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
 		r.shadowDb = P.ShadowOf(r.voices, r.edge and math.max(r.edge.db - (r.edge.doorDb or 0), 0) or nil)
+	end
+	-- dead entries swept (older than cache_ttl: never served again); only P.InvalidateCache emptied the cache,
+	-- one entry per cell pair, level, emitter and line state, for good on a map whose doors never move
+	if now >= (P.cacheSweepT or 0) then
+		P.cacheSweepT = now + CACHE_SWEEP_S
+		local ttl = cfg.cache_ttl
+		for k, e in pairs(P.cache) do if now - e.t >= ttl then P.cache[k] = nil end end
 	end
 	P.cache[key] = { t = now, r = r }
 	if timeOn then
