@@ -250,5 +250,17 @@
  "world_edge": {
   "pos0": "differs",
   "why": "edge diffraction over obstacle ends"
+ },
+ "loops_release_restart": {
+  "pos0": "hook",
+  "why": "engine replay of a long one-shot when pba is turned off midway (relay/lifecycle), outside P.Compute"
+ },
+ "loops_speaker_native": {
+  "pos0": "hook",
+  "why": "long speaker lines rendered by the module vs an engine patch (native rendering), outside P.Compute"
+ },
+ "doors_spawned": {
+  "pos0": "hook",
+  "why": "doors created after map load followed or counted shut (door tracking), outside P.Compute"
  }
 }
