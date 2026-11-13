@@ -1155,9 +1155,7 @@ net.Receive("pba_snd_stop", function()
 	A.StopCopies(idx, name)
 end)
 
--- entity removed on the client (not a full network update): its copies stop with it
-hook.Add("EntityRemoved", "pba_copies_removed", function(e, fullUpdate)
-	if fullUpdate then return end
-	local idx = e:EntIndex()
-	if idx > 0 then A.StopCopies(idx, "") end
-end)
+-- entity removed: its copies play on to their end where they were, as the engine's own sounds do
+-- (sv_relay "pba_relay_removed"). They stay registered under the index: a new entity taking it over
+-- replaces them on their channel, as the engine's channels (keyed by the index) would.
+hook.Remove("EntityRemoved", "pba_copies_removed")

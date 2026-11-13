@@ -3,7 +3,7 @@
 2. physics scrape / friction loops are left to the engine (never taken over);
 3. StopSound on a relayed one-shot stops the client's copies;
 4. a new sound on the same entity channel (CHAN_VOICE) replaces the previous copy;
-5. removing the entity stops its copies;
+5. removing the entity leaves its one-shot copies playing to their end (the engine does);
 6. the listener follows the rendered view (camera / view entity), not the player's eyes.
 Usage: python -I lifecycle.py <mcp.py>
 """
@@ -93,7 +93,7 @@ for render in ("0", "1"):
     lua("server", "_G.pba_t:Remove() return true")
     time.sleep(0.8)
     gone = lua("client", count)
-    check(f"[{tag}] removing the entity stops its copies", gone and gone.get("n") == 0, gone)
+    check(f"[{tag}] removing the entity leaves its copies playing", gone and gone.get("n", 0) >= 1, gone)
 
 # 6. listener = rendered view (view entity on the server, RenderScene origin on the client)
 lua("server", """local p = player.GetHumans()[1] local c = ents.Create('prop_physics') c:SetModel('models/props_junk/PopCan01a.mdl')

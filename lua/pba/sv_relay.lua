@@ -373,17 +373,10 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	return false
 end))
 
--- entity removed: the engine stops its sounds; clients that got relayed copies stop theirs
+-- entity removed: the engine lets its one-shots play to their end where they were (measured with
+-- snd_dumpclientsounds: a line on CHAN_AUTO, VOICE, WEAPON or STATIC still plays 1.5 s after the
+-- removal, on entity NULL); the relayed copies do the same. Loops are stopped by pba.Loops.
 hook.Add("EntityRemoved", "pba_relay_removed", function(e)
 	local idx = e:EntIndex()
-	local r = idx > 0 and A.recentTo[idx]
-	if not r then return end
-	A.recentTo[idx] = nil
-	local plys, now = {}, CurTime()
-	for p, t in pairs(r) do if IsValid(p) and now - t < 30 then plys[#plys + 1] = p end end
-	if #plys == 0 then return end
-	net.Start("pba_snd_stop")
-	net.WriteUInt(idx, 16)
-	net.WriteString("")
-	net.Send(plys)
+	if idx > 0 then A.recentTo[idx] = nil end
 end)

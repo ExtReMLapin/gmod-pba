@@ -896,8 +896,7 @@ function N.UpdateFollowers(L)
 	for id, f in pairs(N.follow) do
 		local e = f.ent
 		if not IsValid(e) then
-			-- the entity is gone: the engine would stop its sound, so do we
-			pba_native.StopVoice(id)
+			-- the entity is gone: the engine plays its sound to the end where it was, so do we
 			N.follow[id] = nil
 		else
 			local S = A.SoundPos({ Entity = e })
