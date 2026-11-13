@@ -63,6 +63,15 @@ function A.ReplacingChannel(chan)
 	return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0
 end
 
+--- THE channel rule, for every copy, mirror, re-emission and voice on both realms: true when a new sound
+-- (chan, flags) replaces what its entity plays on that channel. Not on CHAN_AUTO / CHAN_STATIC, not with
+-- SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL, not for a stop or a change of a playing sound (SND_STOP,
+-- SND_CHANGE_*) unless `started`: the caller knows it starts one (a CSoundPatch's Play arrives as a change).
+function A.CutsChannel(chan, flags, started)
+	if not A.ReplacingChannel(chan) or A.KeepsChannel(flags) then return false end
+	return started or bit.band(flags or 0, NOT_NEW) == 0
+end
+
 --- True when a sound of `dur` seconds is a long one: longer than `min` (pba_max_duration when nil), and
 -- not past 30 minutes (a stream or a broken header, left to the engine).
 function A.LongDuration(dur, min)
@@ -146,9 +155,7 @@ end
 --- Entity index and channel of a new sound the channel rule applies to (nil otherwise).
 local function ruleSlot(data)
 	local chan, e = data.Channel, data.Entity
-	if not A.ReplacingChannel(chan) then return nil end
-	if A.KeepsChannel(data.Flags) then return nil end
-	if not IsValid(e) or e:IsWorld() or bit.band(data.Flags or 0, NOT_NEW) ~= 0 then return nil end
+	if not A.CutsChannel(chan, data.Flags) or not IsValid(e) or e:IsWorld() then return nil end
 	local idx = e:EntIndex()
 	if idx <= 0 then return nil end
 	return idx, chan
@@ -172,11 +179,17 @@ function A.WithChannelRule(fn)
 			end
 			return ret
 		end
+		-- the client's copies and mirrors on that channel stop before the new sound plays (cl_render
+		-- A.CutChannel; a relayed sound, which never reaches this hook, cuts them in A.Process)
+		if CLIENT and A.CutChannel then A.CutChannel(idx, chan) end
 		-- what the engine played before this sound; the handler's re-emissions record themselves anew
 		local per = A.vanillaOn[idx]
 		local prev = per and per[chan]
 		if per then per[chan] = nil end
 		local ret = fn(data)
+		-- the server's mirrors and the players' relayed copies on that channel, once the handler said who
+		-- got this sound relayed (sv_relay A.CutChannel)
+		if SERVER and A.CutChannel then A.CutChannel(data, idx, chan) end
 		if ret == false then
 			if prev then
 				per = A.vanillaOn[idx]

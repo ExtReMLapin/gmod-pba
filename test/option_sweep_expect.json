@@ -262,5 +262,13 @@
  "doors_spawned": {
   "pos0": "hook",
   "why": "doors created after map load followed or counted shut (door tracking), outside P.Compute"
+ },
+ "lipsync_stop": {
+  "pos0": "hook",
+  "why": "mouth copy stopped with the line"
+ },
+ "stop_followers": {
+  "pos0": "hook",
+  "why": "followers ended by stopsound"
  }
 }

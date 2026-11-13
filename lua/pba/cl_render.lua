@@ -85,6 +85,15 @@ end
 local function stopCopy(h)
 	if h.cancelled then return end
 	h.cancelled = true
+	-- a mouth copy (mouthCopy): the engine's own stop of its name on the speaker's index and channel
+	if h.mouth then
+		A.reemitting = true
+		local e = Entity(h.idx)
+		if IsValid(e) then (A.origCl and A.origCl.StopSound or e.StopSound)(e, h.name)
+		else EmitSound(h.name, h.pos, h.idx, h.srcChan, 0, h.lvl, SND_STOP, h.pitch, 0) end
+		A.reemitting = false
+		return
+	end
 	-- a far one-shot held while its routes are computed (A.Process): never emitted, its evaluation dropped
 	if h.job then
 		if A.Slicer then A.Slicer.Cancel(h.job) end
@@ -166,18 +175,28 @@ local function sourceIndex(data)
 	return (idx and idx > 0) and idx or nil
 end
 
---- Copy set of a sound's source on a replacing channel: a new sound there cuts every earlier copy of
--- that channel (anchors, native voices, and those at a fixed position past the anchor cap).
-local function beginCopies(data, idx)
-	local chan = data.Channel or CHAN_AUTO
-	if not idx or not replaces(chan) then return nil end
+--- The channel rule on the client (sh_core A.CutsChannel; called by A.WithChannelRule for the client's own
+-- sounds, by beginCopies for relayed ones, by the client long sounds of cl_loops): what entity idx plays
+-- on channel chan stops, every copy (anchors, native voices, those at a fixed position past the anchor
+-- cap, mouth copies) and every client-side long sound mirror (whichever started it: a long line cut the
+-- brief copies of its channel, a brief one the long mirror).
+function A.CutChannel(idx, chan)
 	local list = A.emitted[idx]
-	-- SND_DO_NOT_OVERWRITE_EXISTING_ON_CHANNEL: the engine keeps what plays on the channel (both play)
-	if list and not A.KeepsChannel(data.Flags) then
+	if list then
 		for i = #list, 1, -1 do
 			if list[i].srcChan == chan then stopCopy(list[i]) table.remove(list, i) end
 		end
+		if #list == 0 then A.emitted[idx] = nil end
 	end
+	if A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
+end
+
+--- Copy set of a sound's source on a replacing channel; a new sound there cuts every earlier copy of
+-- that channel (A.CutChannel).
+local function beginCopies(data, idx)
+	local chan = data.Channel or CHAN_AUTO
+	if not idx or not replaces(chan) then return nil end
+	if A.CutsChannel(chan, data.Flags) then A.CutChannel(idx, chan) end
 	local key = idx .. ":" .. chan
 	local c = A.copies[key]
 	if not c then
@@ -925,6 +944,13 @@ local function mouthCopy(data, src)
 		EmitSound(name, pos, idx, ch, MOUTH_VOL, data.SoundLevel or 75, 0, data.Pitch or 100)
 	end
 	A.reemitting = false
+	-- registered as a copy of the speaker: the stop path (StopSound, scene cancel, stopsound) and the channel
+	-- rule reach it as they reach the line's other copies (pba_lipsync_stop; a sentence's words play on)
+	if (A.cfg.lipsync_stop or 1) >= 0.5 and not A.IsSentence(name) then
+		register(idx, { mouth = true, idx = idx, name = name, orig = name, srcChan = ch, pos = pos,
+			lvl = data.SoundLevel or 75, pitch = data.Pitch or 100,
+			tEnd = A.PlayEnd(name, data.Pitch or 100) or RealTime() + (A.cfg.max_duration or 8) })
+	end
 	A.stats.mouthCopies = (A.stats.mouthCopies or 0) + 1
 	if A.OnMouthCopy then A.OnMouthCopy(idx) end -- (test watchdog: copies by index, the entity may be NULL here)
 end
@@ -1138,8 +1164,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
 		-- a client-side StopSound: our copies of that sound stop too (the engine stops its own)
 		local idx = sourceIndex(data)
-		if idx then A.StopCopies(idx, data.SoundName) end
-		if idx and A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, nil, data.SoundName) end
+		if idx then A.StopSource(idx, data.SoundName) end
 		return
 	end
 	-- long client-side sounds (music of client-side radios): followed like a loop
@@ -1296,17 +1321,33 @@ do
 	function ENT:StopSound(name)
 		A.origCl.StopSound(self, name)
 		local idx = self:EntIndex()
-		if idx > 0 and A.StopCopies then pcall(A.StopCopies, idx, name or "") end
-		if idx > 0 and A.Loops and A.Loops.StopClient then pcall(A.Loops.StopClient, idx, nil, name or "") end
+		if idx > 0 and A.StopSource then pcall(A.StopSource, idx, name or "") end
+	end
+end
+
+--- THE stop path of the client: the engine stopped `name` (every name when ""/nil) of entity idx on channel
+-- chan (any when nil / CHAN_AUTO): a client StopSound, the server's StopSound or scene cancel (pba_snd_stop),
+-- an EmitSound with SND_STOP. Every copy of it stops (anchors, native voices, fixed-position copies, mouth
+-- copies, followed one-shots through their copies) and every client-side long sound mirror.
+function A.StopSource(idx, name, chan)
+	A.StopCopies(idx, name or "", chan)
+	if A.Loops and A.Loops.StopClient then
+		A.Loops.StopClient(idx, chan ~= CHAN_AUTO and chan or nil, name ~= "" and name or nil)
 	end
 end
 
 --- stopsound / snd_restart: the engine stops every channel; pba's copies, mirrors and native voices
--- stop with them.
+-- stop with them, and so does the following of every one-shot (pba_stop_followers: a copy of a source
+-- without an entity is in no registry, its follower kept sending volume changes to a stopped sound).
 function A.StopAllSounds()
 	for idx in pairs(A.emitted) do A.StopCopies(idx, "") end
 	for _, fv in pairs(OS.native) do fv.dead = true end
 	table.Empty(OS.native)
+	if (A.cfg.stop_followers or 1) >= 0.5 then
+		for _, rec in pairs(OS.recs) do
+			for _, fv in ipairs(rec.voices) do fv.dead = true end
+		end
+	end
 	if A.Loops and A.Loops.StopAll then A.Loops.StopAll() end
 	if A.Native and A.Native.StopAllVoices then A.Native.StopAllVoices() end
 	A.stats.stopAll = (A.stats.stopAll or 0) + 1
@@ -1376,8 +1417,8 @@ end
 net.Receive("pba_snd_stop", function()
 	local idx, chan = net.ReadUInt(16), net.ReadInt(10)
 	local n = net.ReadUInt(8)
-	if n == 0 then A.StopCopies(idx, "", chan) return end
-	for _ = 1, n do A.StopCopies(idx, net.ReadString(), chan) end
+	if n == 0 then A.StopSource(idx, "", chan) return end
+	for _ = 1, n do A.StopSource(idx, net.ReadString(), chan) end
 end)
 
 -- entity removed: its copies play on to their end where they were, as the engine's own sounds do

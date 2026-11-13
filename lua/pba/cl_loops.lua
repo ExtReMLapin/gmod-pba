@@ -509,8 +509,6 @@ end
 -- radio:EmitSound of a 5-minute mp3 in a net receiver). Too long for A.Process, and the server
 -- never sees them: without this they play through every wall. Same mirror as a relayed long
 -- sound, keyed "cl:<entindex>:<channel>:<name>".
-local replacing = A.ReplacingChannel
-
 --- Stops the client-side long-sound mirrors of entity idx (channel chan, or any channel when nil;
 -- name, or any name when nil).
 function LP.StopClient(idx, chan, name, patch)
@@ -558,7 +556,8 @@ function LP.HandleClient(data)
 		if m.nativeId and m.reeval then m.reeval.force = true end -- applied at its next turn
 		return true
 	end
-	if replacing(chan) and not A.KeepsChannel(flags) then LP.StopClient(idx, chan) end
+	-- (a new sound: a change flag here is a patch's Play)
+	if A.CutsChannel(chan, flags, true) and A.CutChannel then A.CutChannel(idx, chan) end
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl >= 256 then return false end
 	if src or cpp then
