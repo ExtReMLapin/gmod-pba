@@ -2162,7 +2162,7 @@ local SUITE = {
 		{ name = "Group time: an emitter's last result is reused while it and the listener moved at most reeval_move, not past it nor after a world change", func = function()
 			withSlicedRooms(function(cfg, list)
 				cfg.far_sliced, cfg.group, cfg.group_time, cfg.reeval_move, cfg.reeval_max_s = 0, 0, 1, 8, 1e9
-				local ent = { IsValid = function() return true end }
+				local ent = { IsValid = function() return true end, IsWorld = function() return false end }
 				local S, L = list[1][1], list[1][2]
 				P.InvalidateCache()
 				local r1 = P.Compute(S, L, 75, cfg, ent)

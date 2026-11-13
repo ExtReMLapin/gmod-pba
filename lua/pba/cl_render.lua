@@ -1263,7 +1263,9 @@ do
 	A.stopWatch = watch
 	hook.Add("Think", "pba_stopsound_watch", function()
 		local now = RealTime()
-		if now < watch.nextT then return end
+		-- (a clock that went back, e.g. RealTime stubbed by a test while Think ran: nextT far ahead would
+		-- stall the watch for as long)
+		if now < watch.nextT and watch.nextT - now <= 0.1 then return end
 		watch.nextT = now + 0.1
 		local p = watch.patch
 		if (A.cfg.stopsound_watch or 1) < 0.5 then
