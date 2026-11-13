@@ -282,6 +282,13 @@ local function applyNative(m, S, L)
 	return m.nativeId ~= nil
 end
 
+--- A one-shot engine patch mirror that has played its file: the engine reports a CreateSound patch as
+-- playing long after a file without loop points ended (measured 2026-11-13, the stopsound sentinel relies on
+-- it), so its end is also its length at its start pitch (m.endT).
+local function onceEnded(m)
+	return m.patch and m.once and (not m.patch:IsPlaying() or (m.endT ~= nil and RealTime() > m.endT)) or false
+end
+
 function apply(m, fade)
 	if m.done then return end
 	local ent = m.ent
@@ -315,7 +322,7 @@ function apply(m, fade)
 	local sj = m.pbaSlice
 	if sj and not sj.finished then return end
 	if (m.patch or m.nativeId) and not sj and not reevalDue(m, S, L) then
-		if m.patch and m.once and not m.patch:IsPlaying() then m.done = true end
+		if onceEnded(m) then m.done = true end
 		return
 	end
 	-- far and quiet (pba_quiet_db): a playing mirror keeps its last values, no new path search (handing
@@ -325,7 +332,7 @@ function apply(m, fade)
 	-- volume changes at once, from the update itself.)
 	if (m.patch or m.nativeId) and not sj and (not m.nativeId or m.appliedVol == m.vol)
 		and A.TooQuiet and A.TooQuiet(m.lvl, m.vol, S:Distance(L)) then
-		if m.patch and m.once and not m.patch:IsPlaying() then m.done = true end
+		if onceEnded(m) then m.done = true end
 		return
 	end
 	-- (a loop with its own DSP preset stays an engine patch: the module has no presets, A.OwnDSP)
@@ -334,7 +341,7 @@ function apply(m, fade)
 	end
 	local g, dsp = muffle(m, S, L)
 	if g == nil then return end
-	if m.patch and m.once and not m.patch:IsPlaying() then m.done = true return end
+	if onceEnded(m) then m.done = true return end
 	if not m.patch then
 		if m.once and m.started then m.done = true return end
 		m.started = true
@@ -435,6 +442,11 @@ function LP.HandleClient(data)
 	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
 		dsp = data.DSP or 0, once = not ((src or cpp) and not once), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
 		src = src and setmetatable({ src }, { __mode = "v" }) or nil }
+	-- its end: the file's length at its start pitch (onceEnded)
+	if m.once then
+		local dur = A.SoundDuration(name) or 0
+		if dur > 0 then m.endT = RealTime() + dur * 100 / math.max(m.pitch, 1) + 0.5 end
+	end
 	LP.mirrors[key] = m
 	apply(m, 0)
 	return true
