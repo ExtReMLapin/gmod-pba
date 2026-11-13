@@ -242,7 +242,7 @@ steps = [
     # a sentence an addon plays on the world (no position in EntityEmitSound): taken behind a wall
     ("sentence_pos", lambda: seq(lambda: load(TW), lambda: job("server", "sentence_pos.lua"))),
     # singleplayer: the player's own gunfire gets its native echoes (no prediction: only the server sees it)
-    ("sp_own_echo", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "sp_own_echo.lua"))),
+    ("sp_own_echo", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job("client", "sp_own_echo.lua"))),
     # a quick throttle on / off: the vehicle state sound the next one destroys is no longer mirrored
     ("vehicle_state_sounds", lambda: seq(lambda: load(TW), lambda: job("server", "vehicle_state_sounds.lua"))),
     ("loop_removed", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_removed.lua"))),
