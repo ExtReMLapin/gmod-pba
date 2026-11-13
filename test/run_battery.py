@@ -97,6 +97,12 @@ def any_map():
     if not call("status", {}).get("map"):
         load("pba_tworooms")
 
+def at_room_a():
+    """The host in pba_tworooms' room A, at its spawn (256, 256, 0), and the client's view there."""
+    lua("server", "local p = player.GetHumans()[1] if IsValid(p) then p:SetPos(Vector(256, 256, 0)) end")
+    wait_lua("client", "return LocalPlayer():GetPos():Distance(Vector(256, 256, 0)) < 1", 5)
+    time.sleep(0.3)
+
 def native_on(on):
     """pba_native_render on / off, and wait until the client renderer follows (when the module exists)."""
     call("console_exec", {"realm": "client", "cmd": f"pba_native_render {1 if on else 0}"})
@@ -392,7 +398,9 @@ steps = [
     ("long_line", lambda: long_line()),
     ("looping_sound_stop", lambda: seq(lambda: load(TW), lambda: job("server", "looping_sound_stop.lua"))),
     ("weapon_loop_owner", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
-    ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_loop_fade_hidden.lua"))),
+    # the player in room A (a step before may leave him in room B: manhack_loop_kill puts him at x 600, the loop
+    # then in clear sight)
+    ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_loop_fade_hidden.lua"))),
     ("loop_fade_tail", lambda: seq(lambda: load(TW), lambda: job("server", "loop_fade_tail.lua"))),
     ("constraint_travel_loop", lambda: seq(lambda: load(TW), lambda: job("server", "constraint_travel_loop.lua"))),
     ("loud_loop_far", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "loud_loop_far_setup.lua"), lambda: job("client", "loud_loop_far.lua"))),
