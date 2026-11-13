@@ -154,4 +154,11 @@ int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, d
 // audio thread load: average and max milliseconds per 512-sample block since the last call
 void Load(double* avgMs, double* maxMs, int* blocks);
 
+// Radius (m) within which a source reverb slot keeps the response simulated at one place: `base` near
+// the listener, `frac` of the source - listener distance far away (frac <= 0: base alone).
+inline float SrcNearRadius(float base, float frac, float distToListener) {
+	const float byDist = frac > 0 && distToListener > 0 ? frac * distToListener : 0.0f;
+	return byDist > base ? byDist : base;
+}
+
 } // namespace render

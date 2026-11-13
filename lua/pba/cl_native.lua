@@ -515,6 +515,8 @@ function N.ApplySettings()
 	local k = N.wetScale or 1
 	pba_native.SetReflections(wetLevel(A.cfg.native_reverb, k), wetLevel(A.cfg.native_echo, k), A.cfg.native_rays,
 		A.cfg.native_bounces or 16, A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
+	-- a far moving source keeps its source reverb response over a fraction of its distance (module 1.2.0+)
+	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.cfg.native_src_near or 0.1) end
 end
 
 N.hrtfCvar = N.hrtfCvar or CreateClientConVar("pba_native_hrtf", "", true, false,
