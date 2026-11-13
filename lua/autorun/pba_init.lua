@@ -19,6 +19,7 @@ local files = {
 	{ "pba/sv_relay.lua", "sv" },
 	{ "pba/sv_loops.lua", "sv" },
 	{ "pba/cl_sched.lua", "cl" }, -- one scheduler for every followed sound
+	{ "pba/cl_renders.lua", "cl" }, -- the rules every rendering shares (far muffle, water, module, tail)
 	{ "pba/cl_loops.lua", "cl" },
 	{ "pba/cl_streams.lua", "cl" },
 	{ "pba/cl_probes_kernels.lua", "cl" }, -- compiled kernels of cl_probes (which runs interpreted)

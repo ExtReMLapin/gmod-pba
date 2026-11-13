@@ -439,7 +439,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 	-- (a sentence: by the module when its words are rendered into one sound, cl_sentences; else by the
 	-- engine, PlayVoice failing below)
 	-- (a sound with its own DSP preset, pba_keep_dsp: the engine's, the module has no presets: A.OwnDSP)
-	if A.Native and A.Native.render and (not A.IsSentence(data.SoundName) or A.Sentences.On()) and not A.OwnDSP(data.DSP) then
+	if A.Render.NativeOK(data.SoundName, data.DSP) then
 		-- the full version's distance law (N.PhysPath): real spreading instead of the engine's law
 		-- a weapon's dipole: the aim taken now, at emission (N.Directivity)
 		local dirK = A.Native.Directivity(src, L, data.Channel)
@@ -588,13 +588,14 @@ end
 local function targetValues(rec, fv, t, L)
 	if fv.id then
 		local N = A.Native
-		local el, em, eh = N.VoiceEQ(t.lp, t.len, t.lpDb)
 		-- Doppler of a moving source or listener, as loops and clear voices (N.UpdateFollowers) have it
-		local k = N.Doppler and N.Doppler(rec.S, N.VelocityOf(rec.ent), L, N.ListenerVelocity()) or 1
+		local el, em, eh = N.VoiceEQ(t.lp, t.len, t.lpDb)
+		local pitch
+		el, em, eh, pitch = A.Render.Tail(el, em, eh, rec.pitch, nil, rec.S, rec.ent, L)
 		local g = rec.vol * N.PhysPath(t.gain, t.len, rec.lvl, t.rawLossDb) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim)
 		-- a speaking face's loudest voice keeps its floor while followed (pba_speech_floor_db)
 		if rec.speech and fv == rec.voices[1] then g = math.max(g, speechFloorAt(rec.vol, rec.S, L, rec.lvl)) end
-		return g * A.cfg.native_gain, el, em, eh, t.pos, rec.pitch * k
+		return g * A.cfg.native_gain, el, em, eh, t.pos, pitch
 	end
 	local pos = A.DistVariantPos(rec.name, t.pos, L, rec.S)
 	local d = pos:Distance(L)
@@ -626,7 +627,7 @@ local function wantsNative(rec, fv, t, now)
 	if not fv.a or not fv.started or fv.ownDsp or fv.lp0 == nil or rec.ukey or (fv.switchFails or 0) >= 3 then return false end
 	if (A.cfg.oneshot_native_switch or 1) < 0.5 then return false end
 	local N = A.Native
-	if not (N and N.render and pba_native and pba_native.Play) or (A.IsSentence(rec.name) and not A.Sentences.On()) then return false end
+	if not (pba_native and pba_native.Play and A.Render.NativeOK(rec.name, nil, false)) then return false end
 	-- a switch near the end is not worth a second voice (the end of a compressed file can be off)
 	if now > fv.tEnd - MIN_LEFT - followInterval() then return false end
 	if not playOffsetOK() then return false end
@@ -704,8 +705,7 @@ function evaluate(rec, now, L)
 	local S = rec.S
 	-- a far sound's evaluation may run in slices (cl_slicer): its voices keep their course until it is ready
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
-	if rec.waterDry == nil then rec.waterDry = A.WaterMuffledFile(rec.name) end
-	local r = P.Evaluate(rec, S, L, rec.lvl, ent, rec.waterDry, followReady)
+	local r = P.Evaluate(rec, S, L, rec.lvl, ent, A.Render.WaterDry(rec, rec.name), followReady)
 	if not r then return end
 	A.DebugNote("os:" .. rec.key, S, L, r, rec.name, "oneshot")
 	local vs
@@ -978,14 +978,10 @@ end
 -- its own data (DSP preset, the walls' loss; P.MuffleFor) for the hook to return true. It was heard through
 -- the wall as in plain sight. True when it changed the data.
 function A.FarMuffle(data, pos)
-	if (A.cfg.far_muffle or 0) < 0.5 then return false end
 	local L = listenerPos()
-	if not L or pos:DistToSqr(L) <= A.cfg.lod_dist * A.cfg.lod_dist then return false end
-	local P = A.Paths
-	local src = data.Entity
-	local walls = P.Walls(pos, L, 1, P.SourceObject(pos, IsValid(src) and src or nil))
-	if #walls == 0 then return false end
-	local dsp, gain = P.MuffleFor(walls)
+	if not L then return false end
+	local dsp, gain = A.Render.Far(pos, L, data.Entity) -- (the one far rule of copies and mirrors, cl_renders.lua)
+	if not dsp then return false end
 	-- a "#" (dry mix) sound gets no DSP from the engine: the same file without it
 	if dsp > 0 then data.SoundName, data.DSP = A.WithoutDryMix(data.SoundName), dsp end
 	data.Volume = (data.Volume or 1) * gain
@@ -1017,7 +1013,7 @@ function A.Process(data, relayed)
 	local tReq = RealTime()
 	local r, job
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
-	r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.WaterMuffledFile(data.SoundName))
+	r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.Render.WaterDry(nil, data.SoundName))
 	if not r and job then
 		-- a far sound whose routes are computed in slices (cl_slicer): taken now (the original is not
 		-- played), emitted once they are ready, by the time the sound would reach the listener at the

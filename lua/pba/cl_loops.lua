@@ -228,20 +228,17 @@ local FAR_CLEAR = { clear = true, voices = {} }
 -- the short sounds (P.MuffleFor: DSP preset, the walls' loss), as sv_relay and cl_render A.FarMuffle do: a
 -- loop was heard clear through the wall there, muffled on the near side of the lod_dist boundary.
 -- { far = true, dsp, gain, lp }, or FAR_CLEAR.
-local function farPath(m, S, L)
-	if (A.cfg.far_muffle or 0) < 0.5 then return FAR_CLEAR end
-	local P = A.Paths
-	local ent = IsValid(m.ent) and m.ent ~= m.anchor and m.ent or nil
-	local walls = P.Walls(S, L, 1, P.SourceObject(S, ent))
-	if #walls == 0 then return FAR_CLEAR end
-	local dsp, gain, lp = P.MuffleFor(walls)
-	return { far = true, dsp = dsp, gain = gain, lp = lp }
-end
 local function pathOf(m, S, L)
 	-- beyond lod_dist no path search (a 130 dB rotor 7000 u away is subscribed since the server suppresses
-	-- it for everyone): heard as the original, or muffled when a wall stands in the straight line (farPath)
-	if S:DistToSqr(L) > A.cfg.lod_dist * A.cfg.lod_dist then return farPath(m, S, L) end
-	return A.Paths.Evaluate(m, S, L, m.lvl, m.ent, false, sliceReady)
+	-- it for everyone): heard as the original, or muffled when a wall stands in the straight line (A.Render.Far,
+	-- the one far rule of copies and mirrors)
+	local R = A.Render
+	if R.Beyond(S, L) then
+		local dsp, gain, lp = R.Far(S, L, m.ent ~= m.anchor and m.ent or nil)
+		if not dsp then return FAR_CLEAR end
+		return { far = true, dsp = dsp, gain = gain, lp = lp }
+	end
+	return A.Paths.Evaluate(m, S, L, m.lvl, m.ent, R.WaterDry(m, m.name), sliceReady)
 end
 
 --- Adaptive re-evaluation (reeval_adaptive, P.ReevalDue): a playing mirror whose source, listener
@@ -339,9 +336,10 @@ local function applyNative(m, S, L)
 	local send = N.SlotFadeSend(m, m.srcBound, (trans or 0) * m.vol * A.cfg.native_gain, gain)
 	send = send * N.LoudWet(m.lvl) -- (a loud loop stays dry, as in the engine)
 	m.roomSend = send
+	-- the speaker's EQ and Doppler, as every module voice (A.Render.Tail)
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L), lpDb)
-	if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
-	local pitch = m.pitch * (N.Doppler and N.Doppler(S, N.VelocityOf(m.ent), L, N.ListenerVelocity()) or 1)
+	local pitch
+	el, em, eh, pitch = A.Render.Tail(el, em, eh, m.pitch, m.speaker, S, m.ent, L)
 	-- what this evaluation decided, for a quiet far loop to keep following its law (followQuiet)
 	m.lastEval = { d = d, gain = gain, el = el, em = em, eh = eh, pos = pos, pitch = m.pitch, send = send }
 	if m.nativeId then
@@ -438,6 +436,7 @@ function apply(m, fade)
 	if not L then return end
 	local S = ent == m.anchor and m.pos or ent:WorldSpaceCenter()
 	local nativeOn = A.Native and A.Native.render and A.Enabled()
+	-- (whether the module may render this mirror: A.Render.NativeOK, with the mirror's own reading of its preset)
 	if m.nativeId and (not nativeOn or ownDSP(m)) then
 		-- mode or native rendering switched off (or pba_keep_dsp switched on for a loop with its own preset):
 		-- hand the loop back to the engine without a double
@@ -468,7 +467,7 @@ function apply(m, fade)
 		return
 	end
 	-- (a loop with its own DSP preset stays an engine patch: the module has no presets, A.OwnDSP)
-	if nativeOn and not m.patch and not m.handBack and not ownDSP(m) then
+	if nativeOn and not m.patch and not m.handBack and A.Render.NativeOK(m.name, m.dsp, ownDSP(m)) then
 		if applyNative(m, S, L) ~= false then return end
 	end
 	local g, dsp = muffle(m, S, L)
@@ -701,8 +700,9 @@ function LP.FollowNative(L)
 				local S = ent:WorldSpaceCenter()
 				local d = S:Distance(L)
 				local el, em, eh = N.VoiceEQ(0, d)
-				if m.speaker then el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3] end
-				local g, pitch = N.PhysClear(m.lvl, d) * m.vol * A.cfg.native_gain, m.pitch * N.Doppler(S, N.VelocityOf(ent), L, vL)
+				local pitch
+				el, em, eh, pitch = A.Render.Tail(el, em, eh, m.pitch, m.speaker, S, ent, L, vL)
+				local g = N.PhysClear(m.lvl, d) * m.vol * A.cfg.native_gain
 				if ramp then
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else

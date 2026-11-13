@@ -141,7 +141,7 @@ print("%s static: every option is read somewhere (%d options; read nowhere: %s)"
 # (benches, DRY_SOURCE_CFG) behaves like the full one. FALLBACK_KNOWN lists the fallbacks that differ today
 # (file:option=value): a new one fails, and so does an entry no longer found (the list only shrinks).
 FALLBACK_KNOWN = set("""
-cl_loops.lua:continuous_ramp=0 cl_loops.lua:far_muffle=0 cl_loops.lua:long_sounds=0 cl_loops.lua:loops=0
+cl_loops.lua:continuous_ramp=0 cl_loops.lua:long_sounds=0 cl_loops.lua:loops=0
 cl_loops.lua:loops_client=0 cl_loops.lua:loops_cpp_client=0 cl_loops.lua:native_quiet_law=0
 cl_loops.lua:native_voice_mix=0 cl_loops.lua:patch_oneshots=0 cl_native.lua:lp_hyst_db=0 cl_native.lua:native_air=0
 cl_native.lua:native_all=0 cl_native.lua:native_dir=0 cl_native.lua:native_doors=0 cl_native.lua:native_doppler=0
@@ -149,7 +149,7 @@ cl_native.lua:native_echo=0 cl_native.lua:native_loud_dry=0 cl_native.lua:native
 cl_native.lua:native_render=0 cl_native.lua:native_reverb_window=0 cl_native.lua:native_room_open_area=0
 cl_native.lua:native_stereo_width=0 cl_native.lua:native_voice_mix=0 cl_probes.lua:group_angle=2
 cl_probes.lua:native_traces=0 cl_probes.lua:probe_skip_links=0 cl_probes.lua:route_pos_straight=0
-cl_render.lua:continuous_ramp=0 cl_render.lua:far_muffle=0 cl_render.lua:max_duration=10 cl_render.lua:native_all=0
+cl_render.lua:continuous_ramp=0 cl_render.lua:max_duration=10 cl_render.lua:native_all=0
 cl_render.lua:native_path_fx=0 cl_render.lua:oneshot_follow=0 cl_slicer.lua:far_sliced=0
 cl_streams.lua:continuous_ramp=0 cl_streams.lua:native_gain=0 cl_streams.lua:native_voice_mix=0 cl_streams.lua:streams=0
 cl_streams.lua:streams_filter=0 cl_streams.lua:streams_native=0 cl_demo.lua:native_render=0 sh_acoustics.lua:diffuse=0

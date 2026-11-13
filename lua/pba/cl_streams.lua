@@ -351,7 +351,8 @@ local function rampStep(ch, r, L, now)
 	applyRamp(ch, r, L, now)
 end
 
-hook.Add("Think", "pba_streams_ramp", A.PerfTimed("streams_ramp", function()
+--- Every frame (the scheduler's tick, cl_sched.lua): the streams' ramps.
+function ST.RampTick()
 	if next(ST.chans) == nil then return false end
 	local L = A.ListenerPos()
 	if not L then return false end
@@ -362,15 +363,15 @@ hook.Add("Think", "pba_streams_ramp", A.PerfTimed("streams_ramp", function()
 			pcall(applyRamp, ch, r, L, now)
 		end
 	end
-end))
+end
+hook.Remove("Think", "pba_streams_ramp") -- (its former hook, an autorefresh over an older version)
 
 --- Adaptive re-evaluation (reeval_adaptive, P.ReevalDue): false while the stream, the listener and
 -- the world did not change since its last evaluation (it keeps its values). A rendering switch
 -- (native voice to start or to stop) is applied at once.
 local function reevalDue(r, L)
 	if (r.nativeId ~= nil) ~= (nativeMode(r) and true or false) then return true end
-	r.reeval = r.reeval or {}
-	return A.Paths.ReevalDue(r.reeval, r.pos, L, RealTime())
+	return A.Sched.Due(r, r.pos, L, RealTime(), nil) -- the cadence rule of every followed sound (cl_sched.lua)
 end
 
 local function release(ch, r)
@@ -425,7 +426,13 @@ function ST.Ready(ch)
 	if r and r.pos and L and enabled() then process(ch, r, L) end
 end
 
-timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, A.PerfTimed("streams", function()
+--- Every update_interval (the scheduler's tick, cl_sched.lua, on its own clock as the timer it replaces): each
+-- stream re-evaluated by the cadence rule of every sound, or released when pba or the streams are off.
+local nextT = 0
+function ST.Tick()
+	local now = RealTime()
+	if now < nextT then return false end
+	nextT = now + A.Sched.Interval()
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
 	local L = A.ListenerPos()
@@ -452,4 +459,5 @@ timer.Create("pba_streams", A.cfg.update_interval or 0.25, 0, A.PerfTimed("strea
 	end
 	ST.count = n
 	if pba_native and pba_native.StreamCollect then pcall(pba_native.StreamCollect) end
-end))
+end
+timer.Remove("pba_streams") -- (its former timer, an autorefresh over an older version)
