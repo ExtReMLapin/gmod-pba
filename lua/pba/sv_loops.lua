@@ -409,8 +409,10 @@ end
 function LP.MouthStop(l)
 	if not l.mouth or not IsValid(l.ent) then return end
 	l.mouth = nil
+	-- the engine's StopSound, not sv_relay's detour: that one relays a stop and calls LP.Stop again, from
+	-- inside LP.Stop (OP_STOP sent twice)
 	A.reemitting = true
-	l.ent:StopSound(l.name)
+	A.orig.EntStopSound(l.ent, l.name)
 	A.reemitting = false
 end
 
