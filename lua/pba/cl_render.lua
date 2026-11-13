@@ -1212,10 +1212,38 @@ net.Receive(NET, function()
 end)
 
 -- caption of a suppressed server sound (sv_relay sendCaption); nothing shown with closecaption 0
+-- One caption per line (pba_caption_once): one line reaching the player as several sounds (a microphone's
+-- line through two monitors: d1_trainstation_05's two eli_mic, one copy left to the engine, which captions
+-- it, the other relayed) was captioned once per copy, where the engine shows it once. A caption whose text
+-- was shown less than CAPTION_ONCE_S ago is dropped: pba's when any caption showed it, the engine's when pba
+-- showed it (GM:OnCloseCaptionEmit sees both, ours as gui.AddCaption text).
+local CAPTION_ONCE_S = 1
+A.capShown = A.capShown or {} -- caption text without tags -> { t = CurTime(), ours = true|nil }
+local function captionKey(text) return string.Trim((string.gsub(text or "", "<[^>]*>", ""))) end
+local function captionRecent(key)
+	local c = A.capShown[key]
+	return c and CurTime() - c.t < CAPTION_ONCE_S and c or nil
+end
+hook.Add("OnCloseCaptionEmit", "pba_caption_once", function(tok, dur, fromPlayer, text)
+	if (A.cfg.caption_once or 1) < 0.5 or A.addingCaption then return end
+	local key = captionKey(text or tok)
+	if key == "" then return end
+	local c = captionRecent(key)
+	if c and c.ours then return true end -- the engine's copy of a line pba captioned already
+	A.capShown[key] = { t = CurTime() }
+end)
 net.Receive("pba_caption", function()
 	local tok, dur = net.ReadString(), net.ReadFloat()
 	local txt = language.GetPhrase(tok)
-	if txt and txt ~= tok then gui.AddCaption(txt, dur > 0 and dur or 2, false) end
+	if not txt or txt == tok then return end
+	if (A.cfg.caption_once or 1) >= 0.5 then
+		local key = captionKey(txt)
+		if captionRecent(key) then return end
+		A.capShown[key] = { t = CurTime(), ours = true }
+	end
+	A.addingCaption = true
+	gui.AddCaption(txt, dur > 0 and dur or 2, false)
+	A.addingCaption = false
 end)
 
 -- client-side StopSound (predicted weapons...): our copies of that entity's sound stop too
