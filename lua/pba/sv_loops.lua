@@ -725,3 +725,17 @@ function LP.Release()
 	-- a later take-over could restart a loop that ended meanwhile: forgotten
 	LP.capped = {}
 end
+
+-- env_microphone Disable (audit B-12): the microphone stops its speaker's copy in C++ (StopSound on the last
+-- routed sound, never seen by Lua); in vanilla it is the only stop of a looped or long copy on the speaker
+-- (the original's SND_STOP has volume 0, the microphone does not route it). The speaker's mirrors stop with it.
+hook.Add("AcceptInput", "pba_mic_disable", function(ent, input)
+	if (A.cfg.loops_mic_disable or 1) < 0.5 or not IsValid(ent) or ent:GetClass() ~= "env_microphone" then return end
+	if string.lower(input or "") ~= "disable" then return end
+	local spk = ent:GetInternalVariable("m_hSpeaker")
+	if not IsValid(spk) then return end
+	local idx = spk:EntIndex()
+	for _, l in pairs(LP.active) do
+		if l.idx == idx and l.speaker then LP.Stop(idx, l.name) end
+	end
+end)
