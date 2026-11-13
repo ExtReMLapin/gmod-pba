@@ -306,7 +306,7 @@ steps = [
                                        lambda: [job("server", "impact_inside_prop.lua", 30), job("client", "impact_inside_prop_client.lua", 10)])),
     # a sound beyond lod_dist behind a wall: the cheap muffle (one trace, DSP preset), server and client
     # (was left to the engine, heard through the wall as in plain sight)
-    ("listener_inside_prop", "runconsolecommand_blame", lambda: seq(lambda: load(TW), lambda: job("server", "listener_inside_prop.lua", 20))),
+    ("listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", lambda: seq(lambda: load(TW), lambda: job("server", "listener_inside_prop.lua", 20))),
     ("far_muffle", lambda: seq(lambda: load(TW), lambda: native_on(False),
                                lambda: [job("server", "far_muffle.lua", 30), job("client", "far_muffle_client.lua", 15)])),
     # a sentence an addon plays on the world (no position in EntityEmitSound): taken behind a wall
@@ -345,6 +345,7 @@ steps = [
     # prop_dynamic, MOVETYPE_PUSH like a door, keeps its loop)
     ("loop_reenable", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_reenable.lua", 20))),
     # loops born on the client (CreateSound of addons: vehicle engines): mirrored, stopped with Stop, GC, removal
+    ("patch_oneshot_client", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("client", "patch_oneshot_client.lua", 20))),
     ("client_loop", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("client", "client_loop.lua", 20))),
     # native block (pba_native_render 1); native_doors closes then opens the door itself
     ("native_doors", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_doors.lua"))),
