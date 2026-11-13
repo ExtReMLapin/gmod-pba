@@ -14,9 +14,8 @@ util.AddNetworkString(NET)
 LP.active = LP.active or {} -- key -> { ent, idx, chan, name, vol, pitch, lvl, flags, dsp, pos, subs = {ply=true} }
 LP.released = LP.released or {} -- loops handed back to the engine while pba is off: taken again when it comes back
 -- loops left to the engine by the pba_loops_max cap (their later changes too), same fields as an
--- active loop: taken over by the timer once slots free up. An older file stored `true` here.
+-- active loop: taken over by the timer once slots free up.
 LP.capped = LP.capped or {}
-for k, v in pairs(LP.capped) do if not istable(v) then LP.capped[k] = nil end end
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
 

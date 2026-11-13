@@ -748,7 +748,6 @@ end
 -- Every mirror is re-evaluated each update_interval. loops_stagger spreads them over the frames:
 -- each frame takes its share in turn, instead of all of them in one frame (20 hidden loops on
 -- gm_construct: one 15-55 ms frame every 0.25 s). Same update rate per loop.
-timer.Remove("pba_loops_cl") -- former timer (autorefresh)
 local order, nextIdx, quota, acc, lastT = {}, 1, 0, 0, nil
 hook.Add("Think", "pba_loops_cl", A.PerfTimed("loops", function()
 	if not IsValid(LocalPlayer()) then return false end

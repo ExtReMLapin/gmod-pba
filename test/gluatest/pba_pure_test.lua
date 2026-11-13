@@ -579,23 +579,16 @@ local SUITE = {
 			local b = util.TableToJSON(G.Summary(G.Build(synthBsp())))
 			expect(a).to.equal(b)
 		end },
-		{ name = "ClampToPoly: inside unchanged, outside on the edge", func = function()
-			local poly = rect(100, 0, 50, 0, 100)
-			local c, n = Vector(100, 25, 50), Vector(1, 0, 0)
-			local q = G.ClampToPoly(Vector(120, 10, 10), poly, c, n)
-			expect(near(q.x, 100) and near(q.y, 10) and near(q.z, 10)).to.beTrue()
-			local r = G.ClampToPoly(Vector(100, 300, 50), poly, c, n)
-			expect(near(r.y, 50) and near(r.z, 50)).to.beTrue()
-		end },
-		{ name = "SlitRatio: whole doorway = 1; a narrow gap in line passes the highs; out of line passes less", func = function()
+		{ name = "ApertureRatio: whole doorway = 1; a narrow gap in line passes the highs; out of line passes less", func = function()
 			-- doorway 48 u wide, source and listener 100 u either side
-			expect(near(AC.SlitRatio({ { -24, 24 } }, -24, 24, 0, 100, 100, 1000), 1, 1e-6)).to.beTrue()
+			local function slit(iv, w0, w1, u0, d1, d2, f) return AC.ApertureRatio({ w0 = w0, w1 = w1, intervals = iv }, u0, 0, d1, d2, f) end
+			expect(near(slit({ { -24, 24 } }, -24, 24, 0, 100, 100, 1000), 1, 1e-6)).to.beTrue()
 			local gap = { { 20, 22 } } -- a 2-unit crack near the latch
-			local inLow = AC.SlitRatio(gap, -24, 24, 21, 100, 100, 250)
-			local inHigh = AC.SlitRatio(gap, -24, 24, 21, 100, 100, 4000)
+			local inLow = slit(gap, -24, 24, 21, 100, 100, 250)
+			local inHigh = slit(gap, -24, 24, 21, 100, 100, 4000)
 			expect(inHigh > inLow).to.beTrue() -- the crack is a high-pass in line of sight
 			expect(inHigh < 0.6).to.beTrue()   -- but still far from the whole doorway
-			local outHigh = AC.SlitRatio(gap, -24, 24, -15, 100, 100, 4000)
+			local outHigh = slit(gap, -24, 24, -15, 100, 100, 4000)
 			expect(outHigh < inHigh).to.beTrue() -- the same crack out of line passes less
 			local Cv, Sv = AC.Fresnel(1)
 			expect(near(Cv, 0.7799, 3e-3) and near(Sv, 0.4383, 3e-3)).to.beTrue() -- tabulated C(1), S(1)

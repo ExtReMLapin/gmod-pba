@@ -38,9 +38,6 @@ end
 -- Several names per channel: one sound re-emitted clear to some players and muffled ("#" removed)
 -- to others is two engine sounds.
 A.vanillaOn = A.vanillaOn or {} -- entindex -> { [chan] = { [sound name played by the engine] = true } }
-for idx, per in pairs(A.vanillaOn) do -- an older file stored one name per channel
-	for chan, v in pairs(per) do if isstring(v) then per[chan] = { [v] = true } end end
-end
 local NOT_NEW = SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH
 
 local function stopEngineSound(e, name)
@@ -413,7 +410,7 @@ end
 function A.Eligible(data)
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl < A.cfg.min_level or lvl >= 256 then return false end
-	if data.SoundName == "invalid.wav" then return false end -- sentences: vanilla in v1
+	if data.SoundName == "invalid.wav" then return false end
 	-- SoundTime: predicted weapons (every player's gunfire) stamp their sounds with the current
 	-- time; sounds scheduled away from "now" were left alone (re-emission played them immediately). On the
 	-- server with pba_soundtime their stamp goes with the relay (the client schedules them as the engine
