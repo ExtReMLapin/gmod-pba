@@ -508,6 +508,12 @@ function LP.HandleClient(data)
 		if dur > 0 then m.endT = RealTime() + dur * 100 / math.max(m.pitch, 1) + 0.5 end
 	end
 	LP.mirrors[key] = m
+	-- its start feeds the mixer's ducker, as a server long line's (OP_START below) and a short sound's
+	-- (A.Process, which this hook returns before) do (pba_long_duck)
+	if m.once and (A.cfg.long_duck or 1) >= 0.5 and A.Mix and A.Mix.NoteSound then
+		A.Mix.NoteSound({ SoundName = name, Pos = m.pos, SoundLevel = lvl, Volume = m.vol, Channel = chan, Entity = e,
+			EntIndex = idx }, A.ListenerPos(), (A.SoundDuration(name) or 0) * 100 / math.max(m.pitch, 1))
+	end
 	apply(m, 0)
 	return true
 end
