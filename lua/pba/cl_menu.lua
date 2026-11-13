@@ -255,6 +255,7 @@ function Build.server(panel)
 	sld(panel, "Max loops followed", "loops_max")
 	chk(panel, "Silent loops do not count", "loops_cap_audible")
 	chk(panel, "Microphone off stops its speaker", "loops_mic_disable")
+	chk(panel, "Long sound restarts when pba is off", "loops_release_restart")
 	chk(panel, "Changes of a relayed brief sound dropped", "brief_updates")
 
 	panel:Help("Players' Steam Audio module:")

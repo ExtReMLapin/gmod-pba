@@ -760,7 +760,9 @@ function LP.Release()
 		local plys = {}
 		for p in pairs(l.subs) do if IsValid(p) then plys[#plys + 1] = p end end
 		send(OP_STOP, l, plys)
-		if IsValid(l.ent) then
+		-- a long one-shot is not emitted again (pba_loops_release_restart 0): the engine would play it from its
+		-- top, midway through a speech; it ends silently, as the client's mirror (cannot resume midway)
+		if IsValid(l.ent) and (not l.once or (A.cfg.loops_release_restart or 0) >= 0.5) then
 			A.Emit(A.orig.EntEmitSound, l.ent, l.name, l.lvl, l.pitch, l.vol, l.chan, 0, l.dsp)
 			if not l.once then l.subs = {} LP.released[key] = l end
 		end
