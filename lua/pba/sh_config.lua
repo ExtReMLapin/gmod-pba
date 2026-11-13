@@ -158,6 +158,7 @@ A.CONFIG = {
 	hysteresis      = { 0.3, 0, 2, "sv", "Seconds before the voice layout of a repeating source may change." },
 	max_duration    = { 8, 0.5, 60, "sv", "Sounds longer than this (s) are left untouched." },
 	sentences       = { 1, 0, 1, "sv", "Sentences (Combine and metrocop radio, HL2 NPC lines from sentences.txt): relayed and muffled like other sounds instead of crossing every wall." },
+	phys_loops_muffle = { 1, 0, 1, "sv", "Physics scrape / rolling loops behind a wall: muffled by the engine (DSP preset, lower volume) instead of crossing it unchanged." },
 	patch_oneshots  = { 1, 0, 1, "sv", "Sound patches (CreateSound) on files without loop points: followed for their length like loops instead of crossing every wall." },
 	long_sounds     = { 1, 0, 1, "sv", "Follow long sounds (music, speeches: longer than max_duration) like loops: their path is updated while they play." },
 	allow_debug     = { 0, 0, 1, "sv", "Let every player use the debug overlay (it shows where sounds come from through walls: a wallhack). Admins can always use it." },

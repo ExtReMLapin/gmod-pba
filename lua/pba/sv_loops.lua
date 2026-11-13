@@ -219,6 +219,17 @@ local function relSpeed(e, other)
 	return math.max(v:Length(), w:Length())
 end
 
+--- A physics friction / rolling loop whose lifecycle stays the physics engine's (see LP.IsPhysicsLoop): not
+-- mirrored, but its events are re-emitted muffled in place (sv_relay). True for such an event.
+function LP.EngineDriven(data)
+	if (A.cfg.phys_loops_muffle or 0) < 0.5 then return false end
+	if bit.band(data.Flags or 0, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then return false end
+	if not A.IsLooping(data.SoundName) then return false end
+	local e = data.Entity
+	if IsValid(e) and (e:IsPlayer() or e:IsWorld()) then return false end
+	return LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName)
+end
+
 --- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
 function LP.IsLong(data)
 	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
