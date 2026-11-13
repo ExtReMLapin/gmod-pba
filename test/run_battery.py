@@ -174,6 +174,19 @@ def speaker_once():
     lua("client", "PBA_SPK = util.JSONToTable(%s) return true" % json.dumps(json.dumps(v)))
     return job("client", "speaker_once_check.lua")
 
+def once_native_end():
+    """A one-shot mirror rendered by the module that gets no more updates (quiet shortcut) ends with its file:
+    once_native_end_server.lua starts a one-shot CSoundPatch, once_native_end_check.lua checks the mirror."""
+    lua("client", "pba.SetOverride('quiet_db', -1) return true")
+    try:
+        v = job("server", "once_native_end_server.lua")
+        if not isinstance(v, dict) or "idx" not in v:
+            return v
+        lua("client", "PBA_ONE = util.JSONToTable(%s) return true" % json.dumps(json.dumps(v)))
+        return job("client", "once_native_end_check.lua")
+    finally:
+        lua("client", "pba.SetOverride('quiet_db', nil) return true")
+
 def make_ogg():
     d = os.path.join(GAME, "sound", "pba_test")
     os.makedirs(d, exist_ok=True)
@@ -343,6 +356,7 @@ steps = [
     ("physics_scrape", lambda: seq(lambda: load(TW), lambda: job("server", "physics_scrape.lua", 30))),
     # a speaker's long lines (Breencast on a TV): each ends with its file, a new one replaces it on its channel
     ("speaker_once", lambda: seq(lambda: load("gm_construct", 1), speaker_once)),
+    ("once_native_end", lambda: seq(lambda: load("gm_construct", 1), once_native_end)),
     # loop points as the engine reads them: a cue point loops a file whose smpl chunk lists no loop
     ("looping_cue", lambda: job("client", "looping_cue.lua")),
     # manhack engine / blade loops (client C++ patches): mirrored behind the wall, ended with the entity
@@ -661,7 +675,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "once_native_end", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state
