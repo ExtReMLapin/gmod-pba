@@ -1,0 +1,160 @@
+{
+ "map": "d3_breen_01",
+ "tag": "",
+ "sets": [],
+ "secs": 107,
+ "triggers": 41,
+ "visited": 27,
+ "scenes": 43,
+ "speech": 11,
+ "anomalies": {
+  "mirror_step": {
+   "count": 4,
+   "distinct": 3,
+   "samples": [
+    {
+     "t": 23.37,
+     "pos": "-464.000000 224.000000 1504.000000",
+     "toG": 0.038,
+     "sound": "ambient/levels/citadel/field_loop1.wav",
+     "fromG": 0.007,
+     "key": "ambient/levels/citadel/field_loop1.wav",
+     "map": "d3_breen_01"
+    },
+    {
+     "t": 52.45,
+     "pos": "0.000000 0.000000 -72.000000",
+     "toG": 0.022,
+     "sound": "ambient/machines/machine6.wav",
+     "fromG": 0.011,
+     "key": "ambient/machines/machine6.wav",
+     "map": "d3_breen_01"
+    },
+    {
+     "t": 75.57,
+     "pos": "368.000000 512.000000 128.000000",
+     "toG": 0.018,
+     "sound": "ambient/levels/citadel/field_loop3.wav",
+     "fromG": 0.029,
+     "key": "ambient/levels/citadel/field_loop3.wav",
+     "map": "d3_breen_01"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 29,
+   "distinct": 9,
+   "samples": [
+    {
+     "db": 5.3,
+     "pos": "-2373.696777 -1174.500732 638.386597",
+     "toG": 0.1072,
+     "t": 24.99,
+     "sound": "plats/elevator_stop1.wav",
+     "fromG": 0.058,
+     "key": "plats/elevator_stop1.wav",
+     "map": "d3_breen_01"
+    },
+    {
+     "db": 3.7,
+     "pos": "-2455.950439 -1174.905884 641.031189",
+     "toG": 0.4344,
+     "t": 26.42,
+     "sound": "player/footsteps/tile1.wav",
+     "fromG": 0.2842,
+     "key": "player/footsteps/tile1.wav",
+     "map": "d3_breen_01"
+    },
+    {
+     "db": 3,
+     "pos": "-2456.000000 -1206.787231 641.031189",
+     "toG": 0.4984,
+     "t": 29.3,
+     "sound": "player/footsteps/tile2.wav",
+     "fromG": 0.3522,
+     "key": "player/footsteps/tile2.wav",
+     "map": "d3_breen_01"
+    },
+    {
+     "db": 4.3,
+     "pos": "-2462.682617 -1095.830933 641.031189",
+     "toG": 0.4984,
+     "t": 41.01,
+     "sound": "player/footsteps/tile4.wav",
+     "fromG": 0.3023,
+     "key": "player/footsteps/tile4.wav",
+     "map": "d3_breen_01"
+    },
+    {
+     "db": 4.4,
+     "pos": "-2468.775635 -1057.544800 641.031189",
+     "toG": 0.4984,
+     "t": 41.49,
+     "sound": "player/footsteps/tile3.wav",
+     "fromG": 0.2996,
+     "key": "player/footsteps/tile3.wav",
+     "map": "d3_breen_01"
+    },
+    {
+     "db": 5.1,
+     "pos": "-2356.700195 446.856506 641.031189",
+     "toG": 0.4984,
+     "t": 64.06,
+     "sound": "player/footsteps/metal2.wav",
+     "fromG": 0.2785,
+     "key": "player/footsteps/metal2.wav",
+     "map": "d3_breen_01"
+    }
+   ]
+  },
+  "mouth_missing": {
+   "count": 3,
+   "distinct": 3,
+   "samples": [
+    {
+     "class": "npc_mossman",
+     "name": "*vo/citadel/mo_nouse.wav",
+     "dist": 84,
+     "t": 28.83,
+     "pos": "-2456.000000 -1194.051880 576.093750"
+    },
+    {
+     "class": "npc_breen",
+     "name": "*vo/citadel/br_oheli07.wav",
+     "dist": 1718,
+     "t": 42.52,
+     "pos": "-1975.000000 636.000000 591.000000"
+    },
+    {
+     "class": "npc_eli",
+     "name": "*vo/citadel/eli_genocide.wav",
+     "dist": 569,
+     "t": 62.89,
+     "pos": "-1924.505371 640.163452 586.437317"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_breen",
+     "name": "*vo/citadel/br_oheli07.wav",
+     "dist": 1718,
+     "lagMs": 95,
+     "t": 42.52
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "doors/garage_move1.wav": {
+   "lvl": 100,
+   "dmin": 437,
+   "dmax": 437,
+   "n": 13,
+   "native": true
+  }
+ }
+}

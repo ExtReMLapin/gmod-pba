@@ -1,0 +1,124 @@
+{
+ "map": "d2_coast_12",
+ "tag": "",
+ "sets": [],
+ "secs": 107,
+ "triggers": 62,
+ "visited": 19,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "stuck_once": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 76.44,
+     "pos": "5104.250000 -1531.031250 350.125000",
+     "dur": 7.2,
+     "map": "d2_coast_12",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.7,
+     "key": "407:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.03162277660168378
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 43,
+   "distinct": 22,
+   "samples": [
+    {
+     "db": -8.7,
+     "pos": "4591.731445 -11081.799805 645.820496",
+     "toG": 0.0137,
+     "t": 27.82,
+     "sound": "ambient/machines/thumper_dust.wav",
+     "fromG": 0.0374,
+     "key": "ambient/machines/thumper_dust.wav",
+     "map": "d2_coast_12"
+    },
+    {
+     "db": -8.3,
+     "pos": "4655.731445 -8315.000000 659.871460",
+     "toG": 0.1171,
+     "t": 30.02,
+     "sound": "ambient/machines/thumper_hit.wav",
+     "fromG": 0.3035,
+     "key": "ambient/machines/thumper_hit.wav",
+     "map": "d2_coast_12"
+    },
+    {
+     "db": -8.3,
+     "pos": "4655.731445 -8315.000000 659.871460",
+     "toG": 0.0111,
+     "t": 30.02,
+     "sound": "ambient/machines/thumper_top.wav",
+     "fromG": 0.0288,
+     "key": "ambient/machines/thumper_top.wav",
+     "map": "d2_coast_12"
+    },
+    {
+     "db": -8.3,
+     "pos": "4655.731445 -8315.000000 659.871460",
+     "toG": 0.037,
+     "t": 30.02,
+     "sound": "ambient/machines/thumper_amb.wav",
+     "fromG": 0.096,
+     "key": "ambient/machines/thumper_amb.wav",
+     "map": "d2_coast_12"
+    },
+    {
+     "db": -4.9,
+     "pos": "3847.016113 -6667.692871 472.798767",
+     "toG": 0.159,
+     "t": 36.8,
+     "sound": "weapons/smg1/npc_smg1_fire1.wav",
+     "fromG": 0.2801,
+     "key": "weapons/smg1/npc_smg1_fire1.wav",
+     "map": "d2_coast_12"
+    },
+    {
+     "db": -19.2,
+     "pos": "3726.943848 -6034.670410 506.985382",
+     "toG": 0.0323,
+     "t": 36.8,
+     "sound": "player/footsteps/dirt3.wav",
+     "fromG": 0.2959,
+     "key": "player/footsteps/dirt3.wav",
+     "map": "d2_coast_12"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "*npc/combine_soldier/vo/prison_soldier_bunker1.wav": {
+   "lvl": 100,
+   "dmin": 172,
+   "dmax": 2673,
+   "n": 60,
+   "native": false
+  },
+  "ambient/alarms/siren.wav": {
+   "lvl": 100,
+   "dmin": 120,
+   "dmax": 2308,
+   "n": 28,
+   "native": true
+  },
+  "ambient/alarms/city_siren_loop2.wav": {
+   "lvl": 100,
+   "dmin": 130,
+   "dmax": 2331,
+   "n": 28,
+   "native": true
+  },
+  "*npc/combine_soldier/vo/prison_soldier_bunker2.wav": {
+   "lvl": 100,
+   "dmin": 132,
+   "dmax": 2396,
+   "n": 41,
+   "native": true
+  }
+ }
+}

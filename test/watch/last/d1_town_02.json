@@ -1,0 +1,103 @@
+{
+ "map": "d1_town_02",
+ "tag": "",
+ "sets": [],
+ "secs": 107,
+ "triggers": 62,
+ "visited": 25,
+ "scenes": 15,
+ "speech": 1,
+ "anomalies": {
+  "mirror_step": {
+   "count": 14,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 37.36,
+     "pos": "-2248.000000 1000.000000 -3536.000000",
+     "toG": 0.242,
+     "sound": "ambient/fire/fire_small_loop1.wav",
+     "fromG": 0.013,
+     "key": "ambient/fire/fire_small_loop1.wav",
+     "map": "d1_town_02"
+    },
+    {
+     "t": 37.36,
+     "pos": "-2240.000000 1088.000000 -3547.968750",
+     "toG": 0.643,
+     "sound": "npc/fast_zombie/breathe_loop1.wav",
+     "fromG": 0.109,
+     "key": "npc/fast_zombie/breathe_loop1.wav",
+     "map": "d1_town_02"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 87,
+   "distinct": 19,
+   "samples": [
+    {
+     "db": -6,
+     "pos": "-1221.531982 706.047852 -3348.695557",
+     "toG": 0.0014,
+     "t": 33.88,
+     "sound": "npc/fast_zombie/gurgle_loop1.wav",
+     "fromG": 0.0028,
+     "key": "npc/fast_zombie/gurgle_loop1.wav",
+     "map": "d1_town_02"
+    },
+    {
+     "db": -3.5,
+     "pos": "-1748.089233 505.728973 -3263.883301",
+     "toG": 0.0058,
+     "t": 36.26,
+     "sound": "npc/zombie/zombie_voice_idle6.wav",
+     "fromG": 0.0087,
+     "key": "npc/zombie/zombie_voice_idle6.wav",
+     "map": "d1_town_02"
+    },
+    {
+     "db": 3.5,
+     "pos": "-1956.196045 637.682556 -3324.024658",
+     "toG": 0.0017,
+     "t": 37.13,
+     "sound": "npc/fast_zombie/breathe_loop1.wav",
+     "fromG": 0.0012,
+     "key": "npc/fast_zombie/breathe_loop1.wav",
+     "map": "d1_town_02"
+    },
+    {
+     "db": 8.6,
+     "pos": "-1951.317505 590.781738 -3364.532715",
+     "toG": 0.0049,
+     "t": 37.24,
+     "sound": "npc/fast_zombie/fz_alert_far1.wav",
+     "fromG": 0.0018,
+     "key": "npc/fast_zombie/fz_alert_far1.wav",
+     "map": "d1_town_02"
+    },
+    {
+     "db": -4.1,
+     "pos": "-2037.725098 480.945953 -3383.969727",
+     "toG": 0.0016,
+     "t": 39.41,
+     "sound": "ambient/fire/fire_small_loop1.wav",
+     "fromG": 0.0026,
+     "key": "ambient/fire/fire_small_loop1.wav",
+     "map": "d1_town_02"
+    },
+    {
+     "db": -3.1,
+     "pos": "-2037.483398 463.289246 -3286.973145",
+     "toG": 0.0161,
+     "t": 40.19,
+     "sound": "npc/headcrab/alert1.wav",
+     "fromG": 0.023,
+     "key": "npc/headcrab/alert1.wav",
+     "map": "d1_town_02"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

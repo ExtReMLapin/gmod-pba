@@ -1,0 +1,79 @@
+{
+ "map": "d2_prison_08",
+ "tag": "",
+ "sets": [],
+ "secs": 101,
+ "triggers": 21,
+ "visited": 21,
+ "scenes": 29,
+ "speech": 2,
+ "anomalies": {
+  "voice_step": {
+   "count": 17,
+   "distinct": 11,
+   "samples": [
+    {
+     "db": -15.9,
+     "pos": "-2170.578613 2743.040283 1025.031250",
+     "toG": 0.0289,
+     "t": 32.84,
+     "sound": "player/footsteps/concrete1.wav",
+     "fromG": 0.1798,
+     "key": "player/footsteps/concrete1.wav",
+     "map": "d2_prison_08"
+    },
+    {
+     "db": -15.9,
+     "pos": "-2170.578613 2743.040283 1025.031250",
+     "toG": 0.0318,
+     "t": 32.84,
+     "sound": "vo/novaprospekt/al_uhoh_np.wav",
+     "fromG": 0.1979,
+     "key": "vo/novaprospekt/al_uhoh_np.wav",
+     "map": "d2_prison_08"
+    },
+    {
+     "db": 18.6,
+     "pos": "-1823.766846 1224.000000 1026.031250",
+     "toG": 0.2985,
+     "t": 35.17,
+     "sound": "player/footsteps/concrete3.wav",
+     "fromG": 0.0352,
+     "key": "player/footsteps/concrete3.wav",
+     "map": "d2_prison_08"
+    },
+    {
+     "db": 20.9,
+     "pos": "-1813.033569 1197.228516 1026.031250",
+     "toG": 0.3747,
+     "t": 35.17,
+     "sound": "player/footsteps/concrete4.wav",
+     "fromG": 0.0338,
+     "key": "player/footsteps/concrete4.wav",
+     "map": "d2_prison_08"
+    },
+    {
+     "db": -9.3,
+     "pos": "-1885.629150 1398.284424 1026.031250",
+     "toG": 0.036,
+     "t": 37.57,
+     "sound": "npc/combine_soldier/gear2.wav",
+     "fromG": 0.1051,
+     "key": "npc/combine_soldier/gear2.wav",
+     "map": "d2_prison_08"
+    },
+    {
+     "db": -8.3,
+     "pos": "-1948.309326 1419.981689 1026.031250",
+     "toG": 0.033,
+     "t": 37.57,
+     "sound": "npc/combine_soldier/gear6.wav",
+     "fromG": 0.086,
+     "key": "npc/combine_soldier/gear6.wav",
+     "map": "d2_prison_08"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

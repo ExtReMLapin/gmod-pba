@@ -1,0 +1,135 @@
+{
+ "map": "d3_c17_09",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 39,
+ "visited": 24,
+ "scenes": 16,
+ "speech": 6,
+ "anomalies": {
+  "voice_step": {
+   "count": 88,
+   "distinct": 25,
+   "samples": [
+    {
+     "db": 5.4,
+     "pos": "4328.000000 3868.000000 36.000000",
+     "toG": 0.3752,
+     "t": 31.12,
+     "sound": "vo/streetwar/sniper/male01/c17_09_greeting.wav",
+     "fromG": 0.2005,
+     "key": "vo/streetwar/sniper/male01/c17_09_greeting.wav",
+     "map": "d3_c17_09"
+    },
+    {
+     "db": 3.6,
+     "pos": "5825.614258 6167.129395 122.385132",
+     "toG": 0.0049,
+     "t": 37.89,
+     "sound": "npc/sniper/reload1.wav",
+     "fromG": 0.0032,
+     "key": "npc/sniper/reload1.wav",
+     "map": "d3_c17_09"
+    },
+    {
+     "db": 3,
+     "pos": "5855.000000 5886.000000 62.500000",
+     "toG": 0.9225,
+     "t": 38.63,
+     "sound": "physics/glass/glass_bottle_break2.wav",
+     "fromG": 0.6525,
+     "key": "physics/glass/glass_bottle_break2.wav",
+     "map": "d3_c17_09"
+    },
+    {
+     "db": 3,
+     "pos": "5855.000000 5886.000000 62.500000",
+     "toG": 0.8209,
+     "t": 38.63,
+     "sound": "physics/glass/glass_cup_break1.wav",
+     "fromG": 0.5806,
+     "key": "physics/glass/glass_cup_break1.wav",
+     "map": "d3_c17_09"
+    },
+    {
+     "db": -9.6,
+     "pos": "6165.234863 6279.439941 -40.817341",
+     "toG": 0.0012,
+     "t": 49.04,
+     "sound": "ambient/fire/fire_small1.wav",
+     "fromG": 0.0036,
+     "key": "ambient/fire/fire_small1.wav",
+     "map": "d3_c17_09"
+    },
+    {
+     "db": -9,
+     "pos": "6297.816406 6440.903809 -88.552834",
+     "toG": 0.3173,
+     "t": 53.57,
+     "sound": "ambient/water/water_splash1.wav",
+     "fromG": 0.898,
+     "key": "ambient/water/water_splash1.wav",
+     "map": "d3_c17_09"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 2,
+   "distinct": 2,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "common/null.wav",
+     "dist": 2016,
+     "lagMs": 112,
+     "t": 40.99
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/pain01.wav",
+     "dist": 2016,
+     "lagMs": 112,
+     "t": 40.99
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "npc/combine_gunship/dropship_engine_distant_loop1.wav": {
+   "lvl": 140,
+   "dmin": 2185,
+   "dmax": 2734,
+   "n": 86,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_engine_near_loop1.wav": {
+   "lvl": 130,
+   "dmin": 2185,
+   "dmax": 2734,
+   "n": 86,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_onground_loop1.wav": {
+   "lvl": 130,
+   "dmin": 2185,
+   "dmax": 2734,
+   "n": 86,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_dropping_pod_loop1.wav": {
+   "lvl": 140,
+   "dmin": 2185,
+   "dmax": 2734,
+   "n": 86,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_fire_loop1.wav": {
+   "lvl": 130,
+   "dmin": 2185,
+   "dmax": 2734,
+   "n": 86,
+   "native": true
+  }
+ }
+}

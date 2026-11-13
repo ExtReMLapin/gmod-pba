@@ -1,0 +1,186 @@
+{
+ "map": "d1_canals_01a",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 62,
+ "visited": 25,
+ "scenes": 15,
+ "speech": 34,
+ "anomalies": {
+  "mirror_step": {
+   "count": 3,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 24.6,
+     "pos": "916.000000 3708.000000 -64.000000",
+     "toG": 0.152,
+     "sound": "ambient/fire/fire_small_loop1.wav",
+     "fromG": 0.009,
+     "key": "ambient/fire/fire_small_loop1.wav",
+     "map": "d1_canals_01a"
+    },
+    {
+     "t": 48.33,
+     "pos": "878.000000 2959.000000 -61.187500",
+     "toG": 0.289,
+     "sound": "ambient/fire/fire_med_loop1.wav",
+     "fromG": 0.004,
+     "key": "ambient/fire/fire_med_loop1.wav",
+     "map": "d1_canals_01a"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 39,
+   "distinct": 15,
+   "samples": [
+    {
+     "db": -7.8,
+     "pos": "1019.698975 3980.508545 406.243408",
+     "toG": 0.1182,
+     "t": 37.35,
+     "sound": "npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "fromG": 0.2891,
+     "key": "npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "map": "d1_canals_01a"
+    },
+    {
+     "db": 3,
+     "pos": "1009.451294 6464.192383 259.502136",
+     "toG": 0.0045,
+     "t": 59.91,
+     "sound": "npc/scanner/cbot_fly_loop.wav",
+     "fromG": 0.0032,
+     "key": "npc/scanner/cbot_fly_loop.wav",
+     "map": "d1_canals_01a"
+    },
+    {
+     "db": 8.2,
+     "pos": "892.911255 6463.968750 99.877068",
+     "toG": 0.6975,
+     "t": 60.42,
+     "sound": "physics/concrete/concrete_impact_bullet1.wav",
+     "fromG": 0.2713,
+     "key": "physics/concrete/concrete_impact_bullet1.wav",
+     "map": "d1_canals_01a"
+    },
+    {
+     "db": -3.8,
+     "pos": "1021.489380 6463.968750 150.134369",
+     "toG": 0.3814,
+     "t": 60.42,
+     "sound": "physics/concrete/concrete_impact_bullet2.wav",
+     "fromG": 0.5893,
+     "key": "physics/concrete/concrete_impact_bullet2.wav",
+     "map": "d1_canals_01a"
+    },
+    {
+     "db": 5.2,
+     "pos": "831.651001 6463.968750 120.880829",
+     "toG": 0.3393,
+     "t": 60.42,
+     "sound": "physics/concrete/concrete_impact_bullet4.wav",
+     "fromG": 0.1864,
+     "key": "physics/concrete/concrete_impact_bullet4.wav",
+     "map": "d1_canals_01a"
+    },
+    {
+     "db": -7,
+     "pos": "856.435059 6362.980957 305.084015",
+     "toG": 0.0034,
+     "t": 61.72,
+     "sound": "!metropolice_as_hit_rally2#358318276",
+     "fromG": 0.0077,
+     "key": "!metropolice_as_hit_rally2#358318276",
+     "map": "d1_canals_01a"
+    }
+   ]
+  },
+  "mouth_missing": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 3668,
+     "t": 22.2,
+     "pos": "2240.000000 6080.000000 32.031250"
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2027,
+     "t": 41.65,
+     "pos": "2240.000000 6080.000000 32.031250"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 7,
+   "distinct": 3,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 3750,
+     "lagMs": 208,
+     "t": 12.85
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 3750,
+     "lagMs": 208,
+     "t": 18.31
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 3668,
+     "lagMs": 204,
+     "t": 22.2
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2620,
+     "lagMs": 146,
+     "t": 38.05
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2027,
+     "lagMs": 113,
+     "t": 41.65
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/getdown02.wav",
+     "dist": 1713,
+     "lagMs": 95,
+     "t": 42.15
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "^npc/attack_helicopter/aheli_rotor_loop1.wav": {
+   "lvl": 130,
+   "dmin": 2580,
+   "dmax": 4313,
+   "n": 46,
+   "native": true
+  },
+  "npc/attack_helicopter/aheli_weapon_fire_loop3.wav": {
+   "lvl": 140,
+   "dmin": 2580,
+   "dmax": 4313,
+   "n": 46,
+   "native": true
+  }
+ }
+}

@@ -1,0 +1,141 @@
+{
+ "map": "d1_canals_01",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 41,
+ "visited": 25,
+ "scenes": 13,
+ "speech": 25,
+ "anomalies": {
+  "voice_step": {
+   "count": 35,
+   "distinct": 11,
+   "samples": [
+    {
+     "db": -4.9,
+     "pos": "378.370209 -7359.122559 -55.968742",
+     "toG": 0.0464,
+     "t": 39.36,
+     "sound": "npc/metropolice/gear4.wav",
+     "fromG": 0.082,
+     "key": "npc/metropolice/gear4.wav",
+     "map": "d1_canals_01"
+    },
+    {
+     "db": -4.3,
+     "pos": "-41.532143 -6615.464355 648.031189",
+     "toG": 0.2239,
+     "t": 49.26,
+     "sound": "weapons/pistol/pistol_fire3.wav",
+     "fromG": 0.3682,
+     "key": "weapons/pistol/pistol_fire3.wav",
+     "map": "d1_canals_01"
+    },
+    {
+     "db": -4.2,
+     "pos": "-41.532143 -6615.464355 648.031189",
+     "toG": 0.029,
+     "t": 49.26,
+     "sound": "player/footsteps/concrete3.wav",
+     "fromG": 0.0469,
+     "key": "player/footsteps/concrete3.wav",
+     "map": "d1_canals_01"
+    },
+    {
+     "db": -4.7,
+     "pos": "169.212265 -6729.415039 840.086853",
+     "toG": 0.0282,
+     "t": 49.26,
+     "sound": "npc/crow/flap2.wav",
+     "fromG": 0.0483,
+     "key": "npc/crow/flap2.wav",
+     "map": "d1_canals_01"
+    },
+    {
+     "db": 3.6,
+     "pos": "0.176309 -6432.924805 648.031189",
+     "toG": 0.0434,
+     "t": 51.8,
+     "sound": "player/footsteps/concrete4.wav",
+     "fromG": 0.0285,
+     "key": "player/footsteps/concrete4.wav",
+     "map": "d1_canals_01"
+    },
+    {
+     "db": -4.8,
+     "pos": "-97.225296 -6828.182617 648.031189",
+     "toG": 0.0196,
+     "t": 54.23,
+     "sound": "player/footsteps/concrete2.wav",
+     "fromG": 0.034,
+     "key": "player/footsteps/concrete2.wav",
+     "map": "d1_canals_01"
+    }
+   ]
+  },
+  "mouth_missing": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2222,
+     "t": 76.98,
+     "pos": "-632.402405 -6876.566895 280.093750"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2222,
+     "lagMs": 123,
+     "t": 76.98
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 2636,
+     "lagMs": 146,
+     "t": 85.33
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "^npc/attack_helicopter/aheli_rotor_loop1.wav": {
+   "lvl": 130,
+   "dmin": 3364,
+   "dmax": 9476,
+   "n": 110,
+   "native": true
+  },
+  "npc/attack_helicopter/aheli_weapon_fire_loop3.wav": {
+   "lvl": 140,
+   "dmin": 3364,
+   "dmax": 9476,
+   "n": 112,
+   "native": true
+  },
+  "ambient/alarms/train_crossing_bell_loop1.wav": {
+   "lvl": 105,
+   "dmin": 3007,
+   "dmax": 5459,
+   "n": 75,
+   "native": true
+  },
+  "ambient/machines/train_freight_loop2.wav": {
+   "lvl": 100,
+   "dmin": 19120,
+   "dmax": 20122,
+   "n": 64,
+   "native": true
+  }
+ }
+}

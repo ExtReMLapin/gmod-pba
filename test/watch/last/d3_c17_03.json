@@ -1,0 +1,125 @@
+{
+ "map": "d3_c17_03",
+ "tag": "",
+ "sets": [],
+ "secs": 74,
+ "triggers": 5,
+ "visited": 5,
+ "scenes": 9,
+ "speech": 6,
+ "anomalies": {
+  "mirror_step": {
+   "count": 3,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 28.6,
+     "pos": "-5404.750000 -4816.000000 64.000000",
+     "toG": 0.385,
+     "sound": "ambient/fire/fire_med_loop1.wav",
+     "fromG": 0.869,
+     "key": "ambient/fire/fire_med_loop1.wav",
+     "map": "d3_c17_03"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 13,
+   "distinct": 5,
+   "samples": [
+    {
+     "db": 6,
+     "pos": "-5152.288086 -4164.555664 72.703003",
+     "toG": 0.0124,
+     "t": 28.57,
+     "sound": "npc/scanner/combat_scan_loop6.wav",
+     "fromG": 0.0062,
+     "key": "npc/scanner/combat_scan_loop6.wav",
+     "map": "d3_c17_03"
+    },
+    {
+     "db": -6,
+     "pos": "-4800.858887 -3968.447266 201.440399",
+     "toG": 0.0296,
+     "t": 32.53,
+     "sound": "npc/scanner/combat_scan_loop4.wav",
+     "fromG": 0.059,
+     "key": "npc/scanner/combat_scan_loop4.wav",
+     "map": "d3_c17_03"
+    },
+    {
+     "db": -25.7,
+     "pos": "-3957.754395 -3912.294189 70.031250",
+     "toG": 0.0203,
+     "t": 34.84,
+     "sound": "player/footsteps/concrete3.wav",
+     "fromG": 0.3913,
+     "key": "player/footsteps/concrete3.wav",
+     "map": "d3_c17_03"
+    },
+    {
+     "db": -19.5,
+     "pos": "-3957.754395 -3912.294189 70.031250",
+     "toG": 0.0699,
+     "t": 34.84,
+     "sound": "weapons/smg1/npc_smg1_fire1.wav",
+     "fromG": 0.6619,
+     "key": "weapons/smg1/npc_smg1_fire1.wav",
+     "map": "d3_c17_03"
+    },
+    {
+     "db": -10.9,
+     "pos": "-4499.708008 -3949.421631 209.025467",
+     "toG": 0.0147,
+     "t": 34.84,
+     "sound": "npc/scanner/combat_scan4.wav",
+     "fromG": 0.0517,
+     "key": "npc/scanner/combat_scan4.wav",
+     "map": "d3_c17_03"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 5,
+   "distinct": 5,
+   "samples": [
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_collaboration01.wav",
+     "dist": 13400,
+     "lagMs": 744,
+     "t": 13.18
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_collaboration02.wav",
+     "dist": 13400,
+     "lagMs": 744,
+     "t": 21.43
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_collaboration03.wav",
+     "dist": 13400,
+     "lagMs": 744,
+     "t": 26.08
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_collaboration04.wav",
+     "dist": 11482,
+     "lagMs": 638,
+     "t": 34.99
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_collaboration05.wav",
+     "dist": 10994,
+     "lagMs": 611,
+     "t": 38.64
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

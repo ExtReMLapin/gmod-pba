@@ -1,0 +1,12 @@
+{
+ "map": "d1_trainstation_04",
+ "tag": "main",
+ "sets": [],
+ "secs": 170,
+ "triggers": 24,
+ "visited": 24,
+ "scenes": 6,
+ "speech": 0,
+ "anomalies": {},
+ "loud_census": {}
+}

@@ -1,0 +1,128 @@
+{
+ "map": "d3_c17_06b",
+ "tag": "",
+ "sets": [],
+ "secs": 106,
+ "triggers": 64,
+ "visited": 19,
+ "scenes": 14,
+ "speech": 24,
+ "anomalies": {
+  "mirror_step": {
+   "count": 3,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 41.28,
+     "pos": "2678.500000 1071.187500 73.000000",
+     "toG": 0.01,
+     "sound": "ambient/fire/fire_small1.wav",
+     "fromG": 1,
+     "key": "ambient/fire/fire_small1.wav",
+     "map": "d3_c17_06b"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 33,
+   "distinct": 16,
+   "samples": [
+    {
+     "db": -3.1,
+     "pos": "1897.064819 1749.820190 66.031250",
+     "toG": 0.5549,
+     "t": 29.16,
+     "sound": "vo/npc/male01/startle02.wav",
+     "fromG": 0.7919,
+     "key": "vo/npc/male01/startle02.wav",
+     "map": "d3_c17_06b"
+    },
+    {
+     "db": -14.7,
+     "pos": "1867.589966 1758.598145 66.031250",
+     "toG": 0.0393,
+     "t": 31.52,
+     "sound": "player/footsteps/concrete3.wav",
+     "fromG": 0.2146,
+     "key": "player/footsteps/concrete3.wav",
+     "map": "d3_c17_06b"
+    },
+    {
+     "db": -9.7,
+     "pos": "1733.499634 1808.426636 70.031250",
+     "toG": 0.0326,
+     "t": 31.52,
+     "sound": "player/footsteps/concrete1.wav",
+     "fromG": 0.0994,
+     "key": "player/footsteps/concrete1.wav",
+     "map": "d3_c17_06b"
+    },
+    {
+     "db": 7.2,
+     "pos": "2964.425781 1360.718750 135.163925",
+     "toG": 0.0057,
+     "t": 35.81,
+     "sound": "doors/drawbridge_move1.wav",
+     "fromG": 0.0025,
+     "key": "doors/drawbridge_move1.wav",
+     "map": "d3_c17_06b"
+    },
+    {
+     "db": 3.3,
+     "pos": "2616.220703 1386.203979 70.031250",
+     "toG": 0.4984,
+     "t": 38.26,
+     "sound": "player/footsteps/concrete4.wav",
+     "fromG": 0.3397,
+     "key": "player/footsteps/concrete4.wav",
+     "map": "d3_c17_06b"
+    },
+    {
+     "db": -5.9,
+     "pos": "2846.548584 1084.457520 133.685165",
+     "toG": 0.0191,
+     "t": 41.03,
+     "sound": "vo/trainyard/husb_okay.wav",
+     "fromG": 0.0378,
+     "key": "vo/trainyard/husb_okay.wav",
+     "map": "d3_c17_06b"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 4,
+   "distinct": 3,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "common/null.wav",
+     "dist": 1587,
+     "lagMs": 88,
+     "t": 66.13
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/female01/pain05.wav",
+     "dist": 1587,
+     "lagMs": 88,
+     "t": 66.13
+    },
+    {
+     "class": "npc_citizen",
+     "name": "common/null.wav",
+     "dist": 1913,
+     "lagMs": 106,
+     "t": 72.37
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/pain04.wav",
+     "dist": 1913,
+     "lagMs": 106,
+     "t": 72.37
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

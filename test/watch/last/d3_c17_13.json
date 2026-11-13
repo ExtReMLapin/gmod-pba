@@ -1,0 +1,184 @@
+{
+ "map": "d3_c17_13",
+ "tag": "",
+ "sets": [],
+ "secs": 104,
+ "triggers": 55,
+ "visited": 25,
+ "scenes": 13,
+ "speech": 17,
+ "anomalies": {
+  "overlap_channel": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "names": "vehicles/v8/vehicle_rollover1.wav + vehicles/v8/vehicle_rollover2.wav",
+     "t": 72.76,
+     "key": "148:0",
+     "map": "d3_c17_13"
+    }
+   ]
+  },
+  "stuck_once": {
+   "count": 10,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 87.48,
+     "pos": "6633.500000 -416.656250 45.062500",
+     "dur": 1.79,
+     "map": "d3_c17_13",
+     "sound": "vehicles/v8/vehicle_rollover1.wav",
+     "age": 5,
+     "key": "450:0:vehicles/v8/vehicle_rollover1.wav",
+     "g": 0.40945742107643124
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 54,
+   "distinct": 18,
+   "samples": [
+    {
+     "db": -5.6,
+     "pos": "4820.000000 -2704.000000 36.031250",
+     "toG": 0.3679,
+     "t": 32.62,
+     "sound": "vo/streetwar/rubble/d3_c17_13_striders.wav",
+     "fromG": 0.698,
+     "key": "vo/streetwar/rubble/d3_c17_13_striders.wav",
+     "map": "d3_c17_13"
+    },
+    {
+     "db": -11.7,
+     "pos": "4845.269531 -2199.909424 137.408463",
+     "toG": 0.2593,
+     "t": 33.23,
+     "sound": "npc/strider/strider_minigun.wav",
+     "fromG": 1,
+     "key": "npc/strider/strider_minigun.wav",
+     "map": "d3_c17_13"
+    },
+    {
+     "db": 7.6,
+     "pos": "4881.038574 -2014.121582 756.189331",
+     "toG": 0.0245,
+     "t": 41.97,
+     "sound": "npc/combine_gunship/dropship_engine_distant_loop1.wav",
+     "fromG": 0.0102,
+     "key": "npc/combine_gunship/dropship_engine_distant_loop1.wav",
+     "map": "d3_c17_13"
+    },
+    {
+     "db": -3.4,
+     "pos": "4918.495605 -1146.145874 48.720985",
+     "toG": 0.1396,
+     "t": 43.88,
+     "sound": "npc/combine_gunship/dropship_onground_loop1.wav",
+     "fromG": 0.2054,
+     "key": "npc/combine_gunship/dropship_onground_loop1.wav",
+     "map": "d3_c17_13"
+    },
+    {
+     "db": -14,
+     "pos": "4731.646484 -1235.899780 -57.968742",
+     "toG": 0.0659,
+     "t": 44.35,
+     "sound": "player/footsteps/concrete1.wav",
+     "fromG": 0.3295,
+     "key": "player/footsteps/concrete1.wav",
+     "map": "d3_c17_13"
+    },
+    {
+     "db": -17.1,
+     "pos": "4731.646484 -1235.899780 -57.968742",
+     "toG": 0.0659,
+     "t": 44.35,
+     "sound": "player/footsteps/concrete4.wav",
+     "fromG": 0.4723,
+     "key": "player/footsteps/concrete4.wav",
+     "map": "d3_c17_13"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 5,
+   "distinct": 4,
+   "samples": [
+    {
+     "class": "npc_citizen",
+     "name": "common/null.wav",
+     "dist": 1444,
+     "lagMs": 80,
+     "t": 63.55
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/female01/pain05.wav",
+     "dist": 1444,
+     "lagMs": 80,
+     "t": 63.55
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/female01/coverwhilereload02.wav",
+     "dist": 1897,
+     "lagMs": 105,
+     "t": 83.35
+    },
+    {
+     "class": "npc_citizen",
+     "name": "common/null.wav",
+     "dist": 2090,
+     "lagMs": 116,
+     "t": 87.51
+    },
+    {
+     "class": "npc_citizen",
+     "name": "*vo/npc/male01/pain09.wav",
+     "dist": 2090,
+     "lagMs": 116,
+     "t": 87.51
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "npc/combine_gunship/dropship_onground_loop1.wav": {
+   "lvl": 130,
+   "dmin": 786,
+   "dmax": 2169,
+   "n": 64,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_engine_near_loop1.wav": {
+   "lvl": 130,
+   "dmin": 786,
+   "dmax": 2169,
+   "n": 65,
+   "native": true
+  },
+  "npc/combine_gunship/gunship_fire_loop1.wav": {
+   "lvl": 130,
+   "dmin": 786,
+   "dmax": 2169,
+   "n": 65,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_dropping_pod_loop1.wav": {
+   "lvl": 140,
+   "dmin": 786,
+   "dmax": 2169,
+   "n": 65,
+   "native": true
+  },
+  "npc/combine_gunship/dropship_engine_distant_loop1.wav": {
+   "lvl": 140,
+   "dmin": 786,
+   "dmax": 2169,
+   "n": 64,
+   "native": true
+  }
+ }
+}

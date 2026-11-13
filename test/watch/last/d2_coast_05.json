@@ -1,0 +1,93 @@
+{
+ "map": "d2_coast_05",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 27,
+ "visited": 18,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "voice_step": {
+   "count": 10,
+   "distinct": 7,
+   "samples": [
+    {
+     "db": 5.2,
+     "pos": "3675.400146 -10557.168945 1509.662109",
+     "toG": 0.1801,
+     "t": 32.35,
+     "sound": "npc/roller/mine/rmine_blades_out1.wav",
+     "fromG": 0.0985,
+     "key": "npc/roller/mine/rmine_blades_out1.wav",
+     "map": "d2_coast_05"
+    },
+    {
+     "db": -3.5,
+     "pos": "3638.918945 -10539.486328 1582.959351",
+     "toG": 0.2224,
+     "t": 32.88,
+     "sound": "npc/roller/mine/rmine_movefast_loop1.wav",
+     "fromG": 0.3328,
+     "key": "npc/roller/mine/rmine_movefast_loop1.wav",
+     "map": "d2_coast_05"
+    },
+    {
+     "db": -3.5,
+     "pos": "3638.918945 -10539.486328 1582.959351",
+     "toG": 0.2386,
+     "t": 32.88,
+     "sound": "npc/roller/mine/rmine_seek_loop2.wav",
+     "fromG": 0.3571,
+     "key": "npc/roller/mine/rmine_seek_loop2.wav",
+     "map": "d2_coast_05"
+    },
+    {
+     "db": -3.5,
+     "pos": "3638.918945 -10539.486328 1582.959351",
+     "toG": 0.1788,
+     "t": 32.88,
+     "sound": "npc/roller/mine/rmine_moveslow_loop1.wav",
+     "fromG": 0.2676,
+     "key": "npc/roller/mine/rmine_moveslow_loop1.wav",
+     "map": "d2_coast_05"
+    },
+    {
+     "db": -10.1,
+     "pos": "-6024.999512 -9965.593750 860.851746",
+     "toG": 0.047,
+     "t": 55.48,
+     "sound": "npc/combine_soldier/gear6.wav",
+     "fromG": 0.1502,
+     "key": "npc/combine_soldier/gear6.wav",
+     "map": "d2_coast_05"
+    },
+    {
+     "db": -13.6,
+     "pos": "-6130.200195 -10155.404297 868.477478",
+     "toG": 0.0074,
+     "t": 57.89,
+     "sound": "player/footsteps/concrete2.wav",
+     "fromG": 0.0355,
+     "key": "player/footsteps/concrete2.wav",
+     "map": "d2_coast_05"
+    }
+   ]
+  },
+  "relay_saturation": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 41.61,
+     "relayed": 166,
+     "key": "relayCapped",
+     "muffled": 250,
+     "perSecond": 250,
+     "map": "d2_coast_05"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

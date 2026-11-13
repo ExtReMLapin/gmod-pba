@@ -1,0 +1,90 @@
+{
+ "map": "d2_coast_08",
+ "tag": "",
+ "sets": [],
+ "secs": 107,
+ "triggers": 29,
+ "visited": 18,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "louder_vanilla": {
+   "count": 37,
+   "distinct": 1,
+   "samples": [
+    {
+     "dist": 2750,
+     "lvl": 60,
+     "overDb": 23.2,
+     "t": 39.24,
+     "sound": "npc/crow/flap2.wav",
+     "map": "d2_coast_08",
+     "key": "npc/crow/flap2.wav",
+     "g": 1
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 10,
+   "distinct": 4,
+   "samples": [
+    {
+     "db": 4.5,
+     "pos": "2845.335449 2733.320312 1289.079468",
+     "toG": 0.0221,
+     "t": 41.03,
+     "sound": "npc/crow/flap2.wav",
+     "fromG": 0.0132,
+     "key": "npc/crow/flap2.wav",
+     "map": "d2_coast_08"
+    },
+    {
+     "db": 9.4,
+     "pos": "3306.674805 -478.958618 1786.102539",
+     "toG": 0.0042,
+     "t": 57.73,
+     "sound": "!combine_clear0#2917713705",
+     "fromG": 0.0014,
+     "key": "!combine_clear0#2917713705",
+     "map": "d2_coast_08"
+    },
+    {
+     "db": 3.2,
+     "pos": "3410.150391 -417.127930 0.125000",
+     "toG": 0.0523,
+     "t": 60.5,
+     "sound": "ambient/water/water_splash2.wav",
+     "fromG": 0.0361,
+     "key": "ambient/water/water_splash2.wav",
+     "map": "d2_coast_08"
+    },
+    {
+     "db": -6.1,
+     "pos": "3316.887207 -1523.000244 926.602234",
+     "toG": 0.0401,
+     "t": 65.74,
+     "sound": "ambient/machines/train_freight_loop1.wav",
+     "fromG": 0.0809,
+     "key": "ambient/machines/train_freight_loop1.wav",
+     "map": "d2_coast_08"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "ambient/machines/razor_train_wheels_loop1.wav": {
+   "lvl": 100,
+   "dmin": 3214,
+   "dmax": 6169,
+   "n": 62,
+   "native": true
+  },
+  "ambient/machines/train_freight_loop1.wav": {
+   "lvl": 100,
+   "dmin": 3214,
+   "dmax": 6169,
+   "n": 62,
+   "native": true
+  }
+ }
+}

@@ -1,0 +1,68 @@
+{
+ "map": "d1_canals_09",
+ "tag": "",
+ "sets": [],
+ "secs": 73,
+ "triggers": 10,
+ "visited": 10,
+ "scenes": 0,
+ "speech": 0,
+ "anomalies": {
+  "mirror_step": {
+   "count": 2,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 16.65,
+     "pos": "2048.000000 12288.000000 -6.468750",
+     "toG": 0.175,
+     "sound": "^npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "fromG": 1,
+     "key": "^npc/attack_helicopter/aheli_rotor_loop1.wav",
+     "map": "d1_canals_09"
+    },
+    {
+     "t": 17.86,
+     "pos": "2048.000000 12288.000000 -6.468750",
+     "toG": 0.537,
+     "sound": "npc/attack_helicopter/aheli_weapon_fire_loop3.wav",
+     "fromG": 1,
+     "key": "npc/attack_helicopter/aheli_weapon_fire_loop3.wav",
+     "map": "d1_canals_09"
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 6,
+   "distinct": 1,
+   "samples": [
+    {
+     "db": -5.6,
+     "pos": "7522.180664 10368.351562 -223.266846",
+     "toG": 0.0177,
+     "t": 16.65,
+     "sound": "npc/attack_helicopter/aheli_charge_up.wav",
+     "fromG": 0.0336,
+     "key": "npc/attack_helicopter/aheli_charge_up.wav",
+     "map": "d1_canals_09"
+    }
+   ]
+  }
+ },
+ "loud_census": {
+  "^npc/attack_helicopter/aheli_rotor_loop1.wav": {
+   "lvl": 130,
+   "dmin": 2250,
+   "dmax": 6247,
+   "n": 78,
+   "native": false
+  },
+  "npc/attack_helicopter/aheli_weapon_fire_loop3.wav": {
+   "lvl": 140,
+   "dmin": 2250,
+   "dmax": 6247,
+   "n": 78,
+   "native": false
+  }
+ }
+}

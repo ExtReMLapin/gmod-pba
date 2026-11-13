@@ -1,0 +1,99 @@
+{
+ "map": "d1_canals_03",
+ "tag": "",
+ "sets": [],
+ "secs": 107,
+ "triggers": 52,
+ "visited": 25,
+ "scenes": 10,
+ "speech": 14,
+ "anomalies": {
+  "voice_step": {
+   "count": 85,
+   "distinct": 15,
+   "samples": [
+    {
+     "db": 4.3,
+     "pos": "377.176910 2532.540283 -689.479736",
+     "toG": 0.0722,
+     "t": 30.89,
+     "sound": "npc/manhack/mh_blade_loop1.wav",
+     "fromG": 0.044,
+     "key": "npc/manhack/mh_blade_loop1.wav",
+     "map": "d1_canals_03"
+    },
+    {
+     "db": 4.3,
+     "pos": "378.225983 2535.634766 -692.725220",
+     "toG": 0.0692,
+     "t": 30.89,
+     "sound": "npc/manhack/mh_engine_loop1.wav",
+     "fromG": 0.0422,
+     "key": "npc/manhack/mh_engine_loop1.wav",
+     "map": "d1_canals_03"
+    },
+    {
+     "db": 4.3,
+     "pos": "378.225983 2535.634766 -692.725220",
+     "toG": 0.0691,
+     "t": 30.89,
+     "sound": "npc/manhack/mh_engine_loop2.wav",
+     "fromG": 0.0421,
+     "key": "npc/manhack/mh_engine_loop2.wav",
+     "map": "d1_canals_03"
+    },
+    {
+     "db": 9.7,
+     "pos": "-343.311249 2206.524902 -798.768311",
+     "toG": 0.0046,
+     "t": 35.13,
+     "sound": "ambient/fire/fire_small_loop2.wav",
+     "fromG": 0.0015,
+     "key": "ambient/fire/fire_small_loop2.wav",
+     "map": "d1_canals_03"
+    },
+    {
+     "db": -5.5,
+     "pos": "-45.485245 2495.406250 -736.361145",
+     "toG": 0.0794,
+     "t": 35.74,
+     "sound": "npc/manhack/grind5.wav",
+     "fromG": 0.1494,
+     "key": "npc/manhack/grind5.wav",
+     "map": "d1_canals_03"
+    },
+    {
+     "db": -6.6,
+     "pos": "-109.827316 2457.083252 -770.370422",
+     "toG": 0.0826,
+     "t": 35.74,
+     "sound": "npc/manhack/grind4.wav",
+     "fromG": 0.176,
+     "key": "npc/manhack/grind4.wav",
+     "map": "d1_canals_03"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 1729,
+     "lagMs": 96,
+     "t": 64.48
+    },
+    {
+     "class": "npc_metropolice",
+     "name": "invalid.wav",
+     "dist": 1834,
+     "lagMs": 102,
+     "t": 71.28
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}

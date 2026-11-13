@@ -1,0 +1,217 @@
+{
+ "map": "d1_trainstation_03",
+ "tag": "prefix",
+ "sets": [
+  [
+   "pba_loops_once_end",
+   "0"
+  ]
+ ],
+ "secs": 156,
+ "triggers": 41,
+ "visited": 29,
+ "scenes": 28,
+ "speech": 36,
+ "anomalies": {
+  "mirror_step": {
+   "count": 40,
+   "distinct": 7,
+   "samples": [
+    {
+     "t": 53.02,
+     "pos": "-4431.937500 -4958.093750 297.937500",
+     "toG": 0.086,
+     "sound": "*^vo/breencast/br_instinct01.wav",
+     "fromG": 0.005,
+     "key": "*^vo/breencast/br_instinct01.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "t": 53.02,
+     "pos": "-4431.937500 -4958.093750 297.937500",
+     "toG": 0.077,
+     "sound": "*^vo/breencast/br_instinct03.wav",
+     "fromG": 0.005,
+     "key": "*^vo/breencast/br_instinct03.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "t": 63.21,
+     "pos": "-4221.937500 -4952.156250 304.718750",
+     "toG": 0.069,
+     "sound": "*^vo/breencast/br_instinct04.wav",
+     "fromG": 0.11,
+     "key": "*^vo/breencast/br_instinct04.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "t": 78.82,
+     "pos": "-4431.937500 -4958.093750 297.937500",
+     "toG": 0.507,
+     "sound": "*^vo/breencast/br_instinct05.wav",
+     "fromG": 0.083,
+     "key": "*^vo/breencast/br_instinct05.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "t": 82.09,
+     "pos": "-4221.937500 -4952.156250 304.718750",
+     "toG": 0.014,
+     "sound": "*^vo/breencast/br_instinct06.wav",
+     "fromG": 0.365,
+     "key": "*^vo/breencast/br_instinct06.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "t": 114.22,
+     "pos": "-4434.156250 -4970.343750 294.656250",
+     "toG": 0.559,
+     "sound": "*vo/breencast/br_instinct10.wav",
+     "fromG": 1,
+     "key": "*vo/breencast/br_instinct10.wav",
+     "map": "d1_trainstation_03"
+    }
+   ]
+  },
+  "stuck_once": {
+   "count": 792,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 30.52,
+     "pos": "-4431.937500 -4958.093750 297.937500",
+     "dur": 15.01,
+     "map": "d1_trainstation_03",
+     "sound": "*^vo/breencast/br_instinct01.wav",
+     "age": 18.3,
+     "key": "41:2:*^vo/breencast/br_instinct01.wav",
+     "g": 0.00503099990605533
+    },
+    {
+     "t": 30.52,
+     "pos": "-4221.937500 -4952.156250 304.718750",
+     "dur": 15.01,
+     "map": "d1_trainstation_03",
+     "sound": "*^vo/breencast/br_instinct01.wav",
+     "age": 18.3,
+     "key": "25:2:*^vo/breencast/br_instinct01.wav",
+     "g": 0.005280074377179144
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 60,
+   "distinct": 12,
+   "samples": [
+    {
+     "db": -7.3,
+     "pos": "-4704.748047 -4846.196777 292.427734",
+     "toG": 0.0031,
+     "t": 81.85,
+     "sound": "vehicles/apc/apc_idle1.wav",
+     "fromG": 0.0071,
+     "key": "vehicles/apc/apc_idle1.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "db": -7.6,
+     "pos": "-4707.565918 -4856.273926 291.955811",
+     "toG": 0.0031,
+     "t": 81.85,
+     "sound": "ambient/voices/crying_loop1.wav",
+     "fromG": 0.0073,
+     "key": "ambient/voices/crying_loop1.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "db": -5.8,
+     "pos": "-4747.229492 -4771.939941 305.565826",
+     "toG": 0.0087,
+     "t": 81.9,
+     "sound": "ambient/water/drip_loop1.wav",
+     "fromG": 0.0169,
+     "key": "ambient/water/drip_loop1.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "db": -3.5,
+     "pos": "-4926.730957 -4587.388672 441.607605",
+     "toG": 0.0176,
+     "t": 85.42,
+     "sound": "ambient/materials/footsteps_stairs2.wav",
+     "fromG": 0.0264,
+     "key": "ambient/materials/footsteps_stairs2.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "db": 4.2,
+     "pos": "-4349.000000 -4955.000000 326.000000",
+     "toG": 0.5486,
+     "t": 107.22,
+     "sound": "vo/trainyard/cit_window_cop.wav",
+     "fromG": 0.3369,
+     "key": "vo/trainyard/cit_window_cop.wav",
+     "map": "d1_trainstation_03"
+    },
+    {
+     "db": 6.2,
+     "pos": "-4202.157227 -4974.318359 318.866913",
+     "toG": 0.0053,
+     "t": 114.43,
+     "sound": "vehicles/apc/apc_firstgear_loop1.wav",
+     "fromG": 0.0026,
+     "key": "vehicles/apc/apc_firstgear_loop1.wav",
+     "map": "d1_trainstation_03"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 13,
+   "distinct": 13,
+   "samples": [
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct02.wav",
+     "dist": 4692,
+     "lagMs": 261,
+     "t": 27.27
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct03.wav",
+     "dist": 4692,
+     "lagMs": 261,
+     "t": 39.76
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct04.wav",
+     "dist": 4625,
+     "lagMs": 257,
+     "t": 58.68
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct05.wav",
+     "dist": 4403,
+     "lagMs": 245,
+     "t": 69.82
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct06.wav",
+     "dist": 4124,
+     "lagMs": 229,
+     "t": 81.07
+    },
+    {
+     "class": "npc_breen",
+     "name": "*^vo/breencast/br_instinct07.wav",
+     "dist": 4492,
+     "lagMs": 249,
+     "t": 90.39
+    }
+   ]
+  }
+ }
+}

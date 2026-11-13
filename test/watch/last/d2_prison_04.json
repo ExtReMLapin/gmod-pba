@@ -1,0 +1,131 @@
+{
+ "map": "d2_prison_04",
+ "tag": "",
+ "sets": [],
+ "secs": 105,
+ "triggers": 31,
+ "visited": 19,
+ "scenes": 1,
+ "speech": 0,
+ "anomalies": {
+  "mirror_step": {
+   "count": 4,
+   "distinct": 2,
+   "samples": [
+    {
+     "t": 42.36,
+     "pos": "-1181.906250 1645.687500 464.000000",
+     "toG": 0.455,
+     "sound": "*vo/breencast/br_overwatch03.wav",
+     "fromG": 0.002,
+     "key": "*vo/breencast/br_overwatch03.wav",
+     "map": "d2_prison_04"
+    },
+    {
+     "t": 69.61,
+     "pos": "-1181.906250 1645.687500 464.000000",
+     "toG": 0.696,
+     "sound": "*vo/breencast/br_overwatch04.wav",
+     "fromG": 0.379,
+     "key": "*vo/breencast/br_overwatch04.wav",
+     "map": "d2_prison_04"
+    }
+   ]
+  },
+  "overlap_channel": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "names": "*vo/breencast/br_overwatch01.wav + *vo/breencast/br_overwatch02.wav",
+     "t": 23.8,
+     "key": "386:2",
+     "map": "d2_prison_04"
+    }
+   ]
+  },
+  "stuck_once": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "t": 53.77,
+     "pos": "-797.093750 1567.281250 136.875000",
+     "dur": 7.2,
+     "map": "d2_prison_04",
+     "sound": "physics/body/body_medium_scrape_rough_loop1.wav",
+     "age": 10.5,
+     "key": "296:0:physics/body/body_medium_scrape_rough_loop1.wav",
+     "g": 0.861460775802175
+    }
+   ]
+  },
+  "voice_step": {
+   "count": 77,
+   "distinct": 19,
+   "samples": [
+    {
+     "db": -7.8,
+     "pos": "-772.963806 795.869385 24.093750",
+     "toG": 0.0168,
+     "t": 34.79,
+     "sound": "npc/antlion/foot4.wav",
+     "fromG": 0.0411,
+     "key": "npc/antlion/foot4.wav",
+     "map": "d2_prison_04"
+    },
+    {
+     "db": -4.8,
+     "pos": "-834.000000 704.874207 280.093750",
+     "toG": 0.0153,
+     "t": 34.79,
+     "sound": "npc/antlion/foot1.wav",
+     "fromG": 0.0266,
+     "key": "npc/antlion/foot1.wav",
+     "map": "d2_prison_04"
+    },
+    {
+     "db": -10.4,
+     "pos": "-681.711426 880.736206 64.473328",
+     "toG": 0.0159,
+     "t": 34.79,
+     "sound": "npc/antlion/foot2.wav",
+     "fromG": 0.0524,
+     "key": "npc/antlion/foot2.wav",
+     "map": "d2_prison_04"
+    },
+    {
+     "db": -10,
+     "pos": "-681.711426 880.736206 64.473328",
+     "toG": 0.0202,
+     "t": 34.79,
+     "sound": "npc/antlion/foot3.wav",
+     "fromG": 0.0639,
+     "key": "npc/antlion/foot3.wav",
+     "map": "d2_prison_04"
+    },
+    {
+     "db": -4.6,
+     "pos": "-645.747925 709.098450 300.579498",
+     "toG": 0.1059,
+     "t": 34.79,
+     "sound": "npc/antlion/fly1.wav",
+     "fromG": 0.1798,
+     "key": "npc/antlion/fly1.wav",
+     "map": "d2_prison_04"
+    },
+    {
+     "db": -6.5,
+     "pos": "-683.384521 874.728088 59.052383",
+     "toG": 0.1667,
+     "t": 34.79,
+     "sound": "npc/antlion/idle5.wav",
+     "fromG": 0.351,
+     "key": "npc/antlion/idle5.wav",
+     "map": "d2_prison_04"
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}
