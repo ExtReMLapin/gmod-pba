@@ -903,15 +903,12 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local roomSend
 	if opt.roomSend then roomSend = opt.roomSend * A.cfg.native_gain
 	elseif opt.srcPos or opt.noRoom then roomSend = 0 end
-	local id
-	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
-	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend) end
-	if id and id > 0 and opt.srcPos and L then
-		if not N.BindSource(id, opt.srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
 	-- "#" (dry mix): the engine runs no DSP on it, no room reverb; the module gives it none either
 	local srcPos = opt.srcPos
 	if N.DryMix(name) then roomSend, srcPos = 0, nil end
-	local id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
+	local id
+	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
+	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend) end
 	if id and id > 0 and srcPos and L then
 		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain
