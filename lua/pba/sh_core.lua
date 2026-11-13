@@ -244,7 +244,7 @@ end
 
 A.loopCache = A.loopCache or {}
 
---- True if a .wav file carries loop points (cue/smpl chunk): re-emitting it as a one-shot
+--- True if a .wav file carries loop points (a cue point, or a smpl loop): re-emitting it as a one-shot
 -- would never stop, so such sounds are left to the engine.
 function A.IsLooping(name)
 	name = string.lower(A.SoundFile(name))
@@ -260,16 +260,17 @@ function A.IsLooping(name)
 				local size = f:Size()
 				while f:Tell() + 8 <= size do
 					local id, len = f:Read(4), f:ReadULong()
-					if id == "cue " or id == "smpl" then
-						if id == "smpl" then
-							f:Skip(28)
-							loop = f:ReadULong() > 0
-						else
-							loop = f:ReadULong() > 0
-						end
-						break
+					local nxt = f:Tell() + len + (len % 2)
+					-- as the engine: a cue point loops the file, and so does a sampler loop; a "smpl"
+					-- chunk without loops does not settle it (mh_engine_loop1.wav: smpl 0 loops, then cue)
+					if id == "smpl" then
+						f:Skip(28)
+						loop = f:ReadULong() > 0
+					elseif id == "cue " then
+						loop = f:ReadULong() > 0
 					end
-					f:Skip(len + (len % 2))
+					if loop then break end
+					f:Seek(nxt)
 				end
 			end
 			f:Close()

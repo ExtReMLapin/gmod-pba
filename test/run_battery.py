@@ -208,6 +208,16 @@ def seq(*fns):
         out = f()
     return out
 
+def manhack_loop():
+    """Both client checks of the manhack loops: taken over (part 2) and ended with the entity (part 4)."""
+    load(TW)
+    job("server", "manhack_loop_setup.lua")
+    taken = job("client", "manhack_loop.lua")
+    job("server", "manhack_loop_remove.lua")
+    off = job("client", "manhack_loop_off.lua")
+    ok = isinstance(taken, dict) and taken.get("pass") is True and isinstance(off, dict) and off.get("pass") is True
+    return {"pass": ok, "taken": taken, "off": off}
+
 TW = "pba_tworooms"
 steps = [
     ("GLuaTest pure suite", pure),
@@ -264,6 +274,14 @@ steps = [
     # a quick throttle on / off: the vehicle state sound the next one destroys is no longer mirrored
     ("vehicle_state_sounds", lambda: seq(lambda: load(TW), lambda: job("server", "vehicle_state_sounds.lua"))),
     ("loop_removed", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_removed.lua"))),
+    # a CSoundPatch on a file without loop points (plays once): followed for its length, restarted, stopped
+    ("patch_oneshot", lambda: seq(lambda: load(TW), lambda: job("server", "patch_oneshot.lua", 30))),
+    # a physics scrape loop behind a wall (its lifecycle the physics engine's): re-emitted muffled in place
+    ("physics_scrape", lambda: seq(lambda: load(TW), lambda: job("server", "physics_scrape.lua", 30))),
+    # loop points as the engine reads them: a cue point loops a file whose smpl chunk lists no loop
+    ("looping_cue", lambda: job("client", "looping_cue.lua")),
+    # manhack engine / blade loops (client C++ patches): mirrored behind the wall, ended with the entity
+    ("manhack_loop", lambda: manhack_loop()),
     ("looping_sound_stop", lambda: seq(lambda: load(TW), lambda: job("server", "looping_sound_stop.lua"))),
     ("weapon_loop_owner", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
     ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_loop_fade_hidden.lua"))),
@@ -548,7 +566,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06"}
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "patch_oneshot", "physics_scrape", "looping_cue", "manhack_loop"}
 if "--quick" in opts:
     steps = [s_ for s_ in steps if s_[0] in QUICK]
 # --only=a,b: just these steps (exact labels), in battery order; each sets its own map and state

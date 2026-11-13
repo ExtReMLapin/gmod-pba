@@ -267,6 +267,47 @@ end
 hook.Add("PlayerFootstep", "pba_step", function(ply)
 	A.stepPly, A.stepTick = ply, engine.TickCount()
 end)
+--- A sound whose lifecycle stays the engine's (physics friction loops, LP.EngineDriven): each of its
+-- events (start, volume / pitch changes) re-emitted by the engine itself, muffled per player as a budget
+-- miss is (DSP preset + volume from the walls), its name, channel and flags kept, so later changes and the
+-- C++ StopSound (sent to every player) still reach the copies. Clear players get it unchanged; nobody
+-- behind a wall: untouched. Returns false when the original was replaced.
+local function muffleInPlace(data)
+	local lvl = data.SoundLevel or 75
+	if lvl <= 0 or lvl >= 256 then return end
+	local pos = A.SoundPos(data)
+	if not pos then return end
+	local radius, lod = audibleRadius(lvl), A.cfg.lod_dist
+	local clear, groups, order = {}, {}, {}
+	for _, ply in ipairs(player.GetHumans()) do
+		local eye = A.PlayerEar(ply)
+		local d2 = eye:DistToSqr(pos)
+		if d2 <= radius * radius then
+			local walls = d2 <= lod * lod and A.Paths.Walls(pos, eye, 1, data.Entity) or nil
+			if walls and #walls > 0 then
+				local dsp, gain = muffleFor(walls)
+				local k = dsp .. ":" .. math.Round(gain * 1000)
+				local g = groups[k]
+				if not g then
+					g = { dsp = dsp, gain = gain, plys = {} }
+					groups[k] = g
+					order[#order + 1] = g
+				end
+				g.plys[#g.plys + 1] = ply
+			else
+				clear[#clear + 1] = ply
+			end
+		end
+	end
+	if #order == 0 then return end
+	if #clear > 0 then reemit(data, pos, lvl, clear, data.SoundName, data.Volume, data.DSP) end
+	for _, g in ipairs(order) do
+		reemit(data, pos, lvl, g.plys, data.SoundName, (data.Volume or 1) * g.gain, g.dsp > 0 and g.dsp or data.DSP)
+	end
+	A.stats.physMuffled = (A.stats.physMuffled or 0) + 1
+	return false
+end
+
 local function stepper(data)
 	local e = data.Entity
 	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then return e end
@@ -276,6 +317,7 @@ local relayedTo -- the players the current sound was relayed to (relay, below)
 local function relay(data)
 	A.stats.seen = A.stats.seen + 1
 	if A.Loops and A.Loops.Handle(data) then return false end
+	if A.Loops and A.Loops.EngineDriven and A.Loops.EngineDriven(data) then return muffleInPlace(data) end
 	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
 		-- a stop event (some engine paths do send one): same relay as StopSound
 		A.RelayStop(data.Entity, data.SoundName)
