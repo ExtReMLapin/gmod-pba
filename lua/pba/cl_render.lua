@@ -909,12 +909,13 @@ function A.Process(data, relayed)
 			unregister(idx, h)
 			if h.cancelled then return end
 			h.cancelled = true -- (the placeholder's part is over)
-			if not res or not finish(d, relayed, idx, copies, S, L, ang, src, res, RealTime() - tReq, SysTime()) then vanilla(d)
+			if not res or not finish(d, relayed, idx, copies, S, L, ang, src, res, RealTime() - tReq - (d.Delay or 0), SysTime()) then vanilla(d)
 			else mouthCopy(d, src) end
 		end
 		return true
 	end
-	local taken = finish(data, relayed, idx, copies, S, L, ang, src, r, 0, t0)
+	-- (a relayed sound's own start time, A.SoundTimeDelay: a negative "waited", it starts that much later)
+	local taken = finish(data, relayed, idx, copies, S, L, ang, src, r, -(data.Delay or 0), t0)
 	if taken then mouthCopy(data, src) end
 	return taken
 end
@@ -1069,6 +1070,25 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if A.Process(data, false) then return false end
 end))
 
+-- Start times of relayed sounds (SoundTime, sv_relay writeSound). A weapon fires at its own tick: the
+-- server runs several ticks between two network updates, so two shots 75 ms apart reach the client in
+-- one packet. The engine keeps their spacing: it anchors a stamped server sound's time to its mixer
+-- clock and delays each later one by how much its stamp is ahead of the clock since the anchor; a
+-- delay below 0 or above 0.5 s re-anchors. The same rule here, on RealTime(), for the relayed copies.
+local ST_MAX = 0.5
+--- Delay (s) before relayed sound with stamp `ms` (ms modulo 65536) starts, at client time `now`.
+function A.SoundTimeDelay(ms, now)
+	local s = A.stSync
+	if s and now - s.now < 30 then
+		local d = (ms - s.ms) % 65536
+		if d >= 32768 then d = d - 65536 end
+		local delay = d / 1000 - (now - s.now)
+		if delay >= 0 and delay <= ST_MAX then return delay end
+	end
+	A.stSync = { ms = ms, now = now }
+	return 0
+end
+
 -- relayed server sounds: always played by us (the server suppressed the original)
 A.dict = A.dict or {}
 local pendingAcks = {}
@@ -1098,6 +1118,10 @@ net.Receive(NET, function()
 		Pitch = net.ReadUInt(8), Volume = net.ReadUInt(8) / 255, Channel = net.ReadInt(10),
 		Flags = net.ReadUInt(16), DSP = net.ReadUInt(8), EntIndex = net.ReadUInt(16),
 	}
+	if net.ReadBool() then
+		local d = A.SoundTimeDelay(net.ReadUInt(16), RealTime())
+		if d > 0 then data.Delay = d end
+	end
 	if not name then return end -- id never received (lost first packets): drop
 	if A.Native and A.Native.render and A.Enabled() then
 		local lp = LocalPlayer()
@@ -1108,7 +1132,7 @@ net.Receive(NET, function()
 	A.stats.relayedIn = A.stats.relayedIn + 1
 	if A.Enabled() and A.Process(data, true) then return end
 	-- not processed (disabled client, clear path...): play it as the engine would have
-	vanilla(data)
+	if data.Delay then timer.Simple(data.Delay, function() vanilla(data) end) else vanilla(data) end
 end)
 
 -- caption of a suppressed server sound (sv_relay sendCaption); nothing shown with closecaption 0

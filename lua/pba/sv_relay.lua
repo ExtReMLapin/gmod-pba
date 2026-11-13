@@ -127,6 +127,11 @@ local function writeSound(data, pos, id, full, echoOnly)
 	net.WriteUInt(math.Clamp(math.floor(data.DSP or 0), 0, 255), 8)
 	local e = data.Entity
 	net.WriteUInt(IsValid(e) and e:EntIndex() or 0, 16)
+	-- its own start time (SoundTime: the shots of a weapon fired between two network updates, each at
+	-- its tick), in ms modulo 65.536 s: the client keeps their spacing (cl_render A.SoundTimeDelay)
+	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
+	net.WriteBool(st ~= 0)
+	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
 end
 
 A.stats = A.stats or { seen = 0, relayed = 0, untouched = 0 }
@@ -265,15 +270,20 @@ local function muffleFor(walls)
 end
 
 --- Re-emits the original sound, through the engine, to `plys` only (A.Emit: our hook lets it pass).
+-- Its own start time (SoundTime) goes with it: EmitSound takes none, our hook puts it back on the
+-- re-emission (A.reemitTime), so the engine spaces two shots of one update as it would the original.
 local function reemit(data, pos, lvl, plys, name, vol, dsp)
 	local f = RecipientFilter()
 	f:AddPlayers(plys)
 	local e = data.Entity
+	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
+	A.reemitTime = st ~= 0 and st or nil
 	if IsValid(e) and not e:IsWorld() then
 		A.Emit(A.orig.EntEmitSound, e, name, lvl, data.Pitch, vol, data.Channel, data.Flags, dsp, f)
 	else
 		A.Emit(A.orig.EmitSound, name, pos, 0, data.Channel, vol, lvl, data.Flags, data.Pitch, dsp, f)
 	end
+	A.reemitTime = nil
 end
 
 -- Footsteps of other players: the engine sends the server's footstep only to the players of the PAS
@@ -450,7 +460,12 @@ local function relay(data)
 end
 
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
-	if A.reemitting or A.explicitFilter then return end
+	if A.reemitting then
+		-- pba's re-emission: the original's start time put back (reemit)
+		if A.reemitTime then data.SoundTime = A.reemitTime return true end
+		return
+	end
+	if A.explicitFilter then return end
 	relayedTo = nil
 	local ret = relay(data)
 	relayChannelCut(data, relayedTo)
