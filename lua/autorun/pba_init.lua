@@ -24,6 +24,7 @@ local files = {
 	{ "pba/cl_probes.lua", "cl" },
 	{ "pba/cl_slicer.lua", "cl" }, -- far sounds' evaluations spread over frames
 	{ "pba/cl_native.lua", "cl" },
+	{ "pba/cl_mix.lua", "cl" }, -- the engine's mix groups, mixers and ducking for module voices
 	{ "pba/cl_sentences.lua", "cl" }, -- sentences (scripts/sentences.txt) rendered by the module
 	{ "pba/cl_sentences_virtual.lua", "cl" }, -- their virtual words (V_...) picked in Lua
 	{ "pba/cl_update.lua", "cl" }, -- native module update check (api.github.com, module installed only)

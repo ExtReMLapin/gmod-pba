@@ -417,7 +417,8 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		local wet = A.Native.LoudWet(lvl0)
 		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0)) * wet
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
-			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet })
+			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet,
+			mix = A.Mix and A.Mix.GroupsOf(data.SoundName, src or data.EntIndex, data.Channel, lvl0) })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
 			local t0 = RealTime() + delay
@@ -598,7 +599,10 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	-- the listener's room: what the path brings to its entry point (N.EntrySend), clear sight: none
 	local roomSend = t.len and t.pos and t.pos:DistToSqr(rec.S) > 1 and rec.vol * N.EntrySend(N.Law(rec.lvl), t, L, N.LossLin(t, rec.lvl))
 		* N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain * N.LoudWet(rec.lvl) or 0
-	local id = pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset)
+	-- the engine's mix value and ducking (cl_mix): the record's groups, found once
+	if A.Mix and not rec.mixG then rec.mixG = A.Mix.GroupsOf(rec.name, rec.ent, rec.chan, rec.lvl) end
+	local id = A.Mix and A.Mix.Play(rec.mixG, n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset)
+		or pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset)
 	if not id or id <= 0 then
 		fv.switchFails = (fv.switchFails or 0) + 1
 		return false
@@ -906,6 +910,7 @@ function A.Process(data, relayed)
 	local L, ang = listenerPos()
 	local S = data.Pos
 	if not L or not S then return false end
+	if A.Mix then A.Mix.NoteSound(data, L) end -- heard: the mixer's ducker (cl_mix)
 	-- a sentence with virtual words (V_...): its words picked now for this sound (cl_sentences_virtual)
 	if A.SentenceVirtual and A.IsSentence(data.SoundName) then A.SentenceVirtual.Begin(data, S, L) end
 	-- a new sound on a replacing channel cuts the earlier copies of that channel, even when this one
@@ -971,7 +976,8 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 			local delay = math.max(voiceDelay({ len = d, pos = S }, L) - waited, 0)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
-				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl) })
+				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl),
+				mix = A.Mix and A.Mix.GroupsOf(data.SoundName, IsValid(src) and src or data.EntIndex, data.Channel, lvl) })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
 				local play, ukey = playLength(data.SoundName, data.Pitch)
@@ -1100,7 +1106,11 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	local ply = LocalPlayer()
 	local own = IsValid(ply) and data.Entity == ply
 	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos, own, own) end
-	if own then return end -- own sounds: always clear (the engine plays them)
+	if own then
+		if A.Mix then A.Mix.NoteSound({ SoundName = data.SoundName, Pos = pos, SoundLevel = data.SoundLevel, Volume = data.Volume,
+			Channel = data.Channel, Entity = data.Entity }, A.ListenerPos()) end -- the mixer's ducker (cl_mix)
+		return -- own sounds: always clear (the engine plays them)
+	end
 	data.Pos = pos
 	if A.Process(data, false) then return false end
 	if A.FarMuffle(data, pos) then return true end
