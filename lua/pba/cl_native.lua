@@ -525,6 +525,8 @@ end
 --- Makes sure the module has decoded `name`. Returns true, cleanName when playable natively;
 -- false, nil, "pending" while a large file decodes on the module's worker thread.
 function N.EnsureSound(name)
+	-- a sentence: its words rendered into one sound (cl_sentences, pba_native_sentences)
+	if A.IsSentence(name) then return A.Sentences.Ensure(name) end
 	local n = cleanName(name)
 	-- failures are retried after a while: a sound refused for lack of memory may fit later
 	local f = N.failed[n]

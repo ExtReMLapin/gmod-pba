@@ -18,7 +18,7 @@
 //   SavePaths() -> bytes | nil ; LoadPaths(bytes) -> numProbes | false, err   (disk cache)
 //   Paths(sources, listener) -> array of { el, em, eh, w, sh1..3, dx, dy, dz } (eq + arrival field)
 //   Rendering (render.cpp): AudioStart([sofaBytes]), AudioStop(), HasSound(name),
-//     LoadSound(name, bytes),
+//     LoadSound(name, bytes), LoadSentence(name, words),
 //     Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse, send, offset]) -> id, pathFallback,
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
@@ -1814,6 +1814,43 @@ LUA_FUNCTION(LoadSound) {
 	return 3;
 }
 
+// LoadSentence(name, words) -> seconds, used | nil, err: renders a sentence into one sound `name`
+// (render::LoadSentence). words: flat array, 5 entries per word: file (a name given to LoadSound), volume,
+// pitch, start, end (percent; pitch <= 0: none; start / end 0: no cut).
+LUA_FUNCTION(LoadSentence) {
+	const char* name = LUA->CheckString(1);
+	LUA->CheckType(2, Type::Table);
+	std::vector<render::SentenceWord> words;
+	for (int i = 1;; i += 5) {
+		LUA->PushNumber(i);
+		LUA->GetTable(2);
+		if (!LUA->IsType(-1, Type::String)) { LUA->Pop(); break; }
+		render::SentenceWord w;
+		w.file = LUA->GetString(-1);
+		LUA->Pop();
+		int* fields[4] = {&w.vol, &w.pitch, &w.start, &w.end};
+		for (int k = 0; k < 4; ++k) {
+			LUA->PushNumber(i + 1 + k);
+			LUA->GetTable(2);
+			if (LUA->IsType(-1, Type::Number)) *fields[k] = (int)LUA->GetNumber(-1);
+			LUA->Pop();
+		}
+		words.push_back(std::move(w));
+		if (words.size() > 256) break;
+	}
+	double secs = 0;
+	int used = 0;
+	std::string err = words.empty() ? std::string("no words") : render::LoadSentence(name, words.data(), (int)words.size(), &secs, &used);
+	if (!err.empty()) {
+		LUA->PushNil();
+		LUA->PushString(err.c_str());
+		return 2;
+	}
+	LUA->PushNumber(secs);
+	LUA->PushNumber(used);
+	return 2;
+}
+
 // SetVoiceStereo(id, sel, width) -> bool: channel mix and stereo width of a voice playing a stereo
 // sound (render::SetVoiceStereo)
 LUA_FUNCTION(SetVoiceStereo) {
@@ -2628,6 +2665,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "DynamicCommit");
 	LUA->PushCFunction(LoadSoundAsync);
 	LUA->SetField(-2, "LoadSoundAsync");
+	LUA->PushCFunction(LoadSentence);
+	LUA->SetField(-2, "LoadSentence");
 	LUA->PushCFunction(SoundPending);
 	LUA->SetField(-2, "SoundPending");
 	LUA->PushCFunction(SetUnderwater);
@@ -2653,6 +2692,7 @@ GMOD_MODULE_OPEN() {
 	LUA->PushBool(true); LUA->SetField(-2, "sourcePool");       // SourceReflect / SetSourceSlots
 	LUA->PushBool(true); LUA->SetField(-2, "staticPropTraces"); // trace.* hit static props (trace.Init's 2nd value)
 	LUA->PushBool(true); LUA->SetField(-2, "sourceAccum");      // SetSourceAccum, SrcSlotStats
+	LUA->PushBool(true); LUA->SetField(-2, "sentences");        // LoadSentence
 	LUA->SetField(-2, "caps");
 	LUA->SetField(-2, "pba_native");
 	LUA->Pop();

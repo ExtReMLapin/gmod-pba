@@ -134,6 +134,7 @@ A.CONFIG = {
 	native_all      = { 1, 0, 1, "cl", "With native rendering on: the module plays EVERY sound (HRTF, reverb), not only the obstructed ones. Sounds it cannot decode stay with the engine." },
 	native_doppler  = { 1, 0, 1, "cl", "Doppler effect on moving sources rendered natively (passing cars, projectiles)." },
 	native_stereo   = { 1, 0, 1, "cl", "Stereo files rendered natively as Source does: near / far (^), front / rear (<) and incoming / outgoing (>) channels picked, instead of both summed to mono." },
+	native_sentences = { 1, 0, 1, "cl", "Sentences (Combine and metrocop radio, HL2 NPC lines from sentences.txt) rendered natively: their words are assembled by the module (HRTF, reverb) instead of being left to the engine. Sentences with virtual words (names, numbers, grid positions) stay with the engine." },
 	native_stereo_width = { 1, 0, 1, "cl", "Stereo image of stereo files rendered natively, kept around the source near it (fades out from 240 to 1320 units). 0: mono at the source." },
 	streams         = { 1, 0, 1, "cl", "Radios and music players of other addons (sound.PlayURL / PlayFile, 3D): heard through openings and walls (transparent detour)." },
 	streams_native  = { 1, 0, 1, "cl", "With native rendering: radios of other addons are played by the module (HRTF, room reverb, paths) instead of BASS." },

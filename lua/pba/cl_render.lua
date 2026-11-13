@@ -382,8 +382,9 @@ end
 local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited)
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
-	-- (a sentence is a sequence of words played by the engine: never by the module)
-	if A.Native and A.Native.render and not A.IsSentence(data.SoundName) then
+	-- (a sentence: by the module when its words are rendered into one sound, cl_sentences; else by the
+	-- engine, PlayVoice failing below)
+	if A.Native and A.Native.render and (not A.IsSentence(data.SoundName) or A.Sentences.On()) then
 		-- the full version's distance law (N.PhysPath): real spreading instead of the engine's law
 		-- a weapon's dipole: the aim taken now, at emission (N.Directivity)
 		local dirK = A.Native.Directivity(src, L, data.Channel)
@@ -561,7 +562,7 @@ local function wantsNative(rec, fv, t, now)
 	if not fv.a or not fv.started or fv.ownDsp or fv.lp0 == nil or rec.ukey or (fv.switchFails or 0) >= 3 then return false end
 	if (A.cfg.oneshot_native_switch or 1) < 0.5 then return false end
 	local N = A.Native
-	if not (N and N.render and pba_native and pba_native.Play) or A.IsSentence(rec.name) then return false end
+	if not (N and N.render and pba_native and pba_native.Play) or (A.IsSentence(rec.name) and not A.Sentences.On()) then return false end
 	-- a switch near the end is not worth a second voice (the end of a compressed file can be off)
 	if now > fv.tEnd - MIN_LEFT - followInterval() then return false end
 	if not playOffsetOK() then return false end
@@ -854,9 +855,14 @@ local function mouthCopy(data, src)
 	if ch ~= CHAN_VOICE and ch ~= CHAN_VOICE2 then return end
 	if (src.GetFlexNum and src:GetFlexNum() or 0) == 0 then return end
 	local name = data.SoundName or ""
-	if name == "" or string.sub(name, 1, 1) == "!" then return end -- (a sentence: a list of waves, no single line)
+	if name == "" then return end
 	A.reemitting = true
-	src:EmitSound(name, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch)
+	if A.IsSentence(name) then
+		-- a sentence: the engine's sentence mixer drives the mouth word by word (played on the speaker)
+		EmitSentence(string.sub(name, 2), src:GetPos(), src:EntIndex(), ch, MOUTH_VOL, data.SoundLevel or 75, 0, data.Pitch or 100)
+	else
+		src:EmitSound(name, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch)
+	end
 	A.reemitting = false
 	A.stats.mouthCopies = (A.stats.mouthCopies or 0) + 1
 end
@@ -915,7 +921,7 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 	A.DebugNote(nil, S, L, r, data.SoundName, A.Native and A.Native.render and "native" or "sound")
 	if r.clear or not r.voices or #r.voices == 0 then
 		-- "everything native": a clear sound is played by the module at its real position
-		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 and not A.IsSentence(data.SoundName) then
+		if A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 and (not A.IsSentence(data.SoundName) or A.Sentences.On()) then
 			local d = S:Distance(L)
 			local dir = A.Native.Directivity(IsValid(src) and src or nil, L, data.Channel)
 			local g = (data.Volume or 1) * A.Native.PhysClear(lvl, d) * dir

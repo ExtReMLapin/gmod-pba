@@ -24,6 +24,7 @@ local files = {
 	{ "pba/cl_probes.lua", "cl" },
 	{ "pba/cl_slicer.lua", "cl" }, -- far sounds' evaluations spread over frames
 	{ "pba/cl_native.lua", "cl" },
+	{ "pba/cl_sentences.lua", "cl" }, -- sentences (scripts/sentences.txt) rendered by the module
 	{ "pba/cl_update.lua", "cl" }, -- native module update check (api.github.com, module installed only)
 	{ "pba/cl_render.lua", "cl" },
 	{ "pba/cl_debug.lua", "cl" },

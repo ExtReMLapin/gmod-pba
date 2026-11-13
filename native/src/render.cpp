@@ -1190,6 +1190,12 @@ bool SoundPending(const std::string& name) {
 	return g_pending.count(name) != 0;
 }
 
+std::vector<float> SoundPcm(const std::string& name) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	auto it = g_sounds.find(name);
+	return it == g_sounds.end() ? std::vector<float>() : it->second->pcm;
+}
+
 bool HasSound(const std::string& name) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	return g_sounds.count(name) != 0;
@@ -1231,6 +1237,8 @@ static double WavLoopStart(const void* data, size_t size, uint32_t* rate) {
 	}
 	return smpl >= 0 ? smpl : cue;
 }
+
+static std::string Store(const std::string& name, const std::shared_ptr<Sound>& snd);
 
 std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart, bool* stereo) {
 	uint32_t srcRate = 0;
@@ -1284,16 +1292,88 @@ std::string LoadSound(const std::string& name, const void* data, size_t size, do
 	if (seconds) *seconds = (double)snd->pcm.size() / kRate;
 	if (loopStart) *loopStart = snd->loopStart / kRate;
 	if (stereo) *stereo = !snd->side.empty();
+	return Store(name, snd);
+}
+
+// Stores a decoded sound under `name` (replacing one of that name), evicting least-recently-played
+// sounds that no voice holds until it fits. "" on success.
+static std::string Store(const std::string& name, const std::shared_ptr<Sound>& snd) {
 	const uint64_t bytes = snd->Bytes();
 	std::lock_guard<std::mutex> lk(g_mtx);
-	// evict least-recently-played sounds that no voice holds until the new one fits
-	if (!EvictTo(budget - bytes)) return "memory budget full (every decoded sound is playing): " + name;
+	if (!EvictTo(g_memBudget.load() - bytes)) return "memory budget full (every decoded sound is playing): " + name;
 	snd->lastUse = ++g_useClock;
 	auto old = g_sounds.find(name);
 	if (old != g_sounds.end()) g_soundBytes -= old->second->Bytes();
 	g_sounds[name] = snd;
 	g_soundBytes += bytes;
 	return "";
+}
+
+// ------------------------------------------------------------------ sentences
+// A sentence (scripts/sentences.txt) is a list of words, each a sound file played after the other with
+// its own volume, pitch and start / end cut. The engine plays the words one after the other on a single
+// channel, without gaps. Here the words, already decoded, are rendered once into one sound (stored under
+// the sentence's key): a voice plays it like any file (position, paths, reverb, stop), gapless.
+// Per word, as the engine reads its parameters:
+//   vol   volume in percent: below 100 it scales the word, 0 or 100 and above leave it at full level;
+//   pitch percent, <= 0 = the channel's pitch: added to the channel's pitch ratio ((pitch - 100) / 100).
+//         Baked here as a ratio of pitch / 100 (exact at the channel pitch 100 that sentences are played
+//         at; a channel pitch p0 gives p0 x pitch instead of p0 + pitch - 100: 0.5 % off at p0 = 95, p = 110);
+//   start, end  percent of the word's length, applied only strictly between 0 and 100, end ignored when
+//         not after start; the cut points move to the nearest zero crossing inwards (no click).
+// The "t" (time compression) parameter is parsed by the engine but has no effect on its mixer: ignored.
+static constexpr int kZeroScan = 600; // samples searched for a zero crossing (~255 at the files' 22 kHz)
+
+static size_t ZeroAfter(const std::vector<float>& x, size_t i) {
+	for (size_t k = i, e = std::min(x.size() - 1, i + kZeroScan); k < e; ++k)
+		if ((x[k] <= 0) != (x[k + 1] <= 0)) return k + 1;
+	return i;
+}
+static size_t ZeroBefore(const std::vector<float>& x, size_t i) {
+	for (size_t k = i, e = i > kZeroScan ? i - kZeroScan : 1; k > e; --k)
+		if ((x[k] <= 0) != (x[k - 1] <= 0)) return k;
+	return i;
+}
+
+std::string LoadSentence(const std::string& name, const SentenceWord* words, int n, double* seconds, int* used) {
+	std::vector<std::shared_ptr<Sound>> snds(n);
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		for (int i = 0; i < n; ++i) {
+			auto it = g_sounds.find(words[i].file);
+			if (it != g_sounds.end()) snds[i] = it->second;
+		}
+	}
+	auto out = std::make_shared<Sound>();
+	int count = 0;
+	for (int i = 0; i < n; ++i) {
+		if (!snds[i]) continue; // a missing word is skipped, as the engine does
+		const std::vector<float>& x = snds[i]->pcm; // a stereo word: its mid
+		if (x.size() < 2) continue;
+		const SentenceWord& w = words[i];
+		size_t a = 0, b = x.size() - 1;
+		const int st = w.start, en = w.end > w.start ? w.end : 0;
+		if (st > 0 && st < 100) a = ZeroAfter(x, (size_t)(x.size() * 0.01 * st));
+		if (en > 0 && en < 100) b = std::max(a, ZeroBefore(x, (size_t)(x.size() * 0.01 * en)));
+		const float g = (w.vol > 0 && w.vol < 100) ? w.vol * 0.01f : 1.0f;
+		const double step = w.pitch > 0 ? w.pitch * 0.01 : 1.0;
+		if (step == 1.0) {
+			for (size_t k = a; k < b; ++k) out->pcm.push_back(x[k] * g);
+		} else {
+			// linear interpolation, as the engine's own resampling of a pitched sound
+			for (double c = (double)a; c < (double)b; c += step) {
+				const size_t k = (size_t)c;
+				const float f = (float)(c - k);
+				out->pcm.push_back((x[k] * (1 - f) + x[k + 1] * f) * g);
+			}
+		}
+		++count;
+	}
+	if (used) *used = count;
+	if (out->pcm.size() < 2) return "empty sentence " + name;
+	if (out->Bytes() > g_memBudget.load()) return "too long for the memory budget: " + name;
+	if (seconds) *seconds = (double)out->pcm.size() / kRate;
+	return Store(name, out);
 }
 
 // Gives a voice that wants a baked path a path effect from the pool. Lock held. A voice that finds
