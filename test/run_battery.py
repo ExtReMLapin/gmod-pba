@@ -190,6 +190,7 @@ def speaker_once():
 def once_native_end():
     """A one-shot mirror rendered by the module that gets no more updates (quiet shortcut) ends with its file:
     once_native_end_server.lua starts a one-shot CSoundPatch, once_native_end_check.lua checks the mirror."""
+    native_on(True) # (pba_native_render is archived: an earlier test or game may have left it at 0)
     lua("client", "pba.SetOverride('quiet_db', -1) return true")
     try:
         v = job("server", "once_native_end_server.lua")
