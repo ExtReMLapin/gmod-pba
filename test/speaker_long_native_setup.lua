@@ -4,6 +4,14 @@
 local ply = player.GetHumans()[1]
 if not IsValid(ply) then return { pass = false, err = "needs a human" } end
 local LONG = "music/hl2_song12_long.mp3"
+-- the speaker preset the engine and the mirror use (another test or a config may have left it at 0): 50, the
+-- default, for the test; put back after it
+local cv = GetConVar("dsp_speaker")
+local oldSpk = cv and cv:GetString()
+if cv and cv:GetInt() == 0 then
+	RunConsoleCommand("dsp_speaker", "50")
+	timer.Simple(12, function() RunConsoleCommand("dsp_speaker", oldSpk) end)
+end
 local props = {}
 for i = 1, 2 do
 	local e = ents.Create("prop_physics")
