@@ -55,7 +55,9 @@ for root, _, names in os.walk(os.path.join(repo, "lua")):
         for i, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
             if re.search(r"(?<![\w.])SoundDuration\(", line):
                 raw.append("%s:%d" % (rel, i))
-            if "&~`+%%%(" in line:
+            # (any class of sound characters anchored at the start: "^[%^..." - a second, partial copy hid
+            # behind a different character list, A.WaterMuffledFile)
+            if "&~`+%%%(" in line or '"^[%^' in line:
                 pat.append("%s:%d" % (rel, i))
 ok_static = len(raw) == 1 and raw[0].startswith("lua/pba/sh_core.lua:") and len(pat) == 1 and pat[0].startswith("lua/pba/sh_core.lua:")
 print("%s static: SoundDuration only via A.SoundDuration, prefix pattern only in A.SoundFile (raw calls %s, patterns %s)"
