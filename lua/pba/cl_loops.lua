@@ -538,13 +538,14 @@ net.Receive("pba_loop", function()
 	local vol, pitch, lvl, dsp = net.ReadUInt(8) / 255, net.ReadUInt(8), net.ReadUInt(9), net.ReadUInt(8)
 	local once = net.ReadBool()
 	local speaker = net.ReadBool()
+	local chan = net.ReadInt(10)
 	local m = LP.mirrors[key]
 	if op == OP_START and m then stopMirror(m) m = nil end
 	-- a change of a long one-shot whose mirror already ended here: it must not start it again from its top
 	-- (the server keeps the line until its own end time, a little later)
 	if not m and once and op == OP_UPDATE and (A.cfg.loops_once_end or 1) >= 0.5 then return end
 	if not m then
-		m = { key = key, name = name, idx = idx, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
+		m = { key = key, name = name, idx = idx, chan = chan, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
 		-- its end: the file's length at its start pitch (onceEnded). Without it a server long one-shot's
 		-- engine patch, which reads "playing" long after its file ended, lived on for good, and the next
 		-- volume change replayed it from the top (the Breencast looping, d1_trainstation_02, 2026-11-13)

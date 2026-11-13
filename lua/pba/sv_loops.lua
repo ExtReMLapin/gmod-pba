@@ -44,6 +44,7 @@ local function send(op, l, plys)
 		net.WriteUInt(math.Clamp(math.floor(l.dsp or 0), 0, 255), 8)
 		net.WriteBool(l.once or false)
 		net.WriteBool(l.speaker or false)
+		net.WriteInt(l.chan or 0, 10) -- (as sv_relay: CHAN_REPLACE -1 to user channels 255)
 	end
 	net.Send(plys)
 end
