@@ -130,6 +130,11 @@ constexpr double kSrcHold = 1.0;
 // one response serves sounds this close together (m): a source room's reverberant field barely
 // changes over a step, and every footstep or shot reusing it costs no simulation and no wait
 constexpr float kSrcNear = 1.5f;
+// ... and far away, a fraction of the source - listener distance (SetSourceNear, 0 = kSrcNear alone): a
+// source 90 m off moving 1.5 m barely changes its reverberant field, but each new place restarts the
+// slot's average from one noisy pass (a gunship flying past re-simulated every 0.25 s, its reverb level
+// swinging +-4 dB: heard as an echo that jumps)
+std::atomic<float> g_srcNearFrac{0.0f};
 std::atomic<int> g_srcPool{16}; // SetSourceSlots
 // incremented on every scene change (doors, props): a response simulated before it is stale
 std::atomic<int> g_sceneVersion{0};
@@ -2022,11 +2027,13 @@ LUA_FUNCTION(SourceReflect) {
 	auto d2 = [](IPLVector3 a, IPLVector3 b) {
 		return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
 	};
-	constexpr float kNear2 = kSrcNear * kSrcNear;
 	const int ver = g_sceneVersion.load();
 	int slot = -1, gen = 0;
 	{
 		std::lock_guard<std::mutex> lk(g_stageMtx);
+		const float rNear = render::SrcNearRadius(kSrcNear, g_srcNearFrac.load(),
+			g_stageLisOk ? std::sqrt(d2(g_stageLis.origin, p)) : 0.0f);
+		const float kNear2 = rNear * rNear;
 		const double now = Now();
 		const bool own = cur >= 0 && cur < n;
 		auto others = [&](int k) { return live[k] - (k == cur ? 1 : 0); }; // live voices but this one
@@ -2465,6 +2472,14 @@ LUA_FUNCTION(SrcSlotStats) {
 // g_slotSim). radius (m, default 1.5): the slots are simulated from an anchor moved only when the
 // listener is farther than this from it (0 = off: from the listener, every move restarts the
 // average); passes (default 8): passes for a new anchor's average to replace the previous one's
+// SetSourceNear(frac) -> frac: a source reverb slot keeps its response while its source stays within
+// max(1.5 m, frac x source - listener distance) of where it was simulated (0..0.5, default 0: 1.5 m).
+LUA_FUNCTION(SetSourceNear) {
+	if (LUA->IsType(1, Type::Number)) g_srcNearFrac = std::clamp((float)LUA->GetNumber(1), 0.0f, 0.5f);
+	LUA->PushNumber(g_srcNearFrac.load());
+	return 1;
+}
+
 LUA_FUNCTION(SetSourceAccum) {
 	if (LUA->IsType(1, Type::Number)) g_srcAccumR = std::clamp((float)LUA->GetNumber(1), 0.0f, 20.0f);
 	if (LUA->IsType(2, Type::Number)) g_srcAccumK = std::clamp((int)LUA->GetNumber(2), 1, 256);
@@ -2671,6 +2686,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SrcSlotStats");
 	LUA->PushCFunction(SetSourceAccum);
 	LUA->SetField(-2, "SetSourceAccum");
+	LUA->PushCFunction(SetSourceNear);
+	LUA->SetField(-2, "SetSourceNear");
 	LUA->PushCFunction(SetOutputMode);
 	LUA->SetField(-2, "SetOutputMode");
 	LUA->PushCFunction(SetReflections);
