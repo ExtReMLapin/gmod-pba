@@ -85,9 +85,11 @@ end
 
 -- Sound patches the C++ of client entities plays (C_NPC_Manhack: its engine and blade loops). Their start,
 -- volume and pitch changes reach the hook; no Lua patch stands for them, so they stayed vanilla, through
--- every wall. Known classes only: their sounds end with the entity (measured: a killed manhack's loops play
--- on, vanilla, until it is removed ~1.5 s later; its "engine off" state is no longer networked by then), as
--- the mirror does (apply: entity gone). class -> { lowercased file = true }
+-- every wall. Known classes only. Their end: the entity's death (an NPC's StopLoopingSounds at death switches
+-- the manhack's engine off: the engine pitches go to -1 and its client code destroys the patches, with no
+-- event the hook sees; a shot manhack lingers ~2 s dying before its removal, its mirrors played on through
+-- it, heard as stuck: pba_loops_cpp_death, cppDead), or else its removal (apply: entity gone).
+-- class -> { lowercased file = true }
 LP.CPP_PATCHES = {
 	npc_manhack = { ["npc/manhack/mh_engine_loop1.wav"] = true, ["npc/manhack/mh_engine_loop2.wav"] = true,
 		["npc/manhack/mh_blade_loop1.wav"] = true },
@@ -101,6 +103,12 @@ local function cppPatch(e, name)
 end
 
 --- The registered client patch starting `name` on entity e right now, if any.
+--- True when the C++ loops of client entity e have ended with its death (pba_loops_cpp_death): an NPC at
+--- 0 health or below (the health is networked; the engine-off state is not readable on the client).
+local function cppDead(e)
+	return (A.cfg.loops_cpp_death or 1) >= 0.5 and e:IsNPC() and e:Health() <= 0
+end
+
 local function foreignPatch(e, name)
 	local p = LP.playing
 	local i = p and LP.patchInfo[p]
@@ -299,6 +307,7 @@ function apply(m, fade)
 		m.done = true
 		return
 	end
+	if m.cpp and IsValid(ent) and cppDead(ent) then m.done = true return end -- (its engine switched off)
 	if not IsValid(ent) then
 		-- not networked (yet?): after a grace period, fall back to an anchor at the position
 		m.waited = (m.waited or 0) + 1
@@ -406,6 +415,7 @@ function LP.HandleClient(data)
 		and (A.cfg.loops_client or 0) >= 0.5 and not A.IsLooping(name)
 	local src = (loop or once) and foreignPatch(e, name)
 	local cpp = loop and not src and cppPatch(e, name)
+	if cpp and cppDead(e) then return false end -- (a dead one's: left to the engine, which has shut them)
 	if change and not src and not cpp then
 		if not m then return false end
 		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end
@@ -441,7 +451,7 @@ function LP.HandleClient(data)
 	if n >= (A.cfg.loops_max_cl or 32) then return false end -- cap: left to the engine
 	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
 		dsp = data.DSP or 0, once = not ((src or cpp) and not once), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
-		src = src and setmetatable({ src }, { __mode = "v" }) or nil }
+		src = src and setmetatable({ src }, { __mode = "v" }) or nil, cpp = cpp or nil }
 	-- its end: the file's length at its start pitch (onceEnded)
 	if m.once then
 		local dur = A.SoundDuration(name) or 0
