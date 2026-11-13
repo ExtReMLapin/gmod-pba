@@ -247,6 +247,8 @@ steps = [
     ("looping_sound_stop", lambda: seq(lambda: load(TW), lambda: job("server", "looping_sound_stop.lua"))),
     ("looping_sound_stop_client", lambda: seq(lambda: load(TW), lambda: job("client", "looping_sound_stop_client.lua"))),
     ("stopsound", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "stopsound_setup.lua"), lambda: job("client", "stopsound.lua"))),
+    # a new sound the engine plays on a line's channel (player now in plain sight) cuts its relayed copy
+    ("channel_cut", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "channel_cut_setup.lua"), lambda: job("client", "channel_cut_mid.lua"), lambda: job("server", "channel_cut_next.lua"), lambda: job("client", "channel_cut.lua"))),
     ("removed_oneshot", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "removed_oneshot_setup.lua"), lambda: job("client", "removed_oneshot.lua"))),
     # a loop playing while pba is turned off then on: back to the engine, then mirrored again (and a still
     # prop_dynamic, MOVETYPE_PUSH like a door, keeps its loop)
@@ -503,7 +505,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "stopsound", "removed_oneshot", "loop_reenable", "vehicle_state_sounds", "sp_own_echo",
+QUICK = {"GLuaTest pure suite", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "stopsound", "removed_oneshot", "channel_cut", "loop_reenable", "vehicle_state_sounds", "sp_own_echo",
          "client_loop", "native_doors", "native_features", "path_hysteresis twodoors", "continuous_ramp twodoors",
          "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed"}
 if "--quick" in opts:

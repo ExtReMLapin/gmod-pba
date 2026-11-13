@@ -120,20 +120,73 @@ end
 
 A.stats = A.stats or { seen = 0, relayed = 0, untouched = 0 }
 
---- The engine stopped `name` on entity e: clients that got relayed copies stop theirs.
-function A.RelayStop(e, name)
+--- The engine stopped `name` on entity e (chan: only that channel's copies; nil, any): clients that got
+-- relayed copies stop theirs. except: players left out (set).
+function A.RelayStop(e, name, chan, except)
 	local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
 	local r = idx > 0 and A.recentTo[idx]
 	if not r then return end
 	local plys, now = {}, CurTime()
 	for p, t in pairs(r) do
-		if IsValid(p) and now - t < 30 then plys[#plys + 1] = p else r[p] = nil end
+		if IsValid(p) and now - t < 30 then
+			if not (except and except[p]) then plys[#plys + 1] = p end
+		else
+			r[p] = nil
+		end
 	end
 	if #plys == 0 then return end
 	net.Start("pba_snd_stop")
 	net.WriteUInt(idx, 16)
 	net.WriteString(name or "")
+	net.WriteInt(chan or CHAN_AUTO, 10) -- CHAN_AUTO (0): any channel
 	net.Send(plys)
+end
+
+local function replacing(chan) return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0 end
+local NEW_ONLY = SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH
+
+--- Engine channel rule for the relayed copies (audit A-P1-1, D7): a new sound on an entity's replacing
+-- channel cuts what that channel played, and the engine does it for its own sounds only. When the new
+-- sound is not relayed to a player (left untouched once nobody is blocked any more, re-emitted to the
+-- clear or muffled players, taken by sv_loops, refused), his client never sees it: the copies of an
+-- earlier line relayed to him play on over it (an NPC's line through a wall over its death cry, after
+-- the player walked round the corner). The players it is relayed to apply the rule themselves
+-- (cl_render beginCopies), in order with the new copy: they are left out.
+-- Only players holding a copy on that channel are told (A.recentChan, filled by the relay; once told,
+-- they hold none): an NPC firing CHAN_WEAPON at a player in plain sight sends nothing per shot.
+A.recentChan = A.recentChan or {} -- entindex -> { [chan] = { [ply] = time relayed } }
+local function relayChannelCut(data, relayedTo)
+	local chan = data.Channel
+	if not replacing(chan) or bit.band(data.Flags or 0, NEW_ONLY) ~= 0 then return end
+	local e = data.Entity
+	if not IsValid(e) or e:IsWorld() then return end
+	local idx = e:EntIndex()
+	local rc = A.recentChan[idx]
+	local held = rc and rc[chan]
+	local plys, now = {}, CurTime()
+	if held then
+		if relayedTo then
+			for _, p in ipairs(relayedTo) do held[p] = nil end
+		end
+		-- (a copy is never longer than max_duration; 30 s as for recentTo)
+		for p, t in pairs(held) do
+			if IsValid(p) and now - t < 30 then plys[#plys + 1] = p end
+		end
+		rc[chan] = nil
+	end
+	if relayedTo and #relayedTo > 0 then
+		if not rc then rc = {} A.recentChan[idx] = rc end
+		local h = {}
+		for _, p in ipairs(relayedTo) do h[p] = now end
+		rc[chan] = h
+	end
+	if #plys == 0 then return end
+	net.Start("pba_snd_stop")
+	net.WriteUInt(idx, 16)
+	net.WriteString("")
+	net.WriteInt(chan, 10)
+	net.Send(plys)
+	A.stats.chanCuts = (A.stats.chanCuts or 0) + 1
 end
 
 -- (fallback: a partial autorefresh may reload this file before sh_core)
@@ -217,8 +270,8 @@ local function stepper(data)
 	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then return e end
 end
 
-A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
-	if A.reemitting or A.explicitFilter then return end
+local relayedTo -- the players the current sound was relayed to (relay, below)
+local function relay(data)
 	A.stats.seen = A.stats.seen + 1
 	if A.Loops and A.Loops.Handle(data) then return false end
 	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then
@@ -369,8 +422,17 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	writeSound(data, pos, id, full)
 	A.stats.bytes = (A.stats.bytes or 0) + net.BytesWritten() * #blocked
 	net.Send(blocked)
+	relayedTo = blocked
 	A.stats.relayed = A.stats.relayed + 1
 	return false
+end
+
+A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
+	if A.reemitting or A.explicitFilter then return end
+	relayedTo = nil
+	local ret = relay(data)
+	relayChannelCut(data, relayedTo)
+	return ret
 end))
 
 -- entity removed: the engine lets its one-shots play to their end where they were (measured with
@@ -378,5 +440,5 @@ end))
 -- removal, on entity NULL); the relayed copies do the same. Loops are stopped by pba.Loops.
 hook.Add("EntityRemoved", "pba_relay_removed", function(e)
 	local idx = e:EntIndex()
-	if idx > 0 then A.recentTo[idx] = nil end
+	if idx > 0 then A.recentTo[idx] = nil A.recentChan[idx] = nil end
 end)

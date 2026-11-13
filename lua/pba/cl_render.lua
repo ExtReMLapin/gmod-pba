@@ -197,16 +197,18 @@ local function anchorFor(c, slot)
 	return a
 end
 
---- Stops the copies of `name` (all names if empty) re-emitted for entity idx, whatever their channel.
-function A.StopCopies(idx, name)
+--- Stops the copies of `name` (all names if empty) re-emitted for entity idx, on channel chan (any
+-- channel when nil or CHAN_AUTO).
+function A.StopCopies(idx, name, chan)
 	name = name or ""
 	local list = A.emitted[idx]
 	if not list then return end
+	if chan == CHAN_AUTO then chan = nil end
 	local bare = name ~= "" and A.WithoutDryMix(name)
 	for i = #list, 1, -1 do
 		local h = list[i]
 		-- the name asked, as given or as played (a muffled "#" sound is played without its "#")
-		if name == "" or h.orig == name or h.name == name or h.name == bare then
+		if (not chan or h.srcChan == chan) and (name == "" or h.orig == name or h.name == name or h.name == bare) then
 			stopCopy(h)
 			table.remove(list, i)
 		end
@@ -1149,10 +1151,11 @@ do
 end
 net.Receive("pba_stopall", function() A.StopAllSounds() end)
 
--- server-side StopSound on a relayed sound: stop our copies
+-- server-side StopSound on a relayed sound, or a new sound on its channel the engine played without
+-- us (sv_relay relayChannelCut): stop our copies
 net.Receive("pba_snd_stop", function()
-	local idx, name = net.ReadUInt(16), net.ReadString()
-	A.StopCopies(idx, name)
+	local idx, name, chan = net.ReadUInt(16), net.ReadString(), net.ReadInt(10)
+	A.StopCopies(idx, name, chan)
 end)
 
 -- entity removed: its copies play on to their end where they were, as the engine's own sounds do
