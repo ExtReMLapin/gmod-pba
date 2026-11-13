@@ -383,8 +383,8 @@ local function applyNative(m, S, L)
 	m.stSel, m.stW = nil, nil
 	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
 	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_native_end or 1) >= 0.5 then
-		local dur = A.SoundDuration(m.name) or 0
-		if dur > 0 then m.endT = math.max(m.endT, RealTime() + dur * 100 / math.max(m.pitch or 100, 1) + 0.5) end
+		local e = A.PlayEnd(m.name, m.pitch, nil, A.END_GRACE)
+		if e then m.endT = math.max(m.endT, e) end
 	end
 	-- its source reverb slot at once (else only at the next evaluation)
 	if m.nativeId then
@@ -583,16 +583,13 @@ function LP.HandleClient(data)
 		dsp = data.DSP or 0, once = not ((src or cpp) and not once), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
 		src = src and setmetatable({ src }, { __mode = "v" }) or nil, cpp = cpp or nil }
 	-- its end: the file's length at its start pitch (onceEnded)
-	if m.once then
-		local dur = A.SoundDuration(name) or 0
-		if dur > 0 then m.endT = RealTime() + dur * 100 / math.max(m.pitch, 1) + 0.5 end
-	end
+	if m.once then m.endT = A.PlayEnd(name, m.pitch, nil, A.END_GRACE) end
 	LP.mirrors[key] = m
 	-- its start feeds the mixer's ducker, as a server long line's (OP_START below) and a short sound's
 	-- (A.Process, which this hook returns before) do (pba_long_duck)
 	if m.once and (A.cfg.long_duck or 1) >= 0.5 and A.Mix and A.Mix.NoteSound then
 		A.Mix.NoteSound({ SoundName = name, Pos = m.pos, SoundLevel = lvl, Volume = m.vol, Channel = chan, Entity = e,
-			EntIndex = idx }, A.ListenerPos(), (A.SoundDuration(name) or 0) * 100 / math.max(m.pitch, 1))
+			EntIndex = idx }, A.ListenerPos(), A.PlaySeconds(name, m.pitch) or 0)
 	end
 	apply(m, 0)
 	return true
@@ -620,11 +617,11 @@ net.Receive("pba_loop", function()
 		if m then stopMirror(m) LP.mirrors[key] = nil end
 		return
 	end
-	local name, idx, pos = net.ReadString(), net.ReadUInt(16), net.ReadVector()
-	local vol, pitch, lvl, dsp = net.ReadUInt(8) / 255, net.ReadUInt(8), net.ReadUInt(9), net.ReadUInt(8)
+	local name = net.ReadString()
+	local d = A.ReadSound() -- (the common body, sh_core: as pba_snd's)
 	local once = net.ReadBool()
-	local speaker = net.ReadBool()
-	local chan = net.ReadInt(10)
+	local idx, pos, vol, pitch, lvl, dsp, chan = d.EntIndex, d.Pos, d.Volume, d.Pitch, d.SoundLevel, d.DSP, d.Channel
+	local speaker = bit.band(d.Flags, SND_SPEAKER or 64) ~= 0
 	local m = LP.mirrors[key]
 	if op == OP_START and m then stopMirror(m) m = nil end
 	-- a change of a long one-shot whose mirror already ended here: it must not start it again from its top
@@ -643,10 +640,7 @@ net.Receive("pba_loop", function()
 		-- its end: the file's length at its start pitch (onceEnded). Without it a server long one-shot's
 		-- engine patch, which reads "playing" long after its file ended, lived on for good, and the next
 		-- volume change replayed it from the top (the Breencast looping, d1_trainstation_02, 2026-11-13)
-		if once and (A.cfg.loops_once_end or 1) >= 0.5 then
-			local dur = A.SoundDuration(name) or 0
-			if dur > 0 then m.endT = RealTime() + dur * 100 / math.max(pitch, 1) + 0.5 end
-		end
+		if once and (A.cfg.loops_once_end or 1) >= 0.5 then m.endT = A.PlayEnd(name, pitch, nil, A.END_GRACE) end
 		LP.mirrors[key] = m
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
@@ -656,7 +650,7 @@ net.Receive("pba_loop", function()
 	-- the ambience left at full under it (pba_long_duck)
 	if op == OP_START and once and (A.cfg.long_duck or 1) >= 0.5 and A.Mix and A.Mix.NoteSound then
 		A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, EntIndex = idx }, A.ListenerPos(),
-			(A.SoundDuration(name) or 0) * 100 / math.max(pitch, 1))
+			A.PlaySeconds(name, pitch) or 0)
 	end
 	-- a long line taken from the engine: heard within HANDBACK_S, else its engine patch plays it (pba_silent_handback)
 	if new and once and op == OP_START then

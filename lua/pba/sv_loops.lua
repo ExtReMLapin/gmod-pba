@@ -35,15 +35,10 @@ local function send(op, l, plys)
 	net.WriteString(l.key)
 	if op ~= OP_STOP then
 		net.WriteString(l.name)
-		net.WriteUInt(l.idx, 16)
-		net.WriteVector(l.pos)
-		net.WriteUInt(math.Clamp(math.Round(l.vol * 255), 0, 255), 8)
-		net.WriteUInt(math.Clamp(math.floor(l.pitch), 0, 255), 8)
-		net.WriteUInt(math.Clamp(math.floor(l.lvl), 0, 511), 9)
-		net.WriteUInt(math.Clamp(math.floor(l.dsp or 0), 0, 255), 8)
+		-- the common body (sh_core A.WriteSound, as pba_snd's): the speaker flag, SoundTime and face bit with it
+		A.WriteSound({ pos = l.pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
+			flags = l.speaker and (SND_SPEAKER or 64) or 0, dsp = l.dsp, idx = l.idx, st = l.st, face = l.face })
 		net.WriteBool(l.once or false)
-		net.WriteBool(l.speaker or false)
-		net.WriteInt(l.chan or 0, 10) -- (as sv_relay: CHAN_REPLACE -1 to user channels 255)
 	end
 	net.Send(plys)
 end
@@ -484,7 +479,7 @@ function LP.Handle(data)
 		l = { key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
 			orig = data.OriginalSoundName, posGiven = data.Pos }
 		-- sounds play in real time whatever the time scale (game.SetTimeScale, host_timescale): ends in real time
-		if once then l.once, l.endT = true, RealTime() + dur * 100 / math.max(data.Pitch or 100, 1) + 0.5 end
+		if once then l.once, l.endT = true, A.PlayEnd(data.SoundName, data.Pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE end
 		-- moving brushes (func_door noise1, func_tracktrain MoveSound, func_rotating...) and model doors:
 		-- their C++ stops the loop with a StopSound that never reaches Lua; the mirror stops with the
 		-- motion. Brush models only ("*N"): a prop_dynamic is MOVETYPE_PUSH too, and a still machine
@@ -514,9 +509,10 @@ function LP.Handle(data)
 			l.dsp = cv and cv:GetInt() or 0
 		end
 		l.pos = data.Pos or (IsValid(e) and e:WorldSpaceCenter()) or Vector()
+		l.st, l.face = data.SoundTime, A.OnFace(e, data.Channel) or nil -- (net body only, unused by the mirror yet)
 		-- a long line started again (same key): it plays from its top again, so it ends later
 		if l.once and not fresh then
-			l.endT = RealTime() + (A.SoundDuration(data.SoundName) or 0) * 100 / math.max(l.pitch, 1) + 0.5
+			l.endT = A.PlayEnd(data.SoundName, l.pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE
 		end
 	end
 	if fresh then

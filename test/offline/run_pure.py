@@ -172,6 +172,18 @@ for k, v in srcs.items():
 print("%s static: the long-sound bound 1800 in one place (expected %s, found %s)"
       % ("PASS" if long_seen == LONG_KNOWN else "FAIL", LONG_KNOWN, long_seen))
 
+# Static lock (offline only): one end-of-file rule. A file's play time at a pitch (x 100 / pitch) is
+# written in A.AtPitch only (sh_core.lua); copies, mirrors and voices take their end from A.PlayEnd /
+# A.PlaySeconds.
+END_KNOWN = {"sh_core.lua": 1}
+end_seen = {}
+for k, v in srcs.items():
+    n = len(re.findall(r"\*\s*100\s*/\s*math\.max\(", v))
+    if n:
+        end_seen[k.rsplit("/", 1)[-1]] = n
+print("%s static: the end-of-file rule in one place (expected %s, found %s)"
+      % ("PASS" if end_seen == END_KNOWN else "FAIL", END_KNOWN, end_seen))
+
 # The native helpers (cl_native.lua: distance law, sends, directivity, EQ) and their suite. Loaded last:
 # the suite above runs without pba.Native, as before.
 L.execute("timer.Remove = timer.Remove or function() end")
