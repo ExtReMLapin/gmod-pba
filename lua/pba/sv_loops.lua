@@ -292,6 +292,13 @@ function LP.Handle(data)
 	-- players' own loops (underwater ambience...) are started and stopped by the engine's C++
 	-- code: that StopSound never reaches Lua, a mirror would play forever. Left to the engine.
 	if IsValid(e) and e:IsPlayer() then return false end
+	-- same for the loops of a weapon a player holds: the gravity gun's hold loop is a CSoundPatch on the
+	-- weapon, faded and destroyed by its C++ (weapon_physcannon); a mirror rendered it to its holder as
+	-- a foreign source and could outlive the destroy
+	if IsValid(e) and e:IsWeapon() then
+		local o = e:GetOwner()
+		if IsValid(o) and o:IsPlayer() then return false end
+	end
 	local idx = IsValid(e) and e:EntIndex() or 0
 	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
 	local l = LP.active[key]
