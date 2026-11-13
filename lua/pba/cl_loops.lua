@@ -480,8 +480,18 @@ net.Receive("pba_loop", function()
 	local speaker = net.ReadBool()
 	local m = LP.mirrors[key]
 	if op == OP_START and m then stopMirror(m) m = nil end
+	-- a change of a long one-shot whose mirror already ended here: it must not start it again from its top
+	-- (the server keeps the line until its own end time, a little later)
+	if not m and once and op == OP_UPDATE and (A.cfg.loops_once_end or 1) >= 0.5 then return end
 	if not m then
 		m = { key = key, name = name, idx = idx, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
+		-- its end: the file's length at its start pitch (onceEnded). Without it a server long one-shot's
+		-- engine patch, which reads "playing" long after its file ended, lived on for good, and the next
+		-- volume change replayed it from the top (the Breencast looping, d1_trainstation_02, 2026-11-13)
+		if once and (A.cfg.loops_once_end or 1) >= 0.5 then
+			local dur = A.SoundDuration(name) or 0
+			if dur > 0 then m.endT = RealTime() + dur * 100 / math.max(pitch, 1) + 0.5 end
+		end
 		LP.mirrors[key] = m
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
@@ -491,6 +501,7 @@ net.Receive("pba_loop", function()
 		return -- applied at the next tick
 	end
 	if m.patch and op == OP_UPDATE then
+		if onceEnded(m) then m.done = true return end -- (a finished patch would start again from its top)
 		A.reemitting = true
 		m.patch:ChangePitch(pitch, 0.1)
 		m.patch:ChangeVolume(vol * (m.g or 1), 0.1)
