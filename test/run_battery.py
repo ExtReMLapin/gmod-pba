@@ -266,6 +266,8 @@ steps = [
     ("lipsync_glass pba_materials", lambda: seq(lambda: load("pba_materials"), lambda: native_on(True),
                                                 lambda: [job("server", "lipsync_glass.lua", 30), job("client", "lipsync_client.lua", 10)])),
     ("water_ogg gm_construct", water_ogg),
+    # slime is water to the engine (MASK_WATER): a source in it heard from the air crosses the interface
+    ("underwater_slime d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: job("client", "underwater_slime.lua"))),
     # door leaf crossed by the line = its doorway (one model): no jump at the leaf / wall boundary
     # continuous sounds: no flip-flop between two equal paths, a real move still switches once
     ("path_hysteresis twodoors", lambda: seq(doors_open, lambda: job("client", "path_hysteresis.lua"))),

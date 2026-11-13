@@ -416,8 +416,8 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy)
 	-- water surface between source and listener: the air / water interface reflects most of the
 	-- sound (one fixed, heavily low-passed "wall"; no detour through the air exists)
 	if A.cfg.water >= 0.5 then
-		local wS = bit.band(util.PointContents(S), CONTENTS_WATER) ~= 0
-		local wL = bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
+		local wS = A.InWater(S)
+		local wL = A.InWater(L)
 		if wS ~= wL then
 			local dry, wet = wS and L or S, wS and S or L
 			local tr = util.TraceLine({ start = dry, endpos = wet, mask = MASK_WATER })
@@ -2490,8 +2490,8 @@ function P.LineState(S, L, srcEnt)
 		st = (IsValid(e) and not e:IsWorld()) and "e" .. entKey(e) or "w"
 	end
 	if A.cfg.water >= 0.5 then
-		local wS = bit.band(util.PointContents(S), CONTENTS_WATER) ~= 0
-		local wL = bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
+		local wS = A.InWater(S)
+		local wL = A.InWater(L)
 		st = st .. (wS and "1" or "0") .. (wL and "1" or "0")
 	end
 	return st
@@ -2978,8 +2978,8 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		-- it as a wall). Paths ignored it: a dry point heard an underwater one 44 dB louder one way than
 		-- the other (gm_construct, perceptual bench reciprocity)
 		if cfg.water >= 0.5 and #r.paths > 0 then
-			local wS = bit.band(util.PointContents(S), CONTENTS_WATER) ~= 0
-			local wL = bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
+			local wS = A.InWater(S)
+			local wL = A.InWater(L)
 			if wS ~= wL then
 				local add, lpAdd = AC.WallLoss(nil, "pba_water", 0)
 				for _, p in ipairs(r.paths) do

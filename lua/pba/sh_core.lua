@@ -284,6 +284,12 @@ end
 --- The demo map (pba_demo*): debug overlay and HUD indicator switch on by themselves there.
 function A.IsDemoMap() return string.StartWith(game.GetMap() or "", "pba_demo") end
 
+--- A point inside a liquid, as the engine decides it: MASK_WATER's liquids, water and slime
+-- (CGameMovement::CheckWater, C_BasePlayer::AudioStateIsUnderwater). CONTENTS_WATER alone missed slime
+-- (d1_canals' toxic water): a source in it was heard from the air unmuffled, a listener in it not under water.
+local LIQUID = CONTENTS_WATER + CONTENTS_SLIME
+function A.InWater(p) return bit.band(util.PointContents(p), LIQUID) ~= 0 end
+
 --- World position of a sound.
 function A.SoundPos(data)
 	if data.Pos then return data.Pos end

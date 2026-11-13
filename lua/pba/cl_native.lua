@@ -1143,7 +1143,7 @@ hook.Add("Think", "pba_native_listener", function()
 		pba_native.SetPaused(paused)
 	end
 	-- head under water: the engine applies its own water DSP to the sounds it plays; same for ours
-	local uw = A.cfg.water >= 0.5 and bit.band(util.PointContents(L), CONTENTS_WATER) ~= 0
+	local uw = A.cfg.water >= 0.5 and A.InWater(L)
 	if uw ~= N.underwater and pba_native.SetUnderwater then
 		N.underwater = uw
 		pba_native.SetUnderwater(uw and 1 or 0)
