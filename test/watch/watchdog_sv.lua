@@ -74,12 +74,17 @@ local function wrap()
 				tostring(ret), (s.relayed or 0) - r0, (s.untouched or 0) - u0, (s.relayMuffled or 0) - m0,
 				(s.farMuffled or 0) - f0, (s.mouthLong or 0) - l0, data.Flags or 0)
 		end
-		-- the engine plays this call on the face unless pba suppressed it
+		-- the engine plays this call on the face unless pba suppressed it (pba's inaudible mouth copy of a long
+		-- line, sv_loops MouthStart, moves the mouth but is not the line: speech_silent must still check it)
 		if ret ~= false then
 			local e = data.Entity
+			local quiet = (data.Volume or 1) <= 0.002
 			for i = #W.speech, math.max(n0, 1), -1 do
 				local ev = W.speech[i]
-				if IsValid(e) and ev.idx == e:EntIndex() and ev.name == data.SoundName then ev.engine = true break end
+				if IsValid(e) and ev.idx == e:EntIndex() and ev.name == data.SoundName then
+					if quiet then ev.mouthSv = true else ev.engine = true end
+					break
+				end
 			end
 		end
 		return ret

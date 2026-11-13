@@ -1,0 +1,145 @@
+{
+ "map": "d1_trainstation_05",
+ "tag": "l1",
+ "sets": [],
+ "secs": 108,
+ "triggers": 22,
+ "visited": 22,
+ "scenes": 30,
+ "speech": 25,
+ "anomalies": {
+  "caption_dup": {
+   "count": 11,
+   "distinct": 6,
+   "samples": [
+    {
+     "t": 94.69,
+     "key": "doorsound.null",
+     "text": "doorsound.null",
+     "token": "doorsound.null",
+     "dt": 0,
+     "map": "d1_trainstation_05"
+    },
+    {
+     "t": 94.69,
+     "key": "k_lab.ringsrotating",
+     "text": "k_lab.ringsrotating",
+     "token": "k_lab.ringsrotating",
+     "dt": 0,
+     "map": "d1_trainstation_05"
+    },
+    {
+     "t": 96.09,
+     "key": "Il n'est pas pass\u00e9.",
+     "text": "Il n'est pas pass\u00e9.",
+     "token": "customLuaToken",
+     "dt": 0,
+     "map": "d1_trainstation_05"
+    },
+    {
+     "t": 98.85,
+     "key": "dospark",
+     "text": "dospark",
+     "token": "dospark",
+     "dt": 0.75,
+     "map": "d1_trainstation_05"
+    },
+    {
+     "t": 99.4,
+     "key": "Derri\u00e8re vous\u00a0!",
+     "text": "Derri\u00e8re vous\u00a0!",
+     "token": "customLuaToken",
+     "dt": 0,
+     "map": "d1_trainstation_05"
+    },
+    {
+     "t": 101.59,
+     "key": "\u00c9teignez-le, \u00e9teignez-le\u00a0!",
+     "text": "\u00c9teignez-le, \u00e9teignez-le\u00a0!",
+     "token": "customLuaToken",
+     "dt": 0,
+     "map": "d1_trainstation_05"
+    }
+   ]
+  },
+  "voice_glide": {
+   "count": 2,
+   "distinct": 1,
+   "samples": [
+    {
+     "secs": 0.2,
+     "pos": "-7073.597168 -1265.403687 104.321419",
+     "db": 17.3,
+     "t": 69.67,
+     "sound": "combined/k_lab/k_lab_kl_mygoodness02_cc.wav",
+     "by": "cl_render.lua:723",
+     "key": "combined/k_lab/k_lab_kl_mygoodness02_cc.wav",
+     "map": "d1_trainstation_05"
+    }
+   ]
+  },
+  "lip_delay": {
+   "count": 13,
+   "distinct": 13,
+   "samples": [
+    {
+     "class": "npc_alyx",
+     "name": "*vo/k_lab/al_takecredit.wav",
+     "dist": 4866,
+     "lagMs": 270,
+     "t": 93.55
+    },
+    {
+     "class": "npc_kleiner",
+     "name": "*vo/k_lab/kl_hesnotthere.wav",
+     "dist": 5092,
+     "lagMs": 283,
+     "t": 94.59
+    },
+    {
+     "class": "npc_kleiner",
+     "name": "*vo/k_lab/kl_nonsense.wav",
+     "dist": 5091,
+     "lagMs": 283,
+     "t": 95.55
+    },
+    {
+     "class": "npc_eli",
+     "name": "*vo/k_lab/eli_didntcomethru.wav",
+     "dist": 4281,
+     "lagMs": 238,
+     "t": 96.06
+    },
+    {
+     "class": "npc_kleiner",
+     "name": "*vo/k_lab/kl_thenwhere.wav",
+     "dist": 5091,
+     "lagMs": 283,
+     "t": 97.33
+    },
+    {
+     "class": "npc_alyx",
+     "name": "*vo/k_lab/al_seeifitworks.wav",
+     "dist": 5251,
+     "lagMs": 292,
+     "t": 98.44
+    }
+   ]
+  },
+  "speech_silent": {
+   "count": 1,
+   "distinct": 1,
+   "samples": [
+    {
+     "class": "npc_alyx",
+     "name": "*vo/k_lab/al_foundhim.wav",
+     "dist": 677,
+     "t": 73.05,
+     "pos": "-6538.699219 -1047.336182 0.093750",
+     "killed": []
+    }
+   ]
+  }
+ },
+ "loud_census": []
+}
