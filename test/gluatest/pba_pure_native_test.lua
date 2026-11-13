@@ -209,8 +209,20 @@ return {
 				end
 			end)
 		end },
+		{ name = "LoudWet: with pba_native_loud_dry a sound above dsp_db_min (95 dB) keeps dsp_db_mixdrop (0.1) of its reverb send, others all of it; off: all", func = function()
+			withCfg({ fullscale_db = 90, native_loud_dry = 1 }, function()
+				expect(near(N.LoudWet(140), 0.1, 1e-6)).to.beTrue()
+				expect(N.LoudWet(95)).to.equal(1)
+				expect(N.LoudWet(75)).to.equal(1)
+				expect(near(N.PhysSrcSend(140, 10 * REF), 10 * 0.1, 1e-6)).to.beTrue()
+			end)
+			withCfg({ fullscale_db = 90, native_loud_dry = 0 }, function()
+				expect(N.LoudWet(140)).to.equal(1)
+			end)
+		end },
 		{ name = "PhysSrcSend: the source's 1 m level whatever the distance (unsaturated); clipped direct x d / 1 m near a loud source", func = function()
-			withCfg(BASE, function()
+			-- the physical send, without the engine's dry rule for loud sounds (its own case below)
+			withCfg({ fullscale_db = 90, native_loud_dry = 0 }, function()
 				for _, lvl in ipairs({ 60, 75, 90 }) do
 					local c = AC.EngineGain(REF, lvl)
 					for _, d in ipairs({ 0, 20, REF, 100, 300, 1000, 5000, 20000 }) do
