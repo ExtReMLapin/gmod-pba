@@ -440,7 +440,10 @@ local function isLine(data)
 	return ch == CHAN_VOICE or ch == CHAN_VOICE2 or bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0
 end
 
-local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited)
+-- keep (finish: a cheap result too quiet to emit): the voice at the quietest level emitted, 1 dB over the
+-- emission thresholds below (native gain 0.001, engine volume 0.01)
+local KEEP_GAIN = 10 ^ (1 / 20)
+local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited, keep)
 	local floor = slot == 1 and speechFloor(data, src, L) or nil
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
 	-- native rendering: the module plays the voice itself (HRTF + EQ); no engine compensation
@@ -453,6 +456,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		local dirK = A.Native.Directivity(src, L, data.Channel)
 		local g = (data.Volume or 1) * A.Native.PhysPath(v.gain, v.len, data.SoundLevel or 75, v.rawLossDb) * dirK
 		if floor then g = math.max(g, floor) end
+		if keep then g = math.max(g, 0.001 * KEEP_GAIN) end
 		if g < 0.001 then return false end
 		local delay = math.max(voiceDelay(v, L) - (waited or 0), 0)
 		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
@@ -484,6 +488,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 	local d = v.epos:Distance(L)
 	local vol = (data.Volume or 1) * v.gain / AC.EngineGain(math.max(d, 1), lvl)
 	if floor then vol = math.max(vol, floor / AC.EngineGain(math.max(d, 1), lvl)) end
+	if keep then vol = math.max(vol, 0.01 * KEEP_GAIN) end
 	vol = math.min(vol, 1)
 	if vol < 0.01 then return false end
 	local tunnel = heldTunnel(idx and (idx .. ":" .. (slot or 1)), v.diffuse, RealTime())
@@ -559,6 +564,7 @@ end
 -- only .wav durations are trusted for it (SoundDuration of compressed files can be off).
 -- (one margin and one interval for every followed sound: cl_sched.lua)
 local MIN_LEFT = A.Sched.MIN_LEFT
+local KEEP_RAMP_S = 0.1 -- (a sound kept alive from a cheap result: the glide to its first full result, finish)
 
 local followInterval = A.Sched.Interval
 
@@ -774,6 +780,8 @@ function evaluate(rec, now, L)
 	end
 	local targets = P.FollowAssign(L, olds, vs)
 	local dur = (A.cfg.continuous_ramp or 0) >= 0.5 and followInterval() or 0
+	-- (kept alive from a cheap result too quiet to emit, finish: its first full result reached quickly)
+	if rec.keptCheap then dur, rec.keptCheap = math.min(dur, KEEP_RAMP_S), nil end
 	for i, fv in ipairs(live) do
 		local t = targets[i]
 		if t then
@@ -1253,7 +1261,28 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 			end
 		end
 	end
-	if follow and #follow > 0 then OS.Add(data, src, S, L, r, follow, play, ukey) end
+	-- a cheap result (r.cheap: pba_burst_budget_ms / pba_burst_mask_db / pba_far_force_ms, the walls' transmission
+	-- alone) is a lower bound: the routes round the walls it ignores can only add. Too quiet to emit, it would have
+	-- dropped a sound the full model plays (an 80 dB impact behind an open doorway: full -30.8 dB, cheap -60 dB,
+	-- never heard): its dominant voice is kept at the quietest level emitted, and when followed, its full
+	-- evaluation comes at the next tick and it glides there quickly (OS.Tick, rec.keptCheap)
+	local kept = false
+	if emitted == 0 and r.cheap and r.voices[1] then
+		local v = r.voices[1]
+		local h = emitVoice(data, v, L, IsValid(src) and src or nil, copies, 1, play, ukey, follow ~= nil, idx, waited, true)
+		if h then
+			emitted, kept = 1, true
+			A.active[#A.active + 1] = now + busy
+			A.stats.cheapKept = (A.stats.cheapKept or 0) + 1
+			if follow then
+				if h.id or h.a then follow[#follow + 1] = { h = h, v = v } else follow = nil end
+			end
+		end
+	end
+	if follow and #follow > 0 then
+		local rec = OS.Add(data, src, S, L, r, follow, play, ukey)
+		if rec and kept then rec.tNext, rec.keptCheap = now, true end
+	end
 	A.stats.processed = A.stats.processed + 1
 	-- per-frame cost accounting (dev / perf campaign)
 	local ms = (SysTime() - t0) * 1000
