@@ -184,6 +184,34 @@ def py(script, *args, timeout=1500):
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     return PyOut(p.returncode, p.stdout or "", p.stderr or "")
 
+def loud_dry_reverb():
+    """gm_construct's open field (-1750, 2000, -20, yaw 45), native render and pba_native_all 1 for the run
+    (loud_dry_reverb.lua): a loud shot's reverb <= -10 dB re its direct with pba_native_loud_dry 1."""
+    load("gm_construct")
+    native_on(True)
+    was = (lua("client", "return GetConVar('pba_native_all'):GetString()") or "1")
+    call("console_exec", {"realm": "client", "cmd": "pba_native_all 1"})
+    lua("server", "local p = player.GetHumans()[1] p:SetPos(Vector(-1750, 2000, -20)) p:SetEyeAngles(Angle(0, 45, 0)) return true")
+    wait_lua("client", "return LocalPlayer():GetPos():Distance(Vector(-1750, 2000, -20)) < 2", 5)
+    time.sleep(2)
+    try:
+        return job("client", "loud_dry_reverb.lua", 180)
+    finally:
+        call("console_exec", {"realm": "client", "cmd": f"pba_native_all {was}"})
+
+def lua_reload():
+    """Three autorefresh-style reloads of the files of each realm (lua_reload.lua): no pba hook added or lost,
+    the detoured engine originals still C functions, the detours working."""
+    files = {"server": ["pba/sh_core.lua", "pba/sv_loops.lua", "pba/sv_relay.lua", "pba/sv_sound.lua"],
+             "client": ["pba/sh_core.lua", "pba/cl_loops.lua", "pba/cl_render.lua", "pba/cl_renders.lua", "pba/cl_sched.lua"]}
+    body = open(os.path.join(TEST, "lua_reload.lua"), encoding="utf-8").read()
+    out = []
+    for realm, fl in files.items():
+        code = "PBA_FILES = {" + ", ".join(repr(f) for f in fl) + "}\n" + body
+        r = call("lua_job", {"realm": realm, "code": code, "timeout_s": 60}, timeout=120)
+        out.append(r.get("values", [r])[0] if isinstance(r, dict) else r)
+    return out
+
 def speaker_once():
     """Long one-shots on a speaker: speaker_once_server.lua starts the lines, speaker_once_check.lua (with its
     result in PBA_SPK) checks the client mirrors end with their file and are replaced on their channel."""
@@ -793,6 +821,18 @@ steps = [
     ("dsp_muffle_real", lambda: seq(lambda: load(TW), lambda: py("dsp_muffle_real.py"))),
     # T10: room reverb present / absent (native_reverb 0), echoes near walls vs open field, native_echo 0, native_props
     ("reverb_echo_basics", lambda: py("reverb_echo_basics.py")),
+    # T12 / T13: Doppler pitch and air absorption of what the module is really handed (gm_flatgrass, a flying prop, 10 m vs 100 m)
+    ("doppler_air_render", lambda: seq(lambda: load("gm_flatgrass"), lambda: py("doppler_air_render.py"))),
+    # T11: a radio of another addon behind a closed door (native energy -16 dB vs open), streams_filter high band, streams 0
+    ("streams_basic", lambda: py("streams_basic.py")),
+    # T18: probe graph disk cache (written, reloaded identical, stale version / hash / spacing rebuilt), no error while it builds
+    ("probe_cache", lambda: seq(lambda: load("pba_noportal"), lambda: job("client", "probe_cache.lua", 400))),
+    # T22: a loud shot in the open keeps its reverb <= -10 dB re its direct (pba_native_loud_dry), a quiet one is unchanged
+    ("loud_dry_reverb", lambda: loud_dry_reverb()),
+    # T16: a fake Sound Muffling Effect is turned off by pba_compat_auto 1 and given back (auto 0, pba off); a manual 0 is left alone
+    ("compat_auto", lambda: seq(any_map, lambda: job("server", "compat_auto.lua", 60))),
+    # T19: three reloads of the files of each realm: hooks unchanged, detoured originals still the engine's C functions
+    ("lua_reload", lambda: seq(any_map, lua_reload)),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
