@@ -3,6 +3,7 @@
 
 local A = pba
 local D = {}
+local exp, LN10 = math.exp, math.log(10) -- 10 ^ x, the same compiled or interpreted (sh_paths, #61)
 A.Doors = D
 
 local NET = "pba_doors"
@@ -49,7 +50,7 @@ function D.CombineLeaves(leaves)
 	if total <= 0 then return nil end
 	local p, best, bestLp = 0, -1, nil
 	for _, l in ipairs(leaves) do
-		local t = math.max(l.share or 1, 0) / total * 10 ^ (-l.db / 10)
+		local t = math.max(l.share or 1, 0) / total * exp((-l.db / 10) * LN10)
 		p = p + t
 		if t > best then best, bestLp = t, l.lp end
 	end
