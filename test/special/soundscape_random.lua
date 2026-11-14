@@ -57,7 +57,7 @@ local ok, res = pcall(function()
 				for _, w in ipairs(W) do if string.find(t.SoundName, w, 1, true) then hit = true break end end
 				if hit then
 					local c = PBA_T[PBA_T.phase]
-					if t.Pos:Distance(EyePos()) <= 40 then
+					if t.Pos:Distance(LocalPlayer():EyePos()) <= 40 then -- (EyePos() is only valid while rendering)
 						c.n = c.n + 1
 						if r == false then c.taken = c.taken + 1 end
 					elseif c.far then c.far = c.far + 1 end
@@ -68,7 +68,7 @@ local ok, res = pcall(function()
 	]==])
 	job:sleep(0.5)
 	local n, dirs = best.n, { -best.n, (-best.n + Vector(0, 0, 0.5)):GetNormalized(), (-best.n + best.n:Cross(Vector(0, 0, 1)) * 0.6):GetNormalized() }
-	local code = { "local E = EyePos()" }
+	local code = { "local E = LocalPlayer():EyePos()" }
 	for _, d in ipairs(dirs) do
 		code[#code + 1] = string.format("EmitSound('ambient/wind/wind_moan1.wav', E + Vector(%f, %f, %f) * 30, 0, CHAN_STATIC, 0.5, 140, 0, 100)", d.x, d.y, d.z)
 	end

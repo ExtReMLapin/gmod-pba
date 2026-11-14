@@ -5,8 +5,9 @@
 -- Per option value (0, then 1): a simulated fight (A.Sched.NoteSound(130), what A.Process notes for an
 -- explosion, every 0.3 s for 2.5 s) while the server moves a big prop every 0.05 s; the module calls for that
 -- prop (DynamicMove / Add / Remove) are counted during the fight, then during the 4 s after it.
--- Pass: option 1: no call during the fight (after a 0.3 s grace: a sync already running), at least one after it
--- (it is put where it is) and at most one per second; option 0: one call per sync during the fight (>= 10).
+-- Pass: option 1: no call while the scheduler says fight (SC.InCombat at the call; after a 0.3 s grace: a sync
+-- already running), at least one after it (it is put where it is) and at most one per second; option 0: one
+-- call per sync during the fight (>= 10).
 local A = pba
 local N, SC = A.Native, A.Sched
 if not (N and N.ready and pba_native and pba_native.DynamicMove and SC and SC.NoteSound) then
@@ -30,7 +31,7 @@ for _, k in ipairs({ "DynamicMove", "DynamicAdd", "DynamicRemove" }) do
 	local f = pba_native[k]
 	orig[k] = f
 	pba_native[k] = function(id, ...)
-		if id == idx and counting then calls[#calls + 1] = { phase = counting, t = RealTime(), k = k } end
+		if id == idx and counting then calls[#calls + 1] = { phase = counting, t = RealTime(), k = k, inFight = SC.InCombat() } end
 		return f(id, ...)
 	end
 end
@@ -56,20 +57,27 @@ local function run(v)
 	counting = "after"
 	job:sleep(4.5)
 	counting = nil
+	-- judged by the scheduler's own verdict at the call (SC.InCombat), not by the phase clock: the job's
+	-- sleeps overrun by a frame each (20 fps: 50 ms), so the watched "fightend" ran past the fight's end and
+	-- counted the legitimate commit that follows it (a group of steps, slower frames: fightend = 1)
 	local n = { grace = 0, fight = 0, fightend = 0, after = 0 }
+	local inFight, out = 0, 0
 	local times = {}
 	for _, c in ipairs(calls) do
 		n[c.phase] = n[c.phase] + 1
-		if c.phase == "after" or c.phase == "fightend" then times[#times + 1] = c.t end
+		if c.phase ~= "grace" then
+			if c.inFight then inFight = inFight + 1 else out = out + 1 times[#times + 1] = c.t end
+		end
 	end
 	local minGap = math.huge
 	for i = 2, #times do minGap = math.min(minGap, times[i] - times[i - 1]) end
-	return { fight = n.fight, fightend = n.fightend, after = n.after, minGap = minGap < math.huge and math.Round(minGap, 2) or nil }
+	return { inFight = inFight, out = out, fight = n.fight, fightend = n.fightend, after = n.after,
+		minGap = minGap < math.huge and math.Round(minGap, 2) or nil }
 end
 local ok, r0, r1 = pcall(function() return run("0"), run("1") end)
 for k, f in pairs(orig) do pba_native[k] = f end
 setOpt(prev)
 if not ok then return { pass = false, err = tostring(r0) } end
-local pass = inScene and r0.fight >= 10 and r1.fight == 0 and r1.fightend == 0 and r1.after >= 1
+local pass = inScene and r0.inFight >= 10 and r1.inFight == 0 and r1.out >= 1
 	and (r1.minGap == nil or r1.minGap >= 0.9)
 return { pass = pass, inScene = inScene, opt0 = r0, opt1 = r1, hasOption = cv ~= nil }

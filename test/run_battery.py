@@ -9,6 +9,7 @@ Usage: python -I -u run_battery.py <path to mcp.py> [--smoke | --quick | --speci
   --special    the special-sound scenarios only
   --only=a,b   just these steps (exact labels, comma separated), in battery order
   --force-load every step reloads its map, even the current one (injected code, map-start state)
+  --no-reset   do not put the session's pba_* settings back before each step (to see what a leak does)
 Needs ffmpeg on PATH (water_ogg).
 
 Every step sets the state it needs itself (map, demo mode, door, player position, pba_native_render),
@@ -56,7 +57,7 @@ def call(tool, args, mx=200000, timeout=600):
         return {"raw": out}
 
 import _cvsnap
-_cvsnap.guard(call)
+SNAP0 = _cvsnap.guard(call)  # the session's pba_* settings: every step starts from them (see step())
 
 def lua(realm, code):
     v = call("lua_exec", {"realm": realm, "code": code}).get("values")
@@ -314,18 +315,40 @@ def long_sound_boundary():
     native_on(False)
     RED = os.environ.get("PBA_RED", "").split(",")  # red proof: captions / mouth / end switch a long-path feature off
     fails = []
+    def chans():
+        """Audible channels of the line in the engine's own list (snd_dumpclientsounds), not EntityEmitSound calls:
+        a CSoundPatch start reaches that hook twice (its start, then its envelope's volume / pitch update, flags
+        SND_CHANGE_VOL | SND_CHANGE_PITCH, no Lua caller) for one channel."""
+        if "double" in RED:  # red proof: a second copy of the line, what a double emission would leave
+            lua("client", "local e = LocalPlayer() if IsValid(e) then e:EmitSound('combined/trainyard/trainyard_ba_getoutfast_cc.wav', 75, 100, 0.1, CHAN_STATIC) end return true")
+            time.sleep(0.3)
+        r = call("console_exec", {"realm": "client", "cmd": "snd_dumpclientsounds"})
+        n = 0
+        for o in r.get("output", []):
+            m = re.search(r"vol\((\d+)\).*getoutfast", o.get("text", ""))
+            if m and int(m.group(1)) > 0:
+                n += 1
+        return n
     def run(maxd, long_sounds=1):
         call("console_exec", {"realm": "server", "cmd": f"pba_long_sounds {long_sounds}"})
         out = {}
         def cl():
             out["cl"] = job("client", "long_boundary_client.lua", 60)
+        def dump():
+            time.sleep(2.5 + 2.0)  # the server half emits 2.5 s after its start: 2 s into the line
+            out["chans"] = chans()
         th = threading.Thread(target=cl)
         th.start()
         time.sleep(0.5)
+        td = threading.Thread(target=dump)
+        td.start()
         code = f"T15_MAXD = {maxd}" + chr(10) + open(os.path.join(TEST, "long_boundary_server.lua"), encoding="utf-8").read()
         r = call("lua_job", {"realm": "server", "code": code, "timeout_s": 60}, timeout=120)
         out["sv"] = r.get("values", [r])[0]
         th.join()
+        td.join()
+        if isinstance(out["cl"], dict):
+            out["cl"]["chans"] = out.get("chans")
         return out["sv"], out["cl"]
     res = {}
     try:
@@ -349,6 +372,8 @@ def long_sound_boundary():
             if not cl.get("started"):
                 fails.append(f"{tag}: pba produced nothing on the client")
                 continue
+            if cl.get("chans") != 1:
+                fails.append(f"{tag}: {cl.get('chans')} audible channels of the line in the engine (want 1)")
             if cl.get("caps") != 1:
                 fails.append(f"{tag}: {cl.get('caps')} subtitles (want 1)")
             if mouth != 1:
@@ -1251,8 +1276,43 @@ with open(LOG, "w", encoding="utf-8") as f:
     f.write(f"PBA battery {time.strftime('%Y-%m-%d %H:%M:%S')} args {' '.join(opts) or '(full)'}\n"
             "Full output of every step that did not pass.\n\n")
 
+# Every step starts from the session's pba_* settings (SNAP0): a step that changed one and did not put it back
+# (an exception, a forgotten restore) made the next steps run under it, so a step passed alone and failed in
+# a group (impact_inside_prop, native_props_calm). The settings left are reset and named with their step.
+NO_RESET = "--no-reset" in sys.argv
+SET_BY_STEPS = {"native_render"}  # every step sets it (native_on): no leak
+_prev = [None]
+
+def _same(a, b):
+    """Two convar strings equal as numbers when both are (GetString gives '0.0' or '0.000000' for one value)."""
+    try:
+        return abs(float(a) - float(b)) < 1e-6
+    except (TypeError, ValueError):
+        return a == b
+
+def reset_settings():
+    now = _cvsnap.snapshot(call)
+    left = []
+    for realm, values in SNAP0.items():
+        cur = now.get(realm) or {}  # a realm not there (no map): nothing to compare
+        for name, v in values.items():
+            if name in cur and name not in SET_BY_STEPS and not _same(cur[name], v):
+                left.append(f"{realm} pba_{name}={cur[name]} (was {v})")
+                if not NO_RESET:
+                    call("console_exec", {"realm": realm, "cmd": f"pba_{name} {v}"})
+    if left:
+        print(f"settings left by {_prev[0]}: " + ", ".join(left) + ("" if NO_RESET else " -> reset"), flush=True)
+        if not NO_RESET:
+            time.sleep(0.6)  # the client follows the server's convars within pba_cfgpoll's 0.5 s
+
 def step(i, n, label, fn):
     print(f'##progress step={i}/{n} label="Battery" msg="{label}"', flush=True)
+    if _prev[0] is not None:
+        try:
+            reset_settings()
+        except Exception as e:
+            print(f"settings check failed: {e!r}", flush=True)
+    _prev[0] = label
     t0 = time.time()
     try:
         out = fn()
