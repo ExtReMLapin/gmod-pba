@@ -367,6 +367,14 @@
   "pos0": "hook",
   "why": "another addon's stream volume change applied to its native voice at once (render), outside P.Compute"
  },
+ "streams_rate": {
+  "pos0": "hook",
+  "why": "another addon's stream playback rate applied to its native voice (render reading speed), outside P.Compute"
+ },
+ "streams_stop_now": {
+  "pos0": "hook",
+  "why": "another addon's stream Pause / Stop silences its native voice at once (render), outside P.Compute"
+ },
  "handback_channel": {
   "pos0": "hook",
   "why": "safety-net handback respects the channel rule (render), outside P.Compute"

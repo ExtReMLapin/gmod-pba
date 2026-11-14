@@ -26,6 +26,11 @@ ST.chans = ST.chans or setmetatable({}, { __mode = "k" }) -- channel -> record
 -- methods in place when pba installed its detour (another addon may have detoured first)
 ST.orig = ST.orig or { SetPos = meta.SetPos, GetPos = meta.GetPos, SetVolume = meta.SetVolume, GetVolume = meta.GetVolume }
 local O = ST.orig
+-- later additions, key by key (an autorefresh keeps ST.orig: a key it lacks is taken from the metatable once, where
+-- no detour of ours stood yet)
+for _, k in ipairs({ "SetPlaybackRate", "GetPlaybackRate", "Pause", "Stop", "Play", "GetState" }) do
+	if O[k] == nil then O[k] = meta[k] end
+end
 
 local function enabled() return (A.cfg.streams or 0) >= 0.5 and A.Enabled() end
 
@@ -37,6 +42,9 @@ local function record(ch)
 	if table.Count(ST.chans) >= (A.cfg.streams_max or 16) then return nil end -- cap: untouched
 	local okv, vol = pcall(O.GetVolume, ch)
 	r = { vol = okv and vol or 1, g = 1, apparent = nil, eq = { 1, 1, 1 } }
+	-- the playback rate the owner already set (SetPlaybackRate before the first SetPos): read, not assumed
+	local okr, rt = pcall(O.GetPlaybackRate, ch)
+	if okr and type(rt) == "number" and rt > 0 then r.rate = rt end
 	local okf, file = pcall(ch.GetFileName, ch)
 	r.file = okf and file or nil -- shown by the debug overlay
 	ST.chans[ch] = r
@@ -111,10 +119,13 @@ end
 local function streamSend(ch, r, L, g, pos)
 	local N = A.Native
 	local now = RealTime()
-	if r.nativeId and (not r.srcNext or now >= r.srcNext) then
-		r.srcNext = now + 0.3
+	-- a halted (paused) channel feeds its source slot nothing: that send is taken before the voice's gain, so
+	-- muting the gain alone left the radio's reverb sounding (pba_streams_stop_now); a change of state is bound at once
+	local halted = r.halted and true or false
+	if r.nativeId and (not r.srcNext or now >= r.srcNext or r.srcHalted ~= halted) then
+		r.srcNext, r.srcHalted = now + 0.3, halted
 		local law = function(d) return bassGain(ch, d, r) end
-		r.srcBound = N.BindSource(r.nativeId, r.pos, srcVol(ch, r) * N.SlotSend(law, r.pos:Distance(L)) * A.cfg.native_gain)
+		r.srcBound = N.BindSource(r.nativeId, r.pos, halted and 0 or srcVol(ch, r) * N.SlotSend(law, r.pos:Distance(L)) * A.cfg.native_gain)
 	end
 	return N.SlotFadeSend(r, r.srcBound, r.entryG and srcVol(ch, r) * r.entryG * A.cfg.native_gain or 0, g)
 end
@@ -132,16 +143,33 @@ local function nativeParams(ch, r, L)
 	return pos, gain, el, em, eh, send
 end
 
+--- The native voice's reading speed, percent: the channel's playback rate (pba_streams_rate). BASS produces the
+-- samples the module captures at that speed (a rate of 2 delivers them twice as fast), so a voice reading at x1
+-- played 2 bursts per second where BASS played 4 and its ring ran dry or over (gaps and skips).
+local function pitchOf(r)
+	if (A.cfg.streams_rate or 1) < 0.5 then return 100 end
+	return (r.rate or 1) * 100
+end
+
+--- A paused or stopped channel's voice is muted at once (pba_streams_stop_now, haltNow): its gain and sends are 0
+-- whatever the targets say, until the owner plays the channel again.
+local function heard(r, gain, send)
+	if r.halted then return 0, 0 end
+	return gain, send
+end
+
 local function nativeUpdate(ch, r, L)
 	if not r.nativeId then return end
 	local pos, gain, el, em, eh, send = nativeParams(ch, r, L)
-	if not pba_native.Update(r.nativeId, pos, gain, el, em, eh, 100, r.diffuse or 0, send) then r.nativeId = nil end
+	gain, send = heard(r, gain, send)
+	if not pba_native.Update(r.nativeId, pos, gain, el, em, eh, pitchOf(r), r.diffuse or 0, send) then r.nativeId = nil end
 end
 
 local function nativeStart(ch, r, L)
 	local ok, id = pcall(function()
 		local pos, gain, el, em, eh, send = nativeParams(ch, r, L)
-		return pba_native.PlayStream(ch, pos, gain, el, em, eh, 100, send)
+		gain, send = heard(r, gain, send)
+		return pba_native.PlayStream(ch, pos, gain, el, em, eh, pitchOf(r), send)
 	end)
 	if ok and id and id > 0 then
 		r.nativeId = id
@@ -319,7 +347,8 @@ local function applyRamp(ch, r, L, now)
 	if r.nativeId then
 		-- the room reverb send too, from what is heard now (else the voice kept the send of its start)
 		local send = streamSend(ch, r, L, g, pos)
-		if not pba_native.Update(r.nativeId, pos, g, e1, e2, e3, 100, r.diffuse or 0, send) then r.nativeId = nil end
+		g, send = heard(r, g, send)
+		if not pba_native.Update(r.nativeId, pos, g, e1, e2, e3, pitchOf(r), r.diffuse or 0, send) then r.nativeId = nil end
 		return
 	end
 	r.hG, r.hPos = g, pos
@@ -370,6 +399,63 @@ function meta:SetVolume(v)
 	if old and (A.cfg.streams_vol_now or 1) >= 0.5 then pcall(volumeNow, self, r, old) end
 	local ok = pcall(applyVol, self, r)
 	if not ok then return O.SetVolume(self, v) end
+end
+
+--- What the native voice hears now, from the last evaluation (or its running ramp): after a change of the channel's
+-- rate, a pause or a play, without waiting for the next evaluation.
+local function voiceNow(ch, r)
+	local L = A.ListenerPos()
+	if not (r.nativeId and L and r.pos) then return end
+	if r.ramp and r.ramp.to then applyRamp(ch, r, L, RealTime()) else nativeUpdate(ch, r, L) end
+end
+
+--- The owner's SetPlaybackRate reaches the voice at once (pba_streams_rate): BASS's own channel speeds up or
+-- slows down at the call, and the module reads the captured samples at the same speed. The rate is read back
+-- from BASS (it may have clamped the request).
+function meta:SetPlaybackRate(rate)
+	O.SetPlaybackRate(self, rate)
+	local r = ST.chans[self]
+	if not r then return end
+	local ok, got = pcall(O.GetPlaybackRate, self)
+	if ok and type(got) == "number" and got > 0 then r.rate = got
+	elseif type(rate) == "number" and rate > 0 then r.rate = rate end
+	if r.nativeId and enabled() and (A.cfg.streams_rate or 1) >= 0.5 then pcall(voiceNow, self, r) end
+end
+
+--- Pause, Stop and Play of the owner (pba_streams_stop_now). The voice plays what the module captured: the ~120 ms
+-- of its ring plus what BASS's DSP wrote ahead, 0.2-0.3 s after a cut the radio went on talking. A Pause mutes
+-- the voice at once (its gain and sends 0 until Play; the ring empties meanwhile), a Stop ends it (a stopped
+-- channel is destroyed by GMod; if it were not, the next evaluation starts a new voice).
+local function cutNow(ch, r, stop)
+	if not (r.nativeId and enabled() and (A.cfg.streams_stop_now or 1) >= 0.5) then return end
+	if stop then
+		nativeStop(ch, r)
+		dropRamp(r)
+	else
+		r.halted = true
+		voiceNow(ch, r)
+	end
+end
+
+function meta:Pause()
+	local r = ST.chans[self]
+	if r then pcall(cutNow, self, r, false) end
+	return O.Pause(self)
+end
+
+function meta:Stop()
+	local r = ST.chans[self]
+	if r then pcall(cutNow, self, r, true) end
+	return O.Stop(self)
+end
+
+function meta:Play()
+	local r = ST.chans[self]
+	if r and r.halted then
+		r.halted = nil
+		pcall(voiceNow, self, r)
+	end
+	return O.Play(self)
 end
 
 --- Every frame (the scheduler's tick, cl_sched.lua): the streams' ramps.
@@ -468,6 +554,9 @@ function ST.Tick()
 			if r.nativeId and pba_native then pba_native.StopVoice(r.nativeId) end
 			if A.Slicer then A.Slicer.Drop(r) end
 			ST.chans[ch] = nil
+		elseif r.halted and select(2, pcall(O.GetState, ch)) == 1 then
+			r.halted = nil -- playing again (BASS_ACTIVE_PLAYING), whoever restarted it: the voice follows
+			pcall(voiceNow, ch, r)
 		elseif not on then
 			-- a native voice must stop too: the owner keeps setting the BASS volume back, both would play
 			if r.apparent or (r.g or 1) ~= 1 or r.filtered or r.nativeId then release(ch, r) end
