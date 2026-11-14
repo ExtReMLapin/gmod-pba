@@ -16,7 +16,7 @@ local function fresh(k)
 		"physics/cardboard", "physics/rubber", "physics/flesh", "ambient/machines", "ambient/materials", "npc/combine_soldier/vo" }) do
 		for _, f in ipairs(file.Find("sound/" .. dir .. "/*.wav", "GAME") or {}) do
 			local n = string.lower(dir .. "/" .. f)
-			if not used[n] and not NA.HasSound(n) and not NA.SoundPending(n) and not N.failed[n] then
+			if not used[n] and not NA.HasSound(n) and not NA.SoundPending(n) and not N.failed[n] and not (N.loading and N.loading[n]) then
 				local sz = file.Size("sound/" .. n, "GAME") or 0
 				if sz > 0 and sz < 512 * 1024 then used[n] = true out[#out + 1] = n end
 			end
@@ -49,6 +49,31 @@ local function burst(list)
 end
 local res = {}
 local ok, err = pcall(function()
+	-- a render restart after the map load prewarm (the option on by default since d0df28c: a step that turns
+	-- native rendering off and on, pba_native_restart, an HRTF change): the module drops its decoded sounds, and
+	-- the prewarm's finished decodes must not be taken for undecodable files (were refused 30 s: "fail")
+	if cv then
+		RunConsoleCommand("pba_native_predecode", "1")
+		job:wait(function() return (A.cfg.native_predecode or -1) == 1 end, 3)
+		job:wait(function() return N.prewarm == nil or N.prewarm.done end, 40)
+		local had = {}
+		for _, s in ipairs(N.PrewarmList and N.PrewarmList() or {}) do if NA.HasSound(s) then had[#had + 1] = s end end
+		res.restartHad = #had
+		RunConsoleCommand("pba_native_render", "0")
+		job:wait(function() return not N.render end, 5)
+		RunConsoleCommand("pba_native_render", "1")
+		job:wait(function() return N.render end, 5)
+		-- every prewarm sound decoded before the restart, asked for right after it: decoded, or decoding again,
+		-- never refused
+		local refused = {}
+		for _, s in ipairs(had) do
+			local okS, _, w = N.EnsureSound(s)
+			if not okS and w ~= "pending" then refused[#refused + 1] = s end
+		end
+		res.restartRefused = #refused
+		res.restartRefusedFirst = refused[1]
+		job:wait(function() return N.prewarm == nil or N.prewarm.done end, 40)
+	end
 	setOpt("0")
 	local a = fresh(K)
 	res.offMain, res.offWhy = burst(a)
@@ -78,7 +103,7 @@ local ok, err = pcall(function()
 	local nOk = 0
 	for _, w in ipairs(pwhy) do if w == "ok" then nOk = nOk + 1 end end
 	res.prewarmBurstMain, res.prewarmBurstOk = pm, nOk .. "/" .. #first
-	res.pass = res.offMain > 0 and res.onMain == 0 and nd == #b and #b == K and res.prewarm ~= false and res.prewarm.done
+	res.pass = (res.restartRefused or 0) == 0 and (res.restartHad or 1) > 0 and res.offMain > 0 and res.onMain == 0 and nd == #b and #b == K and res.prewarm ~= false and res.prewarm.done
 		and #(ew or {}) > 0 and eReady == #ew and pm == 0 and nOk == #first
 end)
 if cv then RunConsoleCommand("pba_native_predecode", prev) end
