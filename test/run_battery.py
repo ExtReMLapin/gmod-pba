@@ -796,6 +796,8 @@ steps = [
     ("doppler_air_render", lambda: seq(lambda: load("gm_flatgrass"), lambda: py("doppler_air_render.py"))),
     # T11: a radio of another addon behind a closed door (native energy -16 dB vs open), streams_filter high band, streams 0
     ("streams_basic", lambda: py("streams_basic.py")),
+    # T18: probe graph disk cache (written, reloaded identical, stale version / hash / spacing rebuilt), no error while it builds
+    ("probe_cache", lambda: seq(lambda: load("pba_noportal"), lambda: job("client", "probe_cache.lua", 400))),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
