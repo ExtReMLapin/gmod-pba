@@ -1931,6 +1931,105 @@ function PR.RouteHeardPos(p, pulled, S, L, cfg)
 	return p
 end
 
+-- pba_route_alt: the field is one shortest-way tree, so every probe S sees follows the same branch, and of two
+-- ways round a building of near-equal length only the one the tree took was heard. Which one it took depends
+-- on the seed set (the probes the listener sees, a new field every few steps): rp_downtown's street walk heard
+-- the way round the south side (8 dB louder: fewer bends) at one step and only the north one the next, and
+-- back (native_send_continuity, axial walk: the one-shot 7-8.6 dB, its diffuse share 0.08 <-> 0.43). The
+-- second way is the tree's cheapest single sidetrack that does not rejoin the branch before a seed (a
+-- deviation that rejoins it on the way is mostly the same way along a parallel row of probes), and that does
+-- not tighten to a route already found (PR.SameRoute). Found whichever way the
+-- tree took, so both are heard at every step while within ALT_SLACK of the best.
+local ALT_SLACK, ALT_MIN_SLACK, ALT_TRY = 0.25, 64, 4
+local function altBranches(f, n, L)
+	local g = f.g
+	local best = fieldCost(f, n.id, L)
+	if not best or not f.root then return {} end
+	local adj = g.adj or PR.Prepare(g)
+	local first, nid, elen = adj.first, adj.nid, adj.len
+	local nxt, cost = f.nxt, f.cost
+	local onB, B = {}, {}
+	local id = n.id
+	for _ = 1, #g.nodes do
+		if not id or onB[id] then break end
+		B[#B + 1], onB[id] = id, true
+		id = nxt[id]
+	end
+	local slackMax = math.max(best * ALT_SLACK, ALT_MIN_SLACK)
+	local rejoins, cands = {}, {}
+	for x, b in ipairs(B) do
+		local along = cost[n.id] - cost[b]
+		for k = first[b], first[b + 1] - 1 do
+			local m = nid[k]
+			if m ~= nxt[b] and not onB[m] and cost[m] then
+				local fc = fieldCost(f, m, L)
+				local slack = fc and along + elen[k] + fc - best
+				if slack and slack <= slackMax then
+					-- whether m's branch rejoins B (kept per probe walked)
+					local r = rejoins[m]
+					if r == nil then
+						local walk, q = {}, m
+						for _ = 1, #g.nodes do
+							if not q then r = false break end
+							-- (meeting it at a seed, which the listener sees, is arriving from another side)
+							if onB[q] then r = f.root[q] ~= q break end
+							if rejoins[q] ~= nil then r = rejoins[q] break end
+							walk[#walk + 1] = q
+							q = nxt[q]
+						end
+						r = r or false
+						for _, w in ipairs(walk) do rejoins[w] = r end
+					end
+					if not r then cands[#cands + 1] = { slack, x, m } end
+				end
+			end
+		end
+		sliceCheck()
+	end
+	table.sort(cands, function(u, v)
+		if u[1] ~= v[1] then return u[1] < v[1] end
+		if u[2] ~= v[2] then return u[2] < v[2] end
+		return u[3] < v[3]
+	end)
+	local out, roots = {}, {}
+	f.altPulled = f.altPulled or {}
+	for _, c in ipairs(cands) do
+		local x, m = c[2], c[3]
+		local rt = f.root[m]
+		-- one per seed reached and per probe it leaves the branch at (sidetracks to one seed, or from one
+		-- probe, are mostly one way: the cheapest kept)
+		if rt and not roots[rt] and not roots[-B[x]] then
+			roots[rt], roots[-B[x]] = true, true
+			local key = n.id .. ":" .. B[x] .. ":" .. m
+			local pts = f.altPulled[key]
+			if not pts then
+				-- B[1] .. B[x], then m and its branch, the links' via points between (as fieldPathFrom)
+				local seq = {}
+				for y = 1, x do seq[#seq + 1] = B[y] end
+				local q = m
+				for _ = 1, #g.nodes do
+					if not q then break end
+					seq[#seq + 1] = q
+					q = nxt[q]
+				end
+				local raw = {}
+				for y, u in ipairs(seq) do
+					raw[#raw + 1] = g.nodes[u].pos
+					local w = seq[y + 1]
+					local via = w and g.nodes[u].nb[w]
+					if via and via ~= true then raw[#raw + 1] = via end
+				end
+				pts = PR.Pull(raw)
+				f.altPulled[key] = pts
+			end
+			out[#out + 1] = pts
+			if #out >= ALT_TRY then break end
+		end
+	end
+	return out
+end
+PR.AltBranches = altBranches
+
 --- The routes of S to L read from the listener field, one per physical route, best first:
 -- the field's routes from the probes S sees (k + 2 nearest seen, each a route down its own tree branch),
 -- joined to S and L (attach: tightened, kept per S and L and door epoch), costed on their real edges
@@ -2001,6 +2100,32 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 		end
 	end
 	if guardDone then guardDone() end
+	-- pba_route_alt: the way the tree did not take (altBranches), from the best probe S sees
+	if (cfg.route_alt or 0) >= 0.5 then
+		local inners = fieldPaths(f, starts, S, L)
+		local n = inners.nodes[1]
+		if n then
+			-- the first candidate, cheapest first, that is not one of the routes already found (PR.SameRoute:
+			-- a sidetrack along a parallel row of probes tightens to the same way)
+			for _, inner in ipairs(altBranches(f, n, L)) do
+				sliceCheck()
+				local pulled = attach(inner, S, L, nil)
+				if pulled and #pulled >= 3 and not seenRoute(done, pulled) then
+					local same = false
+					for _, q in ipairs(evaluated) do
+						if PR.SameRoute(q, pulled) then same = true break end
+					end
+					if not same then
+						local p = A.Paths.EvalRoute(pulled, cfg)
+						p.probe, p.alt = true, true
+						PR.RouteHeardPos(p, pulled, S, L, cfg)
+						out[#out + 1] = p
+						break
+					end
+				end
+			end
+		end
+	end
 	return PR.DistinctRoutes(S, L, out)
 end
 
