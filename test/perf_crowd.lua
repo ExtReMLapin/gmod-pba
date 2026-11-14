@@ -1,7 +1,8 @@
 -- Load scene for the perf bench (server lua_job): N emitters around the player, all OUT OF SIGHT of
 -- the listener (a trace from the eye hits the world), half looping ambiences, half one-shots repeated
 -- every 0.4-1.2 s. They keep playing after the job returns (timers); job.args.stop removes them.
--- args: { n = 40, radius = 1500, seed = 7, stop = false, loopsOnly = false (every emitter a loop) }
+-- args: { n = 40, radius = 1500, seed = 7, stop = false, loopsOnly = false (every emitter a loop), atomic = false (never yields:
+-- a frame between two tries lets other code draw math.random and shifts the positions that follow) }
 local args = job.args or {}
 local function stop()
 	for _, e in ipairs(PBA_CROWD or {}) do
@@ -66,6 +67,6 @@ while placed < n and tries < n * 200 do
 			end
 		end
 	end
-	if tries % 50 == 0 then job:step() end
+	if tries % 50 == 0 and not args.atomic then job:step() end -- (atomic: no frame between two draws, paths_golden --regen)
 end
 return { placed = placed, loops = loops, oneshots = shots, tries = tries, loopSounds = #LOOPS, shotSounds = #SHOTS }
