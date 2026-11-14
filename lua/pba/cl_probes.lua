@@ -417,8 +417,9 @@ end
 --- When the straight link between two neighbour probes is blocked, look for a passage (doorway,
 -- window) through the face between them: points every 16 units, nearest to the middle first; a point
 -- q links them if it keeps the probes' clearance (moved clear like a probe) and both half-segments
--- are clear. Returns q or nil.
-local function gapPoint(a, b, s)
+-- are clear. Returns q or nil. step: optional, called between two grid points (a background build passes its
+-- budget check there: a search over a wide face is up to ~10 ms of traces, the 1 ms of pba_build_ms_combat).
+local function gapPoint(a, b, s, step)
 	local axis = b - a
 	axis:Normalize()
 	local u = abs(axis.z) > 0.5 and Vector(1, 0, 0) or Vector(0, 0, 1)
@@ -436,6 +437,7 @@ local function gapPoint(a, b, s)
 	end
 	for _, mid in ipairs(centres) do
 		for _, o in ipairs(gapGrid(s)) do
+			if step then step() end
 			local q = mid + u * o[1] + v * o[2]
 			if bit.band(util.PointContents(q), CONTENTS_SOLID) == 0 and clearSeg(a, q) and clearSeg(q, b) then
 				local c = clearance(q)
@@ -514,7 +516,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		if pa > pb then pa, pb = pb, pa end
 		local fk = failed[pa]
 		if fk and fk[pb] then return end
-		local via = clearSeg(n.pos, q) and true or (gap and gapPoint(n.pos, q, gs or s)) or (drop and dropPoint(n.pos, q))
+		local via = clearSeg(n.pos, q) and true or (gap and gapPoint(n.pos, q, gs or s, budgetFn)) or (drop and dropPoint(n.pos, q))
 		if via then
 			local m = node(i, j, k)
 			if m then n.nb[m.id], m.nb[n.id] = via, via end
@@ -522,6 +524,9 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 			if not fk then fk = {} failed[pa] = fk end
 			fk[pb] = true
 		end
+		-- one link attempt (up to a few ms of traces) is the unit of work: the budget is checked after each, not
+		-- only once per node (a node tries 20+ links: the 1 ms of pba_build_ms_combat was overshot by up to 14 ms)
+		if budgetFn then budgetFn(#nodes) end
 	end
 	-- seeds in a fixed order (same graph whatever order the map lists them in), each on the storey of its
 	-- column nearest to it
@@ -632,7 +637,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 					end
 				end
 			end
-			if budgetFn and x % 8 == 0 then budgetFn(#nodes) end -- (64: up to ~20 ms between two checks)
+			if budgetFn then budgetFn(#nodes) end -- (each node: its joined() searches and links are ms of work)
 		end
 	end
 	return { spacing = s, nodes = nodes, index = index, truncated = truncated, skip = skipLinks }
