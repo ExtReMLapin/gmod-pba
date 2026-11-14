@@ -1225,6 +1225,8 @@ local PROP_MIN_SIZE = 64 -- units (largest box dimension); the count is capped b
 -- later one was skipped for good: on an RP map with 300 props, the container next to the player could
 -- be left out for the session while crates 5000 u away reflected.
 local PROP_RANK_S = 2
+-- pba_native_props_calm: seconds between two scene commits made for props alone (doors commit at once)
+local PROP_COMMIT_S = 1
 -- a prop in the scene keeps its place against one only slightly more relevant (no swapping back and
 -- forth of two props at the same distance; each swap re-commits the scene)
 local PROP_KEEP = 1.5
@@ -1315,7 +1317,14 @@ function N.SyncDoors()
 	local wantProps = (A.cfg.native_props or 0) >= 0.5
 	local cap = A.cfg.native_props_max or 64
 	local now = RealTime()
-	local rerank = wantProps and now >= (N.propRankT or 0)
+	-- pba_native_props_calm: every change of the props (add, move, remove) is held during a fight and for
+	-- PROP_COMMIT_S after the last commit made for them. A commit rebuilds the whole world scene (about 18 ms
+	-- on d1_canals_01, measured), and an explosion's flying barrels and debris asked for one every 0.1 s.
+	-- The props are sent where they came to rest, once the fight is over. Doors are never held.
+	local hold = wantProps and (A.cfg.native_props_calm or 0) >= 0.5
+		and (now < (N.propCommitT or 0) or (A.Sched and A.Sched.InCombat and A.Sched.InCombat()))
+	local propSent = false
+	local rerank = wantProps and not hold and now >= (N.propRankT or 0)
 	if rerank then N.propRankT = now + PROP_RANK_S end
 	local cands = rerank and {} or nil
 	-- a door, mover or large prop that moved near the listener changes paths and occlusion: the
@@ -1325,6 +1334,10 @@ function N.SyncDoors()
 	local function track(e, id, d)
 		local p, a = e:GetPos(), e:GetAngles()
 		if not d.p or d.p ~= p or d.a ~= a then
+			if d.prop then
+				if hold then return end -- sent once the fight is over, where it came to rest
+				propSent = true
+			end
 			pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
 			if d.p and near(p) then moved = true end
 			d.p, d.a = p, a
@@ -1337,7 +1350,8 @@ function N.SyncDoors()
 		local isMover = MOVER_CLASSES[cls] or bk == "mover"
 		local isDoor, isProp = DOOR_CLASSES[cls] or bk == "door" or isMover, wantProps and PROP_CLASSES[cls]
 		local id = e:EntIndex()
-		if (isDoor or isProp) and id > 0 and not N.dynSkip[e] then
+		if (isDoor or isProp) and id > 0 and not N.dynSkip[e] and not (hold and not isDoor and N.doors[id]
+			and N.doors[id].ent ~= e) then -- held: an index reused by a new prop waits for the end of the hold
 			local d = N.doors[id]
 			if d and d.ent ~= e then -- entity index reused by another entity: rebuild
 				if d.prop then nProps = nProps - 1 end
@@ -1368,11 +1382,12 @@ function N.SyncDoors()
 			else
 				if d then
 					seen[id] = true
-				elseif nProps < cap then
+				elseif nProps < cap and not hold then
 					-- room left under the cap: in at once (the next ranking may swap it out)
 					d = addProp(e, id, info)
 					nProps = nProps + 1
 					seen[id] = true
+					propSent = true
 				end
 				if cands then cands[#cands + 1] = { e = e, id = id, info = info, s = propScore(e, info, L) * (d and PROP_KEEP or 1) } end
 			end
@@ -1381,8 +1396,9 @@ function N.SyncDoors()
 	end
 	-- unseen (gone, no longer a candidate, props switched off): out of the scene
 	for id, d in pairs(N.doors) do
-		if not seen[id] or (d.prop and not wantProps) then
+		if (not seen[id] and not (hold and d.prop)) or (d.prop and not wantProps) then
 			if d.prop and near(d.p) then moved = true end
+			if d.prop then propSent = true end
 			removeDyn(id)
 		end
 	end
@@ -1396,6 +1412,7 @@ function N.SyncDoors()
 			if d and d.prop then
 				if near(d.p) then moved = true end
 				removeDyn(c.id)
+				propSent = true
 			end
 		end
 		for i = 1, cap do
@@ -1404,9 +1421,11 @@ function N.SyncDoors()
 				local d = addProp(c.e, c.id, c.info)
 				track(c.e, c.id, d)
 				if near(d.p) then moved = true end
+				propSent = true
 			end
 		end
 	end
+	if propSent and (A.cfg.native_props_calm or 0) >= 0.5 then N.propCommitT = now + PROP_COMMIT_S end
 	-- the module only commits when something changed (and retries itself after a running bake)
 	pba_native.DynamicCommit()
 	if moved and A.Paths then A.Paths.InvalidateCache() end

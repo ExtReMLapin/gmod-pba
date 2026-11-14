@@ -5,6 +5,9 @@ native modes), S8 (campaign map load + changelevel, probe / native caches moved 
 Usage: MCP_INSTANCE=<id> python -I -u perf_suite.py <mcp.py> [--only=S0,S1,S2,S8] [--s0maps=a,b] [--variants=vue,mur]
        [--modes=off,engine,native,native_noecho,native_echo] [--repeat=5] [--cold] [--diag] [--update-baseline]
        [--knob=pba_x=v ...]  (repeatable: a setting applied after the defaults, before every mode; A/B of an option)
+       [--overlay=lua/pba/x.lua,...]  (client files of THIS checkout run over the game's after each map load: a branch's
+                                       code A/B'd without touching the installed addon)
+       [--profile[=N]]  (N more bursts per mode with test/perf/profile.lua: per-function cost in the worst frames)
 
 ONE game instance on the machine (the others closed): parallel games distort every number.
 Launch it with instances_launch preset normal (640x360): the suite sets fps_max 0 / fps_max_nofocus 0 /
@@ -23,6 +26,10 @@ through lua_exec would run interpreted (measured 2026-11-13: same loop 16.7 ms f
 lua_exec). lua_exec only calls functions; nothing is sent to the game during a window.
 --diag: one more pass per scenario in native mode with test/perf/diag.lua (cache hits, keys vs cells,
 synchronous computations per frame); never timed. Needs pba_allow_debug 1 (set by the suite).
+--profile[=N] (default 3): after the timed bursts, N bursts per mode with test/perf/profile.lua (every pba
+function called through its table, pba_native.*, traces and pba hooks wrapped, JIT on): per frame, exclusive
+and inclusive ms and calls per function; prints the worst frames' rows and the per-function worst frame,
+writes test/perf/last/<scenario>_<variant>_profile.json. Never timed (wrappers cost ~0.2-0.5 us per call).
 
 A burst is INVALID (not compared) when the system was not active: no sound seen by pba (processed +
 played clear + native direct) in a pba mode, or the reset failed (voices left), or the scene did not
@@ -65,6 +72,8 @@ MODES = (MODES_OPT or "off,engine,native").split(",")
 REPEAT = int(opt("repeat", "5"))
 COLD = "--cold" in OPTS
 DIAG = "--diag" in OPTS
+OVERLAY = [x for x in opt("overlay", "").split(",") if x]
+PROFILE = next((int(a.split("=", 1)[1]) if "=" in a else 3 for a in OPTS if a.startswith("--profile")), 0)
 UPDATE = "--update-baseline" in OPTS
 PRE, POST, SETTLE = 1.0, 4.5, 2.0
 # scenario -> (scene file, {variant: map}, default variants, default modes)
@@ -156,10 +165,37 @@ def fresh_map(m):
     time.sleep(3)
     wait("client", "pba.Probes == nil or pba.Probes.current ~= nil", 180)
     wait("client", "not pba.Native or not pba.Native.render or pba.Native.ready", 60)
+    overlay()
     uncap()
     defaults()
     load("client", "collector.lua")
     load("server", "collector_sv.lua")
+
+
+def overlay():
+    """--overlay: each file of this checkout (path from the repo root) compiled in the client realm from a timer
+    (JIT on, as the bench files), over the installed addon's version; the pba files are written to be run again."""
+    root = os.path.dirname(HERE)
+    for rel in OVERLAY:
+        name = "ov_" + rel.replace("/", "_").replace("\\", "_")
+        os.makedirs(LUA_TMP, exist_ok=True)
+        shutil.copyfile(os.path.join(root, rel), os.path.join(LUA_TMP, name))
+        lua("client", "PBA_PERF_LOAD = nil timer.Simple(0, function() "
+                      f"local s = file.Read('lua/mcpagent_tmp/pba_perf/{name}', 'GAME') "
+                      f"local f = CompileString(s or '', '{rel}', false) "
+                      "if not isfunction(f) then PBA_PERF_LOAD = { ok = false, err = tostring(f) } return end "
+                      "local ok, r = pcall(f) PBA_PERF_LOAD = { ok = ok, err = not ok and tostring(r) or nil } end) return true")
+        for _ in range(50):
+            v = lua("client", "return PBA_PERF_LOAD")
+            if v:
+                if not v.get("ok"):
+                    raise RuntimeError(f"overlay {rel}: {v.get('err')}")
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError(f"overlay {rel}: not loaded")
+    if OVERLAY:
+        print(f"overlay: {' '.join(OVERLAY)}", flush=True)
 
 
 def uncap():
@@ -208,7 +244,7 @@ def reset():
     return ok
 
 
-def burst(scene_file, variant, mode, seed, invalidate=False):
+def burst(scene_file, variant, mode, seed, invalidate=False, profile=False):
     set_mode(mode)
     load("server", "scenes", scene_file)
     setup = lua("server", f"return PBA_SCENE.Setup({{ variant = '{variant}', seed = {seed} }})")
@@ -217,7 +253,7 @@ def burst(scene_file, variant, mode, seed, invalidate=False):
         lua("client", "pba.Paths.InvalidateCache() return true")
     time.sleep(SETTLE)
     lua("server", f"PBA_PERF_SV.Arm({PRE + POST}) return PBA_SCENE.Fire({PRE})")
-    lua("client", f"PBA_PERF.Arm({PRE}, {POST}) return true")
+    lua("client", f"PBA_PERF.Arm({PRE}, {POST}) " + (f"PBA_PROF.Arm({PRE}, {POST}) " if profile else "") + "return true")
     time.sleep(PRE + POST + 0.5)
     res = None
     for _ in range(20):
@@ -227,6 +263,12 @@ def burst(scene_file, variant, mode, seed, invalidate=False):
         time.sleep(0.5)
     res = res or {}
     res["server"] = lua("server", "return PBA_PERF_SV.Result()")
+    if profile:
+        raw = lua("client", "return PBA_PROF.Result(5, 15)")
+        try:
+            res["profile"] = json.loads(raw) if isinstance(raw, str) else raw
+        except ValueError:
+            res["profile"] = {"raw": str(raw)[:300]}
     res["setup"], res["clean"], res["mode"] = setup, clean, mode
     why = []
     if not clean:
@@ -361,6 +403,26 @@ def run_s8():
         json.dump(out, f, indent=1)
 
 
+def print_profile(sc, variant, m, runs):
+    """Per run: the worst frame (frame time) and the worst pba frame, their top rows; then per function the
+    median over runs of its worst frame (exclusive ms) and calls in it."""
+    agg = {}
+    for i, r in enumerate(runs):
+        p = r.get("profile") or {}
+        for lab, key in (("worst frame", "worst"), ("worst pba frame", "worstPba")):
+            fr = (p.get(key) or [{}])[0]
+            rows = ", ".join(f"{x['f']} {x['x']}/{x['t']} ms x{x['n']}" for x in (fr.get("rows") or [])[:10])
+            print(f"  run {i + 1} {lab}: dt {fr.get('dt')} ms, pba {fr.get('pba')} ms, t+{fr.get('rel')} s: {rows}", flush=True)
+        for x in p.get("totals") or []:
+            agg.setdefault(x["f"], []).append((x["maxX"], x["maxT"], x["x"], x["n"]))
+    rows = sorted(((statistics.median(v[0] for v in vs), statistics.median(v[1] for v in vs),
+                    statistics.median(v[2] for v in vs), statistics.median(v[3] for v in vs), f) for f, vs in agg.items()),
+                  reverse=True)
+    print(f"{sc} {variant} {m} profile, per function (median over {len(runs)} runs): worst frame excl / incl ms, window excl ms, calls", flush=True)
+    for mx, mt, tx, n, f in rows[:20]:
+        print(f"  {f:45} {mx:8.3f} {mt:8.3f} {tx:9.3f} {n:7.0f}", flush=True)
+
+
 invalid_any = False
 os.makedirs(os.path.join(PERF, "last"), exist_ok=True)
 os.makedirs(os.path.join(PERF, "baselines"), exist_ok=True)
@@ -413,6 +475,20 @@ for sc in [x for x in ONLY if x in SCENES]:
             report["diag"] = {"load": d, "result": r.get("diag")}
             lua("client", "if PBA_PERF.diagOff then PBA_PERF.diagOff() end return true")
             print(f"{sc} {variant} diag: {json.dumps(r.get('diag'))}", flush=True)
+        if PROFILE:
+            prof = {}
+            for m in MODES:
+                set_mode(m)
+                info = load("client", "profile.lua")
+                print(f"{sc} {variant} {m} profile: {json.dumps(info)}", flush=True)
+                try:
+                    prof[m] = [burst(scene_file, variant, m, 1, profile=True) for _ in range(PROFILE)]
+                finally:
+                    lua("client", "if PBA_PROF and PBA_PROF.Unload then PBA_PROF.Unload() end return true")
+                print_profile(sc, variant, m, prof[m])
+            with open(os.path.join(PERF, "last", f"{sc}_{variant}_profile.json"), "w", encoding="utf-8") as f:
+                json.dump({m: [{"max": r.get("max"), "pba_max": r.get("pba_max"), "invalid": r.get("invalid"),
+                                "profile": r.get("profile")} for r in rs] for m, rs in prof.items()}, f, indent=1)
         with open(os.path.join(PERF, "last", f"{sc}_{variant}.json"), "w", encoding="utf-8") as f:
             json.dump(report, f, indent=1)
 print("##progress done=ok", flush=True)
