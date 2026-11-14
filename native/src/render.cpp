@@ -253,6 +253,7 @@ size_t g_capMaxFrames = 0; // 0 = unlimited; else the output stops growing there
 std::vector<float> g_capMix, g_capRoom, g_capSrc, g_capOut; // under g_mtx (the audio thread holds it while rendering)
 // mix quality (SetMixQuality): the output stage (limiter / legacy soft clip from 0.8 / hard clip); the decoder's
 // windowed-sinc resampler (true) or miniaudio's linear one (false). Read at the use.
+std::atomic<bool> g_limiterPre{false}; // the output stage works before the master volume (SetMixQuality premaster)
 std::atomic<int> g_limiterMode{1}; // 0 legacy soft clip, 1 limiter, 2 hard clip at full scale (what the engine's int16 mix does)
 std::atomic<bool> g_hqResample{true};
 float g_limFastMs = 6.0f, g_limSlowMs = 50.0f, g_limSlowK = 3.0f; // limiter release tuning (see Limiter)
@@ -875,13 +876,22 @@ void RenderBlock() {
 		g_xc[lag + kMaxLag] += acc;
 	}
 	const int mode = g_limiterMode.load();
+	// the output stage (limiter / clip) before the master volume, as the engine does (its mix is clipped at full scale
+	// and the volume applies after: at a low volume its loud sounds clip all the same), or after it (the legacy order:
+	// at a low master volume the stage never acted)
+	const bool pre = g_limiterPre.load();
+	const float stageIn = pre ? 1.0f : g_master;
+	const float stageOut = pre ? g_master : 1.0f;
 	if (mode == 1) {
-		for (int i = 0; i < kBlock; ++i)
-			g_limiter.Process(g_mix[i * 2] * g_master, g_mix[i * 2 + 1] * g_master, g_mix[i * 2], g_mix[i * 2 + 1]);
+		for (int i = 0; i < kBlock; ++i) {
+			g_limiter.Process(g_mix[i * 2] * stageIn, g_mix[i * 2 + 1] * stageIn, g_mix[i * 2], g_mix[i * 2 + 1]);
+			g_mix[i * 2] *= stageOut;
+			g_mix[i * 2 + 1] *= stageOut;
+		}
 	} else if (mode == 2) {
-		for (auto& s : g_mix) s = std::isfinite(s) ? std::clamp(s * g_master, -1.0f, 1.0f) : 0.0f;
+		for (auto& s : g_mix) s = std::isfinite(s) ? std::clamp(s * stageIn, -1.0f, 1.0f) * stageOut : 0.0f;
 	} else {
-		for (auto& s : g_mix) s = SoftClip(s * g_master);
+		for (auto& s : g_mix) s = SoftClip(s * stageIn) * stageOut;
 	}
 	if (g_capOn && (g_capMaxFrames == 0 || g_capOut.size() < g_capMaxFrames * 2))
 		g_capOut.insert(g_capOut.end(), g_mix.begin(), g_mix.end());
@@ -1496,8 +1506,9 @@ std::string CaptureFinish(const std::string& dir, const std::string& name, int b
 
 float OutputClip(float x) { return SoftClip(x); }
 
-void SetMixQuality(int limiterMode, bool hqResample) {
+void SetMixQuality(int limiterMode, bool hqResample, bool premaster) {
 	std::lock_guard<std::mutex> lk(g_mtx);
+	g_limiterPre = premaster;
 	limiterMode = std::clamp(limiterMode, 0, 2);
 	if (limiterMode != g_limiterMode.load()) g_limiter.Reset(); // (no stale frames of an earlier run in the delay line)
 	g_limiterMode = limiterMode;

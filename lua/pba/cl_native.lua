@@ -554,7 +554,7 @@ function N.ApplySettings()
 	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.cfg.native_src_near or 0.1) end
 	-- output stage and decode resampling (newer modules; an older module keeps its soft clip and linear resampling)
 	if pba_native.SetMixQuality then
-		pba_native.SetMixQuality(math.floor((A.cfg.native_limiter or 1) + 0.5), (A.cfg.native_resample_hq or 1) >= 0.5)
+		pba_native.SetMixQuality(math.floor((A.cfg.native_limiter or 1) + 0.5), (A.cfg.native_resample_hq or 1) >= 0.5, (A.cfg.native_limit_pre or 1) >= 0.5)
 	end
 end
 

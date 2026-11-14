@@ -19,7 +19,8 @@ the module capture writes garrysmod/data/pba/<name>.wav (copied to --out).
 Usage:
   python -I -X utf8 test/own_shot_capture.py <mcp.py> [--out=<dir>] [--gmod=<garrysmod dir>] [--map=gm_construct]
          [--shots=5] [--spacing=0.5] [--only=engine_own0,module_own1] [--cond=<name>:<engine|module>:<realm:cvar=value,...>]...
-         (a --cond adds a condition: e.g. --cond=module_noreverb:module:cl:pba_native_reverb=0
+         (--pos=x,y,z and --ang=pitch,yaw,0 place the player (default: the spawn, looking at the sky);
+         a --cond adds a condition: e.g. --cond=module_noreverb:module:cl:pba_native_reverb=0
           or --cond=module_nodirect:module:cl:pba_native_own_direct=0,cl:pba_native_limiter=2)
   python -I -X utf8 test/own_shot_capture.py --analyze [--shots=5] <label>=<file.wav> [<label>=<file.wav> ...]
          (offline: the first file is the reference the others are compared with)
@@ -58,6 +59,7 @@ THIRD_BANDS = [(THIRDS[i], THIRDS[i + 1]) for i in range(len(THIRDS) - 1)]
 WINDOW = 0.45   # s analysed from each onset (the shots are 0.5 s apart)
 PRE = 0.003     # s kept before the onset
 ATTACK = 0.020  # s
+SPACING = 0.5   # s between the shots (--spacing)
 
 
 # ------------------------------------------------------------------ wav reading / writing
@@ -228,9 +230,11 @@ def find_onsets(w, shots, refractory=0.35):
     if mx <= 0:
         return []
     thr = 0.15 * mx
-    out, i, skip = [], 0, int(refractory * 1000)
+    cands, i, skip = [], 0, int(refractory * 1000)
     while i < n:
-        if env[i] > thr:
+        # a shot RISES out of what came before it (the tail of the previous shot, which a louder or limited rendering keeps
+        # above 15 % of the peak, is not a shot): the 8 ms before must stay under 35 % of this window
+        if env[i] > thr and (i < 8 or max(env[i - 8:i]) < 0.35 * env[i]):
             a = max(0, i * hop - int(0.01 * rate))
             b = min(len(l), i * hop + int(0.05 * rate))
             pk = max(_peak(_seg(l, a, b)), _peak(_seg(r, a, b)))
@@ -238,10 +242,23 @@ def find_onsets(w, shots, refractory=0.35):
             j = a
             while j < b and abs(l[j]) < lim and abs(r[j]) < lim:
                 j += 1
-            out.append(j)
+            cands.append(j)
             i += skip
         else:
             i += 1
+    # the shots are SPACING apart: from the first onset, each next one is the candidate nearest to the previous + SPACING
+    # (within 0.15 s); a stray event (an impact, an echo) in between is not counted as a shot
+    out = []
+    if cands:
+        out.append(cands[0])
+        for _ in range(shots - 1):
+            want = out[-1] + SPACING * rate
+            near = [c for c in cands if c > out[-1] + 0.2 * rate and abs(c - want) < 0.15 * rate]
+            if not near:
+                break
+            out.append(min(near, key=lambda c: abs(c - want)))
+        # (more candidates than shots after the last one: reported as found, the caller compares with the expected count)
+        out += [c for c in cands if c > out[-1] + 0.2 * rate]
     return out
 
 
@@ -498,8 +515,8 @@ BASELINE = [("sv", "pba_enable", "1"), ("cl", "pba_cl_enable", "1"), ("cl", "pba
 
 def parse_cond(spec):
     name, rec, rest = spec.split(":", 2)
-    if rec not in ("engine", "module"):
-        raise SystemExit(f"--cond {name}: recording must be engine or module")
+    if rec not in ("engine", "module", "both"):
+        raise SystemExit(f"--cond {name}: recording must be engine, module or both (both: the module capture AND startmovie, to hear whether the engine still plays a copy)")
     cv = []
     for part in rest.split(","):
         realm, _, nv = part.partition(":")
@@ -518,6 +535,7 @@ def run_game(mcp, opts):
     out = opts.get("out") or os.path.join(os.environ.get("TEMP", "."), "pba_own_shots_" + time.strftime("%Y%m%d_%H%M%S"))
     os.makedirs(out, exist_ok=True)
     shots, spacing = int(opts.get("shots", 5)), float(opts.get("spacing", 0.5))
+    globals()["SPACING"] = spacing
     conds = list(DEFAULT_CONDS)
     for c in opts.get("cond", []):
         conds.append(parse_cond(c))
@@ -527,7 +545,7 @@ def run_game(mcp, opts):
     T.load(opts.get("map", "gm_construct"), mp=1)
     # the module must be the one with the capture, or phase 2 is pointless
     has = T.lua("client", "return pba_native ~= nil and pba_native.CaptureStart ~= nil")
-    if has is not True and any(c[1] == "module" for c in conds):
+    if has is not True and any(c[1] in ("module", "both") for c in conds):
         print("FAIL pba_native.CaptureStart missing: install the module built from feat/capture in garrysmod/lua/bin and restart the game "
               "(see the build commands); not touching the game from here")
         return 1
@@ -535,7 +553,8 @@ def run_game(mcp, opts):
           f"conditions: {[c[0] for c in conds]}, recordings in {out}", flush=True)
     # the player: weapon_ar2, ammo, godmode, still, looking at the sky (no impact sound)
     T.lua("server", "local p = player.GetHumans()[1] p:GodEnable() p:StripWeapons() p:Give('weapon_ar2') p:SetAmmo(900, 'AR2') p:SelectWeapon('weapon_ar2') "
-                    "p:SetEyeAngles(Angle(-80, 0, 0)) p:SetVelocity(-p:GetVelocity()) return true")
+                    "%s p:SetEyeAngles(Angle(%s)) p:SetVelocity(-p:GetVelocity()) return true" % (
+                        ("p:SetPos(Vector(%s))" % opts["pos"]) if opts.get("pos") else "", opts.get("ang", "-80, 0, 0")))
     time.sleep(2.5)
     lua_src = open(os.path.join(HERE, "own_shot_capture.lua"), encoding="utf-8").read()
     files, report_rows, failures = [], {}, []
@@ -549,18 +568,18 @@ def run_game(mcp, opts):
         expect = {n: v for realm, n, v in BASELINE + cvars if n.startswith("pba_native_own") or n in ("pba_enable", "pba_cl_enable")}
         fname = f"osc_{name}"
         tmp_prefix = os.path.join(gmod, fname)
-        if rec == "engine":
+        if rec in ("engine", "both"):
             for old in glob.glob(tmp_prefix + "*.wav"):
                 os.remove(old)
             T.con("client", f"startmovie {fname} wav")
             time.sleep(0.5)
         prelude = "OSC = %s\n" % ("{ name = %r, mode = %r, shots = %d, spacing = %g, expect = { %s } }" % (
-            fname, rec, shots, spacing, ", ".join(f"{k} = {v}" for k, v in expect.items())))
+            fname, "module" if rec == "both" else rec, shots, spacing, ", ".join(f"{k} = {v}" for k, v in expect.items())))
         raw = None
         try:
             raw = T.job("client", prelude + lua_src, timeout_s=int(shots * spacing * 40 + 90))
         finally:
-            if rec == "engine":
+            if rec in ("engine", "both"):
                 T.con("client", "endmovie")
         time.sleep(1.0)
         try:
@@ -572,15 +591,17 @@ def run_game(mcp, opts):
             failures.append(f"{name}: {info.get('err')}")
             print(f"   FAIL {info.get('err')}", flush=True)
             continue
-        if rec == "engine":
+        if rec in ("engine", "both"):
             found = sorted(glob.glob(tmp_prefix + "*.wav"), key=os.path.getmtime)
             if not found:
                 failures.append(f"{name}: no {fname}*.wav written in {gmod} (startmovie ... wav refused? check the console)")
                 print("   FAIL " + failures[-1], flush=True)
                 continue
-            dst = os.path.join(out, name + ".wav")
+            dst = os.path.join(out, name + (".wav" if rec == "engine" else "_engine.wav"))
             shutil.move(found[-1], dst)
-        else:
+            if rec == "both":
+                files.append(f"{name}_engine={dst}")
+        if rec != "engine":
             src = info["capture"]["path"]
             dst = os.path.join(out, name + ".wav")
             shutil.copyfile(src, dst)

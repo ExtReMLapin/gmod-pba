@@ -310,6 +310,12 @@ function M.Play(g, ...)
 	return id
 end
 
+--- The level of the listener's own sounds against the engine's mix rule (pba_native_own_gain): the engine plays them
+-- about twice as loud as the group's value says. 1 = the mix value alone.
+function M.OwnGain()
+	return A.cfg.native_own_gain or 2
+end
+
 function M.Wrap()
 	if not pba_native or pba_native.pbaMixWrapped then return end
 	pba_native.pbaMixWrapped = true
@@ -317,13 +323,14 @@ function M.Wrap()
 	pba_native.Play = function(n, pos, gain, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable, own)
 		local g = M.pending
 		M.pending = nil
-		if g and gain then
-			local k = M.Value(g)
+		-- the group's mix value, and for the listener's own sound the engine's extra level (pba_native_own_gain)
+		local k = (g and M.Value(g) or 1) * (own and M.OwnGain() or 1)
+		if gain and k ~= 1 then
 			gain = gain * k
 			if roomSend then roomSend = roomSend * k end
 		end
 		local id = play(n, pos, gain, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable, own)
-		if g and id and id > 0 then M.voice[id] = { g = g, t = RealTime() } end
+		if (g or own) and id and id > 0 then M.voice[id] = { g = g, own = own and true or nil, t = RealTime() } end
 		local lp = M.lastPlay -- (what the module was given: tests)
 		lp.id, lp.gain = id, gain
 		return id
@@ -331,7 +338,7 @@ function M.Wrap()
 	pba_native.Update = function(id, pos, gain, l, m, h, pitch, diffuse, send, sh)
 		local v = M.voice[id]
 		if v then
-			local k = M.Value(v.g)
+			local k = M.Value(v.g) * (v.own and M.OwnGain() or 1)
 			v.t = RealTime()
 			if gain then gain = gain * k end
 			if send then send = send * k end
@@ -343,7 +350,7 @@ function M.Wrap()
 	if reflect then
 		pba_native.SourceReflect = function(id, S, send, ...)
 			local v = M.voice[id]
-			if v and send then send = send * M.Value(v.g) end
+			if v and send then send = send * M.Value(v.g) * (v.own and M.OwnGain() or 1) end
 			return reflect(id, S, send, ...)
 		end
 	end
