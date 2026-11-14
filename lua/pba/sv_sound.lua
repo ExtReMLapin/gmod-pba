@@ -295,12 +295,13 @@ local function prepare(snd)
 	local predicted = GetPredictionPlayer()
 	snd.predicted = predicted
 	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
-	-- client never sees them (no echoes on his own gunfire). They are his own: clear, as on the client
+	-- client never sees them (no echoes on his own gunfire)
 	local sp = game.SinglePlayer()
-	snd.sp = sp
-	-- multiplayer: the sounds the server plays on a player outside his command (pain, fall damage, his
-	-- suit) are his own too; those of his command go to nobody (his client predicts them, below)
-	snd.ownMP = not sp and (A.cfg.mp_own or 1) >= 0.5
+	-- one rule for "the player's own sound", singleplayer or multiplayer (mp_own): everything the server plays
+	-- on a player, in or outside his command (his weapon, pain, fall damage, his suit's HEV lines), is his
+	-- own: the engine plays it on him, clear. Those of his command in multiplayer go to nobody (his client
+	-- predicts them, below)
+	snd.own = (A.cfg.mp_own or 1) >= 0.5
 	-- the player whose command made the sound, when his client predicts it (nobody otherwise)
 	snd.skip = not sp and predictedBy(data.Entity, predicted) and predicted or nil
 	snd.step = not sp and stepper(data)
@@ -335,7 +336,7 @@ function S.Audience(snd, ply, scale)
 	local e = data.Entity
 	-- his own sound: the engine plays it on him, untouched, unless his module plays it like every other sound
 	-- (pba_native_own: the relay below, as for a native-all player's clear sound)
-	if (snd.sp and ply == snd.predicted or snd.ownMP and ply ~= snd.skip) and e == ply and not wantsOwn(ply) then return "clear" end
+	if snd.own and ply ~= snd.skip and e == ply and not wantsOwn(ply) then return "clear" end
 	local step = snd.step
 	if ply == snd.skip or (step and ply ~= step and ply:TestPVS(step)) then return nil end
 	local eye = A.PlayerEar(ply)
