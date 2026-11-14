@@ -285,6 +285,7 @@ function Build.server(panel)
 
 	panel:Help("Limits (what goes beyond is left to the engine):")
 	sld(panel, "Relayed sounds per second per player", "relay_rate")
+	sld(panel, "... of one same sound", "relay_name_rate")
 	sld(panel, "Max loops followed", "loops_max")
 	chk(panel, "Silent loops do not count", "loops_cap_audible")
 	chk(panel, "NPC loops stop at its death", "loops_npc_death")
