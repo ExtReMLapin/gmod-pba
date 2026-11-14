@@ -2,7 +2,9 @@
 -- the line, whichever path took it. First sign of the line (a subtitle, a mirror, or a copy registered on a speaker)
 -- stamps its start; then: subtitles shown, mouth copies (cl_render), the loudness of the copy (volume of the first
 -- audible emission), the planned end of the line (mirror endT or copy tEnd, from the start), and 13 s later whether
--- anything of it is left. Returns { caps, mouth, vol, nv (audible engine emissions), endRel, left, mirror, copies }.
+-- anything of it is left. Returns { caps, mouth, vol, nv (EntityEmitSound calls, not copies: a CSoundPatch start
+-- reaches the hook twice, its start then its envelope's SND_CHANGE_VOL | SND_CHANGE_PITCH update; the driver counts
+-- the copies in snd_dumpclientsounds), endRel, left, mirror, copies }.
 -- Run with pba_native_render 0: the audible copy is then an engine emission whose volume the hook sees.
 local A = pba
 local LP = A.Loops

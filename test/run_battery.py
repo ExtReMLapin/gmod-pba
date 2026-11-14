@@ -314,18 +314,40 @@ def long_sound_boundary():
     native_on(False)
     RED = os.environ.get("PBA_RED", "").split(",")  # red proof: captions / mouth / end switch a long-path feature off
     fails = []
+    def chans():
+        """Audible channels of the line in the engine's own list (snd_dumpclientsounds), not EntityEmitSound calls:
+        a CSoundPatch start reaches that hook twice (its start, then its envelope's volume / pitch update, flags
+        SND_CHANGE_VOL | SND_CHANGE_PITCH, no Lua caller) for one channel."""
+        if "double" in RED:  # red proof: a second copy of the line, what a double emission would leave
+            lua("client", "local e = LocalPlayer() if IsValid(e) then e:EmitSound('combined/trainyard/trainyard_ba_getoutfast_cc.wav', 75, 100, 0.1, CHAN_STATIC) end return true")
+            time.sleep(0.3)
+        r = call("console_exec", {"realm": "client", "cmd": "snd_dumpclientsounds"})
+        n = 0
+        for o in r.get("output", []):
+            m = re.search(r"vol\((\d+)\).*getoutfast", o.get("text", ""))
+            if m and int(m.group(1)) > 0:
+                n += 1
+        return n
     def run(maxd, long_sounds=1):
         call("console_exec", {"realm": "server", "cmd": f"pba_long_sounds {long_sounds}"})
         out = {}
         def cl():
             out["cl"] = job("client", "long_boundary_client.lua", 60)
+        def dump():
+            time.sleep(2.5 + 2.0)  # the server half emits 2.5 s after its start: 2 s into the line
+            out["chans"] = chans()
         th = threading.Thread(target=cl)
         th.start()
         time.sleep(0.5)
+        td = threading.Thread(target=dump)
+        td.start()
         code = f"T15_MAXD = {maxd}" + chr(10) + open(os.path.join(TEST, "long_boundary_server.lua"), encoding="utf-8").read()
         r = call("lua_job", {"realm": "server", "code": code, "timeout_s": 60}, timeout=120)
         out["sv"] = r.get("values", [r])[0]
         th.join()
+        td.join()
+        if isinstance(out["cl"], dict):
+            out["cl"]["chans"] = out.get("chans")
         return out["sv"], out["cl"]
     res = {}
     try:
@@ -349,6 +371,8 @@ def long_sound_boundary():
             if not cl.get("started"):
                 fails.append(f"{tag}: pba produced nothing on the client")
                 continue
+            if cl.get("chans") != 1:
+                fails.append(f"{tag}: {cl.get('chans')} audible channels of the line in the engine (want 1)")
             if cl.get("caps") != 1:
                 fails.append(f"{tag}: {cl.get('caps')} subtitles (want 1)")
             if mouth != 1:
