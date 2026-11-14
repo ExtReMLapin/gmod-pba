@@ -7,6 +7,8 @@ local A, N = pba, pba.Native
 local res = {}
 -- 1. OGG (test file generated into garrysmod/sound/pba_test/, not shipped)
 local ok, name = N.EnsureSound("pba_test/tone.ogg")
+-- (pba_native_predecode, on by default: the first call only starts a worker decode, "pending")
+job:wait(function() ok, name = N.EnsureSound("pba_test/tone.ogg") return ok end, 10)
 res.ogg = { ok = ok, name = name }
 -- 2. find a water column: sample a coarse grid around the map for a point inside water
 local wet

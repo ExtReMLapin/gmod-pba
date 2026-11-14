@@ -8,7 +8,9 @@ local args = job.args or {}
 local function f(x) return string.format("%.17g", x) end
 local function v3(v) return f(v.x) .. " " .. f(v.y) .. " " .. f(v.z) end
 local saved = {}
-for k, v in pairs({ frame_budget_ms = 20 }) do
+-- the path model alone: the burst policy (budget, masking), the far jobs' forced share and the build pacing
+-- are set off whatever their defaults (on since d0df28c): a bit-for-bit check of P.Compute, not of them
+for k, v in pairs({ frame_budget_ms = 20, burst_budget_ms = 0, burst_mask_db = 0, far_force_ms = 0, build_ms_combat = 0 }) do
 	saved[k] = A.override[k] or false
 	A.SetOverride(k, v, true)
 end

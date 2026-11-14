@@ -329,7 +329,7 @@ function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 		tostring(N.moduleVersion), N.moduleApi or 0, pba_native.Version(), nt, #mats, N.buildMs or 0, SysTime() - (N.buildStart or SysTime()), N.loadMs))
 	if N.ready then N.StartRender() end
 	if N.ready then N.WantReverbBake() end
-	if N.ready then N.Prewarm() end
+	if N.ready and not N.prewarm then N.Prewarm() end -- (StartRender started it)
 	if N.ready and (A.cfg.native_paths or 0) >= 0.5 then
 		-- the probe graph is built in the background: bake once it is there
 		timer.Create("pba_native_bake", 1, 120, function()
@@ -517,6 +517,7 @@ function N.StartRender()
 	if not ok then N.err = err MsgN("[PBA] native audio: ", err) return end
 	N.render = true
 	N.ApplySettings()
+	if N.Prewarm then N.Prewarm() end -- (a restart: the sounds decoded before were dropped)
 	local st = pba_native.Stats and pba_native.Stats()
 	MsgN("[PBA] native rendering on (Steam Audio, HRTF: ", st and st.hrtf or "default", ")")
 end
@@ -549,6 +550,10 @@ N.allCvar = N.allCvar or CreateClientConVar("pba_native_all_want", "0", false, t
 function N.StopRender()
 	if N.render and pba_native then pba_native.AudioStop() end
 	N.render = false
+	-- the module dropped every decoded sound (render::Stop): a decode started before (the map load prewarm,
+	-- pba_native_predecode) is no longer pending nor loaded, and N.EnsureSound took it for an undecodable file
+	-- (refused for 30 s, left to the engine: native_predecode red after a render restart). StartRender prewarms again.
+	N.loading, N.prewarm = nil, nil
 end
 
 local function cleanName(name)

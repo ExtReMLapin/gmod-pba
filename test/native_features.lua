@@ -38,7 +38,9 @@ local eye = ply:EyePos()
 local ang = ply:EyeAngles()
 local right = eye + ang:Right() * 200
 local snd = "ambient/levels/citadel/citadel_hit1_adpcm.wav"
+-- (pba_native_predecode, on by default: the first EnsureSound only starts a worker decode, "pending")
 local ok, name = N.EnsureSound("vo/npc/male01/hi01.wav")
+job:wait(function() ok, name = N.EnsureSound("vo/npc/male01/hi01.wav") return ok end, 10)
 res.sound = ok
 
 -- 1. echoes: loud clear sound in front, A/B
