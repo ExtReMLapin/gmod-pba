@@ -11,7 +11,7 @@ SECS = int(sys.argv[2]) if len(sys.argv) > 2 else 25
 
 def call(tool, args):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), "200000"],
-                         capture_output=True, text=True, encoding="utf-8").stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     try:
         return json.loads(out)
     except ValueError:

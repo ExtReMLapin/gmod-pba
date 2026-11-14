@@ -40,14 +40,25 @@ def call(tool, a, mx=400000, timeout=600):
             f.write(s)
         tmp = f.name
         s = "@" + tmp
-    out = subprocess.run([sys.executable, "-I", MCP, "call", tool, s, str(mx)], capture_output=True, text=True,
-                         encoding="utf-8", timeout=timeout).stdout
+    r = subprocess.run([sys.executable, "-I", MCP, "call", tool, s, str(mx)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=timeout)
+    out = r.stdout
     if tmp:
         os.remove(tmp)
     try:
         return json.loads(out)
     except ValueError:
-        return {"raw": out}
+        return {"raw": out, "stderr": (r.stderr or "")[-400:]}
+
+
+def errors_since(cursor, limit):
+    """(errors, failed): the game's Lua errors from `cursor`, tried twice; failed = why the call gave no list
+    (a failed call is not "no error": it used to empty the map's lua_error count in silence)."""
+    for _ in range(2):
+        r = call("errors_since", {"cursor": cursor, "limit": limit})
+        if isinstance(r.get("errors"), list):
+            return r["errors"], None
+    return [], (r.get("stderr") or r.get("raw") or json.dumps(r))[-300:]
 
 
 def lua(realm, code):
@@ -170,8 +181,10 @@ def report(m, t_start, cur, info, trig, visited):
         for a in (side.get("anomalies") or {}).values():
             if isinstance(a.get("samples"), str):
                 a["samples"] = json.loads(a["samples"])
-    errs = call("errors_since", {"cursor": cur, "limit": 500}).get("errors", [])
+    errs, failed = errors_since(cur, 500)
     pba_errs = {}
+    if failed:
+        pba_errs["errors_since failed: " + failed] = 1
     for e in errs:
         msg = e.get("message") or e.get("text") or json.dumps(e)
         blob = msg + json.dumps(e.get("stack", ""))

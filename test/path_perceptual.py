@@ -103,7 +103,7 @@ import _perceptual as M  # noqa: E402
 
 def call(tool, args, timeout=900):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), "4000000"],
-                         capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout).stdout
     try:
         return json.loads(out)
     except ValueError:

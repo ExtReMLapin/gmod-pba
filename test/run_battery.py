@@ -48,7 +48,7 @@ def call(tool, args, mx=200000, timeout=600):
             f.write(a)
         a = "@" + f.name
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, a, str(mx)],
-                         capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout).stdout
     if a.startswith("@"):
         os.remove(a[1:])
     try:
@@ -723,6 +723,9 @@ steps = [
     # metrics of the perceptual bench (Python, no game): full battery only
     ("perceptual metrics (pure)", lambda: py("test_perceptual.py")),
     ("cvsnap killed-test recovery (pure)", lambda: py("test_cvsnap.py")),
+    # mcp.py's stderr in UTF-8 (a localized Windows error in cp1252 killed the callers' reader thread) and a
+    # failed errors_since reported by sweep.py instead of read as "no error" (pure, no game)
+    ("mcp_encoding (pure)", lambda: py("test_mcp_encoding.py")),
     # every option has a menu control or a written exemption, every control an option (T4, no game)
     ("menu_config_static", lambda: py("menu_config_static.py")),
     # the Workshop package without the module: menu greyed, no error, a sound behind a door muffled (T3)
@@ -802,6 +805,9 @@ steps = [
     # one scheduler for every followed sound (refactor step 10): a still followed one-shot by the cadence rule of loops
     ("oneshot_reeval", lambda: seq(lambda: load(TW), lambda: job("client", "oneshot_reeval.lua"))),
     ("burst_budget", lambda: seq(lambda: load(TW), lambda: job("client", "burst_budget.lua"))),
+    # pba_burst_fair: a degraded new sound takes a nearby full result (an impact behind a wall with an open way
+    # round was 29 dB low with the cheap model), the loudest of a burst is never degraded
+    ("burst_fair", lambda: seq(lambda: load(TW), lambda: job("client", "burst_fair.lua"))),
     ("gc_lean", lambda: seq(lambda: load(TW), lambda: job("client", "gc_lean.lua"))),
     # env_microphone Disable stops its speaker's mirror (audit B-12)
     ("mic_disable", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "mic_disable.lua", 40))),
@@ -885,6 +891,8 @@ steps = [
     ("off_no_work", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "off_no_work.lua"))),
     # pba_native_predecode (perf O4): no main-thread decode in a burst, map load prewarm of the burst sounds
     ("native_predecode", lambda: seq(lambda: native_on(True), lambda: job("client", "native_predecode.lua", 90))),
+    # the prewarm's entity walk spans frames: an entity removed meanwhile is skipped (was: whole prewarm lost)
+    ("prewarm_null_entity", "mcp_encoding (pure)", lambda: job("client", "prewarm_null_entity.lua", 30)),
     ("native_props_calm", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_calm_setup.lua"), lambda: job("client", "native_props_calm.lua", 60))),
     ("detour_cap", lambda: seq(lambda: load(TW), lambda: job("server", "detour_cap_setup.lua"), lambda: job("client", "detour_cap.lua", 60))),
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
@@ -1243,7 +1251,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "streams_vol_now", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "twodoors_unseen", "off_no_work", "native_predecode", "native_props_calm", "detour_cap", "route_alt_street rp_downtown", "sky_route gm_construct", "long_line_decode", "breencast_long_render d1_trainstation_01", "line_first_play", "caption_net"}
+QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "streams_vol_now", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "burst_fair", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "twodoors_unseen", "off_no_work", "native_predecode", "prewarm_null_entity", "mcp_encoding (pure)", "native_props_calm", "detour_cap", "route_alt_street rp_downtown", "sky_route gm_construct", "long_line_decode", "breencast_long_render d1_trainstation_01", "line_first_play", "caption_net"}
 # --smoke: the core, under 2 minutes, to run before every commit (--quick stays the check before a merge)
 SMOKE = {"GLuaTest pure suite", "menu_config_static", "light_no_module", "portal_sweep tworooms",
          "native_doors", "native_features"}

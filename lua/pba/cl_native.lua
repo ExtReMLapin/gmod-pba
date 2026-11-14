@@ -632,8 +632,9 @@ function N.PrewarmList(yield)
 	local surfs = {}
 	for _, s in ipairs(PREWARM_SURFACES) do surfs[s] = true end
 	for _, e in ipairs(ents.GetAll()) do
-		local c = e:GetClass()
-		if string.StartWith(c, "prop_physics") or c == "func_breakable" or c == "func_physbox" then surfs[N.SurfaceOf(e)] = true end
+		-- (a snapshot walked over several frames: an entity removed meanwhile is NULL, skipped)
+		local c = IsValid(e) and e:GetClass()
+		if c and (string.StartWith(c, "prop_physics") or c == "func_breakable" or c == "func_physbox") then surfs[N.SurfaceOf(e)] = true end
 		yield()
 	end
 	for s in pairs(surfs) do

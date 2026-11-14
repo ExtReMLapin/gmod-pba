@@ -32,7 +32,7 @@ MAX_COLD_GAP = 1.0  # dB, cold vs warm median, every variant (the field steps us
 
 def call(tool, args, timeout=900):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), "2000000"],
-                         capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout).stdout
     try:
         return json.loads(out)
     except ValueError:

@@ -17,7 +17,7 @@ MUSIC = "music/hl2_song20_submix0.mp3"
 
 def call(tool, args, mx=5_000_000):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), str(mx)],
-                         capture_output=True, text=True, encoding="utf-8").stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     return json.loads(out)
 
 

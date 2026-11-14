@@ -1107,7 +1107,7 @@ local function linkCands(g, yield)
 	for _, p in ipairs(ag and ag.portals or {}) do
 		if p.target then -- the leaves in a linked portal's opening are that portal's (as P.LeafOfPaths)
 			for _, d in ipairs(doors) do
-				if d:NearestPoint(p.center):Distance(p.center) <= (p.radius or 64) then owned[d] = true end
+				if IsValid(d) and d:NearestPoint(p.center):Distance(p.center) <= (p.radius or 64) then owned[d] = true end -- (removed while yielding: skipped)
 			end
 		end
 		if yield then yield() end
@@ -1120,7 +1120,7 @@ local function linkCands(g, yield)
 		end)
 	end
 	for _, d in ipairs(doors) do
-		if not owned[d] then
+		if not owned[d] and IsValid(d) then
 			local mn, mx = d:WorldSpaceAABB()
 			local c, R = (mn + mx) * 0.5, mn:Distance(mx) * 1.5 + LINK_DOOR_PAD -- the leaf wherever it swings
 			if yield then yield() end
