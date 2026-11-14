@@ -1656,6 +1656,43 @@ local SUITE = {
 			end
 			expect(worst < 0.5).to.beTrue()
 		end },
+		{ name = "DetourDelta: pba_detour_max_tests caps the world tests round one prop (a prop against a floor and a wall: up to 27 tests per blocked edge); a cut search keeps a clear point, never a shorter way; enough tests give the full answer", func = function()
+			local saved = A.cfg.detour_max_tests
+			local ok, err = pcall(function()
+				local mins, maxs = Vector(-20, -20, -20), Vector(20, 20, 20)
+				local S, L = Vector(-150, 0, -15), Vector(150, 0, -15)
+				local tests = 0
+				local function run(cap, valid)
+					A.cfg.detour_max_tests = cap
+					tests = 0
+					return P.DetourDelta(S, L, mins, maxs, function(p) tests = tests + 1 return valid(p) end)
+				end
+				-- every way round blocked (a crate wedged in a gap): the full search samples every edge
+				local none = function() return false end
+				expect(run(0, none)).to.equal(math.huge)
+				local full = tests
+				expect(full > 100).to.beTrue()
+				expect(run(16, none)).to.equal(math.huge)
+				expect(tests <= 16).to.beTrue()
+				-- floor below z = -18 and a wall at y > 18: clear points along blocked edges
+				local floorWall = function(p) return p.z > -18 and p.y < 18 end
+				local d0 = run(0, floorWall)
+				expect(d0 < math.huge).to.beTrue()
+				for _, cap in ipairs({ 1, 4, 8, 16 }) do
+					local d = run(cap, floorWall)
+					expect(tests <= cap).to.beTrue()
+					expect(d >= d0 - 1e-9).to.beTrue()
+				end
+				expect(run(1000, floorWall)).to.equal(d0)
+				-- free-standing: the first edge's best point is clear, one test, the same answer
+				local free = function() return true end
+				local f0 = run(0, free)
+				expect(run(4, free)).to.equal(f0)
+				expect(tests).to.equal(1)
+			end)
+			A.cfg.detour_max_tests = saved
+			if not ok then error(err, 0) end
+		end },
 		{ name = "EvalRoute: a vertex whose neighbours see each other is no corner (a walking source went 2-3 dB up and down with the copy kept, pba_demo)", func = function()
 			-- empty world: every thin trace clear; the route keeps a vertex 40 u off the straight line between
 			-- its neighbours (its hull grazed a wall)
