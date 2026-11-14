@@ -35,6 +35,18 @@ def cmd(realm, c):
     call("console_exec", {"realm": realm, "cmd": c})
 
 
+def wait_decoded(name, tmax=15):
+    """pba_native_predecode (on by default): the first EnsureSound of a file only starts a worker decode and the
+    first play of a sound not decoded yet is the engine's; a render restart drops every decoded sound. The
+    measurement below is about native_all, so the sound is decoded first."""
+    t0 = time.time()
+    while time.time() - t0 < tmax:
+        if lua("client", f"local N = pba.Native return N and N.render and N.EnsureSound('{name}') or false"):
+            return True
+        time.sleep(0.3)
+    return False
+
+
 ok_all = True
 if call("status", {}).get("map") != "pba_tworooms":
     call("map_load", {"map": "pba_tworooms", "maxplayers": 4})
@@ -71,6 +83,8 @@ for mode in ("0", "1"):
     cmd("client", f"pba_native_render {mode}")
     cmd("client", "pba_native_all 1")
     time.sleep(2.0)  # userinfo flag reaches the server on the next timer tick
+    if mode == "1":
+        res["decoded"] = wait_decoded("buttons/button14.wav")
     want = lua("server", "return player.GetHumans()[1]:GetInfoNum('pba_native_all_want', 0)")
     lua("client", "pba.stats.nativeDirect = 0")
     c0 = call("console_read", {"limit": 1})["next_cursor"]
@@ -82,7 +96,7 @@ for mode in ("0", "1"):
     starts = sum(1 for l in lines if re.match(r"^\w+Sound\s+\S*button14", l["text"]))
     nat = lua("client", "return pba.stats.nativeDirect or 0")
     res[mode] = {"want": want, "engine_starts": starts, "native_direct": nat}
-ok2 = res["0"]["engine_starts"] == 5 and res["0"]["native_direct"] == 0 and res["1"]["engine_starts"] == 0 and res["1"]["native_direct"] == 5
+ok2 = res.get("decoded", False) and res["0"]["engine_starts"] == 5 and res["0"]["native_direct"] == 0 and res["1"]["engine_starts"] == 0 and res["1"]["native_direct"] == 5
 ok_all &= ok2
 print(("PASS" if ok2 else "FAIL") + f" everything native: {json.dumps(res)}", flush=True)
 cmd("client", "snd_showstart 0")

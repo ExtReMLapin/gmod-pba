@@ -33,6 +33,11 @@ if call("status", {}).get("map") != "pba_tworooms":
 saved = lua("client", "local c = pba.cfg return { c.native_render, c.native_all }")
 call("console_exec", {"realm": "client", "cmd": "pba_native_render 1"})
 call("console_exec", {"realm": "client", "cmd": "pba_native_all 1"})
+# pba_native_predecode (on by default): the first play of a sound not decoded yet is the engine's (and a render
+# restart drops every decoded sound); the prop's line is decoded first, the test is about the voice following
+t0 = time.time()
+while time.time() - t0 < 15 and not lua("client", "local N = pba.Native return N and N.render and N.EnsureSound('vo/npc/male01/question06.wav') or false"):
+    time.sleep(0.3)
 lua("server", "local p = player.GetHumans()[1] p:SetPos(Vector(256,256,0)) p:SetEyeAngles(Angle(0,0,0)) return true")
 time.sleep(2.0)
 # a prop 200 units ahead, on the listener's left (+y), frozen; moved by the server each tick
