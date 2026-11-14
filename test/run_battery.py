@@ -794,6 +794,8 @@ steps = [
     ("reverb_echo_basics", lambda: py("reverb_echo_basics.py")),
     # T12 / T13: Doppler pitch and air absorption of what the module is really handed (gm_flatgrass, a flying prop, 10 m vs 100 m)
     ("doppler_air_render", lambda: seq(lambda: load("gm_flatgrass"), lambda: py("doppler_air_render.py"))),
+    # T11: a radio of another addon behind a closed door (native energy -16 dB vs open), streams_filter high band, streams 0
+    ("streams_basic", lambda: py("streams_basic.py")),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
