@@ -343,6 +343,10 @@
   "pos0": "hook",
   "why": "stop of a moving brush's brief move sound relayed at its arrival (server), outside P.Compute"
  },
+ "patch_channel_cut": {
+  "pos0": "hook",
+  "why": "channel cut of the old mirror at a patch start (server), outside P.Compute"
+ },
  "loops_net_compact": {
   "pos0": "hook",
   "why": "wire format of a followed loop's updates (server), outside P.Compute"
