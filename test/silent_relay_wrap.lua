@@ -7,7 +7,20 @@ pba.Process = function(data, relayed, ...)
 end
 pba.handedBack = {}
 pba.testEngine = {}
-hook.Add("EntityEmitSound", "pba_test_silent_relay", function(d)
+-- (observes through pba's own hook entry, not a hook of its own: with pba_cl_hook_last 1 the other addons' hooks
+-- never see pba's own engine copies, which are what this test looks for; a wrapper of pba's entry sees every
+-- emission, whatever the hook order and the option)
+local function probe(fn)
+	local orig = rawget(hook.GetTable().EntityEmitSound, "pba")
+	if not orig then return function() end end
+	local wrapped = function(d) pcall(fn, d) return orig(d) end
+	hook.Add("EntityEmitSound", "pba", wrapped)
+	return function()
+		if rawget(hook.GetTable().EntityEmitSound, "pba") == wrapped then hook.Add("EntityEmitSound", "pba", orig) end
+	end
+end
+if pba.testProbeOff then pba.testProbeOff() end
+pba.testProbeOff = probe(function(d)
 	if string.find(string.lower(d.SoundName or ""), "ba_ohshit03", 1, true) and (d.Volume or 1) > 0.01 then
 		pba.testEngine[#pba.testEngine + 1] = RealTime()
 	end

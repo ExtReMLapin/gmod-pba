@@ -3,7 +3,7 @@
 -- within 0.2 s (+ margin), with the console line. Pass: handed back as a relayed line, and an engine emission.
 job:sleep(1)
 if pba.testOrigProcess then pba.Process = pba.testOrigProcess pba.testOrigProcess = nil end
-hook.Remove("EntityEmitSound", "pba_test_silent_relay")
+if pba.testProbeOff then pba.testProbeOff() pba.testProbeOff = nil end
 local back = {}
 for _, h in ipairs(pba.handedBack or {}) do back[#back + 1] = h.why .. " " .. h.name end
 local relayed = false
