@@ -918,7 +918,7 @@ steps = [
     ("soundtime_reemit", lambda: soundtime(True)),
     ("mp_own_sounds", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "mp_own_sounds.lua"))),
     ("predicted_others", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "predicted_others.lua"))),
-    # singleplayer counterparts (no prediction, no bots: S.Audience's own rule keys on snd.sp there)
+    # singleplayer counterparts (no prediction, no bots: one own-sound rule with multiplayer, snd.own)
     ("sp_own_sounds", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job("server", "sp_own_sounds.lua"))),
     ("sp_predicted_others", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job("server", "sp_predicted_others.lua"))),
     ("bot_footsteps", lambda: seq(lambda: load(TW), lambda: job("server", "bot_footsteps.lua"))),
@@ -1342,10 +1342,6 @@ def _num(x):
 # case that passes again is said loudly. The two "Door in 3-D" cases are green outside the game and red in
 # it (gap not found yet, JOURNAL 2026-11-11/12).
 KNOWN_RED = {
-    # singleplayer: the host's own pain / fall damage / HEV lines (outside his command) are relayed to him with
-    # pba_native_own 0 (4 of 4), where multiplayer leaves them to the engine (mp_own_sounds green): S.Audience's
-    # singleplayer own rule only covers the sounds made during his command (snd.predicted). Found 2026-11-14.
-    "sp_own_sounds": ["own sounds relayed with pba_native_own 0"],
     "GLuaTest pure suite": [
         "Door in 3-D: a leaf swinging past a route changes its level by degrees",
         "Door in 3-D: the gap is measured continuously as the leaf turns",
@@ -1404,7 +1400,6 @@ def _check_loop_removed(d):
                                         f"{d.get('serverLeft')} mirrors left after (want 0)")
 
 CHECKS = {"GLuaTest pure suite": _check_pure,
-          "sp_own_sounds": _check_known_fails("sp_own_sounds"),
           "GLuaTest pure suite (native helpers)": lambda v: _check_pure(v, "GLuaTest pure suite (native helpers)"), "menu_fit": _check_menu, "loop_removed": _check_loop_removed}
 
 def judge_py(o):
