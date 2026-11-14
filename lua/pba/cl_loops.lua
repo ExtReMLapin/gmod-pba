@@ -58,8 +58,10 @@ function A.WatchCut(idx, chan, name)
 end
 --- Watches a line pba took from the engine: `handback()` (the engine plays it) when nothing rendered its file
 -- within HANDBACK_S (+ `lag`, its start delay) of now. `why` names the path, for the console line. idx, chan:
--- its entity and channel (A.WatchCut), when it has them.
-function A.WatchLine(name, lag, why, handback, idx, chan)
+-- its entity and channel (A.WatchCut), when it has them. busy(): true while the line is on its way (its file still
+-- decoding for the module): the verdict waits for it, up to DECODE_WAIT_S (pba_loops_decode_wait).
+local DECODE_WAIT_S, DECODE_POLL_S = 5, 0.05
+function A.WatchLine(name, lag, why, handback, idx, chan, busy)
 	if (A.cfg.silent_handback or 1) < 0.5 or not name then return end
 	local t0, key = RealTime(), lineKey(name)
 	local w
@@ -68,7 +70,15 @@ function A.WatchLine(name, lag, why, handback, idx, chan)
 		A.watchedLines[idx] = A.watchedLines[idx] or {}
 		A.watchedLines[idx][w] = true
 	end
-	timer.Simple(HANDBACK_S + (lag or 0), function()
+	local check
+	check = function()
+		-- a line whose file the module is still decoding is not silent: it starts once decoded (LP.StartDecoded).
+		-- Handed back meanwhile, the engine played it instead (d3_c17_12's 1.4 MB 'rockets' line: its decode on a
+		-- worker thread outlasted HANDBACK_S, and the mirror only retried at its next update round)
+		if busy and (A.cfg.loops_decode_wait or 1) >= 0.5 and RealTime() - t0 < DECODE_WAIT_S and busy() then
+			timer.Simple(DECODE_POLL_S, check)
+			return
+		end
 		if w then
 			local list = A.watchedLines[idx]
 			if list then list[w] = nil if next(list) == nil then A.watchedLines[idx] = nil end end
@@ -82,7 +92,8 @@ function A.WatchLine(name, lag, why, handback, idx, chan)
 		MsgN("[PBA] silent line handed back to the engine: ", name, " (", why, ")")
 		if #A.handedBack >= 16 then table.remove(A.handedBack, 1) end
 		A.handedBack[#A.handedBack + 1] = { name = name, why = why, t = RealTime() }
-	end)
+	end
+	timer.Simple(HANDBACK_S + (lag or 0), check)
 end
 
 -- Loops born on this client (CreateSound of an addon: vehicle engines...). The hook sees their start
@@ -429,9 +440,17 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
 	local ok, name, why = N.EnsureSound(m.name)
 	if not ok then
-		if why == "pending" then return nil end -- decoding: wait for it (no engine fallback meanwhile)
+		if why == "pending" then
+			-- decoding: wait for it (no engine fallback meanwhile); pba_loops_decode_wait: started the frame its
+			-- decode ends (LP.StartDecoded), not at the mirror's next update round (up to update_interval later)
+			m.decoding = true
+			if (A.cfg.loops_decode_wait or 1) >= 0.5 then LP.decoding[m] = true end
+			return nil
+		end
+		m.decoding = nil
 		return false
 	end
+	m.decoding = nil
 	-- the engine's mix value and ducking (cl_mix): the loop's groups, found once
 	if A.Mix and not m.mixG then m.mixG = A.Mix.GroupsOf(m.name, m.ent, m.chan, m.lvl) end
 	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
@@ -729,7 +748,8 @@ net.Receive("pba_loop", function()
 	if op == OP_START and once then noteDuck(name, pos, lvl, vol, nil, nil, idx, pitch) end
 	-- a long line taken from the engine: heard within HANDBACK_S, else its engine patch plays it (pba_silent_handback)
 	if new and once and op == OP_START then
-		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end, idx, chan)
+		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end, idx, chan,
+			function() return m.decoding == true and not m.done and not m.handBack and LP.mirrors[m.key] == m end)
 	end
 	if m.nativeId and op == OP_UPDATE then
 		volumeNow(m)
@@ -762,8 +782,25 @@ end
 --- Every frame: natively rendered loops in clear sight follow their (moving) entity, and the
 -- others glide towards their last re-evaluation (continuous_ramp); the path itself is
 -- re-evaluated every update_interval by the hook below.
+--- Mirrors waiting for their file's decode (MIRROR.native.start "pending", pba_loops_decode_wait): applied the
+-- frame it is ready. A mirror stopped or handed back meanwhile is dropped from the set.
+LP.decoding = LP.decoding or {}
+function LP.StartDecoded()
+	if next(LP.decoding) == nil then return end
+	local N = A.Native
+	for m in pairs(LP.decoding) do
+		if m.done or m.handBack or m.nativeId or m.patch or LP.mirrors[m.key] ~= m or not m.decoding then
+			LP.decoding[m] = nil
+		elseif not (N and N.EnsureSound and select(3, N.EnsureSound(m.name)) == "pending") then
+			LP.decoding[m] = nil
+			apply(m, 0)
+		end
+	end
+end
+
 function LP.FollowNative(L)
 	local N = A.Native
+	LP.StartDecoded()
 	if not N or not N.Doppler then return end
 	local P, now = A.Paths, RealTime()
 	local vL = N.ListenerVelocity()
