@@ -1087,9 +1087,13 @@ end
 -- cheap model's level, a lower bound, and glide up to its full result at its first update: instead its full
 -- evaluation is queued in the slicer (SL.Defer) and the sound held until it is there, within the longer of its
 -- propagation delay and the hold. Returns the job, or nil (hold off, not followed, slicer off).
+-- (pba_burst_hold_short) a short sound (not followed: OS.Wanted false) would keep the cheap model its whole life,
+-- 26-36 dB under its full result behind a doorway (a lower bound, no routes round the walls, never corrected by an
+-- update): it is held too, its start a few tens of ms late being the lesser evil.
 local function holdJob(data, S, L, lvl, src, cfg)
 	local hold = (A.cfg.burst_hold_ms or 50) / 1000
-	if hold <= 0 or not A.Slicer or not OS.Wanted((playLength(data.SoundName, data.Pitch))) then return nil end
+	if hold <= 0 or not A.Slicer then return nil end
+	if (A.cfg.burst_hold_short or 0) < 0.5 and not OS.Wanted((playLength(data.SoundName, data.Pitch))) then return nil end
 	return A.Slicer.Defer(S, L, lvl, src, cfg, hold)
 end
 
