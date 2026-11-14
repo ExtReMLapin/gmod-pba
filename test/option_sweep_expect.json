@@ -403,6 +403,10 @@
   "pos0": "hook",
   "why": "speech lines decoded at first play (render), outside P.Compute"
  },
+ "native_prewarm_weapons": {
+  "pos0": "hook",
+  "why": "the held weapons' sound files decoded ahead (Think hook of cl_native), outside P.Compute; covered by prewarm_weapons"
+ },
  "burst_fair": {
   "pos0": "hook",
   "why": "burst policy (cl_render burstEvaluate), outside P.Compute"
