@@ -77,6 +77,10 @@ local function rendered(name, how, id)
 	local f = fileKey(name)
 	local l = W.renderedF[f]
 	if not l then l = {} W.renderedF[f] = l end
+	-- (an engine patch's volume steps reach the hook as emissions, every frame: one rendering per second of them,
+	-- else 64 of them evicted the line's start, d3_c17_12 rockets line handed back to the engine 2026-11-14)
+	local last = l[#l]
+	if how == "engine" and last and last.how == "engine" and CurTime() - last.t < 1 then return last end
 	if #l >= PER_FILE then table.remove(l, 1) end
 	local r = { t = math.Round(CurTime(), 2), f = f, how = how, id = id }
 	l[#l + 1] = r
@@ -310,7 +314,10 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 		-- nothing is judged right after a listener teleport (the voice still carries the old place's values).
 		local v = m.nativeId and W.voices[m.nativeId]
 		local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
-		if v and v.g and S and m.lvl and not quiet and A.Native and A.Native.Law and A.AC and L then
+		-- (not a mirror whose entity just left: its source is unknown, m.pos is where it started; pba drops it at its
+		-- next turn. d1_canals_03 manhacks judged at their start point 618 u away, the voice at its last place ~300 u)
+		local gone = m.ent ~= nil and not IsValid(m.ent) and not IsValid(m.anchor)
+		if v and v.g and S and m.lvl and not quiet and not gone and A.Native and A.Native.Law and A.AC and L then
 			local d = math.max(S:Distance(L), 1)
 			local ng = math.max(A.cfg.native_gain or 1, 1e-6)
 			local sent = v.g / ng

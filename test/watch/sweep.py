@@ -144,7 +144,8 @@ def silent_check(speech, rendered, delay_on, enabled):
     if not enabled:
         return out
     for ev in speech:
-        if ev.get("engine"):
+        # (invalid.wav: a sentence the engine itself could not resolve, nothing to render; metropolice radio)
+        if ev.get("engine") or fkey(ev["name"]) == "invalid.wav":
             continue
         lag = ev["dist"] / SPEED if (delay_on and ev["dist"] > 0) else 0
         f = fkey(ev["name"])
