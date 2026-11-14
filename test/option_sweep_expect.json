@@ -367,6 +367,10 @@
   "pos0": "same",
   "why": "only met where two near-equal routes go round a block (rp_downtown street walk): not in the sweep scenes; covered by route_alt_street"
  },
+ "route_alt_fork": {
+  "pos0": "same",
+  "why": "only met where the alternative round the other side shares its seed with a parallel lane (rp_downtown street walk, step 168): not in the sweep scenes; covered by route_alt_street"
+ },
  "loops_decode_wait": {
   "pos0": "hook",
   "why": "long-line mirror starts the frame its decode ends; the safety net waits for a decode in progress (render), outside P.Compute"
