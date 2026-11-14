@@ -337,6 +337,10 @@ function S.Audience(snd, ply, scale)
 	-- his own sound: the engine plays it on him, untouched, unless his module plays it like every other sound
 	-- (pba_native_own: the relay below, as for a native-all player's clear sound)
 	if snd.own and ply ~= snd.skip and e == ply and not wantsOwn(ply) then return "clear" end
+	-- his own sound for his module (pba_native_own): no wall to look for between him and himself, and no
+	-- relay budget or per-name quota (an SMG's 13 shots a second hit the quota: the shots over it went to
+	-- the engine and the next relayed shot cut them on the weapon channel)
+	if snd.own and ply ~= snd.skip and e == ply then return "relay" end
 	local step = snd.step
 	if ply == snd.skip or (step and ply ~= step and ply:TestPVS(step)) then return nil end
 	local eye = A.PlayerEar(ply)
