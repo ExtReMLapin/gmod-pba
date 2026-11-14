@@ -471,6 +471,10 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 		N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m)
 		m.srcNext = RealTime() + 0.3
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
+		-- a voice with its slot from birth feeds the room bus only what enters through walls, as a short voice
+		-- (cl_render switchNative / N.PlayVoice): the slot fade starting from "no slot" sent the full gain to the
+		-- listener's room for its first ~0.5 s (Breencast br_welcome05: 0.28 against 0.012; pba_loops_slot_birth)
+		if m.srcBound and (A.cfg.loops_slot_birth or 1) >= 0.5 then m.slotW, m.slotT = 0, RealTime() end
 		if m.srcBound then pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, (trans or 0) * m.vol * A.cfg.native_gain * N.LoudWet(m.lvl)) end
 	end
 	-- a new voice starts at its target: the next ramp starts from there
