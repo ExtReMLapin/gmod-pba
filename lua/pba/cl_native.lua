@@ -302,7 +302,7 @@ hook.Add("Think", "pba_native_build", function()
 	end
 	local t0 = SysTime()
 	-- 4 ms per frame, less during a fight (pba_build_ms_combat, cl_sched)
-	local bud = A.Sched and A.Sched.BuildBudget and A.Sched.BuildBudget() or 0.004
+	local bud = A.Sched and A.Sched.BuildBudget and A.Sched.BuildBudget("native") or 0.004
 	if bud <= 0 then return end
 	local deadline = t0 + bud
 	local function yield() if SysTime() > deadline then coroutine.yield() end end
