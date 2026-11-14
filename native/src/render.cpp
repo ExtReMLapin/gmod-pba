@@ -30,6 +30,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <numeric>
@@ -246,6 +248,8 @@ float g_roomRt[3] = {0, 0, 0}; // under g_mtx
 std::vector<float> g_mix(kBlock * 2);
 // offline capture (CaptureStart): what every block rendered, before the master volume
 bool g_capOn = false;
+bool g_capOutOnly = false; // Lua debug capture (CaptureBegin): only the final output is kept
+size_t g_capMaxFrames = 0; // 0 = unlimited; else the output stops growing there (stereo frames)
 std::vector<float> g_capMix, g_capRoom, g_capSrc, g_capOut; // under g_mtx (the audio thread holds it while rendering)
 // mix quality (SetMixQuality): the output stage (limiter / legacy soft clip from 0.8 / hard clip); the decoder's
 // windowed-sinc resampler (true) or miniaudio's linear one (false). Read at the use.
@@ -799,7 +803,7 @@ void RenderBlock() {
 		}
 	}
 
-	if (g_capOn) {
+	if (g_capOn && !g_capOutOnly) {
 		g_capMix.insert(g_capMix.end(), g_mix.begin(), g_mix.end());
 		g_capRoom.insert(g_capRoom.end(), g_room.in.data[0], g_room.in.data[0] + kBlock);
 		const size_t at = g_capSrc.size();
@@ -879,7 +883,8 @@ void RenderBlock() {
 	} else {
 		for (auto& s : g_mix) s = SoftClip(s * g_master);
 	}
-	if (g_capOn) g_capOut.insert(g_capOut.end(), g_mix.begin(), g_mix.end());
+	if (g_capOn && (g_capMaxFrames == 0 || g_capOut.size() < g_capMaxFrames * 2))
+		g_capOut.insert(g_capOut.end(), g_mix.begin(), g_mix.end());
 	const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	g_loadSum += ms;
 	g_loadMax = std::max(g_loadMax, ms);
@@ -1382,6 +1387,8 @@ void CaptureStart() {
 	g_capRoom.clear();
 	g_capSrc.clear();
 	g_capOut.clear();
+	g_capOutOnly = false;
+	g_capMaxFrames = 0;
 	g_capOn = true;
 }
 
@@ -1396,6 +1403,95 @@ void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vec
 	g_capMix.clear();
 	g_capRoom.clear();
 	g_capSrc.clear();
+}
+
+// ------------------------------------------------------------------ debug capture of the final output (Lua)
+std::string CaptureBegin(double seconds) {
+	if (!(seconds > 0) || seconds > kCaptureMaxSeconds) return "seconds must be in ]0, " + std::to_string((int)kCaptureMaxSeconds) + "]";
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_capMix.clear();
+	g_capRoom.clear();
+	g_capSrc.clear();
+	g_capOut.clear();
+	g_capOut.reserve((size_t)(seconds * kRate) * 2 + (size_t)kBlock * 2);
+	g_capOutOnly = true;
+	g_capMaxFrames = (size_t)std::ceil(seconds * kRate);
+	g_capOn = true;
+	return "";
+}
+
+CaptureState CaptureStatus() {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	CaptureState st;
+	st.recording = g_capOn && g_capOutOnly;
+	st.frames = g_capOut.size() / 2;
+	st.maxFrames = g_capMaxFrames;
+	st.full = st.recording && st.frames >= g_capMaxFrames;
+	return st;
+}
+
+std::string CapturePath(const std::string& dir, const std::string& name, std::string* full) {
+	if (name.empty() || name.size() > 64) return "name must be 1 to 64 characters";
+	for (char c : name) {
+		const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+		if (!ok) return "name may only hold letters, digits, '_', '-' and '.' (no folder: the file goes in data/pba/)";
+	}
+	if (name[0] == '.' || name.find("..") != std::string::npos) return "name must not start with '.' or contain '..'";
+	std::string n = name;
+	const std::string ext = ".wav";
+	auto lower = [](std::string x) { for (auto& c : x) c = (char)std::tolower((unsigned char)c); return x; };
+	if (n.size() < 4 || lower(n.substr(n.size() - 4)) != ext) n += ext;
+	if (full) *full = dir + n;
+	return "";
+}
+
+std::string CaptureFinish(const std::string& dir, const std::string& name, int bits, size_t* frames, float* peak, std::string* fullPath) {
+	std::string full;
+	const std::string err = CapturePath(dir, name, &full);
+	if (!err.empty()) return err; // (a refused name leaves the capture running)
+	if (bits != 16 && bits != 32) return "bits must be 16 or 32";
+	std::vector<float> out;
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		if (!(g_capOn && g_capOutOnly)) return "no capture running (CaptureStart first)";
+		g_capOn = false;
+		g_capOutOnly = false;
+		out = std::move(g_capOut);
+		g_capOut.clear();
+		if (g_capMaxFrames && out.size() > g_capMaxFrames * 2) out.resize(g_capMaxFrames * 2);
+		g_capMaxFrames = 0;
+	}
+	if (out.empty()) return "nothing was rendered (audio thread not running?)";
+	const uint32_t n = (uint32_t)(out.size() / 2), ch = 2, rate = (uint32_t)kRate;
+	const uint32_t bytes = bits / 8;
+	std::string d;
+	d.reserve(64 + (size_t)n * ch * bytes);
+	auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) d.push_back((char)(v >> (8 * i))); };
+	auto u16 = [&](uint16_t v) { for (int i = 0; i < 2; ++i) d.push_back((char)(v >> (8 * i))); };
+	d += "RIFF"; u32(4 + 8 + 16 + 8 + n * ch * bytes); d += "WAVEfmt "; u32(16);
+	u16(bits == 32 ? 3 : 1); u16((uint16_t)ch); u32(rate); u32(rate * ch * bytes); u16((uint16_t)(ch * bytes)); u16((uint16_t)bits);
+	d += "data"; u32(n * ch * bytes);
+	float pk = 0;
+	for (float s : out) {
+		if (!std::isfinite(s)) s = 0;
+		pk = std::max(pk, std::fabs(s));
+		if (bits == 32) {
+			uint32_t u;
+			std::memcpy(&u, &s, 4);
+			u32(u);
+		} else {
+			u16((uint16_t)(int16_t)std::lrintf(std::clamp(s, -1.0f, 1.0f) * 32767.0f));
+		}
+	}
+	FILE* f = std::fopen(full.c_str(), "wb");
+	if (!f) return "cannot open " + full + " for writing (does the folder exist?)";
+	const bool ok = std::fwrite(d.data(), 1, d.size(), f) == d.size();
+	std::fclose(f);
+	if (!ok) return "write to " + full + " failed";
+	if (frames) *frames = n;
+	if (peak) *peak = pk;
+	if (fullPath) *fullPath = full;
+	return "";
 }
 
 float OutputClip(float x) { return SoftClip(x); }

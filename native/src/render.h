@@ -146,6 +146,19 @@ std::vector<float> SoundSide(const std::string& name);
 void CaptureStart();
 // output: what the audio device receives (after the master volume and the limiter), same frames as mix
 void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend, std::vector<float>* output = nullptr);
+// Debug capture of the FINAL output, for Lua (pba_native.CaptureStart / CaptureStop): what the audio thread hands
+// to the device (after the limiter / clip and the master volume, 48 kHz stereo), nothing else kept. CaptureBegin
+// records `seconds` at most (the buffer stops growing there; 0 < seconds <= kCaptureMaxSeconds). "" on success.
+constexpr double kCaptureMaxSeconds = 120.0;
+std::string CaptureBegin(double seconds);
+struct CaptureState { bool recording = false, full = false; size_t frames = 0, maxFrames = 0; };
+CaptureState CaptureStatus();
+// `name` -> dir + name (+ ".wav"): letters, digits, '_', '-', '.' only, no folder part, no leading '.', no "..".
+// dir ends with a separator. "" on success, else the reason.
+std::string CapturePath(const std::string& dir, const std::string& name, std::string* full);
+// Stops the capture and writes it as a 48 kHz stereo WAV (bits 32 = IEEE float, 16 = PCM, clamped) at CapturePath.
+// "" on success (frames / peak / fullPath filled), else the reason (a refused name leaves the capture running).
+std::string CaptureFinish(const std::string& dir, const std::string& name, int bits, size_t* frames, float* peak, std::string* fullPath);
 float OutputClip(float x); // the legacy output soft clip (master volume 1)
 // Mix quality (pba_native_limiter, pba_native_resample_hq; both on by default):
 //  limiterMode 1 (default) the output goes through a lookahead peak limiter (ceiling 0.98, gain exactly 1 below it,

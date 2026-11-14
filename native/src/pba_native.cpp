@@ -35,6 +35,8 @@
 //     only). A slot lives as long as one of its voices (bind once right after Play; call again on
 //     Update for a moving source), an unbound one 1 s. pos not a Vector: unbinds that voice.
 //     SetMixQuality(limiterMode 0|1|2, hqResample): output limiter / legacy soft clip / hard clip, sinc / linear decode resampling
+//     CaptureStart(seconds) / CaptureStop(name [, bits]) / CaptureState(): debug capture of the FINAL output (after the limiter
+//     and the master volume) into garrysmod/data/pba/<name>.wav (48 kHz stereo, float or 16 bit; no other folder)
 //     SetSourceSlots: active pool size (0..16, default 16); the reflections run cost grows with it
 //     send: room reverb send level (linear), independent from gain, which carries the distance law;
 //     absent = keep the voice's (a voice that never received one sends at its gain)
@@ -2486,6 +2488,73 @@ LUA_FUNCTION(SetSourceNear) {
 	return 1;
 }
 
+
+// The folder of the debug capture's files: garrysmod/data/pba/ (next to garrysmod/lua/bin, where the module lives),
+// created if missing. "" when it cannot be found.
+static std::string CaptureDir() {
+#ifdef _WIN32
+	const std::wstring dir = ModuleDir() + L"..\\..\\data\\pba\\";
+	wchar_t full[MAX_PATH];
+	const DWORD n = GetFullPathNameW(dir.c_str(), MAX_PATH, full, nullptr);
+	if (n == 0 || n >= MAX_PATH) return "";
+	CreateDirectoryW(std::wstring(full, n - 1).c_str(), nullptr); // (garrysmod/data/ exists; pba/ may not)
+	const int len = WideCharToMultiByte(CP_ACP, 0, full, (int)n, nullptr, 0, nullptr, nullptr);
+	if (len <= 0) return "";
+	std::string s((size_t)len, '\0');
+	WideCharToMultiByte(CP_ACP, 0, full, (int)n, &s[0], len, nullptr, nullptr);
+	return s;
+#else
+	return "";
+#endif
+}
+
+// CaptureStart(seconds) -> true | false, reason: records the module's FINAL output (what goes to the audio
+// device: after the mix, the limiter / clip and the master volume; 48 kHz stereo) for at most `seconds`
+// (<= 120). Debug tool to measure what the player really hears against the engine's own mix.
+LUA_FUNCTION(CaptureStart) {
+	const std::string err = render::CaptureBegin(LUA->IsType(1, Type::Number) ? LUA->GetNumber(1) : 10.0);
+	if (!err.empty()) {
+		LUA->PushBool(false);
+		LUA->PushString(err.c_str());
+		return 2;
+	}
+	LUA->PushBool(true);
+	return 1;
+}
+
+// CaptureStop(name [, bits]) -> path, frames, peak | false, reason: stops the capture and writes it into
+// garrysmod/data/pba/<name>.wav (name: letters, digits, _ - . only; any other path is refused). bits 32 (default,
+// float) or 16. frames = stereo frames written, peak = largest |sample| (before the 16-bit clamp).
+LUA_FUNCTION(CaptureStop) {
+	const std::string name = LUA->IsType(1, Type::String) ? LUA->GetString(1) : "";
+	const int bits = LUA->IsType(2, Type::Number) ? (int)LUA->GetNumber(2) : 32;
+	const std::string dir = CaptureDir();
+	std::string err, path;
+	size_t frames = 0;
+	float peak = 0;
+	if (dir.empty()) err = "cannot locate garrysmod/data/pba (module not in garrysmod/lua/bin?)";
+	else err = render::CaptureFinish(dir, name, bits, &frames, &peak, &path);
+	if (!err.empty()) {
+		LUA->PushBool(false);
+		LUA->PushString(err.c_str());
+		return 2;
+	}
+	LUA->PushString(path.c_str());
+	LUA->PushNumber((double)frames);
+	LUA->PushNumber(peak);
+	return 3;
+}
+
+// CaptureState() -> recording, frames, maxFrames, full (true once the buffer holds `seconds`)
+LUA_FUNCTION(CaptureState) {
+	const render::CaptureState st = render::CaptureStatus();
+	LUA->PushBool(st.recording);
+	LUA->PushNumber((double)st.frames);
+	LUA->PushNumber((double)st.maxFrames);
+	LUA->PushBool(st.full);
+	return 4;
+}
+
 // SetMixQuality(limiterMode, hqResample) -> limiterMode, hqResample: limiterMode 1 (default) = a lookahead peak
 // limiter, transparent below 0.98; 0 = the legacy soft clip from 0.8; 2 = hard clip at full scale (the engine's
 // int16 mix). hqResample (default true): the windowed-sinc 48 kHz resampler of the sounds decoded from now on
@@ -2709,6 +2778,12 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetSourceNear");
 	LUA->PushCFunction(SetMixQuality);
 	LUA->SetField(-2, "SetMixQuality");
+	LUA->PushCFunction(CaptureStart);
+	LUA->SetField(-2, "CaptureStart");
+	LUA->PushCFunction(CaptureStop);
+	LUA->SetField(-2, "CaptureStop");
+	LUA->PushCFunction(CaptureState);
+	LUA->SetField(-2, "CaptureState");
 	LUA->PushCFunction(SetOutputMode);
 	LUA->SetField(-2, "SetOutputMode");
 	LUA->PushCFunction(SetReflections);
