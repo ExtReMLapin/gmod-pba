@@ -350,5 +350,9 @@
  "native_line_decode": {
   "pos0": "hook",
   "why": "speech lines decoded at first play (render), outside P.Compute"
+ },
+ "burst_fair": {
+  "pos0": "hook",
+  "why": "burst policy (cl_render burstEvaluate), outside P.Compute"
  }
 }
