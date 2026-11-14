@@ -1377,8 +1377,12 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	-- echoes (native reflections) for loud sounds, whoever plays the direct sound
 	local ply = LocalPlayer()
 	local own = IsValid(ply) and data.Entity == ply
-	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos, own, own) end
-	if own then
+	-- (pba_native_own: the module plays it like any other sound, its source slot reflects it)
+	local engineOwn = own and not (A.NativeOwn and A.NativeOwn())
+	-- (a predicted sound carries the engine's position, his origin: centered on him instead, A.SoundPos)
+	if own and not engineOwn then pos = A.SoundPos({ Entity = ply }) or pos end
+	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos, engineOwn, own) end
+	if engineOwn then
 		if A.Mix then A.Mix.NoteSound({ SoundName = data.SoundName, Pos = pos, SoundLevel = data.SoundLevel, Volume = data.Volume,
 			Channel = data.Channel, Entity = data.Entity }, (A.ListenerPos())) end -- the mixer's ducker (cl_mix)
 		return -- own sounds: always clear (the engine plays them)
@@ -1462,7 +1466,16 @@ net.Receive(NET, function()
 	-- filter, every listener gets the relay when one is blocked) is played by the engine on me, attached
 	if (A.cfg.mp_own or 1) >= 0.5 and not game.SinglePlayer() then
 		local lp = LocalPlayer()
-		if IsValid(lp) and data.EntIndex == lp:EntIndex() then vanilla(data) return end
+		if IsValid(lp) and data.EntIndex == lp:EntIndex() and not (A.NativeOwn and A.NativeOwn()) then vanilla(data) return end
+	end
+	-- my own sound the server relayed for my module (pba_native_own): centered on me, not where my eyes were
+	-- on the server (A.SoundPos)
+	do
+		local lp = LocalPlayer()
+		if IsValid(lp) and data.EntIndex == lp:EntIndex() and A.NativeOwn and A.NativeOwn() then
+			data.Entity = lp
+			data.Pos = A.SoundPos({ Entity = lp })
+		end
 	end
 	A.stats.relayedIn = A.stats.relayedIn + 1
 	if A.Enabled() and A.Process(data, true) then

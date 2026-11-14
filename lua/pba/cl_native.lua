@@ -546,6 +546,7 @@ N.hrtfCvar = N.hrtfCvar or CreateClientConVar("pba_native_hrtf", "", true, false
 -- tells the server that this client renders echoes (loud server sounds are then relayed to it)
 N.echoCvar = N.echoCvar or CreateClientConVar("pba_echo_want", "0", false, true, "Internal: native echoes active.")
 N.allCvar = N.allCvar or CreateClientConVar("pba_native_all_want", "0", false, true, "Internal: every sound rendered natively.")
+N.ownCvar = N.ownCvar or CreateClientConVar("pba_native_own_want", "0", false, true, "Internal: own sounds rendered natively too.")
 
 function N.StopRender()
 	if N.render and pba_native then pba_native.AudioStop() end
@@ -619,6 +620,11 @@ local PREWARM_SURFACES = { "metal", "metal_barrel", "metalpanel", "wood", "wood_
 	"concrete", "plastic", "plastic_barrel", "dirt", "default" }
 local SURFACE_SOUNDS = { "impactHardSound", "impactSoftSound", "breakSound", "bulletImpactSound",
 	"scrapeRoughSound", "scrapeSmoothSound", "rollingSound", "strainSound" }
+-- with pba_native_own the player's footsteps are the module's too: their first play on a fresh map would
+-- otherwise be the engine's while the file decodes (dry, then the next steps with the room's reverb)
+local STEP_SURFACES = { "concrete", "metal", "metalgrate", "metalpanel", "wood", "tile", "dirt", "gravel", "grass",
+	"mud", "sand", "chainlink", "water", "wade", "ladder", "default" }
+local STEP_SOUNDS = { "stepLeftSound", "stepRightSound" }
 
 --- The wave files of the likely burst sounds of this map (clean names, each once).
 function N.PrewarmList(yield)
@@ -636,6 +642,17 @@ function N.PrewarmList(yield)
 		local c = IsValid(e) and e:GetClass()
 		if c and (string.StartWith(c, "prop_physics") or c == "func_breakable" or c == "func_physbox") then surfs[N.SurfaceOf(e)] = true end
 		yield()
+	end
+	if (A.cfg.native_own or 0) >= 0.5 then
+		for _, s in ipairs(STEP_SURFACES) do
+			local d = util.GetSurfaceData(util.GetSurfaceIndex(s))
+			if d then
+				for _, k in ipairs(STEP_SOUNDS) do
+					local v = d[k]
+					if isstring(v) and v ~= "" then scripts[#scripts + 1] = v end
+				end
+			end
+		end
 	end
 	for s in pairs(surfs) do
 		local d = util.GetSurfaceData(util.GetSurfaceIndex(s))
@@ -1174,6 +1191,11 @@ local function skip(why) N.echoSkip[why] = (N.echoSkip[why] or 0) + 1 end
 -- the engine runs no DSP on it (pba_native_dry_prefix).
 function N.DryMix(name) return (A.cfg.native_dry_prefix or 1) >= 0.5 and A.IsDryMix(name) end
 
+--- True when the module plays the local player's own sounds too (pba_native_own, with pba_native_all).
+function A.NativeOwn()
+	return N.render and (A.cfg.native_all or 0) >= 0.5 and (A.cfg.native_own or 0) >= 0.5 and A.Enabled() or false
+end
+
 function N.Echo(data, pos, enginePlays, own)
 	if not N.render or (A.cfg.native_echo or 0) <= 0 or not pba_native.Echo then return skip("off") end
 	if own and (A.cfg.native_echo_own or 0) < 0.5 then return skip("own") end
@@ -1581,6 +1603,8 @@ timer.Create("pba_native_reverb", 0.5, 0, function()
 	if N.echoCvar and N.echoCvar:GetBool() ~= want then RunConsoleCommand("pba_echo_want", want and "1" or "0") end
 	local all = N.render and (A.cfg.native_all or 0) >= 0.5 and A.Enabled() or false
 	if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("pba_native_all_want", all and "1" or "0") end
+	local own = all and (A.cfg.native_own or 0) >= 0.5
+	if N.ownCvar and N.ownCvar:GetBool() ~= own then RunConsoleCommand("pba_native_own_want", own and "1" or "0") end
 	if not N.Busy() then return end -- pba off and silent: nothing to keep in sync (pushed again once on)
 	-- limits apply whatever renders (decoding also serves echoes)
 	if N.ready and pba_native and pba_native.SetLimits then pba_native.SetLimits(A.cfg.native_max_voices or 64, A.cfg.native_mem_mb or 512) end

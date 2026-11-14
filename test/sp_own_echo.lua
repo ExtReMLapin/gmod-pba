@@ -13,6 +13,10 @@ if not game.SinglePlayer() then return { pass = false, err = "singleplayer only"
 local savedAll = GetConVar("pba_native_all"):GetString()
 local savedOwn = GetConVar("pba_native_echo_own"):GetString()
 local savedEcho = GetConVar("pba_native_echo"):GetString()
+-- (the engine-played own sounds this test is about: with pba_native_own the module plays them instead)
+local cvOwn = GetConVar("pba_native_own")
+local savedNativeOwn = cvOwn and cvOwn:GetString()
+if cvOwn then RunConsoleCommand("pba_native_own", "0") end
 RunConsoleCommand("pba_native_echo", "0.25") -- (the default: the player may have turned echoes off)
 RunConsoleCommand("pba_echo_want", "1") -- (normally set by cl_native when echoes are on)
 RunConsoleCommand("give", "weapon_smg1") -- (the singleplayer host may)
@@ -35,5 +39,6 @@ end
 RunConsoleCommand("pba_native_all", savedAll)
 RunConsoleCommand("pba_native_echo_own", savedOwn)
 RunConsoleCommand("pba_native_echo", savedEcho)
+if savedNativeOwn then RunConsoleCommand("pba_native_own", savedNativeOwn) end
 res.pass = res.all0own1 > 0 and res.all1own1 > 0 and res.all1own0 == 0
 return res
