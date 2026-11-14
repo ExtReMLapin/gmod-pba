@@ -248,7 +248,7 @@ end
 -- never shipped and was told "not installed" even with gmcl_pba_win64.dll and phonon.dll in place.
 function N.InstallProblem(arch, exists)
 	if arch ~= "x64" then
-		return "your game runs the 32-bit version of Garry's Mod: the Steam Audio module is 64-bit only. In Steam: Garry's Mod > Properties > Betas > x86-64 - Chromium + 64-bit binaries"
+		return "your game runs the 32-bit version of Garry's Mod: the Steam Audio module is 64-bit only. Start the 64-bit game (gmod_win64.exe: in Steam, the 64-bit launch option)"
 	end
 	if not exists(MODULE) then return "module not installed" end
 	return nil

@@ -88,9 +88,8 @@ All the other acoustic constants are convars too (`find pba_`). Client: `pba_cl_
 It cannot be shipped through the Workshop: copy it with `phonon.dll` (Steam Audio's runtime)
 into `garrysmod/lua/bin`. Without it, PBA runs in pure Lua as described above.
 
-The module is 64-bit only. Steam installs the 32-bit game by default: switch it to the 64-bit
-branch first (Steam: Garry's Mod > Properties > Betas > `x86-64 - Chromium + 64-bit binaries`).
-A 32-bit game says so in the Steam Audio tab instead of loading the module.
+The module is 64-bit only: start the 64-bit game (`gmod_win64.exe`, Steam's 64-bit launch option),
+not the 32-bit `gmod.exe`. A 32-bit game says so in the Steam Audio tab instead of loading the module.
 
 The `phonon.dll` we use comes from [our Steam Audio fork](https://github.com/ExtReMLapin/steam-audio/releases/tag/v4.8.1-pba.2):
 4.8.1 (current `master`) plus six fixes we sent upstream

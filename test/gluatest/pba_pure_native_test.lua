@@ -63,7 +63,7 @@ return {
 				and N.EntrySend ~= nil and N.SlotSend ~= nil and N.LossLin ~= nil and N.Law ~= nil and N.Directivity ~= nil and N.VoiceEQ ~= nil).to.beTrue()
 			expect(near(N.REF_UNITS, 1 / 0.01905, 0.01)).to.beTrue()
 		end },
-		{ name = "InstallProblem: a 32-bit game is told to switch to the x86-64 branch (the module only exists in 64-bit), a missing file names its path", func = function()
+		{ name = "InstallProblem: a 32-bit game is told to start the 64-bit game (the module only exists in 64-bit), a missing file names its path", func = function()
 			expect(N.InstallProblem ~= nil).to.beTrue()
 			local has = function() return true end
 			local none = function() return false end
@@ -75,7 +75,7 @@ return {
 					local msg = N.InstallProblem(arch, exists)
 					expect(type(msg) == "string").to.beTrue()
 					expect(msg:find("32-bit", 1, true) ~= nil).to.beTrue()
-					expect(msg:find("x86-64", 1, true) ~= nil).to.beTrue()
+					expect(msg:find("gmod_win64.exe", 1, true) ~= nil).to.beTrue()
 				end
 			end
 			-- 64-bit without the file: "module not installed" (the menu's own state)

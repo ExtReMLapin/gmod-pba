@@ -5,7 +5,7 @@ PBA comes in two versions:
 - **Light**: the Lua addon alone, as published on the Workshop. It works on its own.
 - **Full**: Light plus the optional native module `gmcl_pba_win64.dll` and Steam Audio's
   `phonon.dll`, copied into `garrysmod/lua/bin` (see the README), on the 64-bit version of the game
-  (Steam > Properties > Betas > x86-64). Once they are there, the native options unlock in the menu.
+  (gmod_win64.exe). Once they are there, the native options unlock in the menu.
 
 Without the module nothing breaks: the native options are greyed out and Light runs alone.
 
