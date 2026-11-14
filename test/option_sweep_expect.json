@@ -427,6 +427,10 @@
   "pos0": "hook",
   "why": "who plays the player's own sounds (relay audience, cl_render hook), outside P.Compute; covered by native_own"
  },
+ "native_own_direct": {
+  "pos0": "hook",
+  "why": "the module's Play flag for the listener's own sounds (cl_native N.OwnDirect), outside P.Compute; the direct path's rendering is covered by the native own_voice_test"
+ },
  "native_protect_lines": {
   "pos0": "hook",
   "why": "voice cap of the native module (the protect argument of Play), outside P.Compute; covered by line_protect"

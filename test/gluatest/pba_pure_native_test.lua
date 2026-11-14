@@ -530,5 +530,35 @@ return {
 			_G.pba_native, N.failed = saved, failed
 			if not ok then error(err, 0) end
 		end },
+		{ name = "OwnDirect: the listener's own sounds (his footsteps, the shots of a weapon he holds) are played unspatialised when the module renders them; nobody else's, nothing without pba_native_own or with pba_native_own_direct 0", func = function()
+			local me = fakeEnt("player", nil, nil, nil)
+			local other = fakeEnt("player", nil, nil, nil)
+			local myGun = fakeEnt("weapon", nil, nil, me)
+			local hisGun = fakeEnt("weapon", nil, nil, other)
+			local crate = fakeEnt("prop", nil, nil, nil)
+			local savedLP, savedOwn = _G.LocalPlayer, A.NativeOwn
+			_G.LocalPlayer = function() return me end
+			local on = true
+			A.NativeOwn = function() return on end
+			local ok, err = pcall(function()
+				withCfg({ native_own_direct = 1 }, function()
+					expect(N.OwnDirect(me, CHAN_BODY)).to.equal(true)
+					expect(N.OwnDirect(myGun, CHAN_WEAPON)).to.equal(true)
+					expect(N.OwnDirect(other, CHAN_BODY)).to.beNil()
+					expect(N.OwnDirect(hisGun, CHAN_WEAPON)).to.beNil()
+					expect(N.OwnDirect(crate, CHAN_AUTO)).to.beNil()
+					expect(N.OwnDirect(nil, CHAN_AUTO)).to.beNil()
+					on = false -- the engine plays them (pba_native_own 0): nothing to flag
+					expect(N.OwnDirect(me, CHAN_BODY)).to.beNil()
+					on = true
+				end)
+				withCfg({ native_own_direct = 0 }, function()
+					expect(N.OwnDirect(me, CHAN_BODY)).to.beNil()
+					expect(N.OwnDirect(myGun, CHAN_WEAPON)).to.beNil()
+				end)
+			end)
+			_G.LocalPlayer, A.NativeOwn = savedLP, savedOwn
+			if not ok then error(err, 0) end
+		end },
 	},
 }

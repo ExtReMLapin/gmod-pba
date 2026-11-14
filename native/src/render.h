@@ -59,6 +59,12 @@ struct VoiceParams {
 	// SetPaused(true) freezes the voice where it is, SetPaused(false) resumes it. A voice without it keeps
 	// playing through the pause, as the engine's own sounds without the flag do.
 	bool pausable = false;
+	// Play only: the listener's own sound, which the engine does not spatialise: the direct path skips the HRTF /
+	// panning, the stereo width and the diffuse share; a stereo file keeps its left channel on the left ear and its
+	// right one on the right (with the voice's EQ and gain), a mono one is the same on both ears. The room sends
+	// (listener room bus, source reverb slot) are not touched: the reverb answers the sound like any other. Fixed
+	// for the life of the voice (Update leaves it alone).
+	bool own = false;
 };
 
 // sofa / sofaSize: optional SOFA HRTF file contents (nullptr = Steam Audio's default HRTF)
@@ -132,6 +138,14 @@ struct SentenceWord {
 std::string LoadSentence(const std::string& name, const SentenceWord* words, int n, double* seconds, int* used = nullptr);
 // a copy of a loaded sound's samples (mono / mid, 48 kHz): offline tests; empty if not loaded
 std::vector<float> SoundPcm(const std::string& name);
+// the side channel (L - R) / 2 of a stereo sound (48 kHz; empty for a mono one): offline tests
+std::vector<float> SoundSide(const std::string& name);
+// Offline capture (tests): from CaptureStart on, every rendered block's stereo mix BEFORE the master volume and
+// soft clip (interleaved), the mono send into the listener room bus and the sum of the source reverb slots'
+// inputs are kept (kBlock frames per block, aligned). CaptureStop hands them over and stops.
+void CaptureStart();
+void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend);
+float OutputClip(float x); // the output soft clip (master volume 1)
 // stereo sound: the voice spatialises mid + sel x side (sel 1 = left channel, -1 = right, 0 = (L + R) / 2,
 // the default) and adds width x side unspatialised (0 = none, the default; 1 = the file's full width).
 // Ramped over one block. No effect on a mono sound. false if the voice is gone or dying.

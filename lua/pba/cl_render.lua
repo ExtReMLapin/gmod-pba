@@ -482,6 +482,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0)) * wet
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
 			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet, line = isLine(data), protect = A.Native.ProtectLine(data.Channel), pausable = A.Native.PauseFlag(data.Flags),
+			own = A.Native.OwnDirect(src, data.Channel),
 			mix = A.Mix and A.Mix.GroupsOf(data.SoundName, src or data.EntIndex, data.Channel, lvl0) })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
@@ -1297,6 +1298,7 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
 				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl), line = isLine(data), protect = A.Native.ProtectLine(data.Channel), pausable = A.Native.PauseFlag(data.Flags),
+				own = A.Native.OwnDirect(src, data.Channel),
 				mix = A.Mix and A.Mix.GroupsOf(data.SoundName, IsValid(src) and src or data.EntIndex, data.Channel, lvl) })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1

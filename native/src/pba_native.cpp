@@ -1778,6 +1778,7 @@ static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	if (LUA->IsType(first + 4, Type::Number)) p.offset = std::clamp((float)LUA->GetNumber(first + 4), 0.0f, 3600.0f); // inf would make a loop's fmod NaN
 	p.protect = LUA->IsType(first + 5, Type::Bool) && LUA->GetBool(first + 5); // a spoken line: spared by the voice cap
 	p.pausable = LUA->IsType(first + 6, Type::Bool) && LUA->GetBool(first + 6); // frozen by SetPaused
+	p.own = LUA->IsType(first + 7, Type::Bool) && LUA->GetBool(first + 7); // the listener's own sound: not spatialised (Play only)
 }
 
 // optional room reverb send at index i (PlayStream, Update): -1 when absent = keep the current one
@@ -1893,7 +1894,7 @@ LUA_FUNCTION(SetVoiceStereo) {
 	return 1;
 }
 
-// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send [, offset]]]]]]])
+// Play(name, pos, gain, eqL, eqM, eqH [, pitch [, loop [, delay [, sh [, diffuse [, send [, offset [, protect [, pausable [, own]]]]]]]]]]])
 //   -> voice id (0 = failed), pathFallback (sh given but no free path effect: straight line)
 LUA_FUNCTION(Play) {
 	const char* name = LUA->CheckString(1);
