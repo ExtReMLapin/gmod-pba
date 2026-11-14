@@ -7,6 +7,7 @@
 --   overlap_channel two pba mirrors of different lines alive at once on one entity's voice channel
 --   mirror_step     a mirror's gain jumps > STEP_DB between two samples with no ramp (audible step)
 --   voice_step      a module voice's gain jumps > STEP_DB between two Update calls < 0.5 s apart, outside a glide
+--   kept_onset      a followed one-shot kept alive from a cheap result (gain floor 0.0011) gliding up to its full result in 0.1 s
 --   voice_glide     a module voice glides > GLIDE_DB within 0.4 s (its target jumped: a path appearing / vanishing)
 --   louder_vanilla  a module loop's sent gain > LOUD_DB above the engine's own law for its level (vanilla audible)
 --   audible_vanilla_silent  same where vanilla plays nothing (law below ENGINE_CUT_DB): > LOUD_DB above that cut
@@ -50,6 +51,21 @@ W.deadT = W.deadT or {}         -- mirror key -> CurTime() its NPC was first see
 W.hadHealth = W.hadHealth or setmetatable({}, { __mode = "k" }) -- NPC -> true once seen with health > 0
 
 local function db(x) return 20 * math.log10(math.max(x, 1e-9)) end
+-- what drives a followed one-shot's voice, read from the locals of its caller (cl_render's VOICE.native.update(rec, fv,
+-- now, L, g, ...), two levels above the helper): the record and its ramp, to tell a ramp that jumps by design (dur 0) from
+-- a target that moved (2026-11-14: isolated -13/-14 dB steps on followed one-shots)
+local function followInfo()
+	local _, rec = debug.getlocal(3, 1)
+	local _, fv = debug.getlocal(3, 2)
+	if type(rec) ~= "table" or type(fv) ~= "table" or type(fv.ramp) ~= "table" then return nil end
+	local r, now = fv.ramp, RealTime()
+	local fr, to = r.from, r.to
+	return { rec = rec.key, lvl = rec.lvl, ent = IsValid(rec.ent) and rec.ent:GetClass() or nil, clear = rec.clearPath or nil,
+		nv = rec.voices and #rec.voices or nil, age = fv.t0 and math.Round(now - fv.t0, 2) or nil, switched = fv.switched or nil,
+		rampAge = r.t0 and math.Round(now - r.t0, 3) or nil, rampDur = r.dur and math.Round(r.dur, 3) or nil,
+		rampFrom = fr and math.Round(fr[1], 4) or nil, rampTo = to and math.Round(to[1], 4) or nil,
+		rampPos = r.pos1 and tostring(r.pos1) or nil, fading = fv.fading or nil, nextEval = rec.tNext and math.Round(rec.tNext - now, 3) or nil }
+end
 local function note(kind, key, sample)
 	local a = W.anomalies[kind] or { count = 0, keys = {}, samples = {} }
 	W.anomalies[kind] = a
@@ -66,6 +82,37 @@ local function note(kind, key, sample)
 	a.keys[key] = a.keys[key] + 1
 end
 W.note = note
+
+-- the last two evaluations of each playing sound (P.Evaluate with an owner: mirrors, followed one-shots), what the
+-- sample of a step says changed between them: the listener and source places, the number of voices, the first
+-- voice's length / gain / kind, clear sight (2026-11-14: a Breencast mirror stepping ~5 dB at a fixed listener)
+W.ev = W.ev or setmetatable({}, { __mode = "k" })
+local function evSummary(r, S, L)
+	local o = { t = math.Round(CurTime(), 2), L = L and tostring(L) or nil, S = S and tostring(S) or nil }
+	if not r then o.nil_ = true return o end
+	o.far, o.clear, o.cheap, o.nv = r.far or nil, r.clear or nil, r.cheap or nil, r.voices and #r.voices or 0
+	o.gain, o.lp = r.gain and math.Round(r.gain, 4) or nil, r.lp
+	local v = r.voices and r.voices[1]
+	if v then o.v1 = { len = v.len and math.Round(v.len), gain = v.gain and math.Round(v.gain, 4), kind = v.kind, lp = v.lp,
+		pos = v.pos and tostring(v.pos) or nil, diffuse = v.diffuse and math.Round(v.diffuse, 2) or nil } end
+	return o
+end
+if pba and pba.Paths and not pba.Paths.pbaWatchEval then
+	pba.Paths.pbaWatchEval = true
+	local ev0 = pba.Paths.Evaluate
+	pba.Paths.Evaluate = function(o, S, L, ...)
+		local r, extra = ev0(o, S, L, ...)
+		if o then
+			local e = W.ev[o]
+			if not e then e = {} W.ev[o] = e end
+			e.prev, e.cur = e.cur, evSummary(r, S, L)
+			e.hist = e.hist or {}
+			if #e.hist >= 6 then table.remove(e.hist, 1) end
+			e.hist[#e.hist + 1] = e.cur
+		end
+		return r, extra
+	end
+end
 
 local function bare(name) return (string.gsub(name or "", "^[%*%#%@%>%<%^%)%(%}%$%!%?%&%~%`%+%%]+", "")) end
 local function fileKey(name) return string.lower((string.gsub(bare(name), "\\", "/"))) end
@@ -153,7 +200,12 @@ if pba_native and not pba_native.pbaWatchWrapped then
 				if not glides(d, cand.db) then
 					v.steps = v.steps + 1
 					cand.nextDb = math.Round(d, 1)
-					note("voice_step", tostring(v.n), cand)
+					-- a followed one-shot kept alive from a cheap result too quiet to emit (cl_render keptCheap): it starts at
+					-- the quietest level emitted (gain 0.001 * 1 dB) and glides to its first full result in KEEP_RAMP_S (0.1 s),
+					-- a designed onset, up from under -59 dB, counted apart so it does not hide the steps of pba's own
+					local f = cand.follow
+					local kept = f and f.rampFrom and f.rampFrom <= 0.0013 and f.rampDur and f.rampDur <= 0.1 and cand.db > 0
+					note(kept and "kept_onset" or "voice_step", tostring(v.n), cand)
 				end
 			end
 			if math.abs(d) > STEP_DB and not glides(v.d or 0, d) then
@@ -161,7 +213,7 @@ if pba_native and not pba_native.pbaWatchWrapped then
 				-- callers of this update and the previous one (two drivers of one voice disagreeing)
 				v.cand = { sound = tostring(v.n), fromG = math.Round(v.g, 4), toG = math.Round(gain, 4),
 					db = math.Round(d, 1), pos = pos and tostring(pos) or nil, first = v.first or nil,
-					dt = math.Round(now - v.t, 3), by = by, prevBy = v.by }
+					dt = math.Round(now - v.t, 3), by = by, prevBy = v.by, follow = string.find(by, "cl_render", 1, true) and followInfo() or nil }
 			end
 			-- glide: the same-way changes summed; one over GLIDE_DB in at most 0.4 s is a level jump of the target
 			-- (a path appearing / vanishing, a server volume change), smoothed but heard as a swell or a drop
@@ -278,8 +330,10 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 		-- (or a teleport since that value: whatever its distance)
 		local moved = (L and lastL and L:Distance(lastL) > JUMP_UNITS) or (W.mgT[key] and (W.jumpT or -99) >= W.mgT[key])
 		if g and last and not quiet and not moved and g > 1e-3 and last > 1e-3 and not m.ramp and math.abs(db(g) - db(last)) > STEP_DB then
+			local ev = W.ev[m]
 			note("mirror_step", name, { sound = name, fromG = math.Round(last, 3), toG = math.Round(g, 3), pos = m.pos and tostring(m.pos) or nil,
-				native = m.nativeId ~= nil, once = m.once or nil, dsp = m.curDsp })
+				native = m.nativeId ~= nil, once = m.once or nil, dsp = m.curDsp, listener = L and tostring(L) or nil,
+				evPrev = ev and ev.prev or nil, evCur = ev and ev.cur or nil, evHist = ev and ev.hist or nil, lastSampleAge = W.mgT[key] and math.Round(now - W.mgT[key], 2) or nil })
 		end
 		if g ~= last or not lastL then W.mgL[key], W.mgT[key] = L, now end
 		W.mg[key] = g
