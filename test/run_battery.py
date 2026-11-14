@@ -303,6 +303,81 @@ def levels_off_states():
         call("console_exec", {"realm": "server", "cmd": "pba_long_captions 1"})
     return {"pass": not fails, "fails": fails, "res": res}
 
+def long_sound_boundary():
+    """T15: one 10.48 s line (Barney behind the wall of pba_tworooms) on both sides of max_duration (10.3: a long
+    sound, followed by sv_loops; 10.7: a short one, relayed once): what the player gets is the same (muffled by the
+    wall within 1.5 dB, one subtitle, one mouth copy, the end where the file ends, nothing left after); with
+    pba_long_sounds 0 the long one is left to the engine. Engine rendering (pba_native_render 0): the copy's volume
+    is then an engine emission. Halves: long_boundary_server.lua / long_boundary_client.lua (client started first)."""
+    import threading
+    load(TW)
+    native_on(False)
+    RED = os.environ.get("PBA_RED", "").split(",")  # red proof: captions / mouth / end switch a long-path feature off
+    fails = []
+    def run(maxd, long_sounds=1):
+        call("console_exec", {"realm": "server", "cmd": f"pba_long_sounds {long_sounds}"})
+        out = {}
+        def cl():
+            out["cl"] = job("client", "long_boundary_client.lua", 60)
+        th = threading.Thread(target=cl)
+        th.start()
+        time.sleep(0.5)
+        code = f"T15_MAXD = {maxd}" + chr(10) + open(os.path.join(TEST, "long_boundary_server.lua"), encoding="utf-8").read()
+        r = call("lua_job", {"realm": "server", "code": code, "timeout_s": 60}, timeout=120)
+        out["sv"] = r.get("values", [r])[0]
+        th.join()
+        return out["sv"], out["cl"]
+    res = {}
+    try:
+        if "captions" in RED:
+            call("console_exec", {"realm": "server", "cmd": "pba_long_captions 0"})
+        if "mouth" in RED:
+            call("console_exec", {"realm": "server", "cmd": "pba_long_lipsync 0"})
+        if "end" in RED:
+            call("console_exec", {"realm": "server", "cmd": "pba_loops_once_end 0"})
+        call("console_exec", {"realm": "client", "cmd": "pba_loops_once_end " + ("0" if "end" in RED else "1")})
+        time.sleep(1)
+        (svL, clL), (svS, clS) = run(10.3), run(10.7)
+        res.update(long=[svL, clL], short=[svS, clS])
+        dur = svL.get("dur") or 10.48
+        if not (isinstance(svL, dict) and isinstance(svS, dict) and isinstance(clL, dict) and isinstance(clS, dict)):
+            return {"pass": False, "res": res}
+        if svL.get("long") is not True or svS.get("long") is not False:
+            fails.append(f"paths: 10.3 long={svL.get('long')}, 10.7 long={svS.get('long')} (want True, False)")
+        for tag, sv, cl, mouth in (("long", svL, clL, svL.get("mouthLong", 0) + clL.get("mouth", 0)),
+                                   ("short", svS, clS, svS.get("mouthLong", 0) + clS.get("mouth", 0))):
+            if not cl.get("started"):
+                fails.append(f"{tag}: pba produced nothing on the client")
+                continue
+            if cl.get("caps") != 1:
+                fails.append(f"{tag}: {cl.get('caps')} subtitles (want 1)")
+            if mouth != 1:
+                fails.append(f"{tag}: {mouth} mouth copies (want 1)")
+            v = cl.get("vol")
+            if not (v and 0 < v < 0.3):
+                fails.append(f"{tag}: copy volume {v} (want a muffled copy, 0 < v < 0.3)")
+            e = cl.get("endRel")
+            if e is None or not (dur - 0.3 <= e <= dur + 1.0):
+                fails.append(f"{tag}: planned end {e} s after the start (file {dur} s)")
+            if cl.get("left") != 0:
+                fails.append(f"{tag}: {cl.get('left')} followed sounds left after the end")
+        vl, vs = clL.get("vol"), clS.get("vol")
+        if vl and vs and abs(20 * __import__("math").log10(vl / vs)) > 1.5:
+            fails.append(f"volume differs across the boundary: {vl} vs {vs}")
+        el, es = clL.get("endRel"), clS.get("endRel")
+        if el is not None and es is not None and abs(el - es) > 1.0:
+            fails.append(f"end differs across the boundary: {el} vs {es}")
+        # the long path off: the engine keeps its line (pba took nothing)
+        svO, clO = run(10.3, long_sounds=0)
+        res["long_sounds_0"] = [svO, clO]
+        if svO.get("long") is not False or svO.get("relayed") != 0 or clO.get("mirror") or clO.get("copies") or clO.get("mouth") or clO.get("nv"):
+            fails.append(f"long_sounds 0: pba still took the long line: {svO} {clO}")
+    finally:
+        for c in ("pba_max_duration 8", "pba_long_sounds 1", "pba_long_captions 1", "pba_long_lipsync 1", "pba_loops_once_end 1"):
+            call("console_exec", {"realm": "server", "cmd": c})
+        call("console_exec", {"realm": "client", "cmd": "pba_loops_once_end 1"})
+    return {"pass": not fails, "fails": fails, "res": res}
+
 def speaker_once():
     """Long one-shots on a speaker: speaker_once_server.lua starts the lines, speaker_once_check.lua (with its
     result in PBA_SPK) checks the client mirrors end with their file and are replaced on their channel."""
@@ -926,6 +1001,8 @@ steps = [
     ("lua_reload", lambda: seq(any_map, lua_reload)),
     # T23: lipsync, long_captions, soundscape_engine, stopsound_watch: each at 1 and at 0, the two behaviours told apart
     ("levels_off_states", lambda: levels_off_states()),
+    # T15: one line either side of max_duration (long sound / short): same wall, subtitle, mouth, end; long_sounds 0 leaves it to the engine
+    ("long_sound_boundary", lambda: long_sound_boundary()),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
