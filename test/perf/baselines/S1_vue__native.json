@@ -1,0 +1,127 @@
+{
+ "scenario": "S1",
+ "variant": "vue",
+ "mode": "native",
+ "map": "gm_construct",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 6.638,
+   "mad": 0.05
+  },
+  "p99": {
+   "med": 13,
+   "mad": 0.109
+  },
+  "max": {
+   "med": 14.835,
+   "mad": 0.601
+  },
+  "excess": {
+   "med": 2477.706,
+   "mad": 40.467
+  },
+  "hitches": {
+   "med": 354,
+   "mad": 18
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 1.768,
+   "mad": 0.024
+  },
+  "pba_max": {
+   "med": 4.228,
+   "mad": 0.386
+  },
+  "pba_sum": {
+   "med": 64.42,
+   "mad": 3.613
+  },
+  "kb_alloc": {
+   "med": 14445,
+   "mad": 130
+  },
+  "gc_drops": {
+   "med": 0,
+   "mad": 0
+  },
+  "ensure_ms": 39.05,
+  "sv_us_sound": 60.9,
+  "sounds": 169,
+  "idle_p50": 3.181
+ },
+ "cold": {
+  "burst_n": 649,
+  "done": true,
+  "doors": {
+   "max": 0.343,
+   "ms": 9.734,
+   "n": 62
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 3.521,
+   "ms": 44.879,
+   "n": 190
+  },
+  "excess": 2370.869,
+  "gc_drops": 0,
+  "hitches": 326,
+  "idle_n": 292,
+  "idle_p50": 3.288,
+  "idle_p99": 8.034,
+  "kb_alloc": 14312,
+  "max": 17.41,
+  "maxNativeVoices": 36,
+  "native": {
+   "audioMaxMs": 2.492,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 2.191,
+   "reflRuns": 36,
+   "slotPasses": 25,
+   "soundsLoaded": 10
+  },
+  "ndirect": 152,
+  "over16": 1,
+  "p50": 6.576,
+  "p95": 10.691,
+  "p99": 13.053,
+  "pba_max": 3.677,
+  "pba_p50": 0.007,
+  "pba_p99": 2.317,
+  "pba_sum": 81.198,
+  "processed": 19,
+  "relayedIn": 134,
+  "seen": 171,
+  "timers_ms": 33.326,
+  "voices": 19,
+  "worst3": [
+   17.41,
+   14.29,
+   13.941
+  ],
+  "server": {
+   "hook_max": 0.189,
+   "hook_ms": 15.433,
+   "relayed": 137,
+   "sounds": 273,
+   "tick_max": 21.13,
+   "ticks": 368,
+   "us_per_sound": 56.5,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "-1500.000000 0.000000 -84.000000",
+   "barrels": 20
+  },
+  "clean": true,
+  "mode": "native",
+  "invalid": []
+ }
+}

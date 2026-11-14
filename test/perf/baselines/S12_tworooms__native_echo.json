@@ -1,0 +1,128 @@
+{
+ "scenario": "S12",
+ "variant": "tworooms",
+ "mode": "native_echo",
+ "map": "pba_tworooms",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 2.334,
+   "mad": 0.08
+  },
+  "p99": {
+   "med": 5.754,
+   "mad": 0.221
+  },
+  "max": {
+   "med": 7.437,
+   "mad": 0.444
+  },
+  "excess": {
+   "med": 2693.002,
+   "mad": 34.805
+  },
+  "hitches": {
+   "med": 990,
+   "mad": 9
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 0.029,
+   "mad": 0.002
+  },
+  "pba_max": {
+   "med": 0.121,
+   "mad": 0.012
+  },
+  "pba_sum": {
+   "med": 1.398,
+   "mad": 0.042
+  },
+  "kb_alloc": {
+   "med": 11722,
+   "mad": 301
+  },
+  "gc_drops": {
+   "med": 49,
+   "mad": 19
+  },
+  "ensure_ms": 0.042,
+  "sv_us_sound": 0,
+  "sounds": 10,
+  "idle_p50": 1.02
+ },
+ "cold": {
+  "burst_n": 1879,
+  "done": true,
+  "doors": {
+   "max": 0.155,
+   "ms": 1.863,
+   "n": 62
+  },
+  "echoes": 10,
+  "ensure": {
+   "max": 0.025,
+   "ms": 0.05,
+   "n": 10
+  },
+  "excess": 2344.732,
+  "gc_drops": 106,
+  "hitches": 897,
+  "idle_n": 687,
+  "idle_p50": 1.191,
+  "idle_p99": 3.452,
+  "kb_alloc": 11176,
+  "max": 7.831,
+  "maxNativeVoices": 10,
+  "native": {
+   "audioMaxMs": 0.557,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 5.316,
+   "reflRuns": 24,
+   "slotPasses": 1,
+   "soundsLoaded": 0
+  },
+  "ndirect": 0,
+  "over16": 0,
+  "p50": 2.282,
+  "p95": 4.392,
+  "p99": 5.402,
+  "pba_max": 0.155,
+  "pba_p50": 0,
+  "pba_p99": 0.028,
+  "pba_sum": 1.474,
+  "processed": 0,
+  "relayedIn": 0,
+  "seen": 10,
+  "timers_ms": 0.109,
+  "voices": 0,
+  "worst3": [
+   7.831,
+   7.509,
+   6.636
+  ],
+  "server": {
+   "hook_max": 0,
+   "hook_ms": 0,
+   "relayed": 0,
+   "sounds": 0,
+   "tick_max": 18.35,
+   "ticks": 367,
+   "us_per_sound": 0,
+   "wrapped": true
+  },
+  "setup": {
+   "C": "400.000000 280.000000 48.000000",
+   "L": "256.000000 256.000000 1.000000",
+   "booms": 10
+  },
+  "clean": true,
+  "mode": "native_echo",
+  "invalid": []
+ }
+}

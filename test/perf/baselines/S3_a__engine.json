@@ -1,0 +1,127 @@
+{
+ "scenario": "S3",
+ "variant": "a",
+ "mode": "engine",
+ "map": "gm_construct",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 4.059,
+   "mad": 0.032
+  },
+  "p99": {
+   "med": 5.612,
+   "mad": 0.127
+  },
+  "max": {
+   "med": 8.78,
+   "mad": 0.353
+  },
+  "excess": {
+   "med": 1165.726,
+   "mad": 36.891
+  },
+  "hitches": {
+   "med": 7,
+   "mad": 0
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 0.058,
+   "mad": 0.005
+  },
+  "pba_max": {
+   "med": 0.178,
+   "mad": 0.002
+  },
+  "pba_sum": {
+   "med": 2.396,
+   "mad": 0.112
+  },
+  "kb_alloc": {
+   "med": 14472,
+   "mad": 21
+  },
+  "gc_drops": {
+   "med": 0,
+   "mad": 0
+  },
+  "ensure_ms": 0,
+  "sv_us_sound": 116.7,
+  "sounds": 10,
+  "idle_p50": 3.046
+ },
+ "cold": {
+  "burst_n": 1048,
+  "done": true,
+  "doors": {
+   "max": 0.085,
+   "ms": 3,
+   "n": 61
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 0,
+   "ms": 0,
+   "n": 0
+  },
+  "excess": 1110.239,
+  "gc_drops": 0,
+  "hitches": 5,
+  "idle_n": 301,
+  "idle_p50": 3.241,
+  "idle_p99": 4.472,
+  "kb_alloc": 13889,
+  "max": 8.682,
+  "maxNativeVoices": 0,
+  "native": {
+   "audioMaxMs": 0,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 1.735,
+   "reflRuns": 0,
+   "slotPasses": 0,
+   "soundsLoaded": 0
+  },
+  "ndirect": 0,
+  "over16": 0,
+  "p50": 4.19,
+  "p95": 5.228,
+  "p99": 5.807,
+  "pba_max": 0.085,
+  "pba_p50": 0,
+  "pba_p99": 0.057,
+  "pba_sum": 2.316,
+  "processed": 0,
+  "relayedIn": 0,
+  "seen": 10,
+  "timers_ms": 0.085,
+  "voices": 0,
+  "worst3": [
+   8.682,
+   8.561,
+   7.231
+  ],
+  "server": {
+   "hook_max": 0.784,
+   "hook_ms": 3.301,
+   "relayed": 0,
+   "sounds": 10,
+   "tick_max": 21.54,
+   "ticks": 368,
+   "us_per_sound": 330.1,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "-1500.000000 0.000000 -84.000000",
+   "nades": 10
+  },
+  "clean": true,
+  "mode": "engine",
+  "invalid": []
+ }
+}

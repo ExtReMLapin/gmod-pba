@@ -1,0 +1,128 @@
+{
+ "scenario": "S11",
+ "variant": "canals",
+ "mode": "engine",
+ "map": "d1_canals_01",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 3.667,
+   "mad": 0.198
+  },
+  "p99": {
+   "med": 42.323,
+   "mad": 2.123
+  },
+  "max": {
+   "med": 101.454,
+   "mad": 6.485
+  },
+  "excess": {
+   "med": 2880.611,
+   "mad": 71.415
+  },
+  "hitches": {
+   "med": 227,
+   "mad": 17
+  },
+  "over16": {
+   "med": 57,
+   "mad": 1
+  },
+  "pba_p99": {
+   "med": 33.364,
+   "mad": 1.155
+  },
+  "pba_max": {
+   "med": 85.156,
+   "mad": 7.01
+  },
+  "pba_sum": {
+   "med": 1652.09,
+   "mad": 106.026
+  },
+  "kb_alloc": {
+   "med": 98575,
+   "mad": 1316
+  },
+  "gc_drops": {
+   "med": 15,
+   "mad": 11
+  },
+  "ensure_ms": 0,
+  "sv_us_sound": 67.1,
+  "sounds": 144,
+  "idle_p50": 2.33
+ },
+ "cold": {
+  "burst_n": 690,
+  "done": true,
+  "doors": {
+   "max": 32.307,
+   "ms": 1114.267,
+   "n": 62
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 0,
+   "ms": 0,
+   "n": 0
+  },
+  "excess": 2793.979,
+  "gc_drops": 11,
+  "hitches": 186,
+  "idle_n": 320,
+  "idle_p50": 2.486,
+  "idle_p99": 22.237,
+  "kb_alloc": 99311,
+  "max": 107.692,
+  "maxNativeVoices": 0,
+  "native": {
+   "audioMaxMs": 0,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 3.51,
+   "reflRuns": 0,
+   "slotPasses": 0,
+   "soundsLoaded": 0
+  },
+  "ndirect": 0,
+  "over16": 62,
+  "p50": 3.661,
+  "p95": 23.263,
+  "p99": 48.288,
+  "pba_max": 88.381,
+  "pba_p50": 0.003,
+  "pba_p99": 35.287,
+  "pba_sum": 1660.555,
+  "processed": 146,
+  "relayedIn": 111,
+  "seen": 153,
+  "timers_ms": 571.18,
+  "voices": 162,
+  "worst3": [
+   107.692,
+   107.13,
+   83.328
+  ],
+  "server": {
+   "hook_max": 2.235,
+   "hook_ms": 38.639,
+   "relayed": 111,
+   "sounds": 237,
+   "tick_max": 107.67,
+   "ticks": 367,
+   "us_per_sound": 163,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "500.000000 -6600.000000 513.000000",
+   "barrels": 9,
+   "dist": "356 382 626 633 641 815 824 860 861"
+  },
+  "clean": true,
+  "mode": "engine",
+  "invalid": []
+ }
+}

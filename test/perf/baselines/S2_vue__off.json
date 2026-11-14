@@ -1,0 +1,128 @@
+{
+ "scenario": "S2",
+ "variant": "vue",
+ "mode": "off",
+ "map": "gm_construct",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 6.406,
+   "mad": 0.18
+  },
+  "p99": {
+   "med": 9.884,
+   "mad": 0.373
+  },
+  "max": {
+   "med": 12.318,
+   "mad": 0.167
+  },
+  "excess": {
+   "med": 2051.711,
+   "mad": 70.018
+  },
+  "hitches": {
+   "med": 218,
+   "mad": 9
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 0.158,
+   "mad": 0.012
+  },
+  "pba_max": {
+   "med": 0.283,
+   "mad": 0.039
+  },
+  "pba_sum": {
+   "med": 5.484,
+   "mad": 0.081
+  },
+  "kb_alloc": {
+   "med": 10070,
+   "mad": 98
+  },
+  "gc_drops": {
+   "med": 0,
+   "mad": 0
+  },
+  "ensure_ms": 0,
+  "sv_us_sound": 0,
+  "sounds": 0,
+  "idle_p50": 3.675
+ },
+ "cold": {
+  "burst_n": 675,
+  "done": true,
+  "doors": {
+   "max": 0.492,
+   "ms": 7.699,
+   "n": 62
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 0,
+   "ms": 0,
+   "n": 0
+  },
+  "excess": 2082.108,
+  "gc_drops": 0,
+  "hitches": 230,
+  "idle_n": 238,
+  "idle_p50": 3.594,
+  "idle_p99": 16.624,
+  "kb_alloc": 10085,
+  "max": 11.617,
+  "maxNativeVoices": 0,
+  "native": {
+   "audioMaxMs": 0.07,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 1.715,
+   "reflRuns": 6,
+   "slotPasses": 0,
+   "soundsLoaded": 0
+  },
+  "ndirect": 0,
+  "over16": 0,
+  "p50": 6.439,
+  "p95": 9.139,
+  "p99": 10.568,
+  "pba_max": 0.321,
+  "pba_p50": 0,
+  "pba_p99": 0.142,
+  "pba_sum": 5.913,
+  "processed": 0,
+  "relayedIn": 0,
+  "seen": 0,
+  "timers_ms": 0.078,
+  "voices": 0,
+  "worst3": [
+   11.617,
+   11.211,
+   11.103
+  ],
+  "server": {
+   "hook_max": 0,
+   "hook_ms": 0,
+   "relayed": 0,
+   "sounds": 0,
+   "tick_max": 42.95,
+   "ticks": 368,
+   "us_per_sound": 0,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "-1500.000000 0.000000 -84.000000",
+   "center": "-2200.000000 0.000000 -109.995972",
+   "props": 56
+  },
+  "clean": true,
+  "mode": "off",
+  "invalid": []
+ }
+}

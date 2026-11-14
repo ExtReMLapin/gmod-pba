@@ -1,0 +1,128 @@
+{
+ "scenario": "S2",
+ "variant": "vue",
+ "mode": "native",
+ "map": "gm_construct",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 6.485,
+   "mad": 0.093
+  },
+  "p99": {
+   "med": 10.986,
+   "mad": 0.136
+  },
+  "max": {
+   "med": 13.711,
+   "mad": 1.82
+  },
+  "excess": {
+   "med": 2116.891,
+   "mad": 49.084
+  },
+  "hitches": {
+   "med": 232,
+   "mad": 4
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 1.521,
+   "mad": 0.11
+  },
+  "pba_max": {
+   "med": 2.71,
+   "mad": 0.738
+  },
+  "pba_sum": {
+   "med": 60.68,
+   "mad": 22.458
+  },
+  "kb_alloc": {
+   "med": 16338,
+   "mad": 2797
+  },
+  "gc_drops": {
+   "med": 0,
+   "mad": 0
+  },
+  "ensure_ms": 19.773,
+  "sv_us_sound": 45.6,
+  "sounds": 59,
+  "idle_p50": 3.536
+ },
+ "cold": {
+  "burst_n": 636,
+  "done": true,
+  "doors": {
+   "max": 0.423,
+   "ms": 9.354,
+   "n": 62
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 3.165,
+   "ms": 21.77,
+   "n": 53
+  },
+  "excess": 2172.995,
+  "gc_drops": 0,
+  "hitches": 248,
+  "idle_n": 239,
+  "idle_p50": 3.677,
+  "idle_p99": 11.826,
+  "kb_alloc": 16138,
+  "max": 12.519,
+  "maxNativeVoices": 10,
+  "native": {
+   "audioMaxMs": 1.679,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 1.86,
+   "reflRuns": 22,
+   "slotPasses": 15,
+   "soundsLoaded": 12
+  },
+  "ndirect": 40,
+  "over16": 0,
+  "p50": 6.813,
+  "p95": 9.817,
+  "p99": 11.115,
+  "pba_max": 7.836,
+  "pba_p50": 0,
+  "pba_p99": 1.805,
+  "pba_sum": 65.507,
+  "processed": 14,
+  "relayedIn": 57,
+  "seen": 54,
+  "timers_ms": 37.839,
+  "voices": 13,
+  "worst3": [
+   12.519,
+   12.333,
+   11.592
+  ],
+  "server": {
+   "hook_max": 2.192,
+   "hook_ms": 14.062,
+   "relayed": 57,
+   "sounds": 290,
+   "tick_max": 34.9,
+   "ticks": 368,
+   "us_per_sound": 48.5,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "-1500.000000 0.000000 -84.000000",
+   "center": "-2200.000000 0.000000 -109.995972",
+   "props": 56
+  },
+  "clean": true,
+  "mode": "native",
+  "invalid": []
+ }
+}

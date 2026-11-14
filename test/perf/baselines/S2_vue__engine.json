@@ -1,0 +1,128 @@
+{
+ "scenario": "S2",
+ "variant": "vue",
+ "mode": "engine",
+ "map": "gm_construct",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 6.126,
+   "mad": 0.0
+  },
+  "p99": {
+   "med": 9.93,
+   "mad": 0.0
+  },
+  "max": {
+   "med": 12.457,
+   "mad": 0.0
+  },
+  "excess": {
+   "med": 2166.903,
+   "mad": 0.0
+  },
+  "hitches": {
+   "med": 264,
+   "mad": 0
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 0.171,
+   "mad": 0.0
+  },
+  "pba_max": {
+   "med": 0.683,
+   "mad": 0.0
+  },
+  "pba_sum": {
+   "med": 7.714,
+   "mad": 0.0
+  },
+  "kb_alloc": {
+   "med": 10286,
+   "mad": 0
+  },
+  "gc_drops": {
+   "med": 0,
+   "mad": 0
+  },
+  "ensure_ms": 0,
+  "sv_us_sound": 43.5,
+  "sounds": 4,
+  "idle_p50": 3.335
+ },
+ "cold": {
+  "burst_n": 684,
+  "done": true,
+  "doors": {
+   "max": 0.41,
+   "ms": 7.354,
+   "n": 61
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 0,
+   "ms": 0,
+   "n": 0
+  },
+  "excess": 2056.324,
+  "gc_drops": 0,
+  "hitches": 231,
+  "idle_n": 245,
+  "idle_p50": 3.579,
+  "idle_p99": 13.956,
+  "kb_alloc": 21302,
+  "max": 12.107,
+  "maxNativeVoices": 0,
+  "native": {
+   "audioMaxMs": 0,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 1.715,
+   "reflRuns": 0,
+   "slotPasses": 0,
+   "soundsLoaded": 0
+  },
+  "ndirect": 0,
+  "over16": 0,
+  "p50": 6.18,
+  "p95": 8.904,
+  "p99": 10.097,
+  "pba_max": 5.975,
+  "pba_p50": 0,
+  "pba_p99": 1.543,
+  "pba_sum": 75.883,
+  "processed": 25,
+  "relayedIn": 32,
+  "seen": 27,
+  "timers_ms": 83.797,
+  "voices": 29,
+  "worst3": [
+   12.107,
+   11.826,
+   11.464
+  ],
+  "server": {
+   "hook_max": 3.128,
+   "hook_ms": 24.091,
+   "relayed": 34,
+   "sounds": 288,
+   "tick_max": 34.42,
+   "ticks": 368,
+   "us_per_sound": 83.6,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "-1500.000000 0.000000 -84.000000",
+   "center": "-2200.000000 0.000000 -109.995972",
+   "props": 56
+  },
+  "clean": true,
+  "mode": "engine",
+  "invalid": []
+ }
+}

@@ -1,0 +1,128 @@
+{
+ "scenario": "S11",
+ "variant": "canals",
+ "mode": "native",
+ "map": "d1_canals_01",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 4.159,
+   "mad": 0.191
+  },
+  "p99": {
+   "med": 50.476,
+   "mad": 1.632
+  },
+  "max": {
+   "med": 143.063,
+   "mad": 11.146
+  },
+  "excess": {
+   "med": 3278.498,
+   "mad": 27.025
+  },
+  "hitches": {
+   "med": 225,
+   "mad": 16
+  },
+  "over16": {
+   "med": 68,
+   "mad": 1
+  },
+  "pba_p99": {
+   "med": 39.629,
+   "mad": 3.545
+  },
+  "pba_max": {
+   "med": 125.355,
+   "mad": 8.75
+  },
+  "pba_sum": {
+   "med": 1885.774,
+   "mad": 71.249
+  },
+  "kb_alloc": {
+   "med": 96683,
+   "mad": 5629
+  },
+  "gc_drops": {
+   "med": 69,
+   "mad": 23
+  },
+  "ensure_ms": 144.513,
+  "sv_us_sound": 58.6,
+  "sounds": 151,
+  "idle_p50": 2.399
+ },
+ "cold": {
+  "burst_n": 600,
+  "done": true,
+  "doors": {
+   "max": 30.788,
+   "ms": 699.81,
+   "n": 62
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 12.022,
+   "ms": 144.157,
+   "n": 183
+  },
+  "excess": 3106.785,
+  "gc_drops": 63,
+  "hitches": 228,
+  "idle_n": 304,
+  "idle_p50": 2.334,
+  "idle_p99": 22.192,
+  "kb_alloc": 86391,
+  "max": 79.506,
+  "maxNativeVoices": 51,
+  "native": {
+   "audioMaxMs": 3.355,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 2.935,
+   "reflRuns": 56,
+   "slotPasses": 52,
+   "soundsLoaded": 40
+  },
+  "ndirect": 20,
+  "over16": 59,
+  "p50": 3.949,
+  "p95": 28.774,
+  "p99": 51.483,
+  "pba_max": 71.653,
+  "pba_p50": 0.005,
+  "pba_p99": 42.016,
+  "pba_sum": 1643.239,
+  "processed": 128,
+  "relayedIn": 122,
+  "seen": 148,
+  "timers_ms": 690.692,
+  "voices": 145,
+  "worst3": [
+   79.506,
+   77.758,
+   73.159
+  ],
+  "server": {
+   "hook_max": 0.861,
+   "hook_ms": 15.852,
+   "relayed": 122,
+   "sounds": 246,
+   "tick_max": 82.32,
+   "ticks": 368,
+   "us_per_sound": 64.4,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "500.000000 -6600.000000 513.000000",
+   "barrels": 9,
+   "dist": "356 382 626 633 641 815 824 860 861"
+  },
+  "clean": true,
+  "mode": "native",
+  "invalid": []
+ }
+}

@@ -1,0 +1,128 @@
+{
+ "scenario": "S11",
+ "variant": "canals",
+ "mode": "off",
+ "map": "d1_canals_01",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 3.742,
+   "mad": 0.036
+  },
+  "p99": {
+   "med": 24.918,
+   "mad": 0.205
+  },
+  "max": {
+   "med": 32.698,
+   "mad": 1.266
+  },
+  "excess": {
+   "med": 2310.269,
+   "mad": 42.043
+  },
+  "hitches": {
+   "med": 188,
+   "mad": 4
+  },
+  "over16": {
+   "med": 45,
+   "mad": 1
+  },
+  "pba_p99": {
+   "med": 18.995,
+   "mad": 0.194
+  },
+  "pba_max": {
+   "med": 24.831,
+   "mad": 2.765
+  },
+  "pba_sum": {
+   "med": 838.556,
+   "mad": 19.18
+  },
+  "kb_alloc": {
+   "med": 7634,
+   "mad": 170
+  },
+  "gc_drops": {
+   "med": 0,
+   "mad": 0
+  },
+  "ensure_ms": 0,
+  "sv_us_sound": 0,
+  "sounds": 0,
+  "idle_p50": 2.377
+ },
+ "cold": {
+  "burst_n": 858,
+  "done": true,
+  "doors": {
+   "max": 26.793,
+   "ms": 932.548,
+   "n": 62
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 0,
+   "ms": 0,
+   "n": 0
+  },
+  "excess": 2390.102,
+  "gc_drops": 0,
+  "hitches": 196,
+  "idle_n": 342,
+  "idle_p50": 2.485,
+  "idle_p99": 20.728,
+  "kb_alloc": 7394,
+  "max": 39.121,
+  "maxNativeVoices": 0,
+  "native": {
+   "audioMaxMs": 0.068,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 3.844,
+   "reflRuns": 24,
+   "slotPasses": 0,
+   "soundsLoaded": 0
+  },
+  "ndirect": 0,
+  "over16": 48,
+  "p50": 3.99,
+  "p95": 21.422,
+  "p99": 25.368,
+  "pba_max": 26.793,
+  "pba_p50": 0,
+  "pba_p99": 19.237,
+  "pba_sum": 838.301,
+  "processed": 0,
+  "relayedIn": 0,
+  "seen": 0,
+  "timers_ms": 0.083,
+  "voices": 0,
+  "worst3": [
+   39.121,
+   27.056,
+   26.353
+  ],
+  "server": {
+   "hook_max": 0,
+   "hook_ms": 0,
+   "relayed": 0,
+   "sounds": 0,
+   "tick_max": 39.28,
+   "ticks": 367,
+   "us_per_sound": 0,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "500.000000 -6600.000000 513.000000",
+   "barrels": 9,
+   "dist": "356 382 626 633 641 815 824 860 861"
+  },
+  "clean": true,
+  "mode": "off",
+  "invalid": []
+ }
+}

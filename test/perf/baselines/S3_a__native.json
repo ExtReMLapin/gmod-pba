@@ -1,0 +1,127 @@
+{
+ "scenario": "S3",
+ "variant": "a",
+ "mode": "native",
+ "map": "gm_construct",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 4.156,
+   "mad": 0.02
+  },
+  "p99": {
+   "med": 6.302,
+   "mad": 0.399
+  },
+  "max": {
+   "med": 10.296,
+   "mad": 0.133
+  },
+  "excess": {
+   "med": 1258.638,
+   "mad": 75.068
+  },
+  "hitches": {
+   "med": 12,
+   "mad": 4
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 1.009,
+   "mad": 0.456
+  },
+  "pba_max": {
+   "med": 4.198,
+   "mad": 0.349
+  },
+  "pba_sum": {
+   "med": 57.858,
+   "mad": 20.498
+  },
+  "kb_alloc": {
+   "med": 16088,
+   "mad": 116
+  },
+  "gc_drops": {
+   "med": 0,
+   "mad": 0
+  },
+  "ensure_ms": 12.014,
+  "sv_us_sound": 124.3,
+  "sounds": 20,
+  "idle_p50": 3.107
+ },
+ "cold": {
+  "burst_n": 1048,
+  "done": true,
+  "doors": {
+   "max": 0.308,
+   "ms": 5.557,
+   "n": 62
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 3.013,
+   "ms": 12.713,
+   "n": 20
+  },
+  "excess": 1227.976,
+  "gc_drops": 0,
+  "hitches": 10,
+  "idle_n": 319,
+  "idle_p50": 3.125,
+  "idle_p99": 4.363,
+  "kb_alloc": 16130,
+  "max": 10.401,
+  "maxNativeVoices": 14,
+  "native": {
+   "audioMaxMs": 0.971,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 1.797,
+   "reflRuns": 16,
+   "slotPasses": 0,
+   "soundsLoaded": 6
+  },
+  "ndirect": 20,
+  "over16": 0,
+  "p50": 4.211,
+  "p95": 5.39,
+  "p99": 6.116,
+  "pba_max": 3.883,
+  "pba_p50": 0.013,
+  "pba_p99": 1.005,
+  "pba_sum": 70.822,
+  "processed": 0,
+  "relayedIn": 10,
+  "seen": 20,
+  "timers_ms": 61.687,
+  "voices": 0,
+  "worst3": [
+   10.401,
+   8.878,
+   7.929
+  ],
+  "server": {
+   "hook_max": 0.198,
+   "hook_ms": 1.138,
+   "relayed": 10,
+   "sounds": 10,
+   "tick_max": 21.72,
+   "ticks": 367,
+   "us_per_sound": 113.8,
+   "wrapped": true
+  },
+  "setup": {
+   "L": "-1500.000000 0.000000 -84.000000",
+   "nades": 10
+  },
+  "clean": true,
+  "mode": "native",
+  "invalid": []
+ }
+}

@@ -1,0 +1,128 @@
+{
+ "scenario": "S12",
+ "variant": "tworooms",
+ "mode": "native",
+ "map": "pba_tworooms",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 2.266,
+   "mad": 0.081
+  },
+  "p99": {
+   "med": 5.208,
+   "mad": 0.08
+  },
+  "max": {
+   "med": 7.139,
+   "mad": 0.196
+  },
+  "excess": {
+   "med": 2610.24,
+   "mad": 22.754
+  },
+  "hitches": {
+   "med": 1056,
+   "mad": 36
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 0.049,
+   "mad": 0.003
+  },
+  "pba_max": {
+   "med": 0.181,
+   "mad": 0.044
+  },
+  "pba_sum": {
+   "med": 5.606,
+   "mad": 0.438
+  },
+  "kb_alloc": {
+   "med": 12247,
+   "mad": 120
+  },
+  "gc_drops": {
+   "med": 70,
+   "mad": 24
+  },
+  "ensure_ms": 0.032,
+  "sv_us_sound": 0,
+  "sounds": 10,
+  "idle_p50": 1.019
+ },
+ "cold": {
+  "burst_n": 1737,
+  "done": true,
+  "doors": {
+   "max": 0.055,
+   "ms": 1.691,
+   "n": 61
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 3.133,
+   "ms": 7.135,
+   "n": 10
+  },
+  "excess": 2504.947,
+  "gc_drops": 73,
+  "hitches": 877,
+  "idle_n": 644,
+  "idle_p50": 1.176,
+  "idle_p99": 3.566,
+  "kb_alloc": 11768,
+  "max": 9.346,
+  "maxNativeVoices": 10,
+  "native": {
+   "audioMaxMs": 0.552,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 2.579,
+   "reflRuns": 7,
+   "slotPasses": 1,
+   "soundsLoaded": 3
+  },
+  "ndirect": 10,
+  "over16": 0,
+  "p50": 2.369,
+  "p95": 5.135,
+  "p99": 6.168,
+  "pba_max": 1.586,
+  "pba_p50": 0,
+  "pba_p99": 0.048,
+  "pba_sum": 7.76,
+  "processed": 0,
+  "relayedIn": 0,
+  "seen": 10,
+  "timers_ms": 4.812,
+  "voices": 0,
+  "worst3": [
+   9.346,
+   7.934,
+   7.205
+  ],
+  "server": {
+   "hook_max": 0,
+   "hook_ms": 0,
+   "relayed": 0,
+   "sounds": 0,
+   "tick_max": 24.44,
+   "ticks": 368,
+   "us_per_sound": 0,
+   "wrapped": true
+  },
+  "setup": {
+   "C": "400.000000 280.000000 48.000000",
+   "L": "256.000000 256.000000 1.000000",
+   "booms": 10
+  },
+  "clean": true,
+  "mode": "native",
+  "invalid": []
+ }
+}

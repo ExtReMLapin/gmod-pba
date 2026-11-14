@@ -1,0 +1,128 @@
+{
+ "scenario": "S12",
+ "variant": "construct",
+ "mode": "native",
+ "map": "gm_construct",
+ "repeat": 5,
+ "commit": "d951e09",
+ "warm": {
+  "p50": {
+   "med": 4.135,
+   "mad": 0.007
+  },
+  "p99": {
+   "med": 8.029,
+   "mad": 0.555
+  },
+  "max": {
+   "med": 10.591,
+   "mad": 0.642
+  },
+  "excess": {
+   "med": 1662.549,
+   "mad": 60.509
+  },
+  "hitches": {
+   "med": 219,
+   "mad": 51
+  },
+  "over16": {
+   "med": 0,
+   "mad": 0
+  },
+  "pba_p99": {
+   "med": 0.107,
+   "mad": 0.008
+  },
+  "pba_max": {
+   "med": 0.241,
+   "mad": 0.016
+  },
+  "pba_sum": {
+   "med": 7.008,
+   "mad": 0.056
+  },
+  "kb_alloc": {
+   "med": 14327,
+   "mad": 193
+  },
+  "gc_drops": {
+   "med": 0,
+   "mad": 0
+  },
+  "ensure_ms": 0.046,
+  "sv_us_sound": 0,
+  "sounds": 10,
+  "idle_p50": 2.86
+ },
+ "cold": {
+  "burst_n": 1008,
+  "done": true,
+  "doors": {
+   "max": 0.226,
+   "ms": 4.108,
+   "n": 62
+  },
+  "echoes": 0,
+  "ensure": {
+   "max": 2.829,
+   "ms": 6.144,
+   "n": 10
+  },
+  "excess": 1605.229,
+  "gc_drops": 0,
+  "hitches": 186,
+  "idle_n": 338,
+  "idle_p50": 2.903,
+  "idle_p99": 4.041,
+  "kb_alloc": 15547,
+  "max": 10.853,
+  "maxNativeVoices": 10,
+  "native": {
+   "audioMaxMs": 0.509,
+   "echoBusy": 0,
+   "echoDropped": 0,
+   "reflMs": 1.737,
+   "reflRuns": 7,
+   "slotPasses": 1,
+   "soundsLoaded": 3
+  },
+  "ndirect": 10,
+  "over16": 0,
+  "p50": 4.416,
+  "p95": 6.627,
+  "p99": 7.267,
+  "pba_max": 1.438,
+  "pba_p50": 0,
+  "pba_p99": 0.117,
+  "pba_sum": 8.757,
+  "processed": 0,
+  "relayedIn": 0,
+  "seen": 10,
+  "timers_ms": 4.734,
+  "voices": 0,
+  "worst3": [
+   10.853,
+   8.131,
+   7.748
+  ],
+  "server": {
+   "hook_max": 0,
+   "hook_ms": 0,
+   "relayed": 0,
+   "sounds": 0,
+   "tick_max": 20.94,
+   "ticks": 368,
+   "us_per_sound": 0,
+   "wrapped": true
+  },
+  "setup": {
+   "C": "-2000.000000 0.000000 -96.816681",
+   "L": "-1500.000000 0.000000 -84.000000",
+   "booms": 10
+  },
+  "clean": true,
+  "mode": "native",
+  "invalid": []
+ }
+}
