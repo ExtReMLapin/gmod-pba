@@ -103,6 +103,10 @@
   "pos0": "hook",
   "why": "end of long one-shot mirrors, engine and native (render time)"
  },
+ "loops_once_gone": {
+  "pos0": "hook",
+  "why": "drop of a long one-shot mirror whose voice is gone (mirror follow time)"
+ },
  "native_duck": {
   "pos0": "hook",
   "why": "ducking by the engine mixer rules, short and long sounds (render time)"

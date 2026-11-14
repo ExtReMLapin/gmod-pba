@@ -584,6 +584,17 @@ function apply(m, fade)
 		MIRROR.native.stop(m)
 		if m.once then m.done = true return end -- a long one-shot cannot resume midway
 	end
+	-- a one-shot that played through the module and whose voice is gone (its file ended: an update found the voice
+	-- finished, m.nativeId = nil) is over. onceEnded reads false without a patch or a voice, so the re-evaluation below
+	-- queued a path evaluation (cl_slicer job) for a sound already finished, and the mirror was dropped only when that job
+	-- completed (MIRROR.native.start: "a long one-shot that ended"): sweep 2026-11-14, a 0.54 s file alive 3.5 s,
+	-- a 7.2 s one 10.3 s. Dropped at once, its job with it (pba_loops_once_gone). Not a mirror handed back to the
+	-- engine (handBack: its patch plays it from its top), nor one not started yet (file decoding).
+	if m.once and m.started and not m.nativeId and not m.patch and not m.handBack and (A.cfg.loops_once_gone or 1) >= 0.5 then
+		if A.Slicer then A.Slicer.Drop(m) end
+		m.done = true
+		return
+	end
 	-- a far sound's evaluation running in slices (cl_slicer): its values kept until it is ready (sliceReady);
 	-- a finished one is applied whatever reevalDue says (it stamped this request already)
 	local sj = m.pbaSlice
