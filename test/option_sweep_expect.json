@@ -326,5 +326,9 @@
  "handback_channel": {
   "pos0": "hook",
   "why": "safety-net handback respects the channel rule (render), outside P.Compute"
+ },
+ "route_alt": {
+  "pos0": "same",
+  "why": "only met where two near-equal routes go round a block (rp_downtown street walk): not in the sweep scenes; covered by route_alt_street"
  }
 }

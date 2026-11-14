@@ -2101,7 +2101,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	end
 	if guardDone then guardDone() end
 	-- pba_route_alt: the way the tree did not take (altBranches), from the best probe S sees
-	if (cfg.route_alt or 0) >= 0.5 then
+	if (cfg.route_alt or 1) >= 0.5 then
 		local inners = fieldPaths(f, starts, S, L)
 		local n = inners.nodes[1]
 		if n then
