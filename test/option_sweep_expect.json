@@ -115,6 +115,10 @@
   "pos0": "hook",
   "why": "game-entity loops lifecycle"
  },
+ "loops_npc_death": {
+  "pos0": "hook",
+  "why": "NPC loops lifecycle at death (OnNPCKilled), outside P.Compute"
+ },
  "loops_native_fail": {
   "pos0": "hook",
   "why": "hands a loop the module cannot play back to the engine (loop lifecycle), outside P.Compute"
