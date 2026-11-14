@@ -402,5 +402,63 @@ return {
 				expect(l == e2[1] and m == e2[2] and h == e2[3]).to.beTrue()
 			end)
 		end },
+		{ name = "ParseWeaponSounds: the player's sound scripts of a real weapon script (SoundData block; NPC variants, comments and other blocks left out)", func = function()
+			expect(N.ParseWeaponSounds ~= nil).to.beTrue()
+			-- weapon_smg1.txt of Half-Life 2 (the weapon data and texture blocks shortened)
+			local smg1 = "// Small Machine Gun 1\n\nWeaponData\n{\n\t\"printname\"\t\"#HL2_SMG1\"\n\t\"viewmodel\"\t\t\"models/weapons/v_smg1.mdl\"\n"
+				.. "\t// Sounds for the weapon. There is a max of 16 sounds per category (i.e. max 16 \"single_shot\" sounds)\n"
+				.. "\tSoundData\n\t{\n\t\t\"reload\"\t\t\t\"Weapon_SMG1.Reload\"\n\t\t\"reload_npc\"\t\t\"Weapon_SMG1.NPC_Reload\"\n"
+				.. "\t\t\"empty\"\t\t\t\t\"Weapon_SMG1.Empty\"\n\t\t\"single_shot\"\t\t\"Weapon_SMG1.Single\"\n"
+				.. "\t\t\"single_shot_npc\"\t\"Weapon_SMG1.NPC_Single\"\n\t\t\"special1\"\t\t\t\"Weapon_SMG1.Special1\"\n"
+				.. "\t\t\"special2\"\t\t\t\"Weapon_SMG1.Special2\"\n\t\t\"double_shot\"\t\t\"Weapon_SMG1.Double\"\n"
+				.. "\t\t\"burst\"\t\t\t\t\"Weapon_SMG1.Burst\"\n\t}\n\n\t// Weapon Sprite data is loaded by the Client DLL.\n\tTextureData\n\t{\n"
+				.. "\t\t\"weapon\"\n\t\t{\n\t\t\t\t\"font\"\t\t\"WeaponIcons\"\n\t\t\t\t\"character\"\t\"a\"\n\t\t}\n\t}\n}"
+			local got = N.ParseWeaponSounds(smg1)
+			expect(table.concat(got, ",")).to.equal("Weapon_SMG1.Reload,Weapon_SMG1.Empty,Weapon_SMG1.Single,Weapon_SMG1.Special1,Weapon_SMG1.Special2,Weapon_SMG1.Double,Weapon_SMG1.Burst")
+			-- weapon_shotgun.txt: a comment between the entries, CRLF line ends, the NPC entries last
+			local sg = "WeaponData\r\n{\r\n\tSoundData\r\n\t{\r\n\r\n\t\t\"empty\"\t\t\t\t\"Weapon_Shotgun.Empty\"\r\n\t\t\"reload\"\t\t\t\"Weapon_Shotgun.Reload\"\r\n"
+				.. "\t\t\"special1\"\t\t\t\"Weapon_Shotgun.Special1\"\r\n\t\t\"single_shot\"\t\t\"Weapon_Shotgun.Single\"\r\n\t\t\"double_shot\"\t\t\"Weapon_Shotgun.Double\"\r\n"
+				.. "\t\t// NPC WEAPON SOUNDS\r\n\t\t\"reload_npc\"\t\t\"Weapon_Shotgun.NPC_Reload\"\r\n\t\t\"single_shot_npc\"\t\"Weapon_Shotgun.NPC_Single\"\r\n\t}\r\n}"
+			expect(table.concat(N.ParseWeaponSounds(sg), ",")).to.equal("Weapon_Shotgun.Empty,Weapon_Shotgun.Reload,Weapon_Shotgun.Special1,Weapon_Shotgun.Single,Weapon_Shotgun.Double")
+			-- a value written twice once; an empty value, a script with no SoundData, a non-string: nothing
+			expect(table.concat(N.ParseWeaponSounds("SoundData { \"a\" \"X.One\" \"b\" \"X.One\" \"c\" \"\" }"), ",")).to.equal("X.One")
+			expect(#N.ParseWeaponSounds("WeaponData { \"clip_size\" \"45\" }")).to.equal(0)
+			expect(#N.ParseWeaponSounds(nil)).to.equal(0)
+			expect(#N.ParseWeaponSounds("")).to.equal(0)
+		end },
+		{ name = "WeaponSoundFiles: a script's sounds and a SWEP's Primary/Secondary.Sound resolved to wave files (stubbed script table), each file once, lower case", func = function()
+			expect(N.WeaponSoundFiles ~= nil).to.beTrue()
+			-- (the suite's environment is a proxy: the stubs go to the real globals the module reads)
+			local G = _G
+			local savedFile, savedSound, savedWeapons = G.file, G.sound, G.weapons
+			local scripts = {
+				["Weapon_SMG1.Single"] = { sound = { "^weapons/smg1/smg1_fire1.wav", "weapons/smg1/Smg1_fire2.wav" } },
+				["Weapon_SMG1.Reload"] = { sound = "weapons/smg1/smg1_reload.wav" },
+				["Weapon_SMG1.Empty"] = { sound = "weapons/smg1/smg1_reload.wav" }, -- (the same file again)
+				["Custom.Shot"] = { sound = ")mymod/shot.wav" },
+			}
+			local ok, err = pcall(function()
+				G.file = { Read = function(path)
+					if path == "scripts/weapon_smg1.txt" then
+						return "WeaponData { SoundData { \"reload\" \"Weapon_SMG1.Reload\" \"empty\" \"Weapon_SMG1.Empty\" \"single_shot\" \"Weapon_SMG1.Single\" \"single_shot_npc\" \"Weapon_SMG1.NPC_Single\" } }"
+					end
+				end }
+				G.sound = { GetProperties = function(name) return scripts[name] end }
+				G.weapons = { GetStored = function(class)
+					if class == "swep_custom" then return { Primary = { Sound = "Custom.Shot" }, Secondary = { Sound = "mymod/alt.wav" } } end
+				end }
+				local files = N.WeaponSoundFiles("weapon_smg1")
+				expect(table.concat(files, ",")).to.equal("weapons/smg1/smg1_reload.wav,weapons/smg1/smg1_fire1.wav,weapons/smg1/smg1_fire2.wav")
+				-- a SWEP: the registered table ...
+				expect(table.concat(N.WeaponSoundFiles("swep_custom"), ",")).to.equal("mymod/shot.wav,mymod/alt.wav")
+				-- ... or the held weapon's own values (set at its creation) first, a list of sounds, a non-string ignored
+				local held = { Primary = { Sound = { "Weapon_SMG1.Single", 5 } }, Secondary = {} }
+				expect(table.concat(N.WeaponSoundFiles("swep_custom", held), ",")).to.equal("weapons/smg1/smg1_fire1.wav,weapons/smg1/smg1_fire2.wav,mymod/shot.wav,mymod/alt.wav")
+				-- an unknown class: nothing, no error
+				expect(#N.WeaponSoundFiles("weapon_unknown")).to.equal(0)
+			end)
+			G.file, G.sound, G.weapons = savedFile, savedSound, savedWeapons
+			if not ok then error(err, 0) end
+		end },
 	},
 }

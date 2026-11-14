@@ -568,6 +568,7 @@ function N.StopRender()
 	-- pba_native_predecode) is no longer pending nor loaded, and N.EnsureSound took it for an undecodable file
 	-- (refused for 30 s, left to the engine: native_predecode red after a render restart). StartRender prewarms again.
 	N.loading, N.prewarm = nil, nil
+	N.wpnDone, N.wpnQueue = nil, nil -- (the weapons' sounds went with them: asked again)
 end
 
 local function cleanName(name)
@@ -639,6 +640,33 @@ local STEP_SURFACES = { "concrete", "metal", "metalgrate", "metalpanel", "wood",
 	"mud", "sand", "chainlink", "water", "wade", "ladder", "default" }
 local STEP_SOUNDS = { "stepLeftSound", "stepRightSound" }
 
+--- The wave files behind a sound script name (clean names); a name with no script is taken for a file.
+local function scriptFiles(s, out, seen)
+	local p = sound.GetProperties(s)
+	local w = p and p.sound
+	if type(w) == "string" then w = { w } end
+	if type(w) ~= "table" then w = nil end
+	if not w and type(s) == "string" and (string.find(s, "/", 1, true) or string.find(string.lower(s), "%.[wm][ap][v3]$")) then w = { s } end
+	for _, f in ipairs(w or {}) do
+		local n = type(f) == "string" and cleanName(f) or ""
+		if n ~= "" and not seen[n] then seen[n] = true out[#out + 1] = n end
+	end
+end
+
+--- Starts decoding `n` (a clean name) on a worker thread unless it is decoded, decoding or refused; true when
+-- a decode started.
+local function decodeAhead(n)
+	if pba_native.HasSound(n) or pba_native.SoundPending(n) or N.failed[n] then return false end
+	local data = file.Read("sound/" .. n, "GAME")
+	if data and #data > 0 and #data <= (A.cfg.native_file_mb or 48) * 1024 * 1024 and pba_native.LoadSoundAsync(n, data) then
+		N.loading = N.loading or {}
+		N.loading[n] = true
+		N.decodes.prewarm = N.decodes.prewarm + 1
+		return true
+	end
+	return false
+end
+
 --- The wave files of the likely burst sounds of this map (clean names, each once).
 function N.PrewarmList(yield)
 	yield = yield or function() end
@@ -707,16 +735,9 @@ function N.Prewarm()
 				if table.Count(inflight) < PREWARM_INFLIGHT then break end
 				coroutine.yield()
 			end
-			local f = N.failed[n]
-			if not (pba_native.HasSound(n) or pba_native.SoundPending(n) or f) then
-				local data = file.Read("sound/" .. n, "GAME")
-				if data and #data > 0 and #data <= (A.cfg.native_file_mb or 48) * 1024 * 1024 and pba_native.LoadSoundAsync(n, data) then
-					N.loading = N.loading or {}
-					N.loading[n] = true
-					inflight[n] = true
-					pw.started = pw.started + 1
-					N.decodes.prewarm = N.decodes.prewarm + 1
-				end
+			if decodeAhead(n) then
+				inflight[n] = true
+				pw.started = pw.started + 1
 			end
 			yield()
 		end
@@ -741,6 +762,107 @@ hook.Add("Think", "pba_native_prewarm", function()
 		pw.done = true
 	end
 end)
+
+-- ------------------------------------------------------------------ the player's weapons (pba_native_prewarm_weapons)
+-- With pba_native_own the player's shots are the module's, but the first play of a sound not decoded yet goes to
+-- the engine (pba_native_predecode): the first shot of each weapon after a map load sounded different. The
+-- sound files of the weapons he holds are decoded ahead as soon as he has them (map load, pickup, give).
+local WEAPON_POLL, WEAPON_PER_FRAME, WEAPON_INFLIGHT = 0.5, 2, 4
+
+--- The sound script names of the player's use of a weapon, read from the text of its script (SoundData block of
+-- scripts/weapon_<class>.txt: reload, empty, single_shot, double_shot, burst, special1, special2). The NPC
+-- variants ("..._npc") are left out: the player never plays them. Each name once, in file order.
+function N.ParseWeaponSounds(text)
+	local out, seen = {}, {}
+	if type(text) ~= "string" then return out end
+	text = string.gsub(text, "//[^\r\n]*", "")
+	local _, e = string.find(string.lower(text), "\"?sounddata\"?%s*{")
+	if not e then return out end
+	local close = string.find(text, "}", e + 1, true) or #text + 1
+	for k, v in string.gmatch(string.sub(text, e + 1, close - 1), "\"([^\"]*)\"%s*\"([^\"]*)\"") do
+		if v ~= "" and string.lower(string.sub(k, -4)) ~= "_npc" and not seen[v] then seen[v] = true out[#out + 1] = v end
+	end
+	return out
+end
+
+--- The wave files (clean names) of a weapon class: its script's sounds (C++ weapons and any class with a
+-- scripts/<class>.txt) and a SWEP's Primary.Sound / Secondary.Sound (strings, or a list of them; `wep`, the held
+-- weapon, carries the values the SWEP set up at its creation, else the registered table).
+function N.WeaponSoundFiles(class, wep)
+	local names = {}
+	for _, s in ipairs(N.ParseWeaponSounds(file.Read("scripts/" .. class .. ".txt", "GAME"))) do names[#names + 1] = s end
+	local stored = weapons and weapons.GetStored and weapons.GetStored(class)
+	for _, src in ipairs({ wep or false, stored or false }) do
+		if src then
+			for _, k in ipairs({ "Primary", "Secondary" }) do
+				local t = src[k]
+				local v = type(t) == "table" and t.Sound
+				if type(v) == "string" then names[#names + 1] = v
+				elseif type(v) == "table" then for _, x in ipairs(v) do if type(x) == "string" then names[#names + 1] = x end end end
+			end
+		end
+	end
+	local out, seen = {}, {}
+	for _, s in ipairs(names) do if s ~= "" then scriptFiles(s, out, seen) end end
+	return out
+end
+
+--- True when the weapons' sounds are decoded ahead: native own sounds, background decoding and the option on.
+function N.WeaponPrewarmOn()
+	return N.ready and pba_native and pba_native.LoadSoundAsync and A.NativeOwn()
+		and (A.cfg.native_predecode or 1) >= 0.5 and (A.cfg.native_prewarm_weapons or 1) >= 0.5 or false
+end
+
+--- Queues the sound files of a weapon (its entity) for decoding ahead, once per class (until the module
+-- drops its sounds). Returns the number of files queued.
+function N.PrewarmWeapon(wep)
+	if not N.WeaponPrewarmOn() or not IsValid(wep) then return 0 end
+	local class = wep:GetClass()
+	N.wpnDone = N.wpnDone or {}
+	if N.wpnDone[class] then return 0 end
+	N.wpnDone[class] = true
+	local files = N.WeaponSoundFiles(class, wep)
+	N.wpnQueue = N.wpnQueue or {}
+	for _, n in ipairs(files) do N.wpnQueue[#N.wpnQueue + 1] = n end
+	N.wpnStats = N.wpnStats or { weapons = 0, files = 0, started = 0 }
+	N.wpnStats.weapons = N.wpnStats.weapons + 1
+	N.wpnStats.files = N.wpnStats.files + #files
+	return #files
+end
+
+local nextWeaponPoll = 0
+hook.Add("Think", "pba_native_prewarm_weapons", function()
+	if not N.ready then return end
+	local now = RealTime()
+	if now >= nextWeaponPoll then
+		nextWeaponPoll = now + WEAPON_POLL
+		local ply = LocalPlayer()
+		if IsValid(ply) and N.WeaponPrewarmOn() then
+			-- the weapon in his hands first (a held weapon: a pickup, a give, a map load, a switch)
+			N.PrewarmWeapon(ply:GetActiveWeapon())
+			for _, w in ipairs(ply:GetWeapons()) do N.PrewarmWeapon(w) end
+		end
+	end
+	local q = N.wpnQueue
+	if not q or #q == 0 or not N.WeaponPrewarmOn() then return end
+	N.wpnInflight = N.wpnInflight or {}
+	local busy = 0
+	for m in pairs(N.wpnInflight) do
+		if pba_native.SoundPending(m) then busy = busy + 1 else N.wpnInflight[m] = nil end
+	end
+	local started = 0
+	while #q > 0 and started < WEAPON_PER_FRAME and busy < WEAPON_INFLIGHT do
+		local n = table.remove(q, 1)
+		if decodeAhead(n) then
+			N.wpnInflight[n] = true
+			started, busy = started + 1, busy + 1
+			if N.wpnStats then N.wpnStats.started = N.wpnStats.started + 1 end
+		end
+	end
+end)
+
+-- a weapon picked up: decoded ahead at once, not at the next poll
+hook.Add("HUDWeaponPickedUp", "pba_native_prewarm_weapons", function(wep) N.PrewarmWeapon(wep) end)
 
 cvars.AddChangeCallback("pba_native_predecode", function(_, _, new)
 	if tonumber(new) == 1 then N.Prewarm() else N.prewarm = nil end

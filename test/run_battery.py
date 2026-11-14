@@ -599,6 +599,37 @@ def sound_origin():
     return {"pass": okon and okoff, "on": {k: (on or {}).get(k) for k in ("pass", "n", "worst", "fails", "floorWalls")},
             "offMisses": (off or {}).get("pass"), "offWorst": (off or {}).get("worst")}
 
+def prewarm_weapons():
+    """pba_native_prewarm_weapons: the files of the weapons the player holds are decoded ahead (map load, pickup),
+    so his first shot is the module's, not the engine's while the file decodes. Option on: every file of the
+    SMG1 then of the pistol (given in turn) decoded within 8 s of the pickup; option off (0): none decoded 4 s
+    later (the test has teeth). Each pass starts from stripped weapons and a restarted native renderer (the
+    module drops its decoded sounds); the option is put back to 1 after."""
+    load(TW)
+    native_on(True)
+    out = {"on": {}, "off": {}}
+    ok = True
+    try:
+        for opt, key in ((1, "on"), (0, "off")):
+            call("console_exec", {"realm": "client", "cmd": f"pba_native_prewarm_weapons {opt}"})
+            wait_lua("client", f"return (pba.cfg.native_prewarm_weapons or 1) == {opt}", 10)
+            out[key]["strip"] = job("server", "prewarm_weapons_sv.lua", 20)
+            native_on(False)
+            native_on(True)
+            time.sleep(2)
+            pre = job("client", "prewarm_weapons.lua", 20, pre="local PHASE = 'pre'")
+            out[key]["pre"] = pre
+            ok = ok and isinstance(pre, dict) and pre.get("pass") is True
+            for cls in ("weapon_smg1", "weapon_pistol"):
+                job("server", "prewarm_weapons_sv.lua", 20, pre=f"local GIVE = '{cls}'")
+                r = job("client", "prewarm_weapons.lua", 40, pre=f"local PHASE, CLASS, OPT = 'post', '{cls}', {opt}")
+                out[key][cls] = r
+                ok = ok and isinstance(r, dict) and r.get("pass") is True
+    finally:
+        call("console_exec", {"realm": "client", "cmd": "pba_native_prewarm_weapons 1"})
+    out["pass"] = ok
+    return out
+
 def long_lipsync_pref():
     """The player's pba_lipsync also chooses for the long lines' mouth copy (server); his setting put back after."""
     load(TW)
@@ -1153,6 +1184,8 @@ steps = [
     ("native_predecode", lambda: seq(lambda: native_on(True), lambda: job("client", "native_predecode.lua", 90))),
     # the prewarm's entity walk spans frames: an entity removed meanwhile is skipped (was: whole prewarm lost)
     ("prewarm_null_entity", lambda: job("client", "prewarm_null_entity.lua", 30)),
+    # the held weapons' sound files decoded ahead (pba_native_prewarm_weapons): the first shot is the module's
+    ("prewarm_weapons", prewarm_weapons),
     ("native_props_calm", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_calm_setup.lua"), lambda: job("client", "native_props_calm.lua", 60))),
     ("detour_cap", lambda: seq(lambda: load(TW), lambda: job("server", "detour_cap_setup.lua"), lambda: job("client", "detour_cap.lua", 60))),
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
@@ -1531,7 +1564,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "npc_footsteps", "sound_origin", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "streams_vol_now", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "mp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "restore_dup", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "sp_own_sounds", "sp_predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "soundtime_client", "patch_restart_client", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "relay_name_quota", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "change_new", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "once_gone", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "burst_fair", "burst_keep", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "twodoors_unseen", "off_no_work", "native_predecode", "prewarm_null_entity", "mcp_encoding (pure)", "native_props_calm", "detour_cap", "route_alt_street rp_downtown", "sky_route gm_construct", "long_line_decode", "breencast_long_render d1_trainstation_01", "line_first_play", "caption_net", "native_own", "native_own_mp", "mouth_chan", "native_pitch_now", "brief_mover_stop pba_demo", "loops_net_compact", "line_protect", "pause_flag", "hook_order", "burst_hold", "burst_short", "patch_channel_cut", "streams_rate"}
+QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "npc_footsteps", "sound_origin", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "streams_vol_now", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "mp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "restore_dup", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "sp_own_sounds", "sp_predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "soundtime_client", "patch_restart_client", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "relay_name_quota", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "change_new", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "once_gone", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "burst_fair", "burst_keep", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "twodoors_unseen", "off_no_work", "native_predecode", "prewarm_null_entity", "prewarm_weapons", "mcp_encoding (pure)", "native_props_calm", "detour_cap", "route_alt_street rp_downtown", "sky_route gm_construct", "long_line_decode", "breencast_long_render d1_trainstation_01", "line_first_play", "caption_net", "native_own", "native_own_mp", "mouth_chan", "native_pitch_now", "brief_mover_stop pba_demo", "loops_net_compact", "line_protect", "pause_flag", "hook_order", "burst_hold", "burst_short", "patch_channel_cut", "streams_rate"}
 # --smoke: the core, under 2 minutes, to run before every commit (--quick stays the check before a merge)
 SMOKE = {"GLuaTest pure suite", "menu_config_static", "light_no_module", "portal_sweep tworooms",
          "native_doors", "native_features"}
