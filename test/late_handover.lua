@@ -30,7 +30,8 @@ local function fresh(n)
 	local c = clean(n)
 	return not NA.HasSound(c) and not NA.SoundPending(c) and not (N.loading and N.loading[c]) and not N.failed[c]
 end
--- files about 3 s long never decoded in this game (two, one per run)
+-- files about 3 s long never decoded in this game (two, one per run); not looping files (a loop goes the
+-- loop path, not the followed one-shot one: siren.wav was picked and never followed)
 local picks = {}
 for _, dir in ipairs({ "ambient/alarms", "ambient/machines", "ambient/levels/streetwar", "ambient/levels/citadel",
 	"ambient/levels/canals", "ambient/levels/coast", "ambient/levels/labs", "ambient/atmosphere", "ambient/creatures",
@@ -38,7 +39,7 @@ for _, dir in ipairs({ "ambient/alarms", "ambient/machines", "ambient/levels/str
 	for _, f in ipairs(file.Find("sound/" .. dir .. "/*.wav", "GAME") or {}) do
 		local n = dir .. "/" .. f
 		local d = SoundDuration(n) or 0
-		if #picks < 2 and d >= 2.8 and d <= 4.2 and (file.Size("sound/" .. n, "GAME") or 0) < 4 * 1024 * 1024 and fresh(n) then picks[#picks + 1] = n end
+		if #picks < 2 and d >= 2.8 and d <= 4.2 and (file.Size("sound/" .. n, "GAME") or 0) < 4 * 1024 * 1024 and not A.IsLooping(n) and fresh(n) then picks[#picks + 1] = n end
 	end
 	if #picks >= 2 then break end
 end
