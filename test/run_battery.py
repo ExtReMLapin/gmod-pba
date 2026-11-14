@@ -1271,6 +1271,21 @@ if bad:
     print("PREFLIGHT FAILED: pba is not running as the tests assume, battery aborted.\n  " + "\n  ".join(bad), flush=True)
     sys.exit(4)
 print("preflight: pba_enable 1, pba_cl_enable 1, no override, hooks present (client and server)", flush=True)
+# Every archived pba_* setting at its default before the first step: a killed run (or a game session) can
+# leave one changed in the config (2026-11-14: pba_max_duration 10.7 left by an interrupted test turned the
+# 10.5 s test lines into short sounds, 5 long-line steps red). Reported by name, then reset.
+_OFF_DEFAULT = """local out = {}
+for name, def in pairs(pba.CONFIG or {}) do
+	local cv = GetConVar("pba_" .. name)
+	if cv and math.abs(cv:GetFloat() - def[1]) > 1e-4 then out[#out + 1] = { name, cv:GetString(), def[1] } end
+end
+return out"""
+_off = lua("client", _OFF_DEFAULT) or []
+if _off:
+    print("preflight: settings not at their default, reset: " + ", ".join(f"pba_{n}={v} (default {d})" for n, v, d in _off), flush=True)
+    for n, v, d in _off:
+        call("console_exec", {"realm": "menu", "cmd": f"pba_{n} {d}"})
+    time.sleep(0.5)
 results = []  # (label, seconds, verdict, reason)
 with open(LOG, "w", encoding="utf-8") as f:
     f.write(f"PBA battery {time.strftime('%Y-%m-%d %H:%M:%S')} args {' '.join(opts) or '(full)'}\n"
