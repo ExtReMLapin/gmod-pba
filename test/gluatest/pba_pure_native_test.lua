@@ -458,6 +458,8 @@ return {
 				expect(#N.WeaponSoundFiles("weapon_unknown")).to.equal(0)
 			end)
 			G.file, G.sound, G.weapons = savedFile, savedSound, savedWeapons
+			if not ok then error(err, 0) end
+		end },
 
 		-- ---------------------------------------------------------------- late handover (pba_native_late_handover)
 		-- An engine copy of a followed short sound started while the module still decoded its file: N.LateVerdict
