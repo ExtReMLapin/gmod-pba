@@ -410,7 +410,7 @@ local function withSlicedRooms(fn)
 	local surf = util.GetSurfacePropName
 	util.GetSurfacePropName = function(i) if i == nil or not surf then return "concrete" end return surf(i) end -- (offline shim; stubbed traces leave SurfaceProps nil)
 	local ok, err = pcall(withProbeRooms, { { 16, 64, 112 }, { 360, 424, 140 } }, { { Vector(200, 150, -8), Vector(240, 190, 200) } },
-		{ native_traces = 0, far_sliced = 1, far_sliced_ms = 4000, group_time = 0 }, function()
+		{ native_traces = 0, far_sliced = 1, far_sliced_ms = 4000, far_force_ms = 0, group_time = 0 }, function()
 			-- what P.Walls reads besides: the material (concrete everywhere) and where a trace started in solid
 			-- leaves it (1 u steps)
 			local tl = util.TraceLine
@@ -2329,6 +2329,94 @@ local SUITE = {
 					end
 				end
 				expect(done > 0).to.beTrue()
+			end)
+		end },
+		{ name = "Far sliced: pba_far_force_ms bounds the work of finishing the jobs due in one frame; past it a new sound gets the cheap model and a playing one keeps its answer and waits; 0 = every due job finished in full", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				local clock = A.Paths.slice.clock
+				A.cfg.far_sliced_ms = 0 -- (no budget: the due jobs' finish is all the frame's work)
+				-- a burst heard by one listener (debris round an explosion): its field built beforehand, so that a
+				-- job's work is its own routes
+				local L = Vector(300, 300, 64)
+				PR.fieldsByKey, P.cache = nil, {}
+				P.Compute(list[1][1], L, 75, cfg)
+				-- every job of the burst due in the same frame; returns the ticks of that frame's SL.Run, the
+				-- answers delivered, the jobs, and a playing sound with an answer already (SL.Held, seen before)
+				local function burst(forceTicks)
+					A.cfg.far_force_ms = forceTicks * 1000
+					P.cache, SL.jobs = {}, {}
+					local jobs, got = {}, {}
+					for _, pr in ipairs(list) do
+						local j = SL.Defer(pr[1], L, 75, nil, cfg)
+						if j then
+							jobs[#jobs + 1] = j
+							local k = #jobs
+							j.onDone = function(res) got[k] = res end
+						end
+					end
+					local owner, ready = { pbaSliceSeen = true, pbaCfg = cfg }, false
+					local r0 = SL.Held(owner, list[#list][1], L, 75, nil, function() ready = true end)
+					expect(r0).to.beNil()
+					local last = 0
+					for _, j in ipairs(SL.jobs) do last = math.max(last, j.deadline) end
+					nextFrame()
+					setNow(last) -- all of them due before the next frame
+					local c0 = clock()
+					SL.Run()
+					return clock() - c0 - 1, got, jobs, owner, function() return ready end
+				end
+				local function full(S)
+					P.cache = {}
+					return dumpResult(P.Compute(S, L, 75, cfg))
+				end
+				-- off: every due job finished in full in that frame, whatever it costs. A first burst warms what an
+				-- evaluation keeps across requests (world segments, kept answers): the next ones then do equal work
+				burst(0)
+				local T, got, jobs, owner, ready = burst(0)
+				expect(#jobs >= 5).to.beTrue()
+				for k, j in ipairs(jobs) do
+					expect(got[k] ~= nil).to.beTrue()
+					expect(dumpResult(got[k])).to.equal(full(j.S))
+				end
+				expect(ready()).to.beTrue()
+				expect(#SL.jobs).to.equal(0)
+				-- on, a quarter of that: the frame's forced work stays within it (one slice check past it at most;
+				-- off it was 469 ticks against 117 + 33 here)
+				local B = math.floor(T / 4)
+				expect(B >= 4).to.beTrue()
+				local T2
+				T2, got, jobs, owner, ready = burst(B)
+				-- (each job's run reads the clock three times besides its slice checks: bookkeeping, not work)
+				expect(T2 <= B + 1 + 3 * (#jobs + 1)).to.beTrue()
+				-- every new sound answered in that frame: in full (bit for bit) or by the cheap model, never nothing
+				local nFull, nCheap = 0, 0
+				for k, j in ipairs(jobs) do
+					local r = got[k]
+					expect(r ~= nil).to.beTrue()
+					if r.cheap then
+						nCheap = nCheap + 1
+						expect(dumpResult(r)).to.equal(dumpResult(P.Cheap(j.S, L, 75, cfg)))
+					else
+						nFull = nFull + 1
+						expect(dumpResult(r)).to.equal(full(j.S))
+					end
+				end
+				expect(nFull >= 1 and nCheap >= 1).to.beTrue()
+				expect(SL.stats.forceCheap).to.equal(nCheap)
+				-- the playing sound keeps its answer (nothing delivered yet) and is finished in full later
+				expect(ready() == false).to.beTrue()
+				expect(#SL.jobs).to.equal(1)
+				for _ = 1, 100 do
+					if ready() then break end
+					nextFrame()
+					setNow(SL.jobs[1] and SL.jobs[1].deadline or 0)
+					SL.Run()
+				end
+				expect(ready()).to.beTrue()
+				local r = SL.Held(owner, list[#list][1], L, 75, nil, nil)
+				expect(r ~= nil and not r.cheap).to.beTrue()
+				expect(dumpResult(r)).to.equal(full(list[#list][1]))
 			end)
 		end },
 		{ name = "Far sliced: a job whose inputs changed while it was paused (door boxes, settings) is not served: restarted, it answers for the new inputs", func = function()
