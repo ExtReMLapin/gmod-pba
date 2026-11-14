@@ -1180,6 +1180,7 @@ end
 -- the hull cleared the leaf. math.huge when no way round, or when S or L is inside the box by more than
 -- ENCLOSED_DEPTH (a source inside a car); a point just under its surface (a route vertex on a door
 -- leaf's face: the probes' routes pass the leaves) is beside it, not inside.
+do -- (P.DetourDelta and its helpers: a scope of their own, the main chunk is at its 200 locals)
 local EDGE_HALVINGS = 16
 local EDGE_SAMPLES, EDGE_CLEAR_HALVINGS = 6, 7 -- clear points along a blocked edge (P.DetourDelta)
 local ENCLOSED_DEPTH = 4
@@ -1189,11 +1190,77 @@ local function enclosed(p, mins, maxs)
 end
 local EDGES = { -- the 12 edges of a box as corner index pairs (bit k of the index: max on axis k)
 	{ 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
-local candShared = {}
--- (module-level helpers of P.DetourDelta: no closure made per call, LuaJIT NYI FNEW)
-local function boxCorner(i, cx, cy, cz)
-	return cx[bit.band(i, 1) + 1], cy[bit.band(bit.rshift(i, 1), 1) + 1], cz[bit.band(bit.rshift(i, 2), 1) + 1]
+-- (module-level helpers of P.DetourDelta: no closure made per call, LuaJIT NYI FNEW; no table or Vector
+-- made per call either: its own Lua was ~15 ms of a combat frame on d1_canals_01, garbage included)
+local N_EDGES = #EDGES
+-- per edge, its two corners' sides on each axis (true: max)
+local EPX, EPY, EPZ, EQX, EQY, EQZ = {}, {}, {}, {}, {}, {}
+for k, e in ipairs(EDGES) do
+	EPX[k], EPY[k], EPZ[k] = bit.band(e[1], 1) == 1, bit.band(e[1], 2) == 2, bit.band(e[1], 4) == 4
+	EQX[k], EQY[k], EQZ[k] = bit.band(e[2], 1) == 1, bit.band(e[2], 2) == 2, bit.band(e[2], 4) == 4
 end
+-- scratch (the 12 candidates, the blocked list, the point handed to `valid`): one per call in flight, from a
+-- free list (a sliced call yields between its tests and another call runs meanwhile; a call abandoned in its
+-- slice never gives its scratch back, a new one is made then)
+local scratchFree, scratchFreeN = {}, 0
+local function scratchGet()
+	if scratchFreeN > 0 then
+		local s = scratchFree[scratchFreeN]
+		scratchFree[scratchFreeN] = nil
+		scratchFreeN = scratchFreeN - 1
+		return s
+	end
+	local cand = {}
+	for i = 1, N_EDGES do cand[i] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } end
+	return { cand = cand, blocked = {}, v = Vector() }
+end
+local function scratchPut(s)
+	scratchFreeN = scratchFreeN + 1
+	scratchFree[scratchFreeN] = s
+end
+-- table.sort(a, byFirst) on a[l..u] in Lua: LuaJIT's sort (Lua 5.1's auxsort) comparison for comparison and
+-- swap for swap, so the same order, ties included (the library call with a Lua comparator is not compiled)
+local function sortByFirst(a, l, u)
+	while l < u do
+		if a[u][1] < a[l][1] then a[l], a[u] = a[u], a[l] end
+		if u - l == 1 then break end
+		local i = bit.rshift(l + u, 1)
+		if a[i][1] < a[l][1] then
+			a[i], a[l] = a[l], a[i]
+		elseif a[u][1] < a[i][1] then
+			a[i], a[u] = a[u], a[i]
+		end
+		if u - l == 2 then break end
+		local P = a[i]
+		a[i], a[u - 1] = a[u - 1], P
+		local p = P[1]
+		local j = u - 1
+		i = l
+		while true do
+			i = i + 1
+			while a[i][1] < p do
+				if i > u then error("invalid order function for sorting") end
+				i = i + 1
+			end
+			j = j - 1
+			while p < a[j][1] do
+				if j < l then error("invalid order function for sorting") end
+				j = j - 1
+			end
+			if j < i then break end
+			a[i], a[j] = a[j], a[i]
+		end
+		a[u - 1], a[i] = a[i], a[u - 1]
+		local rl, ru
+		if i - l < u - i then
+			rl, ru, l = l, i - 1, i + 1
+		else
+			rl, ru, u = i + 1, u, i - 1
+		end
+		sortByFirst(a, rl, ru)
+	end
+end
+P.SortByFirst = sortByFirst -- (the tests check it against table.sort)
 local function edgeAlong(c, t, sx, sy, sz, lx, ly, lz, len)
 	local x, y, z = c[5] + c[8] * t, c[6] + c[9] * t, c[7] + c[10] * t
 	return x, y, z, math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
@@ -1206,16 +1273,15 @@ end
 -- answer is a clear point: a cut search only finds a longer way round (more loss), never one through the
 -- world; with tests enough it is the full search's answer (the edges past the first clear best point cannot
 -- beat it). math.huge when no clear point was found within the cap.
-local blockedShared = {}
-local function detourCapped(cand, n, cap, valid, sliced, va, vb, vc, sx, sy, sz, lx, ly, lz, len)
-	local blocked = (sliced and SLICE.co) and {} or blockedShared
+local function detourCapped(cand, n, cap, valid, sliced, va, vb, vc, sx, sy, sz, lx, ly, lz, len, blocked, v)
 	local nb, tests, best = 0, 0, math.huge
 	for i = 1, n do
 		local c = cand[i]
 		if tests >= cap then break end
 		if sliced then sliceCheck() end
 		tests = tests + 1
-		if valid(Vector(c[2], c[3], c[4]), va, vb, vc) then
+		v:SetUnpacked(c[2], c[3], c[4])
+		if valid(v, va, vb, vc) then
 			best = c[1]
 			break
 		end
@@ -1237,7 +1303,8 @@ local function detourCapped(cand, n, cap, valid, sliced, va, vb, vc, sx, sy, sz,
 					local x, y, z, d = edgeAlong(c, t, sx, sy, sz, lx, ly, lz, len)
 					if d >= best then break end
 					tests = tests + 1
-					if valid(Vector(x, y, z), va, vb, vc) then
+					v:SetUnpacked(x, y, z)
+					if valid(v, va, vb, vc) then
 						local lo, hi = prev, t -- blocked .. clear (hi stays clear: a cut bisection keeps a clear point)
 						for _ = 1, EDGE_CLEAR_HALVINGS do
 							if tests >= cap then break end
@@ -1245,7 +1312,8 @@ local function detourCapped(cand, n, cap, valid, sliced, va, vb, vc, sx, sy, sz,
 							local m = (lo + hi) * 0.5
 							local mx, my, mz = edgeAlong(c, m, sx, sy, sz, lx, ly, lz, len)
 							tests = tests + 1
-							if valid(Vector(mx, my, mz), va, vb, vc) then hi = m else lo = m end
+							v:SetUnpacked(mx, my, mz)
+							if valid(v, va, vb, vc) then hi = m else lo = m end
 						end
 						local _, _, _, dc = edgeAlong(c, hi, sx, sy, sz, lx, ly, lz, len)
 						if dc < best then best = dc end
@@ -1258,57 +1326,66 @@ local function detourCapped(cand, n, cap, valid, sliced, va, vb, vc, sx, sy, sz,
 	end
 	return best < math.huge and math.max(best, 0) or math.huge
 end
---- sliced: slice checks between its world tests (objectDetour's calls; its scratch list is then its own).
+--- sliced: slice checks between its world tests (objectDetour's calls).
+-- `valid` gets the same Vector at every test of a call (its contents changed): it must not keep it.
+local msqrt, mmax = math.sqrt, math.max
 function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
-	local cand = (sliced and SLICE.co) and {} or candShared
 	-- source or listener enclosed by the obstacle: no way round it
 	if enclosed(S, mins, maxs) or enclosed(L, mins, maxs) then return math.huge end
 	local sx, sy, sz = S.x, S.y, S.z
 	local lx, ly, lz = L.x, L.y, L.z
 	local len = math.sqrt((lx - sx) ^ 2 + (ly - sy) ^ 2 + (lz - sz) ^ 2)
 	if len < 1e-3 then return math.huge end
-	local cx = { mins.x, maxs.x }
-	local cy = { mins.y, maxs.y }
-	local cz = { mins.z, maxs.z }
+	local scr = scratchGet()
+	local cand = scr.cand
+	local mnx, mny, mnz, mxx, mxy, mxz = mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z
 	local n = 0
-	for _, e in ipairs(EDGES) do
-		local px, py, pz = boxCorner(e[1], cx, cy, cz)
-		local qx, qy, qz = boxCorner(e[2], cx, cy, cz)
+	for k = 1, N_EDGES do
+		local px, py, pz = EPX[k] and mxx or mnx, EPY[k] and mxy or mny, EPZ[k] and mxz or mnz
+		local qx, qy, qz = EQX[k] and mxx or mnx, EQY[k] and mxy or mny, EQZ[k] and mxz or mnz
 		local dx, dy, dz = qx - px, qy - py, qz - pz
 		-- f(t) = |S - P(t)| + |P(t) - L| is convex: bisection on the sign of its slope
 		local lo, hi = 0, 1
 		for _ = 1, EDGE_HALVINGS do
 			local t = (lo + hi) * 0.5
 			local x, y, z = px + dx * t, py + dy * t, pz + dz * t
-			local a = math.max(math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2), 1e-6)
-			local b = math.max(math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2), 1e-6)
+			local a = mmax(msqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2), 1e-6)
+			local b = mmax(msqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2), 1e-6)
 			local slope = ((x - sx) * dx + (y - sy) * dy + (z - sz) * dz) / a + ((x - lx) * dx + (y - ly) * dy + (z - lz) * dz) / b
 			if slope > 0 then hi = t else lo = t end
 		end
 		local t = (lo + hi) * 0.5
 		local x, y, z = px + dx * t, py + dy * t, pz + dz * t
-		local d = math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
+		local d = msqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + msqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
 		n = n + 1
 		local c = cand[n]
-		if not c then c = {} cand[n] = c end
 		c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11] = d, x, y, z, px, py, pz, dx, dy, dz, t
 	end
-	for i = n + 1, #cand do cand[i] = nil end
 	-- shortest first. An edge whose best point the world blocks still has clear points along it: the
 	-- best clear one (nearest the best point, on either side) stands, so the way round grows by degrees as
 	-- the world closes on that edge instead of jumping to the next edge: an open leaf's way round went
 	-- from 10 to 3 dB in a 2 u step of the listener when the shortest edge's best point came clear
 	-- (pba_twodoors, open slide). Edges are tried while their best point could still beat the best way found.
-	table.sort(cand, byFirst)
-	if not valid then return n > 0 and math.max(cand[1][1], 0) or math.huge end
+	sortByFirst(cand, 1, n)
+	if not valid then
+		local r = mmax(cand[1][1], 0)
+		scratchPut(scr)
+		return r
+	end
+	local v = scr.v
 	local cap = A.cfg and A.cfg.detour_max_tests or 0
-	if cap >= 1 then return detourCapped(cand, n, math.floor(cap), valid, sliced, va, vb, vc, sx, sy, sz, lx, ly, lz, len) end
+	if cap >= 1 then
+		local r = detourCapped(cand, n, math.floor(cap), valid, sliced, va, vb, vc, sx, sy, sz, lx, ly, lz, len, scr.blocked, v)
+		scratchPut(scr)
+		return r
+	end
 	local best = math.huge
 	for i = 1, n do
 		local c = cand[i]
 		if c[1] >= best then break end
 		if sliced then sliceCheck() end
-		if valid(Vector(c[2], c[3], c[4]), va, vb, vc) then
+		v:SetUnpacked(c[2], c[3], c[4])
+		if valid(v, va, vb, vc) then
 			best = c[1]
 			break
 		end
@@ -1323,13 +1400,15 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
 				local t = t0 + (tEnd - t0) * k / EDGE_SAMPLES
 				local x, y, z, d = edgeAlong(c, t, sx, sy, sz, lx, ly, lz, len)
 				if d >= best then break end
-				if valid(Vector(x, y, z), va, vb, vc) then
+				v:SetUnpacked(x, y, z)
+				if valid(v, va, vb, vc) then
 					local lo, hi = prev, t -- blocked .. clear
 					for _ = 1, EDGE_CLEAR_HALVINGS do
 						if sliced then sliceCheck() end
 						local m = (lo + hi) * 0.5
 						local mx, my, mz = edgeAlong(c, m, sx, sy, sz, lx, ly, lz, len)
-						if valid(Vector(mx, my, mz), va, vb, vc) then hi = m else lo = m end
+						v:SetUnpacked(mx, my, mz)
+						if valid(v, va, vb, vc) then hi = m else lo = m end
 					end
 					local _, _, _, dc = edgeAlong(c, hi, sx, sy, sz, lx, ly, lz, len)
 					if dc < best then best = dc end
@@ -1339,8 +1418,10 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
 			end
 		end
 	end
+	scratchPut(scr)
 	return best < math.huge and math.max(best, 0) or math.huge
 end
+end -- (P.DetourDelta)
 
 --- Edge of a WORLD obstacle on the line S -> L (game state: traces), the world's counterpart of a prop's
 -- detour (P.DetourDelta): a terrain ridge, a low wall, a pillar, a door jamb. Without it, a source the

@@ -1693,6 +1693,35 @@ local SUITE = {
 			A.cfg.detour_max_tests = saved
 			if not ok then error(err, 0) end
 		end },
+		{ name = "DetourDelta's sort (P.SortByFirst) puts its candidates in table.sort's order, ties included (the library call with a Lua comparator is not compiled; a tie's order picks the edge tried first)", func = function()
+			local byFirst = function(u, v) return u[1] < v[1] end
+			for trial = 1, 2000 do
+				local n = 1 + trial % 16
+				local a, b = {}, {}
+				for i = 1, n do
+					local t = { (trial * 7 + i * 13) % (1 + trial % 5) }
+					a[i], b[i] = t, t
+				end
+				table.sort(a, byFirst)
+				P.SortByFirst(b, 1, n)
+				for i = 1, n do expect(b[i] == a[i]).to.beTrue() end
+			end
+		end },
+		{ name = "DetourDelta: no garbage per call (its scratch is reused: ~3-4 KB per call made in a slice, a combat frame's GC)", func = function()
+			local mins, maxs = Vector(-20, -20, -20), Vector(20, 20, 20)
+			local S, L = Vector(-150, 3, -15), Vector(150, -2, -15)
+			local valid = function(p) return p.z > -18 and p.y < 18 end
+			local savedCo = P.slice.co
+			P.slice.co = true -- as in a slice (not the running coroutine: no yield)
+			for _ = 1, 50 do P.DetourDelta(S, L, mins, maxs, valid, true) end
+			collectgarbage("stop")
+			local k0 = collectgarbage("count")
+			for _ = 1, 200 do P.DetourDelta(S, L, mins, maxs, valid, true) end
+			local k1 = collectgarbage("count")
+			collectgarbage("restart")
+			P.slice.co = savedCo
+			expect((k1 - k0) * 1024 / 200 < 64).to.beTrue()
+		end },
 		{ name = "EvalRoute: a vertex whose neighbours see each other is no corner (a walking source went 2-3 dB up and down with the copy kept, pba_demo)", func = function()
 			-- empty world: every thin trace clear; the route keeps a vertex 40 u off the straight line between
 			-- its neighbours (its hull grazed a wall)
