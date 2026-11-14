@@ -306,5 +306,13 @@
  "burst_mask_db": {
   "pos0": "hook",
   "why": "masking of quiet new sounds under a loud one (cl_render A.Process), outside P.Compute"
+ },
+ "gc_lean": {
+  "pos0": "same",
+  "why": "the same cache key built as one string, a record skipped: no result changes"
+ },
+ "gc_idle_step": {
+  "pos0": "hook",
+  "why": "garbage collector steps in idle frames (cl_sched), outside P.Compute"
  }
 }

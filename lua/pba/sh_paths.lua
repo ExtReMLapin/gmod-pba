@@ -2666,8 +2666,14 @@ function P.LineState(S, L, srcEnt, cfg)
 	st = st .. (wall and "1" or "0") .. (crossed and "1" or "0")
 	return st
 end
+local floor, format = math.floor, string.format
 function P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	local st = P.LineState(S, L, srcEnt, cfg)
+	-- pba_gc_lean: the same key (%s formats a number as a concatenation does) in one string instead of three
+	if ((cfg or A.cfg).gc_lean or 0) >= 0.5 then
+		return format("%s,%s,%s|%s,%s,%s|%s|%s|%s", floor(S.x / 32), floor(S.y / 32), floor(S.z / 32),
+			floor(L.x / 32), floor(L.y / 32), floor(L.z / 32), sndlvl, entKey(srcEnt), st), st
+	end
 	return q(S) .. "|" .. q(L) .. "|" .. sndlvl .. "|" .. entKey(srcEnt) .. "|" .. st, st
 end
 
