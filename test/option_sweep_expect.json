@@ -298,5 +298,9 @@
  "native_speaker_follow": {
   "pos0": "hook",
   "why": "speaker EQ of followed native voices (render time)"
+ },
+ "burst_budget_ms": {
+  "pos0": "hook",
+  "why": "per-frame budget of new sounds' evaluations (cl_render A.Process), outside P.Compute"
  }
 }

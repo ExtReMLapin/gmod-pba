@@ -1015,6 +1015,58 @@ function A.FarMuffle(data, pos)
 	return true
 end
 
+-- ------------------------------------------------------------------ bursts (pba_burst_budget_ms)
+-- A burst (barrels, an explosion's debris) is dozens of new sounds in one frame, each evaluated at once:
+-- 16 ms per frame behind a wall on gm_construct, up to 125 ms on d1_canals_01 (PERF bench S1, S11).
+-- burst_budget_ms bounds the time new sounds' full evaluations take in a frame; past it a new sound gets, in
+-- this order: its emitter's recent result (same entity, both ends within BURST_REUSE_U, world unchanged, at
+-- most reeval_max_s old), the far slicer when its distance leaves a frame (SL.Defer), else the cheap model
+-- (P.Cheap: the walls' transmission, never vanilla through a wall).
+-- A followed degraded sound gets its full evaluation at its next update.
+local BURST_REUSE_U = 64
+A.burst = A.burst or { frame = -1, spent = 0, byEmitter = setmetatable({}, { __mode = "k" }) }
+function A.ResetBurstStats() A.burstStats = { full = 0, reused = 0, deferred = 0, cheap = 0 } end
+if not A.burstStats then A.ResetBurstStats() end
+
+local function burstEvaluate(data, S, L, lvl, src)
+	local P, B, st = A.Paths, A.burst, A.burstStats
+	local dry = A.Render.WaterDry(nil, data.SoundName)
+	local cfg = dry and P.DRY_SOURCE_CFG or nil
+	local now = RealTime()
+	local budget = (A.cfg.burst_budget_ms or 0) / 1000
+	local fr = FrameNumber()
+	if B.frame ~= fr then B.frame, B.spent = fr, 0 end
+	if budget > 0 and B.spent >= budget then
+		local m = src and B.byEmitter[src]
+		local r2 = BURST_REUSE_U * BURST_REUSE_U
+		if m and m.gen == P.cacheGen and m.lvl == lvl and now - m.t <= (A.cfg.reeval_max_s or 1)
+			and m.S:DistToSqr(S) <= r2 and m.L:DistToSqr(L) <= r2 then
+			st.reused = st.reused + 1
+			return m.r
+		end
+		local job = A.Slicer and A.Slicer.Defer(S, L, lvl, src, cfg)
+		if job then
+			st.deferred = st.deferred + 1
+			return nil, job
+		end
+		st.cheap = st.cheap + 1
+		local t0 = SysTime()
+		local r = P.Cheap(S, L, lvl, cfg, src)
+		B.spent = B.spent + (SysTime() - t0)
+		return r
+	end
+	local t0 = SysTime()
+	local r, job = P.Evaluate(nil, S, L, lvl, src, dry)
+	B.spent = B.spent + (SysTime() - t0)
+	st.full = st.full + 1
+	if r and src and budget > 0 then
+		local m = B.byEmitter[src] or {}
+		m.r, m.t, m.gen, m.lvl, m.S, m.L = r, now, P.cacheGen, lvl, Vector(S), Vector(L)
+		B.byEmitter[src] = m
+	end
+	return r, job
+end
+
 function A.Process(data, relayed)
 	local L, ang = listenerPos()
 	local S = data.Pos
@@ -1039,7 +1091,11 @@ function A.Process(data, relayed)
 	local tReq = RealTime()
 	local r, job
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
-	r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.Render.WaterDry(nil, data.SoundName))
+	if (A.cfg.burst_budget_ms or 0) > 0 then
+		r, job = burstEvaluate(data, S, L, lvl, IsValid(src) and src or nil)
+	else
+		r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.Render.WaterDry(nil, data.SoundName))
+	end
 	if not r and job then
 		-- a far sound whose routes are computed in slices (cl_slicer): taken now (the original is not
 		-- played), emitted once they are ready, by the time the sound would reach the listener at the

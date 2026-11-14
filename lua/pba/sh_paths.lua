@@ -2671,6 +2671,36 @@ function P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	return q(S) .. "|" .. q(L) .. "|" .. sndlvl .. "|" .. entKey(srcEnt) .. "|" .. st, st
 end
 
+--- The cheap evaluation of a new sound (pba_burst_budget_ms past its budget, pba_burst_mask_db under a loud
+-- sound): the walls on the straight line and their transmission (P.Walls + P.EvalWalls, the server's muffle
+-- model), no routes round them, no probes, no listener field, nothing cached. r.cheap marks it; a followed
+-- sound's next update is a full one. Same result shape as P.Compute (clear, trans, paths = {}, voices).
+function P.Cheap(S, L, sndlvl, cfg, srcEnt)
+	cfg = cfg or A.cfg
+	srcEnt = P.SourceObject(S, srcEnt, cfg)
+	S = P.FreeSource(S)
+	local r = { S = S, L = L, cheap = true }
+	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, false, cfg)
+	if #walls == 0 then
+		r.clear = true
+		return r
+	end
+	r.clear, r.paths = false, {}
+	local loss, lp, mid, tilt = P.EvalWalls(walls, cfg)
+	local last = walls[#walls]
+	local dir = (L - S):GetNormalized()
+	local tpos = last.exit + dir * 2
+	if (cfg.trans_pos_clamp or 0) >= 0.5 then -- (as P.Compute's transmission: never past the listener)
+		local rem = (L - last.exit):Dot(dir)
+		if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
+	end
+	r.trans = { walls = walls, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
+	if (cfg.trans_tilt or 0) >= 0.5 then r.trans.lpDb = tilt end
+	r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
+	r.shadowDb = P.ShadowOf(r.voices, nil)
+	return r
+end
+
 -- Surfaces pba's traces hit but Steam Audio's scene does not hold (cl_native N.BuildWorld): static
 -- props (traces report them as world, texture "**studio**"), sky faces, the tool textures it skips
 -- (mirror of cl_native's SKIP_PREFIX: toolsskybox is solid to traces), displacements when its BSP
