@@ -1174,6 +1174,8 @@ steps = [
     ("water_planes d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: job("client", "water_planes.lua"))),
     # pba_build_ms_combat (perf O6): the probe graph and module world rebuilt during a simulated fight, 1 ms per frame
     ("build_combat d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: native_on(True), lambda: job("client", "build_combat.lua", 400))),
+    # pba_build_fair: during a fight the probe graph and the module's world gather take turns (resume counts per frame)
+    ("build_fair d1_canals_06", lambda: seq(lambda: load("d1_canals_06", 1), lambda: native_on(True), lambda: job("client", "build_fair.lua", 600))),
     # door leaf crossed by the line = its doorway (one model): no jump at the leaf / wall boundary
     # continuous sounds: no flip-flop between two equal paths, a real move still switches once
     ("path_hysteresis twodoors", lambda: seq(doors_open, lambda: job("client", "path_hysteresis.lua"))),

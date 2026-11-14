@@ -391,6 +391,10 @@
   "pos0": "hook",
   "why": "burst policy (cl_render burstEvaluate), outside P.Compute"
  },
+ "build_fair": {
+  "pos0": "hook",
+  "why": "background builds' turns during a fight (cl_sched BuildBudget), outside P.Compute"
+ },
  "burst_hold_ms": {
   "pos0": "hook",
   "why": "burst policy (cl_render burstEvaluate / SL.Defer), outside P.Compute"

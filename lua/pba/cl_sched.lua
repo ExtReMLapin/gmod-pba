@@ -52,11 +52,35 @@ function SC.InCombat()
 	return now - oldest < COMBAT_S
 end
 
+-- The background builds that share the budget of a fight, and whether each is running a time-sliced step now
+-- (a finished build waiting for calm, b.res / N.gathered, takes no slice).
+local BUILDERS = { "probes", "native" }
+local function buildRunning(who)
+	if who == "probes" then
+		local b = A.Probes and A.Probes.building
+		return b ~= nil and not b.res
+	end
+	local N = A.Native
+	return N ~= nil and N.building ~= nil and not N.gathered
+end
+
 --- Seconds a background build may take now: 4 ms per frame each, or during a fight pba_build_ms_combat per frame
 -- for all of them together (what is left of it this frame; 0: wait for the next frame). Option at 0: 4 ms.
-function SC.BuildBudget()
+-- who ("probes" / "native", the caller): with pba_build_fair the builds running together take turns, one frame
+-- each, otherwise the first to ask each frame spent it all and the other starved until the end of the fight.
+function SC.BuildBudget(who)
 	local c = A.cfg.build_ms_combat or 1
 	if c > 0 and SC.InCombat() then
+		if who and (A.cfg.build_fair or 0) > 0 then
+			local n, mine = 0, 0
+			for _, id in ipairs(BUILDERS) do
+				if id == who or buildRunning(id) then
+					n = n + 1
+					if id == who then mine = n end
+				end
+			end
+			if n > 1 and FrameNumber() % n + 1 ~= mine then return 0 end
+		end
 		local b = SC.build
 		local spent = (b and b.frame == FrameNumber()) and b.cur or 0
 		return math.max(math.min(c, 4) - spent, 0) / 1000

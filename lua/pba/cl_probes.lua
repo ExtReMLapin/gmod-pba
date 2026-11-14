@@ -832,7 +832,7 @@ function PR.Start(noCache)
 	local want = A.cfg.probe_spacing
 	local t0 = SysTime()
 	-- 4 ms per frame, less during a fight (pba_build_ms_combat, cl_sched)
-	local function slice() return A.Sched and A.Sched.BuildBudget and A.Sched.BuildBudget() or 0.004 end
+	local function slice() return A.Sched and A.Sched.BuildBudget and A.Sched.BuildBudget("probes") or 0.004 end
 	local co = coroutine.create(function()
 		local deadline = SysTime() + slice()
 		local function budget()
