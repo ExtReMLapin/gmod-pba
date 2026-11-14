@@ -18,7 +18,7 @@ MCP = sys.argv[1]
 
 def call(tool, args, mx=2_000_000):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), str(mx)],
-                         capture_output=True, text=True, encoding="utf-8").stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     try:
         return json.loads(out)
     except Exception:

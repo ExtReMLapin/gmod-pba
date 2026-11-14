@@ -123,7 +123,7 @@ def main():
 
     def call(tool, args, mx=2_000_000, timeout=300):
         out = subprocess.run([sys.executable, "-I", mcp, "call", tool, json.dumps(args), str(mx)],
-                             capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout).stdout
         try:
             return json.loads(out)
         except ValueError:

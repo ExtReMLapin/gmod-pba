@@ -26,7 +26,7 @@ MEM_GROW_MB = 70  # 5 % of the ~1.4 GB game; measured 7 to 27 MB per cycle (a sm
 
 def call(tool, args, mx=2_000_000, timeout=400):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), str(mx)],
-                         capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout).stdout
     try:
         return json.loads(out)
     except ValueError:

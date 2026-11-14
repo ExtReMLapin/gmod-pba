@@ -14,7 +14,7 @@ TOK = "k_lab.eli_allset"
 
 def call(tool, args):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), "200000"],
-                         capture_output=True, text=True, encoding="utf-8").stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     try:
         return json.loads(out)
     except ValueError:

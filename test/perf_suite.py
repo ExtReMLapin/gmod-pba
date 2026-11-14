@@ -104,7 +104,7 @@ MODE_KNOBS = ("enable", "native_render", "native_all", "native_echo")  # set by 
 
 def call(tool, args, timeout=600):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), "400000"],
-                         capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout).stdout
     try:
         return json.loads(out)
     except ValueError:

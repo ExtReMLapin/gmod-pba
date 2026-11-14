@@ -53,7 +53,10 @@ def session():
 
 
 def main():
-    sys.stdout.reconfigure(encoding="utf-8")
+    # both streams in UTF-8: a failed call's traceback carries a localized Windows message (cp1252 bytes
+    # 0x92/0xe9/0xfb on a French system) that the callers, decoding UTF-8, could not read
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     sid = session()
     if sys.argv[1] == "list":
         r, _ = post({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, sid)

@@ -26,7 +26,7 @@ GAME = sys.argv[2] if len(sys.argv) > 2 else os.environ.get(
 
 def call(tool, args, mx=2_000_000, timeout=400):
     out = subprocess.run([sys.executable, "-I", MCP, "call", tool, json.dumps(args), str(mx)],
-                         capture_output=True, text=True, encoding="utf-8", timeout=timeout).stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout).stdout
     try:
         return json.loads(out)
     except ValueError:
