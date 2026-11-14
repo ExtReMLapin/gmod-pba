@@ -521,8 +521,19 @@ end
 function A.SoundTimeTaken(data, long)
 	local st = data.SoundTime or 0
 	if st == 0 or math.abs(st - CurTime()) <= 0.25 then return true end
-	if not SERVER or (A.cfg.soundtime or 1) < 0.5 then return false end
+	-- (a sound made on this client: pba_soundtime_client, its own player's switch; the server's: pba_soundtime)
+	if (A.cfg[SERVER and "soundtime" or "soundtime_client"] or 1) < 0.5 then return false end
 	return not long or (A.cfg.long_soundtime or 1) >= 0.5
+end
+
+--- Seconds a sound stamped away from now waits before it starts, on the client that made it: the stamp's lead
+-- over CurTime() when it is between 0.25 and 0.5 s (the engine delays a stamped sound by that much, and
+-- starts one stamped outside that window, behind or too far ahead, at once). 0 = at once.
+function A.ClientSoundDelay(data)
+	local st = data.SoundTime or 0
+	if st == 0 or SERVER then return 0 end
+	local d = st - CurTime()
+	return (d > 0.25 and d <= 0.5) and d or 0
 end
 
 --- Common eligibility rules for an EntityEmitSound table. Returns true when pba may

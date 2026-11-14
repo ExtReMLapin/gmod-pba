@@ -102,6 +102,8 @@ end
 -- so their mirror stops with them. pba's own patches come from the original CreateSound.
 LP.origCreateSound = LP.origCreateSound or CreateSound
 LP.patchInfo = LP.patchInfo or setmetatable({}, { __mode = "k" }) -- patch -> { ent, name }
+LP.finished = LP.finished or setmetatable({}, { __mode = "k" }) -- patch -> true: its one-shot mirror ended with its file
+LP.restarts = {} -- "entindex|name" -> { p = patch, t = RealTime() }: a finished patch altered just now (PATCH:ChangeVolume)
 function CreateSound(ent, name, filter)
 	local p = LP.origCreateSound(ent, name, filter)
 	if p and IsValid(ent) then LP.patchInfo[p] = { ent = ent, name = name } end
@@ -111,12 +113,13 @@ do
 	local PATCH = FindMetaTable("CSoundPatch")
 	-- originals kept across autorefresh, filled one by one (a reload must not save a detour as original)
 	LP.origPatch = LP.origPatch or {}
-	for _, k in ipairs({ "Stop", "FadeOut", "Play", "PlayEx" }) do
+	for _, k in ipairs({ "Stop", "FadeOut", "Play", "PlayEx", "ChangeVolume", "ChangePitch" }) do
 		local f = PATCH[k]
 		if not LP.origPatch[k] and f and debug.getinfo(f, "S").what == "C" then LP.origPatch[k] = f end
 	end
 	local function ended(p)
 		local i = LP.patchInfo[p]
+		LP.finished[p] = nil -- (stopped: its alterations do not play it again)
 		if i and IsValid(i.ent) and LP.StopClient then LP.StopClient(i.ent:EntIndex(), nil, i.name, p) end
 	end
 	function PATCH:Stop() LP.origPatch.Stop(self) ended(self) end
@@ -130,6 +133,15 @@ do
 	-- the patch being started right now: its start event comes synchronously from these calls
 	function PATCH:Play() LP.playing = self LP.origPatch.Play(self) LP.playing = nil end
 	function PATCH:PlayEx(v, p) LP.playing = self LP.origPatch.PlayEx(self, v, p) LP.playing = nil end
+	-- a change of a patch whose file has ended: the engine plays it again from the top (its channel is gone, the
+	-- alteration starts a sound), and the hook gets it as a start a few frames later, not inside this call. The
+	-- alteration of a finished patch is noted for the hook (foreignPatch, pba_patch_restart)
+	local function altered(p)
+		local i = LP.patchInfo[p]
+		if i and LP.finished[p] and IsValid(i.ent) then LP.restarts[i.ent:EntIndex() .. "|" .. i.name] = { p = p, t = RealTime() } end
+	end
+	function PATCH:ChangeVolume(v, t) altered(self) return LP.origPatch.ChangeVolume(self, v, t) end
+	function PATCH:ChangePitch(v, t) altered(self) return LP.origPatch.ChangePitch(self, v, t) end
 end
 
 -- Entity:StartLoopingSound (GMod) on the client: a loop with no patch; a token stands for it (started
@@ -198,6 +210,14 @@ local function foreignPatch(e, name)
 	local p = LP.playing
 	local i = p and LP.patchInfo[p]
 	if i and i.ent == e and i.name == name then return p end
+	-- a finished patch altered a moment ago: the engine starts it again (pba_patch_restart)
+	if (A.cfg.patch_restart or 1) < 0.5 then return end
+	local key = e:EntIndex() .. "|" .. name
+	local r = LP.restarts[key]
+	if r and RealTime() - r.t < 1 and LP.finished[r.p] then
+		LP.restarts[key] = nil
+		return r.p
+	end
 end
 
 local function stopMirror(m)
@@ -646,6 +666,7 @@ function LP.HandleClient(data)
 	local once = not m and not loop and change and (A.cfg.patch_oneshots or 0) >= 0.5 and (A.cfg.loops or 0) >= 0.5
 		and (A.cfg.loops_client or 0) >= 0.5 and not A.IsLooping(name)
 	local src = (loop or once) and foreignPatch(e, name)
+	if src then LP.finished[src] = nil end -- (restarted: followed again)
 	local cpp = loop and not src and cppPatch(e, name)
 	if cpp and cppDead(e) then return false end -- (a dead one's: left to the engine, which has shut them)
 	if change and not src and not cpp then
@@ -668,15 +689,13 @@ function LP.HandleClient(data)
 	if src or cpp then
 		-- client loop: needs its registered patch or a known C++ owner (else nothing would ever stop the mirror)
 		if once then
-			local st = data.SoundTime or 0
-			if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+			if not A.SoundTimeTaken(data, true) then return false end
 			local dur = A.SoundDuration(name) or 0
 			if not A.LongDuration(dur, 0) then return false end
 		end
 	else
 		if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 or A.IsLooping(name) then return false end
-		local st = data.SoundTime or 0
-		if st ~= 0 and math.abs(st - CurTime()) > 0.25 then return false end
+		if not A.SoundTimeTaken(data, true) then return false end
 		local dur = A.SoundDuration(name) or 0
 		if not A.LongDuration(dur) then return false end
 	end
@@ -846,6 +865,8 @@ local function step(key, m)
 	-- a client loop whose patch was collected (the engine stops its sound then, without any event)
 	if m.src and not m.src[1] then m.done = true end
 	if m.done then
+		-- a client patch's one-shot that played to its end: a later volume / pitch change restarts it (engine), taken again
+		if m.client and m.once and m.src and m.src[1] and IsValid(m.ent) then LP.finished[m.src[1]] = true end
 		stopMirror(m)
 		LP.mirrors[key] = nil
 		return
