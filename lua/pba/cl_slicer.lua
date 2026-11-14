@@ -219,18 +219,23 @@ end
 -- without a first slice now, when its distance leaves at least one frame before its deadline. Returns the
 -- job (its answer through job.onDone, as SL.Compute's held jobs), or nil when it is too near (or the slicer
 -- is off): the caller then takes another cheap way.
-function SL.Defer(S, L, sndlvl, srcEnt, cfg)
+-- holdS (seconds, pba_burst_hold_ms): a sound too near to wait for its propagation delay may be held that long
+-- anyway, so that it starts at its full level instead of a lower bound's followed by a glide up; its deadline
+-- is then the longer of the two (a far sound keeps its physical one).
+function SL.Defer(S, L, sndlvl, srcEnt, cfg, holdS)
 	if not SL.On(cfg) then return nil end
 	local ft = SL.FrameDt()
 	local reach = S:Distance(L) / SL.SPEED - SL.MARGIN_FRAMES * ft
-	if reach <= ft then return nil end
+	local held = holdS and holdS > 0 and holdS > reach
+	if held then reach = holdS
+	elseif reach <= ft then return nil end
 	local st = SL.stats
 	st.requests, st.held = st.requests + 1, st.held + 1
 	st.deferred = (st.deferred or 0) + 1
 	SL.seq = SL.seq + 1
 	local now = RealTime()
 	local j = { S = Vector(S), L = Vector(L), lvl = sndlvl, ent = srcEnt, cfg = cfg, tReq = now, deadline = now + reach,
-		seq = SL.seq, segs = 0, restarts = 0, cpu = 0 }
+		seq = SL.seq, segs = 0, restarts = 0, cpu = 0, holdFor = held and holdS or nil }
 	newCo(j)
 	snap(j) -- (its inputs as of now: its first slice, later, is its start)
 	SL.jobs[#SL.jobs + 1] = j
@@ -274,7 +279,8 @@ function SL.Run()
 			table.remove(jobs, i)
 			st.cancelled = st.cancelled + 1
 		else
-			local due = now + ft >= j.deadline
+			-- (a held sound: due when its hold is over, not a frame before: at 20 fps that is the next frame already)
+			local due = now + (j.holdFor and 0 or ft) >= j.deadline
 			local left = budgetLeft()
 			if not due and left <= 0 then break end -- (sorted: the next ones are not due either)
 			-- pba_far_force_ms: a due job's finish within what is left of the frame's forced share
@@ -302,7 +308,12 @@ function SL.Run()
 			end
 			if res == "over" then
 				st.forceOver = (st.forceOver or 0) + 1
-				if j.canWait then
+				if j.holdFor and now < j.tReq + j.holdFor + math.max(j.holdFor, 2 * ft) then
+					-- a held sound with no propagation delay to wait out: its hold is extended once, by the hold or two frames (the frame's
+					-- forced share was spent by the others), first in line next frame, before the cheap model
+					st.forceWait = (st.forceWait or 0) + 1
+					i = i + 1
+				elseif j.canWait then
 					-- a playing sound with an answer: it keeps it (SL.Held) and is first in line next frame
 					st.forceWait = (st.forceWait or 0) + 1
 					i = i + 1
