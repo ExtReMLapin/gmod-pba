@@ -55,7 +55,7 @@ end
 --- Seconds a background build may take now: 4 ms per frame each, or during a fight pba_build_ms_combat per frame
 -- for all of them together (what is left of it this frame; 0: wait for the next frame). Option at 0: 4 ms.
 function SC.BuildBudget()
-	local c = A.cfg.build_ms_combat or 0
+	local c = A.cfg.build_ms_combat or 1
 	if c > 0 and SC.InCombat() then
 		local b = SC.build
 		local spent = (b and b.frame == FrameNumber()) and b.cur or 0
@@ -67,7 +67,7 @@ end
 --- True when a build's last, indivisible step (the module's world load, the probe graph's preparation: tens of
 -- ms in one frame) must wait for the end of the fight (pba_build_ms_combat on).
 function SC.HoldLongStep()
-	return (A.cfg.build_ms_combat or 0) > 0 and SC.InCombat()
+	return (A.cfg.build_ms_combat or 1) > 0 and SC.InCombat()
 end
 
 --- A background build ran ms this frame: per-frame totals kept for the diagnostics and tests (SC.build:

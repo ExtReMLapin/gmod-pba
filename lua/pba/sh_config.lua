@@ -86,9 +86,9 @@ A.CONFIG = {
 	probe_field_ms  = { 1, 0.1, 10, "cl", "Time per frame (ms) spent keeping the listener's probe field up to date while moving (a full build is ~27 ms on a large map)." },
 	far_sliced      = { 1, 0, 1, "cl", "Far sounds' paths are computed over several frames: sound takes time to arrive (343 m/s, about 0.11 s for 2000 units), so the routes of a far sound are worked out a little each frame and are ready before the sound would reach you; the result is the same, without the frame spikes of new far routes. Near sounds and answers already known are computed at once as before. 0 = every sound computed at once." },
 	far_sliced_ms   = { 1.5, 0.1, 10, "cl", "Time per frame (ms) spent on far sounds' paths (pba_far_sliced). A path due before the next frame is finished at once whatever this budget." },
-	far_force_ms    = { 0, 0, 20, "cl", "Most time per frame (ms) spent finishing far sounds' paths that are due (pba_far_sliced): a burst of far sounds all due in one frame was finished at once, 20-27 ms on d1_canals_01. Past it, a new sound gets the walls' transmission alone (no routes round them, never plain sight through a wall) and a playing sound keeps its previous values until a later frame. 0 = every due path finished at once." },
+	far_force_ms    = { 2, 0, 20, "cl", "Most time per frame (ms) spent finishing far sounds' paths that are due (pba_far_sliced): a burst of far sounds all due in one frame was finished at once, 20-27 ms on d1_canals_01. Past it, a new sound gets the walls' transmission alone (no routes round them, never plain sight through a wall) and a playing sound keeps its previous values until a later frame. 0 = every due path finished at once." },
 	detour_max_tests = { 0, 0, 200, "cl", "Most world tests (2 traces each) spent finding the way round one prop: a prop against a floor and a wall had every blocked edge sampled, up to about 650 traces for one barrel in a near sound's evaluation. With a cap, every edge's nearest point is tried first, then the clear points along the blocked edges while tests are left; a cut search finds a longer way round (more loss), never one through the world. A free-standing prop is unchanged. 0 = no cap." },
-	build_ms_combat = { 0, 0, 4, "cl", "Time per frame (ms) left to the background builds after a map load (probe graph, native world) while a fight is heard (loud sounds in the last 2 s); 0 = always 4 ms." },
+	build_ms_combat = { 1, 0, 4, "cl", "Time per frame (ms) left to the background builds after a map load (probe graph, native world) while a fight is heard (loud sounds in the last 2 s); 0 = always 4 ms." },
 	group           = { 0, 0, 1, "cl", "Far sounds share the part of their routes that does not depend on them: a probe's route to you is worked out once and joined to every far sound that sees that probe (each keeps its own straight line, first leg and first corner, length and delay). Only where the source and the probe see each other through no wall, glass, door or prop, their straight lines to you are cut alike, and the probe is within pba_group_angle of the source seen from you. Experimental: not bit-identical to the per-sound routes." },
 	group_angle     = { 5, 0.5, 20, "cl", "Largest angle (degrees, seen from you) between a far sound and a probe whose route it shares (pba_group); 2 is about the smallest change of direction one can hear in front, 5 shares about 78% of far routes for a direction error up to ~3.5 deg (bench of 180 far sources). Entered at three quarters of it, left above it." },
 	group_min_dist  = { 1000, 0, 5000, "cl", "Distance (units) from which a sound shares routes (pba_group); nearer sounds always get their own." },
@@ -178,8 +178,8 @@ A.CONFIG = {
 	native_max_probes = { 3000, 100, 20000, "cl", "Steam Audio pathing: max probes baked (the grid is thinned above)." },
 	native_probe_spacing = { 128, 32, 512, "cl", "Steam Audio pathing probe spacing (units)." },
 	frame_budget_ms = { 1, 0.1, 20, "cl", "Path search time per frame; beyond it, sounds fall back to cheaper processing." },
-	burst_budget_ms = { 0, 0, 20, "cl", "Time per frame (ms) for the paths of new sounds (bursts: explosions, debris). Past it, a new sound gets a cheaper evaluation: its emitter's recent result, else the far-sound slicer when it is far enough to wait a frame, else the walls' transmission alone (no routes round them); a followed sound rejoins the full model at its next update. 0 = off, every new sound fully evaluated at once." },
-	burst_mask_db   = { 0, 0, 80, "cl", "Masking: within 100 ms of a loud sound, a new sound more than this many dB quieter at your ear (estimated before any trace, as in plain sight) gets the cheap evaluation (the walls' transmission alone): the loud one masks it. 0 = off." },
+	burst_budget_ms = { 2, 0, 20, "cl", "Time per frame (ms) for the paths of new sounds (bursts: explosions, debris). Past it, a new sound gets a cheaper evaluation: its emitter's recent result, else the far-sound slicer when it is far enough to wait a frame, else the walls' transmission alone (no routes round them); a followed sound rejoins the full model at its next update. 0 = off, every new sound fully evaluated at once." },
+	burst_mask_db   = { 25, 0, 80, "cl", "Masking: within 100 ms of a loud sound, a new sound more than this many dB quieter at your ear (estimated before any trace, as in plain sight) gets the cheap evaluation (the walls' transmission alone): the loud one masks it. 0 = off." },
 	gc_lean         = { 0, 0, 1, "cl", "Less garbage per sound: the path cache key built as one string, no per-sound report record when reports are off. Same results. 0 = the former code." },
 	gc_idle_step    = { 0, 0, 2000, "cl", "Garbage collector work (KB) done in each frame without a new sound, so that the collector catches up between bursts instead of during them. Touches the whole client Lua state. 0 = off." },
 	min_level       = { 50, 0, 140, "sv", "Sounds with a lower SNDLVL are left untouched." },
@@ -242,9 +242,9 @@ A.CONFIG = {
 	native_max_voices = { 64, 4, 128, "cl", "Max sounds played at once by the native module (the quietest is dropped beyond)." },
 	native_mem_mb   = { 512, 16, 4096, "cl", "Memory for sounds decoded by the native module (MB). Least recently played sounds are dropped to make room; a sound larger than this is left to the engine." },
 	native_file_mb  = { 48, 1, 512, "cl", "Largest sound file (MB, compressed) the native module will decode." },
-	native_predecode = { 0, 0, 1, "cl", "Decode every sound off the main thread (not only files over 512 KB): the first play of a sound not decoded yet is left to the engine, muffled by pba as usual. At map load, the likely burst sounds (explosions, breakables, the impacts of the map's props) are decoded ahead in the background." },
+	native_predecode = { 1, 0, 1, "cl", "Decode every sound off the main thread (not only files over 512 KB): the first play of a sound not decoded yet is left to the engine, muffled by pba as usual. At map load, the likely burst sounds (explosions, breakables, the impacts of the map's props) are decoded ahead in the background." },
 	native_props_max = { 64, 0, 256, "cl", "Max props added to the Steam Audio scene (reflections)." },
-	native_props_calm = { 0, 0, 1, "cl", "Props in the Steam Audio scene are updated (added, moved, removed) only out of fights and at most once a second: each update rebuilds the whole scene (about 18 ms on a campaign map), and an explosion's flying barrels and debris asked for one every 0.1 s. They are put where they came to rest. Doors are always updated at once." },
+	native_props_calm = { 1, 0, 1, "cl", "Props in the Steam Audio scene are updated (added, moved, removed) only out of fights and at most once a second: each update rebuilds the whole scene (about 18 ms on a campaign map), and an explosion's flying barrels and debris asked for one every 0.1 s. They are put where they came to rest. Doors are always updated at once." },
 	loops           = { 1, 0, 1, "sv", "Take over looping sounds (vehicles, fire, alarms) and muffle them in place on each client." },
 }
 
@@ -289,6 +289,13 @@ if CLIENT and cookie then
 		{ name = "group_time", old = 0, key = "pba_mig_group_time_v1" },
 		-- 1.1: native rendering on by default (the simulated reverb is only heard with it)
 		{ name = "native_render", old = 0, key = "pba_mig_native_render_v1" },
+		-- 2026-11-14: the burst/perf options (measured, docs/PERF_BANC_2026-11-14.md) on by default
+		{ name = "burst_budget_ms", old = 0, key = "pba_mig_burst_budget_ms_v1" },
+		{ name = "burst_mask_db", old = 0, key = "pba_mig_burst_mask_db_v1" },
+		{ name = "native_predecode", old = 0, key = "pba_mig_native_predecode_v1" },
+		{ name = "build_ms_combat", old = 0, key = "pba_mig_build_ms_combat_v1" },
+		{ name = "native_props_calm", old = 0, key = "pba_mig_native_props_calm_v1" },
+		{ name = "far_force_ms", old = 0, key = "pba_mig_far_force_ms_v1" },
 	}
 	-- Options merged into another (refactor step 8: one option per feature, not one per path): a player who
 	-- had switched the old one off keeps the feature off, once. The old convar is read from its saved value.

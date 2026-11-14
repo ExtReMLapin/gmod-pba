@@ -1048,7 +1048,7 @@ local function burstEvaluate(data, S, L, lvl, src)
 	local dry = A.Render.WaterDry(nil, data.SoundName)
 	local cfg = dry and P.DRY_SOURCE_CFG or nil
 	local now = RealTime()
-	local maskDb = A.cfg.burst_mask_db or 0
+	local maskDb = A.cfg.burst_mask_db or 25
 	if maskDb > 0 then
 		-- its level at the ear, in plain sight: SNDLVL at 36 u (about 1 m), spherical spreading beyond (the
 		-- engine's gain, clamped to full scale, put a 140 dB explosion 9 dB over an 80 dB impact at 20 m)
@@ -1058,7 +1058,7 @@ local function burstEvaluate(data, S, L, lvl, src)
 			return P.Cheap(S, L, lvl, cfg, src)
 		end
 	end
-	local budget = (A.cfg.burst_budget_ms or 0) / 1000
+	local budget = (A.cfg.burst_budget_ms or 2) / 1000
 	local fr = FrameNumber()
 	if B.frame ~= fr then B.frame, B.spent = fr, 0 end
 	if budget > 0 and B.spent >= budget then
@@ -1117,7 +1117,7 @@ function A.Process(data, relayed)
 	local tReq = RealTime()
 	local r, job
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
-	if (A.cfg.burst_budget_ms or 0) > 0 or (A.cfg.burst_mask_db or 0) > 0 then
+	if (A.cfg.burst_budget_ms or 2) > 0 or (A.cfg.burst_mask_db or 25) > 0 then
 		r, job = burstEvaluate(data, S, L, lvl, IsValid(src) and src or nil)
 	else
 		r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.Render.WaterDry(nil, data.SoundName))

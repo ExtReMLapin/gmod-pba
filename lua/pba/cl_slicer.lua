@@ -266,7 +266,7 @@ function SL.Run()
 	end
 	budgetLeft()
 	SL.need = need
-	local forceB = (A.cfg.far_force_ms or 0) / 1000
+	local forceB = (A.cfg.far_force_ms or 2) / 1000
 	local i = 1
 	while i <= #jobs do
 		local j = jobs[i]

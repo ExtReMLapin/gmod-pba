@@ -584,7 +584,7 @@ function N.EnsureSound(name)
 	if not data or #data == 0 or #data > (A.cfg.native_file_mb or 48) * 1024 * 1024 then N.failed[n] = RealTime() return false end
 	-- large files decode on a worker thread; with pba_native_predecode every file does (a burst's first sounds
 	-- cost the main thread up to 12 ms each: perf bench S11), the first play of each left to the engine
-	local asyncAbove = (A.cfg.native_predecode or 0) >= 0.5 and 0 or 512 * 1024
+	local asyncAbove = (A.cfg.native_predecode or 1) >= 0.5 and 0 or 512 * 1024
 	if #data > asyncAbove and pba_native.LoadSoundAsync then
 		pba_native.LoadSoundAsync(n, data)
 		N.loading = N.loading or {}
@@ -652,7 +652,7 @@ end
 --- Starts the prewarm (pba_native_predecode 1, module loaded); a running one is restarted.
 function N.Prewarm()
 	N.prewarm = nil
-	if (A.cfg.native_predecode or 0) < 0.5 or not N.ready or not pba_native.LoadSoundAsync then return end
+	if (A.cfg.native_predecode or 1) < 0.5 or not N.ready or not pba_native.LoadSoundAsync then return end
 	local pw = { started = 0, done = false, deadline = 0 }
 	N.prewarm = pw
 	pw.co = coroutine.create(function()
@@ -1321,7 +1321,7 @@ function N.SyncDoors()
 	-- PROP_COMMIT_S after the last commit made for them. A commit rebuilds the whole world scene (about 18 ms
 	-- on d1_canals_01, measured), and an explosion's flying barrels and debris asked for one every 0.1 s.
 	-- The props are sent where they came to rest, once the fight is over. Doors are never held.
-	local hold = wantProps and (A.cfg.native_props_calm or 0) >= 0.5
+	local hold = wantProps and (A.cfg.native_props_calm or 1) >= 0.5
 		and (now < (N.propCommitT or 0) or (A.Sched and A.Sched.InCombat and A.Sched.InCombat()))
 	local propSent = false
 	local rerank = wantProps and not hold and now >= (N.propRankT or 0)
@@ -1425,7 +1425,7 @@ function N.SyncDoors()
 			end
 		end
 	end
-	if propSent and (A.cfg.native_props_calm or 0) >= 0.5 then N.propCommitT = now + PROP_COMMIT_S end
+	if propSent and (A.cfg.native_props_calm or 1) >= 0.5 then N.propCommitT = now + PROP_COMMIT_S end
 	-- the module only commits when something changed (and retries itself after a running bake)
 	pba_native.DynamicCommit()
 	if moved and A.Paths then A.Paths.InvalidateCache() end
