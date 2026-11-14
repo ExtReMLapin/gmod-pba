@@ -548,7 +548,10 @@ function A.Eligible(data)
 	-- would, A.SoundTimeDelay) and with the re-emission (sv_relay reemit): taken like any other
 	if not A.SoundTimeTaken(data) then return false end
 	local flags = data.Flags or 0
-	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return false end
+	if bit.band(flags, SND_STOP) ~= 0 then return false end
+	-- a volume / pitch change is the engine's unless it starts a sound nobody plays yet (a scene line with a pitch,
+	-- EmitSound with SND_CHANGE_PITCH on a new sound: the engine starts it): server, A.NewChange (sv_relay)
+	if bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 and not (SERVER and A.NewChange and A.NewChange(data)) then return false end
 	if A.IsLooping(data.SoundName) then return false end
 	local dur = A.SoundDuration(data.SoundName) or 0
 	-- (a sentence is relayed whatever its length: it cannot be followed as a long sound anyway)

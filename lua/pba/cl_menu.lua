@@ -295,6 +295,7 @@ function Build.server(panel)
 	chk(panel, "Doors spawned after load are followed", "doors_spawned")
 	chk(panel, "Long sound restarts when pba is off", "loops_release_restart")
 	chk(panel, "Changes of a relayed brief sound dropped", "brief_updates")
+	chk(panel, "New sounds with a change flag relayed", "change_new")
 
 	panel:Help("Players' Steam Audio module:")
 	chk(panel, "Allow the module", "allow_native")

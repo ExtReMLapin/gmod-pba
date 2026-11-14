@@ -276,7 +276,9 @@ end
 A.recentBrief = A.recentBrief or {}
 local function briefKey(name) return string.lower(A.SoundFile(name or "")) end
 function A.NoteBrief(data, took)
-	if bit.band(data.Flags or 0, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return end
+	if bit.band(data.Flags or 0, SND_STOP) ~= 0 then return end
+	-- (a change flag: only a new sound taken as new, A.NewChange; a real change of a playing one is not a start)
+	if bit.band(data.Flags or 0, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 and not (took and A.newChangeData == data) then return end
 	local e = data.Entity
 	if not IsValid(e) or e:IsWorld() or not isstring(data.SoundName) then return end
 	local now = CurTime()
@@ -298,6 +300,28 @@ function A.BriefPlaying(data)
 	local x = r and r[briefKey(data.SoundName)]
 	if not x or x.t < CurTime() then return false end
 	return true, x.took
+end
+
+--- True when `data`, a volume / pitch change, is in fact the START of a sound: nothing of that name plays on its
+-- entity (no followed one, no capped one, no brief one still playing). The engine starts such a sound (a scene
+-- line with a pitch other than 1; EmitSound(..., SND_CHANGE_PITCH) on a new sound): pba_change_new takes it as
+-- any new sound (A.Eligible). A real change of a playing sound stays as it was (b5139cb): the engine's, or dropped.
+function A.NewChange(data)
+	if (A.cfg.change_new or 1) < 0.5 then return false end
+	local flags = data.Flags or 0
+	if bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(flags, SND_STOP) ~= 0 then return false end
+	local e = data.Entity
+	if not IsValid(e) or e:IsPlayer() or not isstring(data.SoundName) then return false end
+	local LP = A.Loops
+	if LP then
+		local idx = e:EntIndex()
+		if LP.capped[idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName] or LP.Following(idx, data.SoundName) then return false end
+	end
+	local r = A.recentBrief[e:EntIndex()]
+	local x = r and r[briefKey(data.SoundName)]
+	if x and x.t >= CurTime() then return false end
+	A.newChangeData = data
+	return true
 end
 
 -- Cancelled choreographed scenes (audit D3). A scene's line plays on its actor's CHAN_VOICE
