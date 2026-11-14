@@ -1347,11 +1347,12 @@ def _num(x):
 
 # Known reds, by name: step label -> beginnings of the names of the cases that are allowed to fail. A step
 # whose failing cases are all listed is KNOWN (reported apart); one more failing case is a FAIL, and a listed
-# case that passes again is said loudly. The two "Door in 3-D" cases are green outside the game and red in
-# it (gap not found yet, JOURNAL 2026-11-11/12).
+# case that passes again is said loudly. "Door in 3-D: the gap is measured continuously" is green outside the
+# game and red in it (gap not found yet, JOURNAL 2026-11-11/12; checked again 2026-11-14: in game listener 2,
+# 4.49 dB in 0.1 degree at 11.3). Its twin "a leaf swinging past a route" is green in game now (probably the
+# deterministic pow of 55b2f47) and was removed.
 KNOWN_RED = {
     "GLuaTest pure suite": [
-        "Door in 3-D: a leaf swinging past a route changes its level by degrees",
         "Door in 3-D: the gap is measured continuously as the leaf turns",
     ],
 }
