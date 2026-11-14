@@ -71,7 +71,7 @@ end
 function SC.BuildBudget(who)
 	local c = A.cfg.build_ms_combat or 1
 	if c > 0 and SC.InCombat() then
-		if who and (A.cfg.build_fair or 0) > 0 then
+		if who and (A.cfg.build_fair or 1) > 0 then
 			local n, mine = 0, 0
 			for _, id in ipairs(BUILDERS) do
 				if id == who or buildRunning(id) then
