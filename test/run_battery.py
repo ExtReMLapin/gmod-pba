@@ -212,6 +212,190 @@ def lua_reload():
         out.append(r.get("values", [r])[0] if isinstance(r, dict) else r)
     return out
 
+def levels_off_states():
+    """T23: four options at 0 give the behaviour they replace, at 1 the one pba adds (each run both ways):
+    pba_lipsync (mouth copy of a muffled line, pba_materials), pba_long_captions (subtitle of a long line taken over
+    by sv_loops, pba_tworooms), pba_soundscape_engine (soundscape wave round the ear left to the engine or taken,
+    d1_town_01), pba_stopsound_watch (the console's stopsound stops the mirrors and native voices, or leaves them)."""
+    res = {}
+    fails = []
+    RED = os.environ.get("PBA_RED", "").split(",")  # red proof: PBA_RED=lipsync,long_captions,... leaves that option on while the run asks for 0
+    def need(ok, what):
+        if not ok:
+            fails.append(what)
+    def red(opt, realm):
+        if opt in RED:
+            lua(realm, f"pba.SetOverride('{opt}', 1) return true")
+            time.sleep(1.5)
+    try:
+        # lipsync: the line behind the glass is taken by pba (server half), its mouth copy plays only with 1
+        load("pba_materials")
+        native_on(True)
+        for v in (1, 0):
+            cl_set(lipsync=v)
+            if v == 0:
+                red("lipsync", "client")
+            sv = job("server", "lipsync_glass.lua", 30)
+            cl = job("client", "lipsync_client.lua", 10)
+            res[f"lipsync {v}"] = {"taken": sv.get("taken") if isinstance(sv, dict) else sv,
+                                   "mouth": cl.get("pba") if isinstance(cl, dict) else cl}
+            need(isinstance(sv, dict) and sv.get("pass") is True and isinstance(cl, dict), f"lipsync {v}: line not taken: {sv}")
+            if isinstance(cl, dict):
+                need((cl.get("pba", 0) >= 1) == (v == 1) and cl.get("pba", 0) == (cl.get("pba", 0) if v == 1 else 0),
+                     f"lipsync {v}: {cl.get('pba')} mouth copies")
+        cl_set(lipsync=1)
+        # long captions: the line is followed in both cases (ducker noted), its subtitle only with 1
+        load(TW)
+        for v in (1, 0):
+            call("console_exec", {"realm": "server", "cmd": f"pba_long_captions {v}"})
+            time.sleep(1)
+            if v == 0:
+                red("long_captions", "server")
+            job("server", "long_line_setup.lua")
+            job("client", "long_line_watch.lua")
+            emit = job("server", "long_line_emit.lua")
+            chk = job("client", "long_line_check.lua")
+            checks = chk.get("checks", {}) if isinstance(chk, dict) else {}
+            res[f"long_captions {v}"] = {"emit": emit.get("pass") if isinstance(emit, dict) else emit, "checks": checks}
+            need(isinstance(emit, dict) and emit.get("pass") is True, f"long_captions {v}: line not taken over: {emit}")
+            need(checks.get("ducked") is True, f"long_captions {v}: line not followed (no ducker note)")
+            need(checks.get("caption") is (v == 1), f"long_captions {v}: caption shown = {checks.get('caption')}")
+        call("console_exec", {"realm": "server", "cmd": "pba_long_captions 1"})
+        # stopsound_watch: the same console stopsound as stopsound_console, the watch on then off
+        native_on(True)
+        src = open(os.path.join(TEST, "stopsound_console.lua"), encoding="utf-8").read()
+        for v in (1, 0):
+            job("server", "stopsound_setup.lua")
+            if v == 0:
+                red("stopsound_watch", "client")
+            r = job("client", "stopsound_console.lua") if v == 1 else None
+            if v == 0:
+                code = src.replace('run("pba_stopsound_watch", "1")', 'run("pba_stopsound_watch", "0")')
+                r = call("lua_job", {"realm": "client", "code": code, "timeout_s": 60}, timeout=120)
+                r = r.get("values", [r])[0]
+            res[f"stopsound_watch {v}"] = r
+            if not isinstance(r, dict) or "before" not in r:
+                fails.append(f"stopsound_watch {v}: {r}")
+                continue
+            need(r["before"]["mirrors"] > 0, f"stopsound_watch {v}: no mirror before the command")
+            left = r["at15"]["mirrors"] + r["at15"]["voices"]
+            need((left == 0) == (v == 1), f"stopsound_watch {v}: {left} mirrors+voices left 1.5 s after the command")
+            if v == 0:
+                call("console_exec", {"realm": "client", "cmd": "pba_stopsound_watch 1"})
+                time.sleep(1)
+        # soundscape: engine 1 leaves the three waves to the engine (answer nil), 0 takes them (false)
+        load("d1_town_01")
+        for v in (1, 0):
+            if v == 0:
+                red("soundscape_engine", "client")
+            code = f"SS_ENGINE = '{v}'" + chr(10) + open(os.path.join(TEST, "soundscape_engine.lua"), encoding="utf-8").read()
+            r = call("lua_job", {"realm": "server", "code": code, "timeout_s": 60}, timeout=120)
+            r = r.get("values", [r])[0]
+            res[f"soundscape_engine {v}"] = r
+            if not isinstance(r, dict) or r.get("n") != 3:
+                fails.append(f"soundscape_engine {v}: {r}")
+                continue
+            need(r["taken"] == (0 if v == 1 else 3), f"soundscape_engine {v}: {r['taken']} of 3 waves taken by pba")
+    finally:
+        for o, rl in (("lipsync", "client"), ("soundscape_engine", "client"), ("stopsound_watch", "client"), ("long_captions", "server")):
+            lua(rl, f"pba.SetOverride('{o}', nil) return true")
+        cl_set(lipsync=1, soundscape_engine=1, stopsound_watch=1)
+        call("console_exec", {"realm": "server", "cmd": "pba_long_captions 1"})
+    return {"pass": not fails, "fails": fails, "res": res}
+
+def long_sound_boundary():
+    """T15: one 10.48 s line (Barney behind the wall of pba_tworooms) on both sides of max_duration (10.3: a long
+    sound, followed by sv_loops; 10.7: a short one, relayed once): what the player gets is the same (muffled by the
+    wall within 1.5 dB, one subtitle, one mouth copy, the end where the file ends, nothing left after); with
+    pba_long_sounds 0 the long one is left to the engine. Engine rendering (pba_native_render 0): the copy's volume
+    is then an engine emission. Halves: long_boundary_server.lua / long_boundary_client.lua (client started first)."""
+    import threading
+    load(TW)
+    native_on(False)
+    RED = os.environ.get("PBA_RED", "").split(",")  # red proof: captions / mouth / end switch a long-path feature off
+    fails = []
+    def run(maxd, long_sounds=1):
+        call("console_exec", {"realm": "server", "cmd": f"pba_long_sounds {long_sounds}"})
+        out = {}
+        def cl():
+            out["cl"] = job("client", "long_boundary_client.lua", 60)
+        th = threading.Thread(target=cl)
+        th.start()
+        time.sleep(0.5)
+        code = f"T15_MAXD = {maxd}" + chr(10) + open(os.path.join(TEST, "long_boundary_server.lua"), encoding="utf-8").read()
+        r = call("lua_job", {"realm": "server", "code": code, "timeout_s": 60}, timeout=120)
+        out["sv"] = r.get("values", [r])[0]
+        th.join()
+        return out["sv"], out["cl"]
+    res = {}
+    try:
+        if "captions" in RED:
+            call("console_exec", {"realm": "server", "cmd": "pba_long_captions 0"})
+        if "mouth" in RED:
+            call("console_exec", {"realm": "server", "cmd": "pba_long_lipsync 0"})
+        if "end" in RED:
+            call("console_exec", {"realm": "server", "cmd": "pba_loops_once_end 0"})
+        call("console_exec", {"realm": "client", "cmd": "pba_loops_once_end " + ("0" if "end" in RED else "1")})
+        time.sleep(1)
+        (svL, clL), (svS, clS) = run(10.3), run(10.7)
+        res.update(long=[svL, clL], short=[svS, clS])
+        dur = svL.get("dur") or 10.48
+        if not (isinstance(svL, dict) and isinstance(svS, dict) and isinstance(clL, dict) and isinstance(clS, dict)):
+            return {"pass": False, "res": res}
+        if svL.get("long") is not True or svS.get("long") is not False:
+            fails.append(f"paths: 10.3 long={svL.get('long')}, 10.7 long={svS.get('long')} (want True, False)")
+        for tag, sv, cl, mouth in (("long", svL, clL, svL.get("mouthLong", 0) + clL.get("mouth", 0)),
+                                   ("short", svS, clS, svS.get("mouthLong", 0) + clS.get("mouth", 0))):
+            if not cl.get("started"):
+                fails.append(f"{tag}: pba produced nothing on the client")
+                continue
+            if cl.get("caps") != 1:
+                fails.append(f"{tag}: {cl.get('caps')} subtitles (want 1)")
+            if mouth != 1:
+                fails.append(f"{tag}: {mouth} mouth copies (want 1)")
+            v = cl.get("vol")
+            if not (v and 0 < v < 0.3):
+                fails.append(f"{tag}: copy volume {v} (want a muffled copy, 0 < v < 0.3)")
+            e = cl.get("endRel")
+            if e is None or not (dur - 0.3 <= e <= dur + 1.0):
+                fails.append(f"{tag}: planned end {e} s after the start (file {dur} s)")
+            if cl.get("left") != 0:
+                fails.append(f"{tag}: {cl.get('left')} followed sounds left after the end")
+        vl, vs = clL.get("vol"), clS.get("vol")
+        if vl and vs and abs(20 * __import__("math").log10(vl / vs)) > 1.5:
+            fails.append(f"volume differs across the boundary: {vl} vs {vs}")
+        el, es = clL.get("endRel"), clS.get("endRel")
+        if el is not None and es is not None and abs(el - es) > 1.0:
+            fails.append(f"end differs across the boundary: {el} vs {es}")
+        # the long path off: the engine keeps its line (pba took nothing)
+        svO, clO = run(10.3, long_sounds=0)
+        res["long_sounds_0"] = [svO, clO]
+        if svO.get("long") is not False or svO.get("relayed") != 0 or clO.get("mirror") or clO.get("copies") or clO.get("mouth") or clO.get("nv"):
+            fails.append(f"long_sounds 0: pba still took the long line: {svO} {clO}")
+    finally:
+        for c in ("pba_max_duration 8", "pba_long_sounds 1", "pba_long_captions 1", "pba_long_lipsync 1", "pba_loops_once_end 1"):
+            call("console_exec", {"realm": "server", "cmd": c})
+        call("console_exec", {"realm": "client", "cmd": "pba_loops_once_end 1"})
+    return {"pass": not fails, "fails": fails, "res": res}
+
+def glass_window():
+    """T14: the glass cell of pba_materials loses what AC.WallLoss says (+-3 dB), the lightest muffling class, its voice
+    on the pane, 15 dB less than concrete and less than the metal beside it (glass_window_cells.lua); the open window
+    of pba_window gives one loud portal voice inside the opening (glass_window_open.lua)."""
+    RED = os.environ.get("PBA_RED", "").split(",")  # red proof: glass (glass made concrete) / window (edge diffraction off)
+    load("pba_materials")
+    pre = "RED_GLASS = true" + chr(10) if "glass" in RED else "RED_GLASS = nil" + chr(10)
+    code = pre + open(os.path.join(TEST, "glass_window_cells.lua"), encoding="utf-8").read()
+    r1 = call("lua_job", {"realm": "client", "code": code, "timeout_s": 60}, timeout=120)
+    r1 = r1.get("values", [r1])[0]
+    load("pba_window")
+    pre = "RED_WINDOW = " + ("true" if "window" in RED else "nil") + chr(10)
+    code = pre + open(os.path.join(TEST, "glass_window_open.lua"), encoding="utf-8").read()
+    r2 = call("lua_job", {"realm": "client", "code": code, "timeout_s": 60}, timeout=120)
+    r2 = r2.get("values", [r2])[0]
+    return {"pass": isinstance(r1, dict) and isinstance(r2, dict) and r1.get("pass") is True and r2.get("pass") is True,
+            "cells": r1, "window": r2}
+
 def speaker_once():
     """Long one-shots on a speaker: speaker_once_server.lua starts the lines, speaker_once_check.lua (with its
     result in PBA_SPK) checks the client mirrors end with their file and are replaced on their channel."""
@@ -853,6 +1037,12 @@ steps = [
     ("compat_auto", lambda: seq(any_map, lambda: job("server", "compat_auto.lua", 60))),
     # T19: three reloads of the files of each realm: hooks unchanged, detoured originals still the engine's C functions
     ("lua_reload", lambda: seq(any_map, lua_reload)),
+    # T23: lipsync, long_captions, soundscape_engine, stopsound_watch: each at 1 and at 0, the two behaviours told apart
+    ("levels_off_states", lambda: levels_off_states()),
+    # T15: one line either side of max_duration (long sound / short): same wall, subtitle, mouth, end; long_sounds 0 leaves it to the engine
+    ("long_sound_boundary", lambda: long_sound_boundary()),
+    # T14: glass loses what the table says, lightest class, voice on the pane; the open window gives a loud portal voice inside the opening
+    ("glass_window", lambda: glass_window()),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))

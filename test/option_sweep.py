@@ -50,6 +50,23 @@ SCENES = {
     "noportal": ("pba_noportal", None, ("client",)),
     "demo": ("pba_demo", "OPEN_BOOMBOX", ("client", "server")),
 }
+# extra scenes (same maps, a Lua scene of option_sweep.lua and what the realms need set up around it):
+# name -> (map, demo scenario, realms, lua scene, server setup, client setup, client teardown, server teardown)
+PROP_SPAWN = """if IsValid(PBA_OBS) then PBA_OBS:Remove() end
+local e = ents.Create('prop_physics') e:SetModel('models/props_interiors/VendingMachineSoda01a.mdl')
+e:SetPos(Vector(550, 90, 0)) e:SetAngles(Angle(0, 180, 0)) e:Spawn()
+local ph = e:GetPhysicsObject() if IsValid(ph) then ph:EnableMotion(false) end
+local mn = e:WorldSpaceAABB() e:SetPos(Vector(550 - (mn.x - 526), 90, -e:OBBMins().z)) PBA_OBS = e return true"""
+WATER_ON = """PBA_OLD_PC = PBA_OLD_PC or util.PointContents
+util.PointContents = function(p) return ((p.x < 300 and p.z < 100) or (p.x > 500 and p.z < 200)) and CONTENTS_WATER or CONTENTS_EMPTY end return true"""
+WATER_OFF = "if PBA_OLD_PC then util.PointContents = PBA_OLD_PC PBA_OLD_PC = nil end return true"
+EXTRA = {
+    "doorline_closed": ("pba_tworooms", "tworooms_closed", ("client",), "doorline", None, None, None, None),
+    "doorline_half": ("pba_tworooms", "tworooms_half", ("client",), "doorline", None, None, None, None),
+    "prop": ("pba_tworooms", "tworooms_open", ("client",), "prop", PROP_SPAWN, None, None, "if IsValid(PBA_OBS) then PBA_OBS:Remove() end return true"),
+    "water": ("pba_tworooms", "tworooms_closed", ("client",), "water", None, WATER_ON, WATER_OFF, None),
+}
+SCENES.update(EXTRA)
 want = next((a[9:].split(",") for a in opts if a.startswith("--scenes=")), list(SCENES))
 only = next((a[7:].split(",") for a in opts if a.startswith("--only=")), None)
 
@@ -99,7 +116,8 @@ agg = {}      # option -> {"mm": bool, "min": bool, "max": bool}
 problems = []
 e0 = errors_count()
 for name in want:
-    m, demo, realms = SCENES[name]
+    m, demo, realms = SCENES[name][:3]
+    ex = SCENES[name][3:] if len(SCENES[name]) > 3 else (None,) * 5
     load(m)
     if demo == "OPEN_BOOMBOX":
         call("lua_exec", {"realm": "server", "code": "for _, d in ipairs(ents.FindByName('pba_boombox_door')) do d:Fire('Open') end return true"})
@@ -109,8 +127,14 @@ for name in want:
         time.sleep(3.5)
         call("console_exec", {"realm": "server", "cmd": "pba_demo stop"})
         time.sleep(0.5)
+    if ex[1]:
+        lua("server", ex[1])
+        time.sleep(1.5)
+    if ex[2]:
+        lua("client", ex[2])
     for realm in realms:
-        r = lua(realm, PRE + pre + (SOUND if realm == "server" else "") + src)
+        scn = "PBA_SWEEP_SCENE = " + (f"'{ex[0]}'" if ex[0] else "nil") + chr(10)
+        r = lua(realm, scn + PRE + pre + (SOUND if realm == "server" else "") + src)
         if not isinstance(r, dict) or "differs" not in r:
             problems.append(f"{name}/{realm}: sweep did not return: {json.dumps(r)[:200]}")
             continue
@@ -122,6 +146,10 @@ for name in want:
             a = agg.setdefault(o, {"mm": False, "min": False, "max": False})
             for k in a:
                 a[k] = a[k] or bool(d[k])
+    if ex[3]:
+        lua("client", ex[3])
+    if ex[4]:
+        lua("server", ex[4])
     time.sleep(1)
 e1 = errors_count()
 if e1 > e0:
