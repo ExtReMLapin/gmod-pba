@@ -612,6 +612,38 @@ hook.Add("OnNPCKilled", "pba_loops_npc_death", function(npc)
 	for _, l in ipairs(ended) do LP.Stop(idx, l.name, l.chan) end
 end)
 
+-- BRIEF move sounds of the moving brushes (func_door noise1 on a wave without loop points, a train's or a
+-- func_movelinear's start sound): the same C++ StopSound at the arrival (CBaseDoor::DoorHitTop...), invisible to
+-- Lua. A loop ends with its mover (l.mover); the copies pba relayed of a brief one played to their end over the
+-- arrival sound (audit B-10, pba_brief_mover_stop). Each such sound pba took is kept until its end; the 0.1 s
+-- timer below relays its stop once the mover is at rest.
+LP.briefMovers = LP.briefMovers or {}
+function LP.NoteBriefMover(data, took)
+	if not took or (A.cfg.brief_mover_stop or 1) < 0.5 then return end
+	local e = data.Entity
+	if not IsValid(e) or e:IsWorld() or e:GetMoveType() ~= MOVETYPE_PUSH then return end
+	if not (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating") then return end
+	if not LP.IsMoveSound(e, data.SoundName) then return end
+	local now = CurTime()
+	local tEnd = A.PlayEnd(data.SoundName, data.Pitch, now, 0.1)
+	if not tEnd then return end
+	LP.briefMovers[e:EntIndex() .. ":" .. string.lower(A.SoundFile(data.SoundName))] = { ent = e, name = data.SoundName, t = now, endT = tEnd }
+end
+
+timer.Create("pba_brief_movers", 0.1, 0, function()
+	if next(LP.briefMovers) == nil then return end
+	local now = CurTime()
+	for k, x in pairs(LP.briefMovers) do
+		if now >= x.endT or not IsValid(x.ent) then
+			LP.briefMovers[k] = nil -- (played to its end, or the entity went: its sounds with it)
+		elseif now - x.t > 0.3 and LP.MoverStill(x.ent) then
+			LP.briefMovers[k] = nil
+			A.StopSource(x.ent, x.name)
+			A.stats.moverStops = (A.stats.moverStops or 0) + 1
+		end
+	end
+end)
+
 --- True when the entity's C++ ended loop l with a StopSound Lua never sees: a mover at rest, a
 -- charger no longer in use, a vehicle whose engine is off (its own sounds only, see l.charger / l.vehicle).
 local function endedInCpp(l)
