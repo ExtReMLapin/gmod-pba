@@ -13,7 +13,7 @@ local A = pba
 local N = A.Native or {}
 A.Native = N
 
-local MODULE = "lua/bin/gmcl_pba_" .. (jit.arch == "x64" and "win64" or "win32") .. ".dll"
+local MODULE = "lua/bin/gmcl_pba_win64.dll" -- (64-bit only: N.InstallProblem)
 -- Module compatibility. The Lua comes from the Workshop (updated by itself), the module is installed by hand: it
 -- can be of another version. pba_native.ModuleVersion() -> version text (the addon's pba.VERSION it was built
 -- from), API number (raised in native/src/pba_native.cpp, PBA_NATIVE_API, when a function changes). This Lua
@@ -243,11 +243,23 @@ function N.BuildWorld()
 	return verts, tris, matIdx, mats, mins, maxs
 end
 
+--- Why the module cannot be used on this install, or nil. arch: jit.arch; exists(path): file.Exists in GAME.
+-- The module only exists in 64-bit: a 32-bit game (Steam's default branch) looks for a win32 build that is
+-- never shipped and was told "not installed" even with gmcl_pba_win64.dll and phonon.dll in place.
+function N.InstallProblem(arch, exists)
+	if arch ~= "x64" then
+		return "your game runs the 32-bit version of Garry's Mod: the Steam Audio module is 64-bit only. In Steam: Garry's Mod > Properties > Betas > x86-64 - Chromium + 64-bit binaries"
+	end
+	if not exists(MODULE) then return "module not installed" end
+	return nil
+end
+
 function N.Start()
 	N.ready, N.pathsReady, N.err, N.outdated = false, false, nil, nil
 	if (A.cfg.native or 1) < 0.5 then return end
 	if (A.cfg.allow_native or 1) < 0.5 then N.err = "disabled by the server (pba_allow_native 0)" return end
-	if not file.Exists(MODULE, "GAME") then N.err = "module not installed" return end
+	local problem = N.InstallProblem(jit.arch, function(p) return file.Exists(p, "GAME") end)
+	if problem then N.err = problem return end
 	if not pba_native then
 		local ok, err = pcall(require, "pba")
 		if not ok or not pba_native then N.err = "require failed: " .. tostring(err) return end
@@ -643,7 +655,7 @@ function N.PrewarmList(yield)
 		if c and (string.StartWith(c, "prop_physics") or c == "func_breakable" or c == "func_physbox") then surfs[N.SurfaceOf(e)] = true end
 		yield()
 	end
-	if (A.cfg.native_own or 0) >= 0.5 then
+	if (A.cfg.native_own or 1) >= 0.5 then
 		for _, s in ipairs(STEP_SURFACES) do
 			local d = util.GetSurfaceData(util.GetSurfaceIndex(s))
 			if d then
@@ -1193,7 +1205,7 @@ function N.DryMix(name) return (A.cfg.native_dry_prefix or 1) >= 0.5 and A.IsDry
 
 --- True when the module plays the local player's own sounds too (pba_native_own, with pba_native_all).
 function A.NativeOwn()
-	return N.render and (A.cfg.native_all or 0) >= 0.5 and (A.cfg.native_own or 0) >= 0.5 and A.Enabled() or false
+	return N.render and (A.cfg.native_all or 0) >= 0.5 and (A.cfg.native_own or 1) >= 0.5 and A.Enabled() or false
 end
 
 function N.Echo(data, pos, enginePlays, own)
@@ -1603,7 +1615,7 @@ timer.Create("pba_native_reverb", 0.5, 0, function()
 	if N.echoCvar and N.echoCvar:GetBool() ~= want then RunConsoleCommand("pba_echo_want", want and "1" or "0") end
 	local all = N.render and (A.cfg.native_all or 0) >= 0.5 and A.Enabled() or false
 	if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("pba_native_all_want", all and "1" or "0") end
-	local own = all and (A.cfg.native_own or 0) >= 0.5
+	local own = all and (A.cfg.native_own or 1) >= 0.5
 	if N.ownCvar and N.ownCvar:GetBool() ~= own then RunConsoleCommand("pba_native_own_want", own and "1" or "0") end
 	if not N.Busy() then return end -- pba off and silent: nothing to keep in sync (pushed again once on)
 	-- limits apply whatever renders (decoding also serves echoes)

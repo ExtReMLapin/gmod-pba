@@ -358,7 +358,7 @@ function S.Audience(snd, ply, scale)
 	-- line: their module plays the sound instead of the engine
 	local all = A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1
 	-- one name from many sources: past its quota it takes no token of the budget the other sounds share
-	local nq = A.cfg.relay_name_rate or 0
+	local nq = A.cfg.relay_name_rate or 8
 	local ns
 	if nq > 0 then
 		ns = nameState(ply, data.SoundName)
