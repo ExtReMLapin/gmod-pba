@@ -318,5 +318,13 @@
  "gc_idle_step": {
   "pos0": "hook",
   "why": "garbage collector steps in idle frames (cl_sched), outside P.Compute"
+ },
+ "native_vol_now": {
+  "pos0": "hook",
+  "why": "server volume change applied to the native voice at once (render), outside P.Compute"
+ },
+ "handback_channel": {
+  "pos0": "hook",
+  "why": "safety-net handback respects the channel rule (render), outside P.Compute"
  }
 }
