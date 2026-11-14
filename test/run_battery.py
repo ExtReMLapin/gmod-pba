@@ -815,6 +815,8 @@ steps = [
     ("probe_cache", lambda: seq(lambda: load("pba_noportal"), lambda: job("client", "probe_cache.lua", 400))),
     # T22: a loud shot in the open keeps its reverb <= -10 dB re its direct (pba_native_loud_dry), a quiet one is unchanged
     ("loud_dry_reverb", lambda: loud_dry_reverb()),
+    # T16: a fake Sound Muffling Effect is turned off by pba_compat_auto 1 and given back (auto 0, pba off); a manual 0 is left alone
+    ("compat_auto", lambda: seq(any_map, lambda: job("server", "compat_auto.lua", 60))),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
