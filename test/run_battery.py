@@ -534,6 +534,34 @@ def soundtime(reemit=False):
             call("console_exec", {"realm": "menu", "cmd": "snd_show 0"})
             call("console_exec", {"realm": "menu", "cmd": "developer 0"})
 
+# Step isolation self-test (isolation_leak_dummy then isolation_check, adjacent in the battery; not in QUICK): the
+# dummy leaks one setting of each kind (an archived client option the steps switch, a client option, a server
+# option) and passes; the check, the next step, fails when any of them reached it, or when the renderer did not
+# follow its convar. Red when the between-step reset skips a setting, green when it covers it.
+_LEAKS = (("client", "native_render", "0"), ("client", "native_echo", "0.9"), ("server", "max_duration", "13"))
+
+def isolation_leak_dummy():
+    any_map()
+    for realm, name, v in _LEAKS:
+        call("console_exec", {"realm": realm, "cmd": f"pba_{name} {v}"})
+    time.sleep(1.5)  # (the renderer and the client's copy of the server option follow)
+    return {"pass": True, "note": "left " + ", ".join(f"{r} pba_{n}={v}" for r, n, v in _LEAKS)}
+
+def isolation_check():
+    any_map()
+    now = _cvsnap.snapshot(call)
+    bad = []
+    for realm, name, v in _LEAKS:
+        cur = (now.get(realm) or {}).get(name)
+        want = (SNAP0.get(realm) or {}).get(name)
+        if cur is None or want is None or not _same(cur, want):
+            bad.append(f"{realm} pba_{name} is {cur} (session value {want})")
+    render = lua("client", "local N = pba.Native return N == nil or pba_native == nil or N.render == true")
+    want_render = _same((SNAP0.get("client") or {}).get("native_render", "1"), 1)
+    if render is not None and render != want_render:
+        bad.append(f"the renderer runs with render={render} (session value {want_render})")
+    return {"pass": not bad, "left": bad}
+
 def seq(*fns):
     """Runs the setters then the test (last), returns the test's result."""
     out = None
@@ -915,6 +943,9 @@ steps = [
     ("sp_own_echo", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job("client", "sp_own_echo.lua"))),
     ("native_own", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job("client", "native_own.lua"))),
     ("native_own_mp", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_own_mp.lua"))),
+    # step isolation self-test: a step leaks three settings, the next one must start from the session's (full battery only)
+    ("isolation_leak_dummy", isolation_leak_dummy),
+    ("isolation_check", isolation_check),
     # a quick throttle on / off: the vehicle state sound the next one destroys is no longer mirrored
     ("vehicle_state_sounds", lambda: seq(lambda: load(TW), lambda: job("server", "vehicle_state_sounds.lua"))),
     ("loop_removed", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "loop_removed.lua"))),
@@ -1497,7 +1528,11 @@ with open(LOG, "w", encoding="utf-8") as f:
 # (an exception, a forgotten restore) made the next steps run under it, so a step passed alone and failed in
 # a group (impact_inside_prop, native_props_calm). The settings left are reset and named with their step.
 NO_RESET = "--no-reset" in sys.argv
-SET_BY_STEPS = {"native_render"}  # every step sets it (native_on): no leak
+# Settings a step switches by design as part of its own setup (native_on(False) for a Light step): put back
+# like the others, but not reported. They were once skipped altogether ("every step sets it"): a step that
+# does not call native_on (speech_floor light left it at 0, the next step ran in Light unseen) then ran in
+# whatever mode the previous one left. Now every step starts with the renderer in the session's mode.
+BY_DESIGN = {"native_render"}
 _prev = [None]
 
 def _same(a, b):
@@ -1509,18 +1544,22 @@ def _same(a, b):
 
 def reset_settings():
     now = _cvsnap.snapshot(call)
-    left = []
+    left, fixed = [], []
     for realm, values in SNAP0.items():
         cur = now.get(realm) or {}  # a realm not there (no map): nothing to compare
         for name, v in values.items():
-            if name in cur and name not in SET_BY_STEPS and not _same(cur[name], v):
-                left.append(f"{realm} pba_{name}={cur[name]} (was {v})")
+            if name in cur and not _same(cur[name], v):
+                if name not in BY_DESIGN:
+                    left.append(f"{realm} pba_{name}={cur[name]} (was {v})")
                 if not NO_RESET:
                     call("console_exec", {"realm": realm, "cmd": f"pba_{name} {v}"})
+                    fixed.append(name)
     if left:
         print(f"settings left by {_prev[0]}: " + ", ".join(left) + ("" if NO_RESET else " -> reset"), flush=True)
-        if not NO_RESET:
-            time.sleep(0.6)  # the client follows the server's convars within pba_cfgpoll's 0.5 s
+    if fixed:
+        time.sleep(0.6)  # the client follows the server's convars within pba_cfgpoll's 0.5 s
+        if "native_render" in fixed:  # the renderer follows its convar: wait for it (as native_on does)
+            native_on(_same(SNAP0.get("client", {}).get("native_render", "1"), 1))
 
 def step(i, n, label, fn):
     print(f'##progress step={i}/{n} label="Battery" msg="{label}"', flush=True)
