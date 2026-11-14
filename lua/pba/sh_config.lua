@@ -158,6 +158,7 @@ A.CONFIG = {
 	native_stereo_width = { 1, 0, 1, "cl", "Stereo image of stereo files rendered natively, kept around the source near it (fades out from 240 to 1320 units). 0: mono at the source." },
 	streams         = { 1, 0, 1, "cl", "Radios and music players of other addons (sound.PlayURL / PlayFile, 3D): heard through openings and walls (transparent detour)." },
 	streams_native  = { 1, 0, 1, "cl", "With native rendering: radios of other addons are played by the module (HRTF, room reverb, paths) instead of BASS." },
+	streams_vol_now = { 1, 0, 1, "cl", "Radios of other addons rendered by the module follow their owner's SetVolume (a server-driven volume knob, a fade) at once, as BASS does: the voice's gain (and its running ramp) scaled by new / old volume, its route kept until the next re-evaluation. 0: the change waited for that re-evaluation (up to an update interval, then a ramp)." },
 	streams_filter  = { 1, 0, 1, "cl", "With the native module: really muffle those streams behind walls (3-band EQ on their BASS channel)." },
 	native_air      = { 1, 0, 1, "cl", "Air absorption (high frequencies fade with distance) on natively rendered sounds." },
 	native_dir      = { 0.3, 0, 1, "cl", "Directivity of weapon sounds (dipole weight): quieter behind the shooter. 0 = omnidirectional." },

@@ -7,18 +7,19 @@ local AC = {}
 A.AC = AC
 
 local log10, sqrt, exp, max, min, floor = math.log10, math.sqrt, math.exp, math.max, math.min, math.floor
+local LN10 = math.log(10) -- 10 ^ x as exp(x * LN10): the same compiled or interpreted (sh_paths, #61)
 local UNIT_M = 0.01905 -- 1 Hammer unit in metres
 local SPEED = 343      -- m/s
 
-function AC.DbToGain(db) return 10 ^ (db / 20) end
+function AC.DbToGain(db) return exp((db / 20) * LN10) end
 function AC.GainToDb(g) return 20 * log10(max(g, 1e-9)) end
 
 --- Distance gain of the Source sound engine (engine.dll x64, measured; see THIRD_PARTY.md).
 -- Returns the linear gain applied to a sound of level `sndlvl` dB at `dist` units.
 function AC.EngineGain(dist, sndlvl)
 	if sndlvl <= 0 then return 1 end
-	local distMult = 10 ^ ((60 - sndlvl) * 0.05) / 36
-	local rel = dist * distMult * 10 ^ (4 * dist / 24000)
+	local distMult = exp(((60 - sndlvl) * 0.05) * LN10) / 36
+	local rel = dist * distMult * exp((4 * dist / 24000) * LN10)
 	local g
 	if rel > 0.1 then g = 1 / rel else g = 10 end
 	if g > 0.5 then
@@ -38,7 +39,7 @@ end
 function AC.Compensate(vol0, sndlvl, L, d, lossDb)
 	local gl = AC.EngineGain(L, sndlvl)
 	local gd = AC.EngineGain(max(d, 1), sndlvl)
-	local v = vol0 * (gl / gd) * 10 ^ (-(lossDb or 0) / 20)
+	local v = vol0 * (gl / gd) * exp((-(lossDb or 0) / 20) * LN10)
 	return min(v, 1), v
 end
 
@@ -65,8 +66,8 @@ end
 -- 20 dB as the second. Returns the corner's loss (dB; slightly below 0 at grazing: the leak adds to a
 -- free wave, the voices' free-field cap in P.SelectVoices takes it back), the edge gain and the leak gain.
 function AC.Corner(delta, freq, maxDb, leakDb)
-	local gEdge = 10 ^ (-AC.Diffraction(delta, freq, maxDb) / 20)
-	local gLeak = (leakDb and leakDb < 60) and 10 ^ (-leakDb / 20) or 0
+	local gEdge = exp((-AC.Diffraction(delta, freq, maxDb) / 20) * LN10)
+	local gLeak = (leakDb and leakDb < 60) and exp((-leakDb / 20) * LN10) or 0
 	return -AC.GainToDb(sqrt(gEdge * gEdge + gLeak * gLeak)), gEdge, gLeak
 end
 
@@ -173,7 +174,7 @@ end
 local function mixTiltAdd(lo, hi, e, t)
 	if e and e > 0 then
 		lo = lo + e
-		hi = hi + e * 10 ^ (-(t or 0) / 10)
+		hi = hi + e * exp((-(t or 0) / 10) * LN10)
 	end
 	return lo, hi
 end
@@ -338,7 +339,7 @@ function AC.LeafDb(closedDb, cfg)
 end
 
 function AC.DoorGain(frac, closedDb)
-	local gc = 10 ^ (-closedDb / 20)
+	local gc = exp((-closedDb / 20) * LN10)
 	frac = min(max(frac, 0), 1)
 	return gc + (1 - gc) * sqrt(frac)
 end
@@ -358,7 +359,7 @@ function AC.Delay(len) return len * UNIT_M / SPEED end
 --- Sum in power of dB losses -> combined loss.
 function AC.PowerSumDb(list)
 	local p = 0
-	for _, db in ipairs(list) do p = p + 10 ^ (-db / 10) end
+	for _, db in ipairs(list) do p = p + exp((-db / 10) * LN10) end
 	if p <= 0 then return math.huge end
 	return -10 * log10(p)
 end

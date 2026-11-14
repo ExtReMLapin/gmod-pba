@@ -9,6 +9,12 @@ A.Paths = P
 
 local AC = A.AC
 local Vector, math = Vector, math
+-- Deterministic powers (pba-side-bugs #61): LuaJIT compiles 10 ^ x as exp2(x * log2 10) and x ^ n (integer n) as
+-- products, while its interpreter calls pow(): the same expression differed in the last bit depending on whether
+-- the code ran compiled or interpreted, so P.Compute's results changed run to run (paths_golden). exp() and
+-- explicit products are the same in both.
+local exp, LN10 = math.exp, math.log(10)
+local function sq(v) return v * v end
 
 -- 0 below x0, 1 from x1, smoothstep in between (continuous level and slope: no pop)
 local function ramp(x, x0, x1)
@@ -1263,7 +1269,7 @@ end
 P.SortByFirst = sortByFirst -- (the tests check it against table.sort)
 local function edgeAlong(c, t, sx, sy, sz, lx, ly, lz, len)
 	local x, y, z = c[5] + c[8] * t, c[6] + c[9] * t, c[7] + c[10] * t
-	return x, y, z, math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
+	return x, y, z, math.sqrt(sq(x - sx) + sq(y - sy) + sq(z - sz)) + math.sqrt(sq(x - lx) + sq(y - ly) + sq(z - lz)) - len
 end
 -- pba_detour_max_tests: the edges' search with at most `cap` world tests (`valid` calls). A prop against a
 -- floor and a wall had its blocked edges sampled one after the other (up to 27 tests of 2 traces each, ~650
@@ -1334,7 +1340,7 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
 	if enclosed(S, mins, maxs) or enclosed(L, mins, maxs) then return math.huge end
 	local sx, sy, sz = S.x, S.y, S.z
 	local lx, ly, lz = L.x, L.y, L.z
-	local len = math.sqrt((lx - sx) ^ 2 + (ly - sy) ^ 2 + (lz - sz) ^ 2)
+	local len = math.sqrt(sq(lx - sx) + sq(ly - sy) + sq(lz - sz))
 	if len < 1e-3 then return math.huge end
 	local scr = scratchGet()
 	local cand = scr.cand
@@ -1349,14 +1355,14 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
 		for _ = 1, EDGE_HALVINGS do
 			local t = (lo + hi) * 0.5
 			local x, y, z = px + dx * t, py + dy * t, pz + dz * t
-			local a = mmax(msqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2), 1e-6)
-			local b = mmax(msqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2), 1e-6)
+			local a = mmax(msqrt(sq(x - sx) + sq(y - sy) + sq(z - sz)), 1e-6)
+			local b = mmax(msqrt(sq(x - lx) + sq(y - ly) + sq(z - lz)), 1e-6)
 			local slope = ((x - sx) * dx + (y - sy) * dy + (z - sz) * dz) / a + ((x - lx) * dx + (y - ly) * dy + (z - lz) * dz) / b
 			if slope > 0 then hi = t else lo = t end
 		end
 		local t = (lo + hi) * 0.5
 		local x, y, z = px + dx * t, py + dy * t, pz + dz * t
-		local d = msqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + msqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
+		local d = msqrt(sq(x - sx) + sq(y - sy) + sq(z - sz)) + msqrt(sq(x - lx) + sq(y - ly) + sq(z - lz)) - len
 		n = n + 1
 		local c = cand[n]
 		c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11] = d, x, y, z, px, py, pz, dx, dy, dz, t
@@ -1536,12 +1542,12 @@ end
 -- position turned toward the apex by the energy it brings. Modifies and returns t.
 function P.AddEdge(t, e, L, cfg)
 	cfg = cfg or A.cfg
-	local eD = e.weight * 10 ^ (-e.db / 10)
+	local eD = e.weight * exp((-e.db / 10) * LN10)
 	if eD <= 0 then return t end
-	local eT = 10 ^ (-t.lossDb / 10)
+	local eT = exp((-t.lossDb / 10) * LN10)
 	local tilt = AC.MixTilt2(eT, t.lpDb or AC.LevelDb(t.lp or 0, cfg), eD, e.tilt or e.db)
 	t.lossDb = math.max(-10 * math.log10(eT + eD), 0)
-	if t.midDb then t.midDb = math.max(-10 * math.log10(10 ^ (-t.midDb / 10) + eD), 0) end
+	if t.midDb then t.midDb = math.max(-10 * math.log10(exp((-t.midDb / 10) * LN10) + eD), 0) end
 	t.lp = math.min(t.lp or 0, AC.LowpassLevel(tilt, cfg))
 	t.edgeDb, t.edgeApex, t.tilt = e.db, e.apex, tilt
 	if t.lpDb then t.lpDb = tilt end -- (pba_trans_tilt: kept continuous)
@@ -1687,7 +1693,7 @@ end
 -- reverb from -7 dB under the direct to none in one 4 u step); the edge's depth grows from 0 at grazing.
 function P.ShadowOf(voices, floorDb)
 	local e = 0
-	for _, v in ipairs(voices or {}) do e = e + 10 ^ (-math.max(v.rawLossDb or v.lossDb or 0, 0) / 10) end
+	for _, v in ipairs(voices or {}) do e = e + exp((-math.max(v.rawLossDb or v.lossDb or 0, 0) / 10) * LN10) end
 	local db = e > 1e-30 and math.max(-10 * math.log10(e), floorDb or 0) or 300
 	for _, v in ipairs(voices or {}) do v.shadowDb = db end
 	return db
@@ -1699,7 +1705,7 @@ end
 -- clear energy: a real wall's transmission is far below). Modifies and returns t.
 function P.BoundBeside(t, p, cfg)
 	local MAX_DB = 200
-	local room = 1 - 10 ^ (-math.max(p.lossDb or 0, 0) / 10)
+	local room = 1 - exp((-math.max(p.lossDb or 0, 0) / 10) * LN10)
 	local cap = room > 1e-20 and math.min(-10 * math.log10(room), MAX_DB) or MAX_DB
 	if t.lossDb < cap then t.lossDb, t.bounded = cap, true end
 	if t.midDb and t.midDb < cap then t.midDb = cap end
@@ -2080,7 +2086,7 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
 	for _, w in ipairs(P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)) do if bundleDoor(w) then cDoors[#cDoors + 1] = w end end
 	local dl, dm, dt, _ = 0, 0, 0, nil
 	if #cDoors > 0 then dl, _, dm, dt = P.EvalWalls(cDoors, cfg, true, true) end
-	local gl, gm, n = 10 ^ (-(loss + dl) / 10), 10 ^ (-(mid + dm) / 10), 1
+	local gl, gm, n = exp((-(loss + dl) / 10) * LN10), exp((-(mid + dm) / 10) * LN10), 1
 	local gt = gl * ((tilt or 0) + dt)
 	for _, o in ipairs({ u * r, u * -r, v * r, v * -r }) do
 		local m, sel = M + o, {}
@@ -2089,8 +2095,8 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
 		end
 		local l2, _, m2, t2 = 0, 0, 0, 0
 		if #sel > 0 then l2, _, m2, t2 = P.EvalWalls(sel, cfg, true, true) end
-		local e2 = 10 ^ (-l2 / 10)
-		gl, gm, n, gt = gl + e2, gm + 10 ^ (-m2 / 10), n + 1, gt + e2 * t2
+		local e2 = exp((-l2 / 10) * LN10)
+		gl, gm, n, gt = gl + e2, gm + exp((-m2 / 10) * LN10), n + 1, gt + e2 * t2
 	end
 	local bt = tilt and math.max(gt / math.max(gl, 1e-300) - dt, 0) or nil
 	return math.max(-10 * math.log10(gl / n) - dl, 0), lp, math.max(-10 * math.log10(gm / n) - dm, 0), bt
@@ -2210,7 +2216,7 @@ function P.EvalWalls(walls, cfg, noCap, noDetour)
 			-- lowpass LEVEL is whole: a route past an open leaf went from level 1 (4 dB of tilt) to 0 in one
 			-- 2 u step while its loss moved 0.4 dB (pba_twodoors).
 			local tObj = AC.LevelDb(l, cfg)
-			if dd then tObj = AC.MixTilt2(10 ^ (-transDb / 10), tObj, 10 ^ (-dd / 10), dd) end
+			if dd then tObj = AC.MixTilt2(exp((-transDb / 10) * LN10), tObj, exp((-dd / 10) * LN10), dd) end
 			if not noCap and not leaf3d and pThrough > cap then
 				-- the reflected sound dominates: capped loss, muffled like that level of loss
 				pThrough, pMid = cap, math.min(pMid, cap + cfg.trans_lf_bonus)
@@ -2349,8 +2355,8 @@ function P.DiffuseMix(p, share, absorbDb, cfg)
 	if not share or share <= 0 then return raw, 0 end
 	local diff = math.Clamp(p.diffDb or 0, 0, math.max(raw, 0))
 	local corners = math.min((p.bendUse or p.bendDeg or 0) / 90 * (cfg.diffuse_corner_db or 3), diff)
-	local ec = (1 - share) * 10 ^ (-raw / 10)
-	local ed = share * 10 ^ (-(raw - diff + corners + (absorbDb or 0)) / 10)
+	local ec = (1 - share) * exp((-raw / 10) * LN10)
+	local ed = share * exp((-(raw - diff + corners + (absorbDb or 0)) / 10) * LN10)
 	local e = math.max(ec + ed, 1e-30)
 	return -10 * math.log10(e), math.min(ed / e, cfg.diffuse_max or 0.85)
 end
@@ -2370,7 +2376,7 @@ local SPLIT_SOFT_DEG, SPLIT_SOFT_DB = 10, 2
 local function byLevelDesc(a, b) return a.level > b.level end
 local function svDirOf(p, L) return (p.pos - L):GetNormalized() end
 local function svEnergyOf(p, sndlvl)
-	local g = AC.EngineGain(p.length, sndlvl) * 10 ^ (-p.lossDb / 20)
+	local g = AC.EngineGain(p.length, sndlvl) * exp((-p.lossDb / 20) * LN10)
 	return g * g
 end
 -- a path's tilt (dB): the loss behind its level when that loss gives it, else its level's equivalent
@@ -2389,7 +2395,7 @@ local function svGive(v, p, d, e, pull, L, cfg)
 	if e <= 0 then return end
 	local t, cont = svTiltOf(p, cfg)
 	v.e = v.e + e
-	v.hi = v.hi + e * 10 ^ (-t / 10)
+	v.hi = v.hi + e * exp((-t / 10) * LN10)
 	v.df = v.df + (p.diffuse or 0) * e
 	v.raw = v.raw + (p.mixLossDb or p.rawLossDb or p.lossDb) * e
 	v.dist = v.dist + p.pos:Distance(L) * e
@@ -2485,7 +2491,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 					-- near: its power is kept), each weighted by how much it is a voice of its own
 					local w, W = {}, 0
 					for j, v in ipairs(voices) do
-						w[j] = v.s * ((1 - ap[j]) + 1e-6 * ((1 + d:Dot(v.dir)) / 2) ^ 8) + 1e-12
+						w[j] = v.s * ((1 - ap[j]) + 1e-6 * sq(sq(sq((1 + d:Dot(v.dir)) / 2)))) + 1e-12
 						W = W + w[j]
 					end
 					for j, v in ipairs(voices) do svGive(v, p, d, e * (1 - s) * w[j] / W, 1 - ap[j], L, cfg) end
@@ -2538,7 +2544,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 
 	-- transmission voice
 	if trans and trans.walls and #trans.walls > 0 then
-		local g = AC.EngineGain(trans.length, sndlvl) * 10 ^ (-trans.lossDb / 20)
+		local g = AC.EngineGain(trans.length, sndlvl) * exp((-trans.lossDb / 20) * LN10)
 		local lvl = AC.GainToDb(g)
 		local dom = voices[1] and voices[1].level or -math.huge
 		-- pba_trans_window_soft: faded out past the window's edge instead of cut there: the transmission, often the
@@ -2550,7 +2556,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 			if over > 0 then
 				local add = TRANS_WINDOW_SLOPE * over
 				keep = lvl - add >= dom - TRANS_WINDOW_FLOOR
-				g = g * 10 ^ (-add / 20)
+				g = g * exp((-add / 20) * LN10)
 				lvl = lvl - add
 				raw = raw and raw + add
 			end
@@ -2996,8 +3002,8 @@ end
 -- (the former o > 0.5 switch stepped it from 4 to 1).
 function P.NativeBlend(o, wl, wlp, wm)
 	o = math.Clamp(o, 0, 1)
-	local loss = -AC.GainToDb(o + (1 - o) * 10 ^ (-wl / 20))
-	local mid = -AC.GainToDb(o + (1 - o) * 10 ^ (-wm / 20))
+	local loss = -AC.GainToDb(o + (1 - o) * exp((-wl / 20) * LN10))
+	local mid = -AC.GainToDb(o + (1 - o) * exp((-wm / 20) * LN10))
 	local edge = math.min(wlp, 1)
 	local f = o < 0.5 and wlp + (edge - wlp) * o * 2 or edge * (1 - o) * 2
 	return math.max(loss, 0), math.floor(f + 0.5), math.max(mid, 0)
@@ -3131,7 +3137,7 @@ function P.ThroughPath(S, L, best, cfg)
 	-- loss near 0), it is the transmission itself, entering over the wall from just past it (share 1); it turns
 	-- into a route's entry (through its last opening) as its corners cost. Taken as a route's at once, the room
 	-- send fell 16 dB in a 10 u step where the line began to clip a partition (gm_melancholia, owner's retest)
-	local w = 10 ^ (-math.max(q.diffDb or q.lossDb or 0, 0) / 10)
+	local w = exp((-math.max(q.diffDb or q.lossDb or 0, 0) / 10) * LN10)
 	p.entryWall = w
 	p.entryLen = w * S:Distance(best.V) + (1 - w) * math.max(p.length - (q.pos or L):Distance(L), 0)
 	-- its bend (the diffuse model's, pba_bend_final) on the taut route, corners on their edges: the clearance
@@ -3164,7 +3170,7 @@ local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emit
 	local c = P.cache[key]
 	if c and now - c.t < cfg.cache_ttl then return c.r end
 	if timeOn then
-		local mv2 = (cfg.reeval_move or 8) ^ 2
+		local mv2 = sq(cfg.reeval_move or 8)
 		local maxAge = cfg.reeval_max_s or 1
 		local list = P.timeMemo
 		for i = #list, 1, -1 do
@@ -3295,7 +3301,7 @@ local function nativeLoss(r, S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
 				-- the continuous muffling (pba_trans_tilt): the part Steam Audio sees unmuffled, the rest
 				-- through the walls it holds, mixed by energy; then the walls it lacks, in series
 				local o = math.Clamp(d.occlusion, 0, 1)
-				tilt = math.min(AC.MixTilt2(o * o, 0, ((1 - o) * 10 ^ (-wl / 20)) ^ 2, wt) + et, cfg.trans_max)
+				tilt = math.min(AC.MixTilt2(o * o, 0, sq((1 - o) * exp((-wl / 20) * LN10)), wt) + et, cfg.trans_max)
 			end
 		end
 		r.nativeOcclusion = d and d.occlusion
@@ -3335,7 +3341,7 @@ local function leafFade(r, S, L, walls, cfg, srcEnt)
 			local e = P.BundleEdge(S, L, srcEnt, cfg, P.KeepWorldWall)
 			-- linear in dB: the voice often carries the highs (the route's leaves muffle more than the
 			-- wall), which its level sets until it is some 30 dB under the route
-			fade = e > 0 and fade * 10 ^ (-TRANS_EDGE_DB * (1 - e) / 10) or 0
+			fade = e > 0 and fade * exp((-TRANS_EDGE_DB * (1 - e) / 10) * LN10) or 0
 		end
 		if fade <= 0 then
 			r.trans = nil
