@@ -327,6 +327,10 @@
   "pos0": "hook",
   "why": "server volume change applied to the native voice at once (render), outside P.Compute"
  },
+ "streams_vol_now": {
+  "pos0": "hook",
+  "why": "another addon's stream volume change applied to its native voice at once (render), outside P.Compute"
+ },
  "handback_channel": {
   "pos0": "hook",
   "why": "safety-net handback respects the channel rule (render), outside P.Compute"
