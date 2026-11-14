@@ -11,6 +11,8 @@ A.CONFIG = {
 	debug           = { 0, 0, 2, "cl", "Debug overlay: 1 = graph + active paths, 2 = + text." },
 	report          = { 0, 0, 1, "cl", "Publish computed paths on the mcpagent report channel (dev)." },
 	compat_auto     = { 1, 0, 1, "sv", "Turn off addons that do the same job (Sound Muffling Effect, rRadio's occlusion and distance falloff) while pba is on." },
+	hook_last       = { 1, 0, 1, "sv", "Server: pba handles a sound after the other addons' EntityEmitSound hooks, not in the hook table's arbitrary order: they all see every sound, pba included when it relays or re-emits it, and what they change (pitch, volume, name) or block is honoured. 0 = pba's hook runs where the table puts it (the hooks after it never see the sounds it takes over, those that change a sound before it hide it from pba)." },
+	cl_hook_last    = { 1, 0, 1, "cl", "Same on this client, for the sounds it plays itself (footsteps, client-side entities, the engine's own): other addons' client EntityEmitSound hooks see every sound and pba decides after them." },
 
 	-- path search / selection
 	max_paths       = { 3, 1, 6, "sv", "Portal paths kept per sound (distinct last portals)." },

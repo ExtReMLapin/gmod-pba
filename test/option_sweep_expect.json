@@ -1,4 +1,12 @@
 {
+ "cl_hook_last": {
+  "pos0": "hook",
+  "why": "client: other addons' EntityEmitSound hooks run first (test hook_order)"
+ },
+ "hook_last": {
+  "pos0": "hook",
+  "why": "server: other addons' EntityEmitSound hooks run first (test hook_order)"
+ },
  "bend_final": {
   "pos0": "same",
   "why": "only reaches the diffuse share of a route whose final bend differs from its coarse one: not met"
