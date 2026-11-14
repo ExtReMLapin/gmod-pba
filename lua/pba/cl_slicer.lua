@@ -211,6 +211,28 @@ function SL.Compute(S, L, sndlvl, srcEnt, cfg, minReach)
 	return nil, j
 end
 
+--- A new sound past this frame's burst budget (pba_burst_budget_ms, cl_render): its evaluation queued
+-- without a first slice now, when its distance leaves at least one frame before its deadline. Returns the
+-- job (its answer through job.onDone, as SL.Compute's held jobs), or nil when it is too near (or the slicer
+-- is off): the caller then takes another cheap way.
+function SL.Defer(S, L, sndlvl, srcEnt, cfg)
+	if not SL.On(cfg) then return nil end
+	local ft = SL.FrameDt()
+	local reach = S:Distance(L) / SL.SPEED - SL.MARGIN_FRAMES * ft
+	if reach <= ft then return nil end
+	local st = SL.stats
+	st.requests, st.held = st.requests + 1, st.held + 1
+	st.deferred = (st.deferred or 0) + 1
+	SL.seq = SL.seq + 1
+	local now = RealTime()
+	local j = { S = Vector(S), L = Vector(L), lvl = sndlvl, ent = srcEnt, cfg = cfg, tReq = now, deadline = now + reach,
+		seq = SL.seq, segs = 0, restarts = 0, cpu = 0 }
+	newCo(j)
+	snap(j) -- (its inputs as of now: its first slice, later, is its start)
+	SL.jobs[#SL.jobs + 1] = j
+	return j
+end
+
 --- Drops a job (its sound was stopped, its owner removed): no more work, no callback.
 function SL.Cancel(j)
 	if j then j.cancelled = true end

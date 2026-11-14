@@ -68,8 +68,20 @@ ticks[3] = timed("far_sliced", function() return A.Slicer end, "Run")
 ticks[4] = timed("streams", function() return A.Streams end, "Tick")
 ticks[5] = timed("streams_ramp", function() return A.Streams end, "RampTick")
 
+-- pba_gc_idle_step: the collector's work done in frames without a new sound (none in this frame nor the last:
+-- A.perf.frame is the last frame a sound was processed), so that it is not left to the next burst
+local function gcIdle()
+	local k = A.cfg.gc_idle_step or 0
+	if k <= 0 then return end
+	local pf = A.perf
+	if pf and pf.frame and pf.frame >= FrameNumber() - 1 then return end
+	collectgarbage("step", k)
+	if A.stats then A.stats.gcIdleSteps = (A.stats.gcIdleSteps or 0) + 1 end
+end
+
 hook.Add("Think", "pba_sched", function()
 	for i = 1, #ticks do ticks[i]() end
+	gcIdle()
 end)
 -- the former per-kind hooks (an autorefresh over an older version)
 hook.Remove("Think", "pba_oneshots")
