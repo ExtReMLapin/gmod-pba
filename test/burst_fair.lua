@@ -16,7 +16,7 @@ local function set(name, v)
 	job:wait(function() return A.cfg[name] == v end, 3)
 end
 local saved = {}
-for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair" }) do saved[k] = A.cfg[k] end
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair", "burst_hold_ms" }) do saved[k] = A.cfg[k] end
 if LocalPlayer():GetPos():Distance(Vector(256, 256, 0)) > 1 then
 	RunConsoleCommand("setpos", "256", "256", "0")
 	job:sleep(0.5)
@@ -67,6 +67,7 @@ local function run()
 	return out
 end
 local ok, res = pcall(function()
+	if saved.burst_hold_ms then set("burst_hold_ms", 0) end -- (the cheap path itself: burst_hold.lua tests the hold)
 	set("burst_mask_db", 0)
 	set("burst_budget_ms", 2)
 	set("burst_fair", 0)

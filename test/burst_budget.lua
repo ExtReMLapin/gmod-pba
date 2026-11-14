@@ -11,7 +11,7 @@ local function set(name, v)
 	RunConsoleCommand("pba_" .. name, tostring(v))
 	job:wait(function() return A.cfg[name] == v end, 3)
 end
-local b0, m0 = A.cfg.burst_budget_ms, A.cfg.burst_mask_db
+local b0, m0, h0v = A.cfg.burst_budget_ms, A.cfg.burst_mask_db, A.cfg.burst_hold_ms
 local lp = LocalPlayer()
 local L0 = Vector(256, 256, 0)
 if lp:GetPos():Distance(L0) > 1 then
@@ -52,6 +52,7 @@ local function burst(extra)
 end
 local ok, res = pcall(function()
 	local out = {}
+	if h0v then A.SetOverride("burst_hold_ms", 0, true) end -- (the cheap path itself: burst_hold.lua tests the hold)
 	set("burst_budget_ms", 0) set("burst_mask_db", 0)
 	out.off = burst()
 	out.offMask = burst("mask")
@@ -65,6 +66,7 @@ end)
 P.Compute, P.Cheap = c0, h0
 for _, e in ipairs(emitters) do if IsValid(e) then e:Remove() end end
 set("burst_budget_ms", b0) set("burst_mask_db", m0)
+if h0v then A.SetOverride("burst_hold_ms", nil, true) end
 if not ok then return { pass = false, err = tostring(res) } end
 local o, bu, ma = res.off, res.budget, res.mask
 -- off: nothing degraded, every sound through the full model (P.Compute, cache hits included)

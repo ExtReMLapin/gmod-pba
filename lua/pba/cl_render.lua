@@ -1082,6 +1082,16 @@ local function nearResult(S, L, lvl, now, dry)
 	return best and best.r
 end
 
+-- (pba_burst_hold_ms) a degraded sound that will be followed (it plays long enough: OS.Wanted) would start at the
+-- cheap model's level, a lower bound, and glide up to its full result at its first update: instead its full
+-- evaluation is queued in the slicer (SL.Defer) and the sound held until it is there, within the longer of its
+-- propagation delay and the hold. Returns the job, or nil (hold off, not followed, slicer off).
+local function holdJob(data, S, L, lvl, src, cfg)
+	local hold = (A.cfg.burst_hold_ms or 0) / 1000
+	if hold <= 0 or not A.Slicer or not OS.Wanted((playLength(data.SoundName, data.Pitch))) then return nil end
+	return A.Slicer.Defer(S, L, lvl, src, cfg, hold)
+end
+
 local function burstEvaluate(data, S, L, lvl, src)
 	local P, B, st = A.Paths, A.burst, A.burstStats
 	local dry = A.Render.WaterDry(nil, data.SoundName)
@@ -1099,6 +1109,11 @@ local function burstEvaluate(data, S, L, lvl, src)
 			st.masked = st.masked + 1
 			local n = fair and nearResult(S, L, lvl, now, dry)
 			if n then st.reused = st.reused + 1 return n end
+			local job = holdJob(data, S, L, lvl, src, cfg)
+			if job then
+				st.deferred = st.deferred + 1
+				return nil, job
+			end
 			return P.Cheap(S, L, lvl, cfg, src)
 		end
 	elseif fair and (B.loudT < 0 or now - B.loudT > BURST_MASK_S or db >= B.loudDb) then
@@ -1117,7 +1132,7 @@ local function burstEvaluate(data, S, L, lvl, src)
 		end
 		local n = fair and nearResult(S, L, lvl, now, dry)
 		if n then st.reused = st.reused + 1 return n end
-		local job = A.Slicer and A.Slicer.Defer(S, L, lvl, src, cfg)
+		local job = holdJob(data, S, L, lvl, src, cfg) or (A.Slicer and A.Slicer.Defer(S, L, lvl, src, cfg))
 		if job then
 			st.deferred = st.deferred + 1
 			return nil, job
