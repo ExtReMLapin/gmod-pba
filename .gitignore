@@ -33,3 +33,4 @@ scenario_results.json
 test/battery_last*.log
 native/build-test/
 test/perf/last/
+test/watch/last/*.json
