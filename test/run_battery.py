@@ -199,6 +199,19 @@ def loud_dry_reverb():
     finally:
         call("console_exec", {"realm": "client", "cmd": f"pba_native_all {was}"})
 
+def lua_reload():
+    """Three autorefresh-style reloads of the files of each realm (lua_reload.lua): no pba hook added or lost,
+    the detoured engine originals still C functions, the detours working."""
+    files = {"server": ["pba/sh_core.lua", "pba/sv_loops.lua", "pba/sv_relay.lua", "pba/sv_sound.lua"],
+             "client": ["pba/sh_core.lua", "pba/cl_loops.lua", "pba/cl_render.lua", "pba/cl_renders.lua", "pba/cl_sched.lua"]}
+    body = open(os.path.join(TEST, "lua_reload.lua"), encoding="utf-8").read()
+    out = []
+    for realm, fl in files.items():
+        code = "PBA_FILES = {" + ", ".join(repr(f) for f in fl) + "}\n" + body
+        r = call("lua_job", {"realm": realm, "code": code, "timeout_s": 60}, timeout=120)
+        out.append(r.get("values", [r])[0] if isinstance(r, dict) else r)
+    return out
+
 def speaker_once():
     """Long one-shots on a speaker: speaker_once_server.lua starts the lines, speaker_once_check.lua (with its
     result in PBA_SPK) checks the client mirrors end with their file and are replaced on their channel."""
@@ -817,6 +830,8 @@ steps = [
     ("loud_dry_reverb", lambda: loud_dry_reverb()),
     # T16: a fake Sound Muffling Effect is turned off by pba_compat_auto 1 and given back (auto 0, pba off); a manual 0 is left alone
     ("compat_auto", lambda: seq(any_map, lambda: job("server", "compat_auto.lua", 60))),
+    # T19: three reloads of the files of each realm: hooks unchanged, detoured originals still the engine's C functions
+    ("lua_reload", lambda: seq(any_map, lua_reload)),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
