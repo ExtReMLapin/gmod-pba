@@ -260,6 +260,7 @@ A.CONFIG = {
 	oneshot_follow_max = { 16, 1, 64, "cl", "Max short sounds followed at once while they play. Beyond it the one ending soonest is no longer followed (it plays on as computed)." },
 	debug_max       = { 48, 1, 512, "cl", "Max sources drawn by the debug overlay." },
 	native_max_voices = { 64, 4, 128, "cl", "Max sounds played at once by the native module (the quietest is dropped beyond)." },
+	native_pause = { 1, 0, 1, "cl", "Single player: the module's sounds emitted with the engine's pause flag (SND_SHOULDPAUSE) freeze while the game is paused (escape menu) and resume after, as the engine does with its own; the others keep playing. 0: the module's sounds ignore the pause." },
 	native_protect_lines = { 1, 0, 1, "cl", "Beyond the native voice cap a spoken line (CHAN_VOICE, CHAN_STREAM, CHAN_VOICE2) is dropped last, as the engine never steals those channels: a quiet line behind a wall no longer dies first in a burst of shots (0 = the quietest voice goes whatever it is)." },
 	native_mem_mb   = { 512, 16, 4096, "cl", "Memory for sounds decoded by the native module (MB). Least recently played sounds are dropped to make room; a sound larger than this is left to the engine." },
 	native_file_mb  = { 48, 1, 512, "cl", "Largest sound file (MB, compressed) the native module will decode." },

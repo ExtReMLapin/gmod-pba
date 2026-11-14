@@ -55,6 +55,10 @@ struct VoiceParams {
 	// Play only: a spoken line (the engine never steals its CHAN_VOICE / CHAN_STREAM / CHAN_VOICE2 channels
 	// for another sound): the voice cap spares it while any other voice can go instead
 	bool protect = false;
+	// Play / PlayEcho only: the engine pauses this sound with the game (SND_SHOULDPAUSE, single player menu):
+	// SetPaused(true) freezes the voice where it is, SetPaused(false) resumes it. A voice without it keeps
+	// playing through the pause, as the engine's own sounds without the flag do.
+	bool pausable = false;
 };
 
 // sofa / sofaSize: optional SOFA HRTF file contents (nullptr = Steam Audio's default HRTF)
@@ -69,7 +73,8 @@ void SetDiffuseSend(float k);
 void SetDiffuseRtRef(float s);
 // listener under water: low-pass on the whole native mix (0 = dry, 1 = fully under water)
 void SetUnderwater(float amount);
-// game paused (single player menu): silence, voices and reflections frozen where they are
+// game paused (single player menu): the voices started with VoiceParams::pausable freeze where they are
+// (they feed nothing, their cursor stays); every other voice keeps playing
 void SetPaused(bool paused);
 // reflection sources owned by the simulator (nullptr to detach before releasing them);
 // srcs: the source reverb slots' sources (kSrcSlotsMax)
@@ -144,7 +149,7 @@ bool SoundPending(const std::string& name);
 // so the voice renders the straight line instead of the baked path (Update retries)
 int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFallback = nullptr);
 // reflections-only voice: the sound feeds echo slot `slot` once it is simulated at `gen`
-int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay);
+int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay, bool pausable = false);
 // voice fed by a captured stream (another addon's BASS radio); lives until the stream closes
 int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p);
 // false if the voice is gone or stopping; pathFallback as Play (the voice wants a path, none free)

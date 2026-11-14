@@ -112,6 +112,8 @@ struct Voice {
 	float gain = 0, gainCur = -1;
 	float eq[3] = {1, 1, 1};
 	bool protect = false; // a spoken line: the voice cap takes it last (VoiceParams::protect)
+	bool pausable = false; // frozen while the game is paused (VoiceParams::pausable)
+	bool wasPaused = false; // skipped during the previous block: fades in on resuming (no step in the waveform)
 	bool hasSH = false; // wants the baked path rendering (pathSlot may be missing: pool full)
 	float sh[4] = {0, 0, 0, 0};
 	// share of the output taken from the path effect (0 straight line .. 1 baked path), smoothed over
@@ -372,6 +374,16 @@ void RenderBlock() {
 	for (auto& vp : g_voices) {
 		Voice& v = *vp;
 		if (!v.alive.load()) continue;
+		// game paused: a voice the engine would pause feeds nothing and stays where it is (a stopped one
+		// still fades out: its slot must come back)
+		if (g_paused && v.pausable && !v.dying) {
+			v.wasPaused = true;
+			continue;
+		}
+		if (v.wasPaused) {
+			v.wasPaused = false;
+			if (!v.stream) v.fadeIn = kBlock;
+		}
 		if (v.echoSlot >= 0 && g_echo[v.echoSlot].simGen.load() < v.needGen) {
 			// impulse response for this position not simulated yet: hold the voice
 			if (++v.waited > kEchoWaitBlocks) {
@@ -753,10 +765,6 @@ void RenderBlock() {
 void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 	float* o = (float*)out;
 	std::lock_guard<std::mutex> lk(g_mtx);
-	if (g_paused) { // nothing advances while the game is paused
-		std::memset(o, 0, (size_t)frames * 2 * sizeof(float));
-		return;
-	}
 	ma_uint32 done = 0;
 	while (done < frames) {
 		if (g_fifoPos >= g_fifo.size()) {
@@ -850,6 +858,7 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 	g_ctx = ctx;
 	g_echoDropped = 0;
 	g_pathFallback = 0;
+	g_paused = false;
 	IPLAudioSettings as{kRate, kBlock};
 	IPLHRTFSettings hs{};
 	hs.volume = 1.0f;
@@ -1503,6 +1512,7 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 	it->second->lastUse = ++g_useClock;
 	v->loop = loop;
 	v->protect = p.protect;
+	v->pausable = p.pausable;
 	v->cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
 	SetVoice(*v, p); // takes a path effect if p.hasSH (see AcquirePath)
 	if (p.offset > 0) {
@@ -1541,7 +1551,7 @@ int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p) {
 	return id;
 }
 
-int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay) {
+int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay, bool pausable) {
 	if (slot < 0 || slot >= kEchoSlots) return 0;
 	std::lock_guard<std::mutex> lk(g_mtx);
 	auto it = g_sounds.find(name);
@@ -1565,6 +1575,7 @@ int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch
 	v->id = g_nextId++;
 	v->snd = it->second;
 	v->echoSlot = slot;
+	v->pausable = pausable;
 	v->needGen = gen;
 	v->gain = gain;
 	v->rate = std::clamp(pitch / 100.0f, 0.05f, 4.0f);

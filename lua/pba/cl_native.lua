@@ -19,7 +19,7 @@ local MODULE = "lua/bin/gmcl_pba_win64.dll" -- (64-bit only: N.InstallProblem)
 -- from), API number (raised in native/src/pba_native.cpp, PBA_NATIVE_API, when a function changes). This Lua
 -- accepts the API range N.API_MIN..N.API_MAX; any other module, or one without ModuleVersion (older than this
 -- check), is left unused as if it were not installed. No automatic update.
-N.API_MIN, N.API_MAX = 1, 1
+N.API_MIN, N.API_MAX = 1, 2 -- (2: pausable voices, N.PauseFlag; a module of API 1 is used without the pause)
 local UPDATE_HINT = "update gmcl_pba_win64.dll and phonon.dll in garrysmod/lua/bin with the ones of the PBA release matching the addon"
 
 -- -> true, nil, version, api | false, message, version, api (mod: the module's table, pba_native)
@@ -528,6 +528,7 @@ function N.StartRender()
 	local ok, err = pba_native.AudioStart(sofa)
 	if not ok then N.err = err MsgN("[PBA] native audio: ", err) return end
 	N.render = true
+	N.paused = false -- (render::Start: not paused)
 	N.ApplySettings()
 	if N.Prewarm then N.Prewarm() end -- (a restart: the sounds decoded before were dropped)
 	local st = pba_native.Stats and pba_native.Stats()
@@ -1069,6 +1070,15 @@ function N.ProtectLine(chan)
 	return (A.cfg.native_protect_lines or 1) >= 0.5 and (chan == CHAN_VOICE or chan == CHAN_STREAM or chan == CHAN_VOICE2) or nil
 end
 
+-- The engine pauses the sounds emitted with SND_SHOULDPAUSE while the game is paused (single player, escape menu)
+-- and resumes them after; the others keep playing. The module does the same for a voice played with the pausable
+-- flag (pba_native.Play, argument after protect; Echo's last one): -> true | nil. Needs the module of API 2 (before
+-- it, SetPaused froze every voice); pba_native_pause.
+function N.PauseSupported() return (N.moduleApi or 0) >= 2 and pba_native ~= nil and pba_native.SetPaused ~= nil end
+function N.PauseFlag(flags)
+	return (A.cfg.native_pause or 1) >= 0.5 and N.PauseSupported() and bit.band(flags or 0, SND_SHOULDPAUSE or 128) ~= 0 or nil
+end
+
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
 	opt = opt or {}
@@ -1089,8 +1099,8 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local srcPos = opt.srcPos
 	if N.DryMix(name) then roomSend, srcPos = 0, nil end
 	local id
-	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect)
-	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect) end
+	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect, opt.pausable)
+	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect, opt.pausable) end
 	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
 	if id and id > 0 and srcPos and L then
 		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
@@ -1239,7 +1249,7 @@ function N.Echo(data, pos, enginePlays, own)
 	local aim = nil
 	if w > 0 then local _, a = N.WeaponAim(e, data.Channel) aim = a end
 	-- (a relayed sound's own start time, A.SoundTimeDelay: its echoes start with it)
-	local id = pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, math.max(data.Delay or 0, 0), aim, aim and w or 0)
+	local id = pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, math.max(data.Delay or 0, 0), aim, aim and w or 0, N.PauseFlag(data.Flags))
 	-- reflections arrive from afar: the far variant of a "^" sound
 	if id and id > 0 then N.ApplyStereo(id, data.SoundName, DV_MAX, e, pos, A.ListenerPos()) end
 	N.echoes = (N.echoes or 0) + 1
@@ -1492,6 +1502,19 @@ function N.MasterVolume()
 	return m
 end
 
+--- Single player menu: the game is paused, the engine pauses the sounds it emitted with SND_SHOULDPAUSE and keeps
+-- the others playing; the module's voices played with the pausable flag freeze the same way. Think does not run
+-- during that pause (nor does a timer), a render hook does: this runs from PreRender.
+function N.UpdatePause()
+	if not N.render or not pba_native or not pba_native.SetPaused then return end
+	local paused = (A.cfg.native_pause or 1) >= 0.5 and N.PauseSupported() and game.SinglePlayer() and gui.IsGameUIVisible() or false
+	if paused ~= (N.paused or false) then
+		N.paused = paused
+		pba_native.SetPaused(paused)
+	end
+end
+hook.Add("PreRender", "pba_native_pause", function() N.UpdatePause() end)
+
 hook.Add("Think", "pba_native_listener", function()
 	if not N.render or not N.Busy() then return end
 	local ply = LocalPlayer()
@@ -1506,12 +1529,6 @@ hook.Add("Think", "pba_native_listener", function()
 	N.live, eL, eR = pba_native.SetListener(L, ang:Forward(), ang:Up(), master)
 	-- what follows its entity every frame (clear voices, native mirrors): the scheduler's frame pass
 	if A.Sched then A.Sched.Frame(L) else N.UpdateFollowers(L) end
-	-- single player menu: the engine pauses its sounds; the module's voices freeze too
-	local paused = game.SinglePlayer() and gui.IsGameUIVisible() or false
-	if paused ~= N.paused and pba_native.SetPaused then
-		N.paused = paused
-		pba_native.SetPaused(paused)
-	end
 	-- head under water: the engine applies its own water DSP to the sounds it plays; same for ours
 	local uw = A.cfg.water >= 0.5 and A.InWater(L)
 	if uw ~= N.underwater and pba_native.SetUnderwater then

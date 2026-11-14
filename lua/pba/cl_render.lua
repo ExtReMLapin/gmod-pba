@@ -473,7 +473,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		local wet = A.Native.LoudWet(lvl0)
 		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0)) * wet
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
-			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet, line = isLine(data), protect = A.Native.ProtectLine(data.Channel),
+			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet, line = isLine(data), protect = A.Native.ProtectLine(data.Channel), pausable = A.Native.PauseFlag(data.Flags),
 			mix = A.Mix and A.Mix.GroupsOf(data.SoundName, src or data.EntIndex, data.Channel, lvl0) })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
@@ -670,8 +670,9 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	-- the engine's mix value and ducking (cl_mix): the record's groups, found once
 	if A.Mix and not rec.mixG then rec.mixG = A.Mix.GroupsOf(rec.name, rec.ent, rec.chan, rec.lvl) end
 	local protect = N.ProtectLine(rec.chan)
-	local id = A.Mix and A.Mix.Play(rec.mixG, n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset, protect)
-		or pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset, protect)
+	local pausable = N.PauseFlag(rec.flags)
+	local id = A.Mix and A.Mix.Play(rec.mixG, n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset, protect, pausable)
+		or pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset, protect, pausable)
 	if not id or id <= 0 then
 		fv.switchFails = (fv.switchFails or 0) + 1
 		return false
@@ -846,7 +847,7 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 	-- chan / aim: a weapon's dipole keeps the aim it was fired with (N.Directivity)
 	local _, aim0 = A.Native and A.Native.WeaponAim and A.Native.WeaponAim(IsValid(src) and src or nil, data.Channel)
 	local rec = { key = OS.seq, name = name, ent = ent, dirEnt = IsValid(src) and src or nil, S = S, lvl = data.SoundLevel or 75,
-		chan = data.Channel, aim = aim0,
+		chan = data.Channel, aim = aim0, flags = data.Flags,
 		vol = data.Volume or 1, pitch = data.Pitch or 100, tEnd = tEnd, tNext = now + followInterval(), hyst = {},
 		clearPath = r.clear or not r.voices or #r.voices == 0, ukey = ukey,
 		-- volume changes need a trusted end (see MIN_LEFT): never for a sound of unknown length
@@ -1242,7 +1243,7 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 			local delay = math.max(voiceDelay({ len = d, pos = S }, L) - waited, 0)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
-				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl), line = isLine(data), protect = A.Native.ProtectLine(data.Channel),
+				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl), line = isLine(data), protect = A.Native.ProtectLine(data.Channel), pausable = A.Native.PauseFlag(data.Flags),
 				mix = A.Mix and A.Mix.GroupsOf(data.SoundName, IsValid(src) and src or data.EntIndex, data.Channel, lvl) })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
