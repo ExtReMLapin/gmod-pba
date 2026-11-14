@@ -761,7 +761,7 @@ end
 function evaluate(rec, now, L)
 	local P = A.Paths
 	local ent = IsValid(rec.ent) and rec.ent or nil
-	if ent then rec.S = A.SoundPos({ Entity = ent }) end
+	if ent then rec.S = A.SoundPos({ Entity = ent, Channel = rec.chan }) end
 	local S = rec.S
 	-- a far sound's evaluation may run in slices (cl_slicer): its voices keep their course until it is ready
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
@@ -807,7 +807,7 @@ end
 -- and N.UpdateFollowers do), the running ramp ending on it.
 local function followClear(rec, L)
 	if not rec.clearPath or not IsValid(rec.ent) then return end
-	local S = A.SoundPos({ Entity = rec.ent })
+	local S = A.SoundPos({ Entity = rec.ent, Channel = rec.chan })
 	if S:DistToSqr(rec.S) < 1 then return end
 	rec.S = S
 	local d = S:Distance(L)
@@ -921,7 +921,7 @@ function OS.Tick()
 			table.remove(recs, i)
 		else
 			if now >= rec.tNext then
-				local S = IsValid(rec.ent) and A.SoundPos({ Entity = rec.ent }) or rec.S
+				local S = IsValid(rec.ent) and A.SoundPos({ Entity = rec.ent, Channel = rec.chan }) or rec.S
 				if A.Sched.Due(rec, S, L, now, rec.tEnd) then
 					rec.tNext = now + followInterval()
 					evaluate(rec, now, L)

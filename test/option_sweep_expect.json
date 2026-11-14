@@ -7,6 +7,10 @@
   "pos0": "hook",
   "why": "server: other addons' EntityEmitSound hooks run first (test hook_order)"
  },
+ "sound_origin": {
+  "pos0": "hook",
+  "why": "where an entity's sound is taken (A.SoundPos), outside P.Compute: its scenes give the position (test sound_origin)"
+ },
  "bend_final": {
   "pos0": "same",
   "why": "only reaches the diffuse share of a route whose final bend differs from its coarse one: not met"
