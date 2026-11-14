@@ -433,6 +433,13 @@ local function speechFloor(data, src, L)
 	return speechFloorAt(data.Volume, data.Pos, L, data.SoundLevel)
 end
 
+--- True when sound data is a spoken line (a voice channel, or a loudspeaker's copy): decoded on its first play
+-- (pba_native_line_decode, N.EnsureSound) so the module renders it as the lines around it.
+local function isLine(data)
+	local ch = data.Channel
+	return ch == CHAN_VOICE or ch == CHAN_VOICE2 or bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0
+end
+
 local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited)
 	local floor = slot == 1 and speechFloor(data, src, L) or nil
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
@@ -462,7 +469,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		local wet = A.Native.LoudWet(lvl0)
 		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0)) * wet
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
-			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet,
+			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet, line = isLine(data),
 			mix = A.Mix and A.Mix.GroupsOf(data.SoundName, src or data.EntIndex, data.Channel, lvl0) })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
@@ -1166,7 +1173,7 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 			local delay = math.max(voiceDelay({ len = d, pos = S }, L) - waited, 0)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
-				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl),
+				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl), line = isLine(data),
 				mix = A.Mix and A.Mix.GroupsOf(data.SoundName, IsValid(src) and src or data.EntIndex, data.Channel, lvl) })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
