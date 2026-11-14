@@ -21,7 +21,7 @@
 -- mouthCopy; the engine reads visemes from the voice channels it plays on an entity, Lua cannot read them:
 -- GetFlexWeight stays 0 while a face talks, even in vanilla). They are recorded per entity for sweep.py to
 -- match the server's speech events (mouth_missing).
--- Rendered lines: every way this client makes a line heard is recorded by file (W.rendered: a module voice
+-- Rendered lines: every way this client makes a line heard is recorded by file (W.renderedF: a module voice
 -- started at a gain above -60 dB, an engine emission from Lua above volume 0.01 (pba's vanilla fallback, its
 -- engine copies), a mirror's engine patch playing), with the time a module voice died if it died within
 -- EARLY_S. sweep.py matches the lines the server took from the engine against them (speech_silent: a line
@@ -36,9 +36,8 @@ W.mg = W.mg or {}               -- mirror key -> last gain
 local STEP_DB, LOUD_DB, VOICES_MAX, ONCE_MARGIN, GLIDE_DB, HITCH_S = 3, 6, 96, 3, 12, 0.15
 local ENGINE_CUT_DB = -36 -- the engine's own law below this: vanilla plays nothing (startmovie wav, gm_flatgrass, levels 60-100:
 -- audible down to -35.0 dB, digital silence from -38.4 dB, at volume 0.16 and 1 alike; the quietest steps are coarse: -29.4, -31.9, -35.4)
-W.rendered = W.rendered or {}   -- { t, f (file, lower case), how, id }, in order
 W.caps = W.caps or {}           -- bare caption text -> last CurTime() shown
-local CAP_DUP_S, EARLY_S, MAX_RENDERED, AUDIBLE = 1, 0.5, 2000, 0.001
+local CAP_DUP_S, EARLY_S, AUDIBLE = 1, 0.5, 0.001
 local JUMP_UNITS, JUMP_QUIET = 200, 1.5 -- a listener teleport (the sweeper's) changes paths for real: no step check right after
 -- a teleport is also a listener faster than any walk or sprint (the sweeper's trigger centres can be < 200 u apart:
 -- a Breencast mirror stepped 47 dB at a 'still' listener on d2_prison_04, 2026-11-13)
@@ -69,10 +68,18 @@ W.note = note
 
 local function bare(name) return (string.gsub(name or "", "^[%*%#%@%>%<%^%)%(%}%$%!%?%&%~%`%+%%]+", "")) end
 local function fileKey(name) return string.lower((string.gsub(bare(name), "\\", "/"))) end
+-- (kept per file, the last PER_FILE of each: one list of the last 2000 of all evicted a line's rendering
+-- within a minute on a busy map (d3_c17_10b: 2000 renderings in 76 s, gunfire, shield loops), and the line then
+-- counted as speech_silent)
+local PER_FILE = 64
+W.renderedF = W.renderedF or {} -- file key -> { renderings }
 local function rendered(name, how, id)
-	if #W.rendered >= MAX_RENDERED then table.remove(W.rendered, 1) end
-	local r = { t = math.Round(CurTime(), 2), f = fileKey(name), how = how, id = id }
-	W.rendered[#W.rendered + 1] = r
+	local f = fileKey(name)
+	local l = W.renderedF[f]
+	if not l then l = {} W.renderedF[f] = l end
+	if #l >= PER_FILE then table.remove(l, 1) end
+	local r = { t = math.Round(CurTime(), 2), f = f, how = how, id = id }
+	l[#l + 1] = r
 	return r
 end
 W.renderedById = W.renderedById or {}
@@ -165,6 +172,7 @@ if pba_native and not pba_native.pbaWatchWrapped then
 			v.gt1 = now
 			v.d = ok and d or 0
 			v.g, v.t, v.L, v.first, v.by = gain, now, L or v.L, nil, by
+			if pos then v.pos = pos end
 		end
 		local ok = update(id, pos, gain, ...)
 		-- a voice that ended within EARLY_S of its start (killed: cut, capped) was not heard
@@ -313,7 +321,11 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 			if over > LOUD_DB then
 				note(silent and "audible_vanilla_silent" or "louder_vanilla", name, { sound = name, lvl = m.lvl, dist = math.floor(d),
 					overDb = math.Round(over, 1), sentDb = math.Round(db(sent), 1), lawDb = math.Round(db(law), 1),
-					engDb = math.Round(db(eng), 1), sentOverLawDb = math.Round(db(sent) - db(law), 1), g = m.g })
+					engDb = math.Round(db(eng), 1), sentOverLawDb = math.Round(db(sent) - db(law), 1), g = m.g,
+					-- (what drove the voice last and when, the mirror's state: what to look at when it is a bug)
+					by = v.by, updAgo = math.Round(RealTime() - v.t, 2), clear = m.clearPath or nil, evalD = m.lastEval and math.floor(m.lastEval.d) or nil,
+					entOk = IsValid(m.ent) or nil, anchor = (m.ent == m.anchor) or nil, ramp = m.ramp and (m.ramp.pending and "pending" or "done") or nil,
+					voicePos = v.pos and tostring(v.pos) or nil, src = tostring(S) })
 			end
 		end
 	end
@@ -356,8 +368,10 @@ function W.Report(mouthFor)
 	end
 	out.mouth = util.TableToJSON(W.copies)
 	out.census = util.TableToJSON(W.census or {})
-	out.rendered = util.TableToJSON(W.rendered)
+	local all = {}
+	for _, l in pairs(W.renderedF) do for _, r in ipairs(l) do all[#all + 1] = r end end
+	out.rendered = util.TableToJSON(all)
 	return out
 end
-function W.Reset() W.anomalies = {} W.copies = {} W.seen = {} W.mg = {} W.deadT = {} W.vehQuietT = nil W.rendered = {} W.caps = {} end
+function W.Reset() W.anomalies = {} W.copies = {} W.seen = {} W.mg = {} W.deadT = {} W.vehQuietT = nil W.renderedF = {} W.caps = {} end
 return true
