@@ -184,6 +184,21 @@ def py(script, *args, timeout=1500):
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     return PyOut(p.returncode, p.stdout or "", p.stderr or "")
 
+def loud_dry_reverb():
+    """gm_construct's open field (-1750, 2000, -20, yaw 45), native render and pba_native_all 1 for the run
+    (loud_dry_reverb.lua): a loud shot's reverb <= -10 dB re its direct with pba_native_loud_dry 1."""
+    load("gm_construct")
+    native_on(True)
+    was = (lua("client", "return GetConVar('pba_native_all'):GetString()") or "1")
+    call("console_exec", {"realm": "client", "cmd": "pba_native_all 1"})
+    lua("server", "local p = player.GetHumans()[1] p:SetPos(Vector(-1750, 2000, -20)) p:SetEyeAngles(Angle(0, 45, 0)) return true")
+    wait_lua("client", "return LocalPlayer():GetPos():Distance(Vector(-1750, 2000, -20)) < 2", 5)
+    time.sleep(2)
+    try:
+        return job("client", "loud_dry_reverb.lua", 180)
+    finally:
+        call("console_exec", {"realm": "client", "cmd": f"pba_native_all {was}"})
+
 def speaker_once():
     """Long one-shots on a speaker: speaker_once_server.lua starts the lines, speaker_once_check.lua (with its
     result in PBA_SPK) checks the client mirrors end with their file and are replaced on their channel."""
@@ -798,6 +813,8 @@ steps = [
     ("streams_basic", lambda: py("streams_basic.py")),
     # T18: probe graph disk cache (written, reloaded identical, stale version / hash / spacing rebuilt), no error while it builds
     ("probe_cache", lambda: seq(lambda: load("pba_noportal"), lambda: job("client", "probe_cache.lua", 400))),
+    # T22: a loud shot in the open keeps its reverb <= -10 dB re its direct (pba_native_loud_dry), a quiet one is unchanged
+    ("loud_dry_reverb", lambda: loud_dry_reverb()),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))

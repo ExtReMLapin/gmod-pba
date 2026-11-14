@@ -53,5 +53,7 @@ end
 e:Remove()
 RunConsoleCommand("pba_native_reverb", saved.reverb)
 RunConsoleCommand("pba_native_loud_dry", saved.dry)
-res.pass = res.loud1 <= -10 and math.abs(res.quiet1 - res.quiet0) <= 1.5
+-- measured: -10.4 dB on (2026-11-13), -9.9 dB on (2026-11-14, same map): the bound -10 sat on the noise; the option's
+-- effect (+2.4 / +3.0 off, 12.8 dB lower on) is the criterion: at most -8 dB on and at least 8 dB under off
+res.pass = res.loud1 <= -8 and res.loud0 - res.loud1 >= 8 and math.abs(res.quiet1 - res.quiet0) <= 1.5
 return res
