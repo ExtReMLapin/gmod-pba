@@ -728,6 +728,85 @@ function A.WaterMuffledFile(name)
 	return muffled[string.lower(A.SoundFile((string.gsub(name, "\\", "/"))))] or false
 end
 
+--- True when a model's file holds IK chains (studiohdr_t numikchains, read once per model from the .mdl; 0 for
+-- a file this reader does not know). The engine gives an NPC with IK (a humanoid's hands and feet, a hunter's
+-- legs) a sound origin at the centre of its model bounds instead of its origin (C_BaseAnimating::GetSoundSpatialization).
+local ikModels = {}
+local function modelHasIK(m)
+	local c = ikModels[m]
+	if c ~= nil then return c end
+	c = false
+	local ok, f = pcall(file.Open, m, "rb", "GAME")
+	if ok and f then
+		f:Seek(4)
+		local ver = f:ReadLong() or 0
+		if ver >= 44 and ver <= 49 then
+			f:Seek(284)
+			c = (f:ReadLong() or 0) > 0
+		end
+		f:Close()
+	end
+	ikModels[m] = c
+	return c
+end
+A.ModelHasIK = modelHasIK
+
+--- Where the engine plays a sound attached to entity e (C_BaseEntity::GetSoundSpatialization and its
+-- overrides): the entity's origin; the centre of the model's bounds for a brush entity (a func_door) and for
+-- an NPC with IK; the entity's origin otherwise (a prop_dynamic door's hinge, a vehicle's base, a
+-- player's feet). The origin of a creature on the floor lies in the floor's plane: P.Walls from there counts no
+-- wall for the floor (measured on pba_tworooms, 0 to 2 u above it and 0.5 u below, test/sound_origin.lua).
+local function engineOrigin(e)
+	local p = e:GetPos()
+	local m = e:GetModel()
+	if m and string.byte(m) == 42 then -- "*": a brush model
+		return p + e:OBBCenter()
+	end
+	if e:IsNPC() and m and e:GetModelScale() == 1 and modelHasIK(m) then
+		local mn, mx = e:GetModelBounds()
+		if mn and mx then return p + (mn + mx) * 0.5 end
+	end
+	return p
+end
+
+--- The point a voice line comes from: the "mouth" attachment (CHAN_VOICE, CHAN_VOICE2 of a face, as the
+-- engine puts it); the eyes of an NPC or player without one. Nil for anything else.
+local function mouthPos(e)
+	local at = e:LookupAttachment("mouth")
+	if at and at > 0 then
+		local a = e:GetAttachment(at)
+		if a and a.Pos then return a.Pos end
+	end
+	if e:IsPlayer() or e:IsNPC() then return e:EyePos() end
+	return nil
+end
+
+--- The muzzle of weapon w: its "muzzle" attachment, else the weapon's centre.
+local function muzzlePos(w)
+	local at = w:LookupAttachment("muzzle")
+	if at and at > 0 then
+		local a = w:GetAttachment(at)
+		if a and a.Pos then return a.Pos end
+	end
+	return w:WorldSpaceCenter()
+end
+
+--- The weapon a sound is a shot of: the sound's entity when it is a weapon a player or NPC holds (a SWEP's
+-- self:EmitSound), or the active weapon of the player or NPC emitting on CHAN_WEAPON (HL2 weapons emit their
+-- shots on their owner). Nil for any other sound (footsteps, voices and pain sounds of a shooter).
+function A.ShotWeapon(e, chan)
+	if e:IsWeapon() then
+		local o = e:GetOwner()
+		if IsValid(o) and (o:IsPlayer() or o:IsNPC()) then return e, o end
+		return nil
+	end
+	if chan == CHAN_WEAPON and (e:IsPlayer() or e:IsNPC()) then
+		local w = e:GetActiveWeapon()
+		if IsValid(w) then return w, e end
+	end
+	return nil
+end
+
 --- World position of a sound.
 function A.SoundPos(data)
 	if data.Pos then return data.Pos end
@@ -735,10 +814,26 @@ function A.SoundPos(data)
 	if IsValid(e) then
 		-- the local player's own sound played by the module (pba_native_own): centered, 1 unit ahead of the
 		-- ears (the engine plays the listener's own sounds unspatialized; at the ears the module would have
-		-- no direction), and following the view
-		if CLIENT and e == LocalPlayer() and A.NativeOwn and A.NativeOwn() then
-			local L, ang = A.ListenerPos()
-			if L then return L + ang:Forward() end
+		-- no direction), and following the view. His weapon's shots are his own sounds too.
+		if CLIENT and A.NativeOwn and A.NativeOwn() then
+			local lp = LocalPlayer()
+			local w, owner = A.ShotWeapon(e, data.Channel)
+			if e == lp or owner == lp then
+				local L, ang = A.ListenerPos()
+				if L then return L + ang:Forward() end
+			end
+		end
+		if (A.cfg.sound_origin or 1) >= 0.5 and not e:IsWorld() then
+			-- the shot of a weapon comes from its muzzle
+			local w = A.ShotWeapon(e, data.Channel)
+			if w then return muzzlePos(w) end
+			-- a line from the mouth
+			local ch = data.Channel
+			if ch == CHAN_VOICE or ch == CHAN_VOICE2 then
+				local m = mouthPos(e)
+				if m then return m end
+			end
+			return engineOrigin(e)
 		end
 		if e:IsPlayer() or e:IsNPC() then return e:EyePos() end
 		return e:WorldSpaceCenter()
