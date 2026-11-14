@@ -179,6 +179,72 @@ end
 --- Engine muffling for a blocked player over budget (P.MuffleFor): DSP preset and volume factor.
 local function muffleFor(walls) return A.Paths.MuffleFor(walls) end
 
+-- Per-(player, sound name) relay quota (pba_relay_name_rate). One sound name from many sources (thirty gibs
+-- breaking concrete, 13-18 impacts a second each, sweep 2026-11-14 d2_coast_05) ate the whole budget: the few
+-- different sounds of that second (the wall crashing, a boulder, a spark) got no relay. Past its quota a name
+-- takes no token: it is muffled by the engine from the verdict of a recent relay of that name that was close
+-- (same wall, no new trace), or by one trace when none is.
+local NAME_VERDICTS = 4       -- recent verdicts kept per (player, name)
+local NAME_SRC_U2 = 256 * 256 -- a verdict serves a source this close to the one it was made for
+local NAME_EAR_U2 = 128 * 128 -- ... and an ear this close
+local NAME_AGE_S = 2          -- ... for this long
+local NAME_MAX = 256          -- names kept per player (the table starts over beyond)
+
+local function nameState(ply, name)
+	local t = ply.pba_nameQ
+	if not t or t.n >= NAME_MAX then
+		t = { n = 0 }
+		ply.pba_nameQ = t
+	end
+	local s = t[name]
+	if not s then
+		s = { v = {}, nxt = 1 }
+		t[name] = s
+		t.n = t.n + 1
+	end
+	return s
+end
+
+local function nearVerdict(e, pos, eye)
+	local dx, dy, dz = e.x - pos.x, e.y - pos.y, e.z - pos.z
+	if dx * dx + dy * dy + dz * dz > NAME_SRC_U2 then return false end
+	dx, dy, dz = e.ex - eye.x, e.ey - eye.y, e.ez - eye.z
+	return dx * dx + dy * dy + dz * dz <= NAME_EAR_U2
+end
+
+--- Notes the walls found between `pos` and `eye` for a sound of the name state `ns` (the verdict a later
+-- sound of that name reuses past its quota): refreshes the verdict of that place, else takes the oldest slot.
+local function noteVerdict(ns, pos, eye, walls)
+	local v, e = ns.v
+	for i = 1, #v do
+		if nearVerdict(v[i], pos, eye) then e = v[i] break end
+	end
+	if not e then
+		if #v < NAME_VERDICTS then
+			e = {}
+			v[#v + 1] = e
+		else
+			e = v[ns.nxt]
+			ns.nxt = ns.nxt % NAME_VERDICTS + 1
+		end
+	end
+	e.x, e.y, e.z, e.ex, e.ey, e.ez = pos.x, pos.y, pos.z, eye.x, eye.y, eye.z
+	e.t, e.walls, e.dsp, e.gain = CurTime(), walls, nil, nil
+end
+
+--- The verdict (DSP preset, gain) of a recent relay of this name near `pos` / `eye`; nil when none.
+local function reuseVerdict(ns, pos, eye)
+	local now = CurTime()
+	local v = ns.v
+	for i = 1, #v do
+		local e = v[i]
+		if e.walls and now - e.t <= NAME_AGE_S and nearVerdict(e, pos, eye) then
+			if not e.dsp then e.dsp, e.gain = muffleFor(e.walls) end
+			return e.dsp, e.gain
+		end
+	end
+end
+
 -- Footsteps of other players: the engine sends the server's footstep only to the players of the PAS
 -- outside the stepping player's PVS (CBasePlayer::PlayStepSound: RemoveRecipientsByPVS); the players
 -- who see him generate the footstep on their own client. PlayerFootstep runs right before that
@@ -291,12 +357,34 @@ function S.Audience(snd, ply, scale)
 	-- clients rendering every sound natively (userinfo pba_native_all_want) get the relay even with a clear
 	-- line: their module plays the sound instead of the engine
 	local all = A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1
+	-- one name from many sources: past its quota it takes no token of the budget the other sounds share
+	local nq = A.cfg.relay_name_rate or 0
+	local ns
+	if nq > 0 then
+		ns = nameState(ply, data.SoundName)
+		if not takeToken(ns, "bucket", nq, "relayNameCapped") then
+			local dsp, gain = reuseVerdict(ns, pos, eye)
+			if dsp then
+				A.stats.relayNameReused = (A.stats.relayNameReused or 0) + 1
+				return "muffled", dsp, gain
+			end
+			local w = A.Paths.Walls(pos, eye, 1, snd.srcObj)
+			if #w == 0 then return "clear" end
+			noteVerdict(ns, pos, eye, w)
+			dsp, gain = muffleFor(w)
+			return "muffled", dsp, gain
+		end
+	end
 	local walls = not all and A.Paths.Walls(pos, eye, 1, snd.srcObj) or nil
-	if (all or #walls > 0) and relayToken(ply) then return "relay" end
+	if (all or #walls > 0) and relayToken(ply) then
+		if ns and walls then noteVerdict(ns, pos, eye, walls) end
+		return "relay"
+	end
 	-- over budget (or a clear line): the wall test decides, a native-all player over budget included (his
 	-- relay was not conditioned on a wall)
 	walls = walls or A.Paths.Walls(pos, eye, 1, snd.srcObj)
 	if #walls > 0 then
+		if ns then noteVerdict(ns, pos, eye, walls) end
 		local dsp, gain = muffleFor(walls)
 		return "muffled", dsp, gain
 	end
