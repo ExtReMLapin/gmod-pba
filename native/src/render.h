@@ -52,6 +52,9 @@ struct VoiceParams {
 	// the source's power whatever the source-listener distance, so the send must not carry the distance
 	// law that gain does. < 0: unchanged on Update; a voice that never received one sends at its gain
 	float send = -1;
+	// Play only: a spoken line (the engine never steals its CHAN_VOICE / CHAN_STREAM / CHAN_VOICE2 channels
+	// for another sound): the voice cap spares it while any other voice can go instead
+	bool protect = false;
 };
 
 // sofa / sofaSize: optional SOFA HRTF file contents (nullptr = Steam Audio's default HRTF)

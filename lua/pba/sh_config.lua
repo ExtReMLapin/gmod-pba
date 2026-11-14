@@ -253,6 +253,7 @@ A.CONFIG = {
 	oneshot_follow_max = { 16, 1, 64, "cl", "Max short sounds followed at once while they play. Beyond it the one ending soonest is no longer followed (it plays on as computed)." },
 	debug_max       = { 48, 1, 512, "cl", "Max sources drawn by the debug overlay." },
 	native_max_voices = { 64, 4, 128, "cl", "Max sounds played at once by the native module (the quietest is dropped beyond)." },
+	native_protect_lines = { 1, 0, 1, "cl", "Beyond the native voice cap a spoken line (CHAN_VOICE, CHAN_STREAM, CHAN_VOICE2) is dropped last, as the engine never steals those channels: a quiet line behind a wall no longer dies first in a burst of shots (0 = the quietest voice goes whatever it is)." },
 	native_mem_mb   = { 512, 16, 4096, "cl", "Memory for sounds decoded by the native module (MB). Least recently played sounds are dropped to make room; a sound larger than this is left to the engine." },
 	native_file_mb  = { 48, 1, 512, "cl", "Largest sound file (MB, compressed) the native module will decode." },
 	native_line_decode = { 1, 0, 1, "cl", "A spoken line (voice channel or loudspeaker) not decoded yet is decoded on the main thread on its first play (files up to 1.5 MB, ~5 ms for a short line), so the module renders it like the lines around it. 0: its first play went to the engine (d1_trainstation_01: every short Breencast line heard through the engine's speaker radio preset without the module's reverb, the long line native)." },

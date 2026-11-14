@@ -501,8 +501,9 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	m.decoding = nil
 	-- the engine's mix value and ducking (cl_mix): the loop's groups, found once
 	if A.Mix and not m.mixG then m.mixG = A.Mix.GroupsOf(m.name, m.ent, m.chan, m.lvl) end
-	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
-		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send)
+	local protect = N.ProtectLine(m.chan)
+	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, nil, protect)
+		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, nil, protect)
 	-- (pba_loops_native_fail: a voice the module could not start leaves the line to the engine patch below;
 	-- marked started, a long line was then dropped there as "already played": captioned, never heard)
 	if (id or 0) > 0 or (A.cfg.loops_native_fail or 1) < 0.5 then m.started = true end

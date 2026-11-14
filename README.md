@@ -219,6 +219,12 @@ same job as PBA and is switched off automatically (`pba_compat_auto`).
 - Probe graphs are capped at 30 000 probes; very large maps are covered from the spawn points out.
 - Light has no reverberation of its own: room acoustics are left to the engine's DSP (the native
   module simulates it).
+- The native module renders in stereo (binaural headphones or two-speaker panning), whatever
+  `snd_surround_speakers` says: on a 5.1 / 7.1 setup its sounds are plain stereo (what the system
+  mixer does with them is up to it), the engine's own sounds keep their surround.
+- The native module simulates the room it measures. The room type a soundscape asks for
+  (`dsp` / `dsp_volume` in `soundscapes_*.txt`) is not applied to the sounds it renders, and a
+  soundscape's own loops (`playlooping`) stay with the engine.
 
 ## Compatibility
 

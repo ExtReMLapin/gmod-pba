@@ -1063,6 +1063,12 @@ end
 -- to follow a moving entity, wet = share of the reverb kept (N.LoudWet) for the room bus without a slot,
 -- mix = the sound's mix groups (A.Mix.GroupsOf: the engine's mix value and ducking, cl_mix) }.
 -- Returns true on success.
+-- a spoken line (the engine's channel stealing never takes CHAN_VOICE, CHAN_STREAM nor CHAN_VOICE2, REVERSE.md
+-- section 6): the module's voice cap drops it last (pba_native.Play, last argument; pba_native_protect_lines)
+function N.ProtectLine(chan)
+	return (A.cfg.native_protect_lines or 1) >= 0.5 and (chan == CHAN_VOICE or chan == CHAN_STREAM or chan == CHAN_VOICE2) or nil
+end
+
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
 	opt = opt or {}
@@ -1083,8 +1089,8 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local srcPos = opt.srcPos
 	if N.DryMix(name) then roomSend, srcPos = 0, nil end
 	local id
-	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend)
-	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend) end
+	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect)
+	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect) end
 	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
 	if id and id > 0 and srcPos and L then
 		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
