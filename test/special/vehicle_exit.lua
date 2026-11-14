@@ -12,7 +12,11 @@ local ply = player.GetHumans()[1]
 if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return { pass = false, err = "needs pba_tworooms with a human" } end
 if game.MaxPlayers() < 2 then return { pass = nil, err = "maxplayers 1: no slot for a bot" } end
 ply:SetPos(Vector(256, 256, 0))
+-- a bot spawned on the spawn point telefrags the player standing there (god mode does not protect: measured, the
+-- host dies the same frame): let this spawn through (IsSpawnpointSuitable true = no blocker killed)
+hook.Add("IsSpawnpointSuitable", "pba_test_nofrag", function() return true end)
 local bot = player.CreateNextBot("pba_test_driver")
+hook.Remove("IsSpawnpointSuitable", "pba_test_nofrag")
 if not IsValid(bot) then return { pass = nil, err = "could not create a bot" } end
 local veh = ents.Create("prop_vehicle_jeep")
 veh:SetModel("models/buggy.mdl")
