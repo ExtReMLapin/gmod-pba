@@ -1377,7 +1377,8 @@ end
 
 --- Echoes of a loud sound (reflections only, on top of whatever plays the direct sound). enginePlays:
 -- the engine plays this one (the player's own sounds, an echo-only relay), never the module. own: the
--- local player's own sound (echoed only with pba_native_echo_own).
+-- local player's own sound: never echoed here (with pba_native_own the module plays it and its source reverb
+-- slot reflects it; the engine-played way had odd, short echoes and was removed).
 N.echoSkip = N.echoSkip or {}
 local function skip(why) N.echoSkip[why] = (N.echoSkip[why] or 0) + 1 end
 
@@ -1392,7 +1393,7 @@ end
 
 function N.Echo(data, pos, enginePlays, own)
 	if not N.render or (A.cfg.native_echo or 0) <= 0 or not pba_native.Echo then return skip("off") end
-	if own and (A.cfg.native_echo_own or 0) < 0.5 then return skip("own") end
+	if own then return skip("own") end
 	if N.DryMix(data.SoundName) then return skip("dry") end
 	-- every sound played by the module ("all native"): its reflections come from its source reverb slot;
 	-- echoes too would simulate the same reflections twice (audit). The ones the engine plays have no slot:

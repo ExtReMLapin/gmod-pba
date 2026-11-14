@@ -1,7 +1,7 @@
 -- The player's own sounds rendered by the module like every other sound (client lua_job, singleplayer,
 -- pba_tworooms, native rendering on with pba_native_all). Before: the engine played them untouched, so an
 -- NPC's footsteps beside you got the room's reverb (the module's source slot) and yours none at all (the
--- 95 dB echo threshold and pba_native_echo_own left them dry).
+-- 95 dB echo threshold left them dry).
 -- With pba_native_own 1 the module plays the player's footsteps and gunfire, centered (1 unit ahead of
 -- the listener, as the engine plays the listener's own sounds unspatialized) and following him; with 0
 -- the engine keeps them (none reaches the module).
