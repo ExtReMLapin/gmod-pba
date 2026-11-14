@@ -993,6 +993,8 @@ steps = [
     ("native_vol_now", lambda: native_vol_now()),
     # a loop's volume / pitch updates are compact on the wire (audit B-14)
     ("loops_net_compact", lambda: loops_net_compact()),
+    # the same with two real players on a listen server (needs MCP_INSTANCE_B, a second game: INCONCLUSIVE without)
+    ("loops_net_compact_mp", lambda: py("loops_net_compact_mp.py")),
     ("streams_vol_now", lambda: seq(any_map, lambda: streams_vol_now())),
     ("loop_fade_tail", lambda: seq(lambda: load(TW), lambda: job("server", "loop_fade_tail.lua"))),
     ("constraint_travel_loop", lambda: seq(lambda: load(TW), lambda: job("server", "constraint_travel_loop.lua"))),
