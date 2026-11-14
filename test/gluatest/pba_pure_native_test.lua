@@ -402,5 +402,75 @@ return {
 				expect(l == e2[1] and m == e2[2] and h == e2[3]).to.beTrue()
 			end)
 		end },
+
+		-- ---------------------------------------------------------------- late handover (pba_native_late_handover)
+		-- An engine copy of a followed short sound started while the module still decoded its file: N.LateVerdict
+		-- decides each frame what becomes of it. A 3 s sound that started at t0 = 10, ending at 13, margin 0.75 s.
+		{ name = "N.LateVerdict: waits while the file decodes, hands over the frame it is decoded, at the point reached", func = function()
+			local v = N.LateVerdict(true, true, "pending", true, false, 10.4, 10, 13, 0.75)
+			expect(v).to.equal("wait")
+			local v2, off = N.LateVerdict(true, true, "ready", true, false, 10.8, 10, 13, 0.75)
+			expect(v2).to.equal("switch")
+			expect(near(off, 0.8, 1e-9)).to.beTrue() -- what was heard so far: now - t0
+			-- the copy has not started yet (a propagation delay): nothing to hand over yet, whatever the decode
+			expect(N.LateVerdict(true, true, "ready", false, false, 9.9, 10, 13, 0.75)).to.equal("wait")
+			-- a clock a hair before t0 never gives a negative offset
+			local _, o0 = N.LateVerdict(true, true, "ready", true, false, 9.9999, 10, 13, 0.75)
+			expect(o0).to.equal(0)
+		end },
+		{ name = "N.LateVerdict: the offset is playback time whatever the pitch (the module scales it by the voice's pitch)", func = function()
+			-- pitch 150: the file's 3 s play in 2 s (t0 = 10, end 12); 0.9 s in, the offset is 0.9 s (the module puts
+			-- the cursor 1.35 s into the file), 1.5 x the same seconds heard as the engine copy played them
+			local v, off = N.LateVerdict(true, true, "ready", true, false, 10.9, 10, 12, 0.75)
+			expect(v).to.equal("switch")
+			expect(near(off, 0.9, 1e-9)).to.beTrue()
+			-- too close to the end of the shortened sound: not worth a second voice
+			expect(N.LateVerdict(true, true, "ready", true, false, 11.3, 10, 12, 0.75)).to.equal("drop")
+		end },
+		{ name = "N.LateVerdict: stays with the engine when the sound ended, was stopped, failed to decode, has no module offset or the option is off", func = function()
+			local function why(...) local v, w = N.LateVerdict(...) return v .. ":" .. tostring(w) end
+			-- ended (or nearly: its last margin seconds are not worth a second voice), decoded or not
+			expect(why(true, true, "ready", true, false, 12.5, 10, 13, 0.75)).to.equal("drop:ended")
+			expect(why(true, true, "pending", true, false, 13.5, 10, 13, 0.75)).to.equal("drop:ended")
+			-- the margin's edge: still worth it up to tEnd - margin
+			expect(why(true, true, "ready", true, false, 12.25, 10, 13, 0.75):sub(1, 6)).to.equal("switch")
+			-- stopped meanwhile (StopSound, channel cut, entity removed), at any stage of the decode
+			expect(why(true, true, "ready", true, true, 10.8, 10, 13, 0.75)).to.equal("drop:gone")
+			expect(why(true, true, "pending", true, true, 10.4, 10, 13, 0.75)).to.equal("drop:gone")
+			-- decode failure: the engine keeps it
+			expect(why(true, true, "failed", true, false, 10.8, 10, 13, 0.75)).to.equal("drop:failed")
+			-- a module without Play's start offset would play the sound from its start, heard twice
+			expect(why(true, false, "ready", true, false, 10.8, 10, 13, 0.75)).to.equal("drop:nocap")
+			expect(why(true, false, "pending", true, false, 10.4, 10, 13, 0.75)).to.equal("drop:nocap")
+			-- option off (or native rendering off)
+			expect(why(false, true, "ready", true, false, 10.8, 10, 13, 0.75)).to.equal("drop:off")
+		end },
+		{ name = "N.DecodePending: true only while the module decodes the file (no side effect, no failure, nothing decoded)", func = function()
+			local saved, failed = _G.pba_native, N.failed
+			local pend, has = {}, {}
+			_G.pba_native = { SoundPending = function(n) return pend[n] == true end, HasSound = function(n) return has[n] == true end }
+			N.failed = {}
+			local ok, err = pcall(function()
+				expect(N.DecodePending("physics/metal/metal_barrel_impact_hard1.wav")).to.equal(false)
+				pend["physics/metal/metal_barrel_impact_hard1.wav"] = true
+				expect(N.DecodePending("physics/metal/metal_barrel_impact_hard1.wav")).to.equal(true)
+				-- the name as the engine plays it: sound characters in front, any case
+				expect(N.DecodePending("^Physics/Metal/metal_barrel_impact_hard1.wav")).to.equal(true)
+				-- decoded meanwhile: no longer pending
+				has["physics/metal/metal_barrel_impact_hard1.wav"] = true
+				expect(N.DecodePending("physics/metal/metal_barrel_impact_hard1.wav")).to.equal(false)
+				has["physics/metal/metal_barrel_impact_hard1.wav"] = nil
+				-- refused as undecodable: not pending, whatever the module says
+				N.failed["physics/metal/metal_barrel_impact_hard1.wav"] = true
+				expect(N.DecodePending("physics/metal/metal_barrel_impact_hard1.wav")).to.equal(false)
+				-- a sentence is the sentence mixer's, not a file's decode
+				expect(N.DecodePending("!HG_BRIEFING")).to.equal(false)
+				-- no module: false
+				_G.pba_native = nil
+				expect(N.DecodePending("physics/metal/metal_barrel_impact_hard1.wav")).to.equal(false)
+			end)
+			_G.pba_native, N.failed = saved, failed
+			if not ok then error(err, 0) end
+		end },
 	},
 }

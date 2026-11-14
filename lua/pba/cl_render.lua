@@ -443,6 +443,13 @@ end
 -- keep (finish: a cheap result too quiet to emit): the voice at the quietest level emitted, 1 dB over the
 -- emission thresholds below (native gain 0.001, engine volume 0.01)
 local KEEP_GAIN = 10 ^ (1 / 20)
+-- (pba_native_late_handover) True when the module is still decoding the file `name` and could take over an
+-- engine copy of it later: the option, a module whose Play takes a start offset, a decode in progress.
+local function lateWanted(name)
+	local N = A.Native
+	return (A.cfg.native_late_handover or 1) >= 0.5 and playOffsetOK() and N ~= nil and N.DecodePending ~= nil and N.DecodePending(name)
+end
+
 local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited, keep)
 	local floor = slot == 1 and speechFloor(data, src, L) or nil
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
@@ -450,7 +457,8 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 	-- (a sentence: by the module when its words are rendered into one sound, cl_sentences; else by the
 	-- engine, PlayVoice failing below)
 	-- (a sound with its own DSP preset, pba_keep_dsp: the engine's, the module has no presets: A.OwnDSP)
-	if A.Render.NativeOK(data.SoundName, data.DSP) then
+	local nativeOK = A.Render.NativeOK(data.SoundName, data.DSP)
+	if nativeOK then
 		-- the full version's distance law (N.PhysPath): real spreading instead of the engine's law
 		-- a weapon's dipole: the aim taken now, at emission (N.Directivity)
 		local dirK = A.Native.Directivity(src, L, data.Channel)
@@ -514,6 +522,9 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 	-- what its preset was chosen from (frozen for the whole sound): a followed copy compares its new
 	-- target with it (see the native switch below); its own preset (own) is never replaced
 	h.lp0, h.tunnel0, h.tunnel, h.ownDsp = v.lp or 0, tunnel, tunnel, own or nil
+	-- (pba_native_late_handover) the module refused the voice only because its file is still decoding: a
+	-- followed copy (long enough to be followed, drivable by its anchor) is handed over when the decode ends
+	if anchor and follow and nativeOK and not ukey and lateWanted(data.SoundName) then h.late = true end
 	if anchor then
 		h.seq = (anchor.pbaSeqNext or 0) + 1
 		anchor.pbaSeqNext, anchor.pbaEnd = h.seq, tEnd
@@ -641,13 +652,15 @@ end
 local function wantsNative(rec, fv, t, now)
 	-- (lp0 nil: a copy emitted before this code was loaded, autorefresh: left as it is)
 	if not fv.a or not fv.started or fv.ownDsp or fv.lp0 == nil or rec.ukey or (fv.switchFails or 0) >= 3 then return false end
-	if (A.cfg.oneshot_native_switch or 1) < 0.5 then return false end
+	-- (pba_native_late_handover: lateCheck found its file decoded: handed over whatever its muffling)
+	local late = fv.late and fv.lateReady
+	if not late and (A.cfg.oneshot_native_switch or 1) < 0.5 then return false end
 	local N = A.Native
 	if not (pba_native and pba_native.Play and A.Render.NativeOK(rec.name, nil, false)) then return false end
 	-- a switch near the end is not worth a second voice (the end of a compressed file can be off)
 	if now > fv.tEnd - MIN_LEFT - followInterval() then return false end
 	if not playOffsetOK() then return false end
-	return math.abs((t.lp or 0) - fv.lp0) >= 1 or (fv.tunnel0 ~= nil and fv.tunnel ~= fv.tunnel0)
+	return late or math.abs((t.lp or 0) - fv.lp0) >= 1 or (fv.tunnel0 ~= nil and fv.tunnel ~= fv.tunnel0)
 end
 
 local NATIVE_FV = { id = true } -- targetValues of a voice about to become native
@@ -695,6 +708,7 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	if IsValid(a) and a.pbaSeqNext == fv.seq then a.pbaEnd = 0 end -- free for the next copy
 	fv.a, fv.seq, fv.chan, fv.dsp, fv.sent = nil, nil, nil, nil, nil
 	fv.id, fv.switched = id, true
+	fv.late, fv.lateReady = nil, nil
 	OS.native[id] = fv
 	fv.sh = t.sh or false
 	fv.shSent = sh and fv.sh or false
@@ -883,6 +897,40 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 	return rec
 end
 
+-- (pba_native_late_handover) A followed engine copy emitted while its file was still decoding (fv.late, emitVoice)
+-- is looked at every frame (N.LateVerdict): the frame the decode has ended, its record is evaluated now (that
+-- gives the voice its target) and wantsNative hands the copy over (fv.lateReady) at the point of the sound
+-- reached, through A.Render.Switch like every change of rendering. Stopped, ended, refused or without a
+-- module that takes a start offset: the copy stays with the engine, and is looked at no more.
+local LATE_TRIES = 12 -- evaluations that found nothing to hand over (a far evaluation held by the slicer...)
+local function lateCheck(rec, fv, now, L)
+	local N = A.Native
+	if not (N and N.LateVerdict) then fv.late = nil return end
+	local on = (A.cfg.native_late_handover or 1) >= 0.5 and N.render and pba_native ~= nil and pba_native.Play ~= nil
+		and (fv.switchFails or 0) < 3 and not rec.ukey and A.Render.NativeOK(rec.name, nil, false)
+	local decode = "pending"
+	if on then
+		local ok, _, why = N.EnsureSound(rec.name)
+		decode = ok and "ready" or why == "pending" and "pending" or "failed"
+	end
+	local gone = fv.cancelled or fv.dead or fv.fading or not fv.a
+		or (fv.started and not anchorAlive(fv, fv.name or rec.name))
+	local verdict, why = N.LateVerdict(on and true or false, playOffsetOK(), decode, fv.started and true or false, gone and true or false,
+		now, fv.t0, fv.tEnd, MIN_LEFT + followInterval())
+	if verdict == "wait" then return end
+	if verdict == "drop" then
+		fv.late, fv.lateReady = nil, nil
+		A.stats["lateDrop_" .. why] = (A.stats["lateDrop_" .. why] or 0) + 1
+		return
+	end
+	fv.lateReady = true
+	if now < (fv.lateNext or 0) then return end
+	fv.lateNext, fv.lateTries = now + followInterval(), (fv.lateTries or 0) + 1
+	if fv.lateTries > LATE_TRIES then fv.late, fv.lateReady = nil, nil return end
+	rec.tNext = now + followInterval() -- (this evaluation stands for the next scheduled one)
+	evaluate(rec, now, L)
+end
+
 --- Every frame (the scheduler's tick, cl_sched.lua): re-evaluates each followed one-shot by the cadence
 -- rule of every sound (A.Sched.Due: at most once per update_interval, each on its own clock from its
 -- emission, and only when it, the listener or the world moved: reeval_adaptive), glides its voices, drops it
@@ -920,6 +968,9 @@ function OS.Tick()
 			dropRec(rec)
 			table.remove(recs, i)
 		else
+			for _, fv in ipairs(rec.voices) do
+				if fv.late and not fv.dead then lateCheck(rec, fv, now, L) end
+			end
 			if now >= rec.tNext then
 				local S = IsValid(rec.ent) and A.SoundPos({ Entity = rec.ent, Channel = rec.chan }) or rec.S
 				if A.Sched.Due(rec, S, L, now, rec.tEnd) then

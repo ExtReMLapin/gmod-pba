@@ -622,6 +622,35 @@ function N.EnsureSound(name, now)
 	return true, n
 end
 
+--- True while the module decodes `name` on a worker thread (no side effect: nothing is started, unlike
+-- N.EnsureSound). A file refused as undecodable (N.failed) or already decoded is not pending.
+function N.DecodePending(name)
+	if not (pba_native and pba_native.SoundPending) or A.IsSentence(name) then return false end
+	local n = cleanName(name)
+	local f = N.failed[n]
+	if f and (f == true or RealTime() - f < 30) then return false end
+	return pba_native.SoundPending(n) and not pba_native.HasSound(n)
+end
+
+--- (pba_native_late_handover) What an engine copy of a followed short sound, started while its file was still
+-- decoding, does now: "wait" (decoding goes on, or the copy has not started), "switch", offset (decoded: hand
+-- it to the module, which plays from offset seconds into the sound; the offset is playback time, the module
+-- scales it by the voice's pitch) or "drop", why (stay on the engine for good). Pure: the caller passes the
+-- facts. on: the option, native rendering and the module's own rules allow it; cap: the module's Play takes
+-- a start offset (pba_native.caps.playOffset: an older one would play the sound from its start, heard twice);
+-- decode: "pending" | "ready" | "failed"; started: the engine copy has started; gone: it was stopped
+-- (StopSound, channel cut, entity removed) or is no longer driven; now, t0 (when the copy started), tEnd (when
+-- it ends), margin: seconds before its end from which a second voice is not worth it.
+function N.LateVerdict(on, cap, decode, started, gone, now, t0, tEnd, margin)
+	if not on then return "drop", "off" end
+	if gone then return "drop", "gone" end
+	if not cap then return "drop", "nocap" end
+	if decode == "failed" then return "drop", "failed" end
+	if now > tEnd - margin then return "drop", "ended" end
+	if decode ~= "ready" or not started then return "wait" end
+	return "switch", math.max(now - t0, 0)
+end
+
 -- ------------------------------------------------------------------ prewarm (pba_native_predecode)
 -- At map load (module ready), the sounds a fight brings at once are decoded ahead on worker threads: the
 -- explosion script, the breakables' scripts and the physics sounds (impacts, breaks, scrapes, bullet hits)

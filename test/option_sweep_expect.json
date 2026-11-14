@@ -403,6 +403,10 @@
   "pos0": "hook",
   "why": "speech lines decoded at first play (render), outside P.Compute"
  },
+ "native_late_handover": {
+  "pos0": "hook",
+  "why": "an engine copy of a followed sound handed to the module when its decode ends (render), outside P.Compute"
+ },
  "burst_fair": {
   "pos0": "hook",
   "why": "burst policy (cl_render burstEvaluate), outside P.Compute"
