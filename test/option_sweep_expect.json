@@ -338,5 +338,13 @@
  "loops_decode_wait": {
   "pos0": "hook",
   "why": "long-line mirror starts the frame its decode ends; the safety net waits for a decode in progress (render), outside P.Compute"
+ },
+ "caption_net": {
+  "pos0": "hook",
+  "why": "caption-armed safety net (render), outside P.Compute"
+ },
+ "native_line_decode": {
+  "pos0": "hook",
+  "why": "speech lines decoded at first play (render), outside P.Compute"
  }
 }
