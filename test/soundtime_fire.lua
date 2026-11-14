@@ -5,7 +5,11 @@
 local ply = player.GetHumans()[1]
 if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return "needs pba_tworooms with a human" end
 ply:SetPos(Vector(256, 256, 0))
+-- a bot spawned on the spawn point telefrags the player standing there (god mode does not protect: measured, the
+-- host dies the same frame): let this spawn through (IsSpawnpointSuitable true = no blocker killed)
+hook.Add("IsSpawnpointSuitable", "pba_test_nofrag", function() return true end)
 local bot = player.GetBots()[1] or player.CreateNextBot("apgun")
+hook.Remove("IsSpawnpointSuitable", "pba_test_nofrag")
 job:sleep(0.5)
 bot:SetPos(Vector(784, 256, 0))
 bot:StripWeapons()

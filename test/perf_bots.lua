@@ -6,7 +6,11 @@ ply:GodEnable()
 local base = ply:GetPos()
 local have = 0
 for _, p in ipairs(player.GetBots()) do have = have + 1 end
+-- a bot spawned on the spawn point telefrags the player standing there (god mode does not protect: measured, the
+-- host dies the same frame): let this spawn through (IsSpawnpointSuitable true = no blocker killed)
+hook.Add("IsSpawnpointSuitable", "pba_test_nofrag", function() return true end)
 for i = have + 1, n do player.CreateNextBot("apbot" .. i) end
+hook.Remove("IsSpawnpointSuitable", "pba_test_nofrag")
 job:sleep(1)
 local bots = player.GetBots()
 math.randomseed(1234)

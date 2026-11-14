@@ -12,8 +12,12 @@ local ply = player.GetHumans()[1]
 if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return "needs pba_tworooms with a human" end
 if game.SinglePlayer() then return "needs a listen server (maxplayers > 1)" end
 if ply:GetInfoNum("pba_native_all_want", 0) < 1 then return "needs pba_native_all on the host" end
--- the bot first: created on the spawn point, it kills a host standing there
+-- the bot is created on the spawn point (see the hook below)
+-- a bot spawned on the spawn point telefrags the player standing there (god mode does not protect: measured, the
+-- host dies the same frame): let this spawn through (IsSpawnpointSuitable true = no blocker killed)
+hook.Add("IsSpawnpointSuitable", "pba_test_nofrag", function() return true end)
 local bot = player.GetBots()[1] or player.CreateNextBot("apnpc")
+hook.Remove("IsSpawnpointSuitable", "pba_test_nofrag")
 job:sleep(0.5)
 bot:SetPos(Vector(784, 256, 0))
 job:sleep(0.3)
