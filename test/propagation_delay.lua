@@ -6,6 +6,10 @@
 local A = pba
 local S = Vector(unpack(DL.S))
 job:wait(function() return A.ListenerPos():Distance(Vector(DL.L[1], DL.L[2], DL.L[3] + 64)) < 8 end)
+-- the sound decoded first (pba_native_predecode, on by default: the first play of a sound not decoded yet
+-- is left to the engine, and this test measures the delay of the copy pba registers)
+local N = A.Native
+if N and N.render and N.EnsureSound then job:wait(function() return N.EnsureSound("buttons/button14.wav") end, 10) end
 A.Paths.InvalidateCache()
 A.Paths.cache, A.Paths.timeMemo = {}, {}
 A.emitted[DL.idx] = nil
