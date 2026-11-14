@@ -398,6 +398,31 @@ def handback_replaced(on=True):
         return {"pass": False, "emit": emit, "check": chk}
     return chk
 
+def native_vol_now(on=True):
+    """A server volume change of a hidden loop reaches its native voice at once (pba_native_vol_now): within 0.1 s
+    of the new volume (x 0.25) reaching the mirror, the voice gain is within 1.5 dB of before x 0.25 (SW2: a
+    dropship fade stayed +8..11 dB over its law until the next re-evaluation)."""
+    import threading
+    load(TW)
+    native_on(True)
+    at_room_a()
+    cl_set(native_vol_now=1 if on else 0)
+    out = {}
+    def check():
+        out["check"] = job("client", "native_vol_now_check.lua")
+    try:
+        t = threading.Thread(target=check)
+        t.start()
+        time.sleep(1.0)
+        emit = job("server", "native_vol_now_emit.lua")
+        t.join()
+    finally:
+        cl_set(native_vol_now=1)
+    chk = out.get("check")
+    if not (isinstance(emit, dict) and emit.get("pass") is True):
+        return {"pass": False, "emit": emit, "check": chk}
+    return chk
+
 def long_line():
     """A long speech line taken over by sv_loops keeps its subtitle and ducks the other sounds."""
     load(TW)
@@ -536,6 +561,7 @@ steps = [
     # the player in room A (a step before may leave him in room B: manhack_loop_kill puts him at x 600, the loop
     # then in clear sight)
     ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_loop_fade_hidden.lua"))),
+    ("native_vol_now", lambda: native_vol_now()),
     ("loop_fade_tail", lambda: seq(lambda: load(TW), lambda: job("server", "loop_fade_tail.lua"))),
     ("constraint_travel_loop", lambda: seq(lambda: load(TW), lambda: job("server", "constraint_travel_loop.lua"))),
     ("loud_loop_far", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "loud_loop_far_setup.lua"), lambda: job("client", "loud_loop_far.lua"))),
@@ -909,7 +935,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "off_no_work", "native_predecode", "native_props_calm"}
+QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "off_no_work", "native_predecode", "native_props_calm"}
 # --smoke: the core, under 2 minutes, to run before every commit (--quick stays the check before a merge)
 SMOKE = {"GLuaTest pure suite", "menu_config_static", "light_no_module", "portal_sweep tworooms",
          "native_doors", "native_features"}

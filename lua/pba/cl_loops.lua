@@ -246,6 +246,33 @@ local function followQuiet(m, S, L)
 	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil end
 end
 
+--- A volume change of a mirror's sound (the server's SND_CHANGE_VOL, a client patch's ChangeVolume) reaches its
+-- native voice at once (pba_native_vol_now), as the engine's channel takes it: the voice's gain, its sends, the
+-- running ramp and the last evaluation scaled by new / old volume, the route kept (the forced re-evaluation
+-- follows at the voice's next turn). Before, the change waited for that turn (half an update_interval at least,
+-- then a ramp over one interval): a dropship's engine fade stayed +8..11 dB over its law meanwhile (d3_c17_10b).
+local function volumeNow(m)
+	if not m.nativeId or (A.cfg.native_vol_now or 1) < 0.5 then return end
+	local old, new = m.appliedVol, m.vol
+	if not (old and new) or old == new or old <= 1e-6 then return end
+	local k = new / old
+	m.appliedVol = new
+	local e = m.lastEval
+	if e then e.gain, e.send = e.gain * k, e.send * k end
+	if m.roomSend then m.roomSend = m.roomSend * k end
+	if m.srcSend then m.srcSend = m.srcSend * k end
+	local ramp = m.ramp
+	local gain, el, em, eh, pos, pitch
+	if ramp and ramp.to then
+		ramp.from[1], ramp.to[1] = ramp.from[1] * k, ramp.to[1] * k
+		gain, el, em, eh, pos, pitch = A.Paths.RampAt(ramp, RealTime(), A.ListenerPos())
+	elseif e then
+		gain, el, em, eh, pos, pitch = e.gain, e.el, e.em, e.eh, e.pos, e.pitch
+	end
+	if not (gain and pos) then return end
+	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, m.roomSend) then m.nativeId = nil end
+end
+
 -- a mirror's far evaluation is ready (cl_slicer): applied at once
 local function sliceReady(m) if not m.done then apply(m) end end
 
@@ -607,7 +634,8 @@ function LP.HandleClient(data)
 			m.patch:ChangeVolume(m.vol * (m.g or 1), 0.1) m.patch:ChangePitch(m.pitch, 0.1)
 			A.reemitting = false
 		end
-		if m.nativeId and m.reeval then m.reeval.force = true end -- applied at its next turn
+		volumeNow(m)
+		if m.nativeId and m.reeval then m.reeval.force = true end -- (the route) at its next turn
 		return true
 	end
 	-- (a new sound: a change flag here is a patch's Play)
@@ -704,6 +732,7 @@ net.Receive("pba_loop", function()
 		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end, idx, chan)
 	end
 	if m.nativeId and op == OP_UPDATE then
+		volumeNow(m)
 		if m.reeval then m.reeval.force = true end
 		return -- applied at the next tick
 	end
