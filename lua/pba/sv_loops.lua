@@ -536,6 +536,14 @@ function LP.Take(data, snd)
 			l.endT = A.PlayEnd(data.SoundName, l.pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE
 		end
 	end
+	-- a C++ patch started on a replacing channel (audit B-16, pba_patch_channel_cut): its Play reaches the hook as a
+	-- CHANGE_* update of a sound that is not playing, which the engine makes a new sound ON THAT CHANNEL, replacing what
+	-- the entity played there; the channel rule (sh_core WithChannelRule) leaves the CHANGE_* flags out, so a followed
+	-- line stayed over the new patch. Cut here, whether the cap then takes the patch over or leaves it to the engine.
+	if fresh and idx > 0 and bit.band(flags, VOL_PITCH) ~= 0 and (A.cfg.patch_channel_cut or 1) >= 0.5
+		and A.CutsChannel(data.Channel, flags, true) and A.CutChannel then
+		A.CutChannel(data, idx, data.Channel)
+	end
 	if fresh then
 		if LP.CapCount() >= (A.cfg.loops_max or 64) then -- cap: left to the engine for now
 			-- (a NEW one-shot with a change flag past the cap goes to the brief stage instead, relayed like any new
