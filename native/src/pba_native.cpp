@@ -1764,7 +1764,8 @@ static render::VoiceParams ReadVoice(ILuaBase* LUA, int first) {
 }
 
 // optional trailing arguments of Play: delay (seconds), sh {w, sh1, sh2, sh3} (baked path field),
-// diffuse share (0..1), room reverb send level (linear, absent = follows gain), start offset (seconds)
+// diffuse share (0..1), room reverb send level (linear, absent = follows gain), start offset (seconds),
+// protect (true: a spoken line, the voice cap drops any other voice first)
 static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	if (LUA->IsType(first, Type::Number)) p.delay = (float)LUA->GetNumber(first);
 	if (LUA->IsType(first + 1, Type::Table)) {
@@ -1774,6 +1775,7 @@ static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	if (LUA->IsType(first + 2, Type::Number)) p.diffuse = (float)LUA->GetNumber(first + 2);
 	if (LUA->IsType(first + 3, Type::Number)) p.send = (float)LUA->GetNumber(first + 3);
 	if (LUA->IsType(first + 4, Type::Number)) p.offset = std::clamp((float)LUA->GetNumber(first + 4), 0.0f, 3600.0f); // inf would make a loop's fmod NaN
+	p.protect = LUA->IsType(first + 5, Type::Bool) && LUA->GetBool(first + 5); // a spoken line: spared by the voice cap
 }
 
 // optional room reverb send at index i (PlayStream, Update): -1 when absent = keep the current one

@@ -179,6 +179,7 @@ function Build.native(panel)
 
 	panel:Help("Limits:")
 	dep(sld(panel, "Max native voices", "native_max_voices"), R)
+	dep(chk(panel, "Spoken lines dropped last past the cap", "native_protect_lines"), R)
 	dep(sld(panel, "Decoded sounds memory (MB)", "native_mem_mb"), R)
 	dep(sld(panel, "Largest sound file (MB)", "native_file_mb"), R)
 	dep(chk(panel, "Decode sounds in the background", "native_predecode"), R)

@@ -111,6 +111,7 @@ struct Voice {
 	IPLVector3 pos{};
 	float gain = 0, gainCur = -1;
 	float eq[3] = {1, 1, 1};
+	bool protect = false; // a spoken line: the voice cap takes it last (VoiceParams::protect)
 	bool hasSH = false; // wants the baked path rendering (pathSlot may be missing: pool full)
 	float sh[4] = {0, 0, 0, 0};
 	// share of the output taken from the path effect (0 straight line .. 1 baked path), smoothed over
@@ -816,9 +817,12 @@ void Reap() {
 	int n = 0;
 	for (auto& v : g_voices) n += v->dying ? 0 : 1;
 	while (n >= g_maxVoices.load()) {
+		// the quietest voice goes; a protected one (a spoken line) only when nothing else is left
 		Voice* q = nullptr;
-		for (auto& v : g_voices)
-			if (!v->dying && (!q || Audibility(*v) < Audibility(*q))) q = v.get();
+		for (auto& v : g_voices) {
+			if (v->dying) continue;
+			if (!q || (q->protect && !v->protect) || (q->protect == v->protect && Audibility(*v) < Audibility(*q))) q = v.get();
+		}
 		if (!q) break;
 		q->dying = true;
 		q->gain = 0;
@@ -831,6 +835,7 @@ void Reap() {
 	while ((int)g_voices.size() >= kMaxVoices) {
 		auto q = std::min_element(g_voices.begin(), g_voices.end(), [](const auto& a, const auto& b) {
 			if (a->dying != b->dying) return a->dying; // the fading ones first
+			if (a->protect != b->protect) return !a->protect; // then the unprotected ones
 			return Audibility(*a) < Audibility(*b);
 		});
 		ReleaseVoice(**q);
@@ -1497,6 +1502,7 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 	v->snd = it->second;
 	it->second->lastUse = ++g_useClock;
 	v->loop = loop;
+	v->protect = p.protect;
 	v->cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
 	SetVoice(*v, p); // takes a path effect if p.hasSH (see AcquirePath)
 	if (p.offset > 0) {

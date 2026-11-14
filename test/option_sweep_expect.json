@@ -358,5 +358,9 @@
  "native_own": {
   "pos0": "hook",
   "why": "who plays the player's own sounds (relay audience, cl_render hook), outside P.Compute; covered by native_own"
+ },
+ "native_protect_lines": {
+  "pos0": "hook",
+  "why": "voice cap of the native module (the protect argument of Play), outside P.Compute; covered by line_protect"
  }
 }
