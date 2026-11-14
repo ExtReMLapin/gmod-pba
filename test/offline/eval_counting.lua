@@ -73,6 +73,7 @@ V.WithinAABox = wrap(function(s, mn, mx)
 	return X(s) >= X(mn) and Y(s) >= Y(mn) and Z(s) >= Z(mn) and X(s) <= X(mx) and Y(s) <= Y(mx) and Z(s) <= Z(mx)
 end)
 V.Unpack = wrap(function(a) return X(a), Y(a), Z(a) end)
+V.SetUnpacked = wrap(function(a, x, y, z) rawset(a, 1, x) rawset(a, 2, y) rawset(a, 3, z) end)
 -- table.Copy of a Vector
 local copy = table.Copy
 function table.Copy(t, seen)

@@ -78,6 +78,7 @@ CONTENTS_SLIME = 16
 CONTENTS_WINDOW = CONTENTS_WINDOW or 2
 hook = { Add = function() end, Remove = function() end }
 function V:Unpack() return self.x, self.y, self.z end
+function V:SetUnpacked(x, y, z) self.x, self.y, self.z = x, y, z end
 function SysTime() return os.clock() end
 function RealTime() return os.clock() end
 function FrameNumber() return 1 end
