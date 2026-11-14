@@ -1,15 +1,19 @@
--- Singleplayer: the player's own gunfire gets its native echoes (client lua_job, native rendering on,
--- singleplayer, any map), with and without pba_native_all.
--- Without prediction the engine sends the player his own sounds from the server and his client never
--- sees them in EntityEmitSound: the server relays their echoes to him, as for every loud sound he hears
--- directly. With pba_native_all the echoes of sounds the module plays are skipped (their source reverb
+-- The player's own gunfire gets its native echoes (client lua_job, native rendering on, any map), with and
+-- without pba_native_all. Singleplayer (step sp_own_echo) or a listen server (step mp_own_echo, which sends
+-- `local MP_VARIANT = true` first): the guard below checks the mode the step set up.
+-- Singleplayer: without prediction the engine sends the player his own sounds from the server and his client
+-- never sees them in EntityEmitSound: the server relays their echoes to him, as for every loud sound he
+-- hears directly. Multiplayer: his client predicts them, they reach its EntityEmitSound hook (cl_render's
+-- own path, no relay: the server leaves his own gunfire out of his relay).
+-- With pba_native_all the echoes of sounds the module plays are skipped (their source reverb
 -- slot reflects them); his own are played by the engine, so theirs must not be.
 -- The option pba_native_echo_own (off by default) turns them on.
 -- Pass: echoes PLAYED (N.echoes, not just N.Echo calls) during a short burst in both modes with the
 -- option on, none with it off.
 local N = pba.Native
 if not (N and N.render) then return { pass = false, err = "native renderer not running" } end
-if not game.SinglePlayer() then return { pass = false, err = "singleplayer only" } end
+local wantMP = MP_VARIANT == true
+if game.SinglePlayer() == wantMP then return { pass = false, err = wantMP and "needs a listen server" or "singleplayer only" } end
 local savedAll = GetConVar("pba_native_all"):GetString()
 local savedOwn = GetConVar("pba_native_echo_own"):GetString()
 local savedEcho = GetConVar("pba_native_echo"):GetString()
