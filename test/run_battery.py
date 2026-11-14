@@ -792,6 +792,8 @@ steps = [
     ("dsp_muffle_real", lambda: seq(lambda: load(TW), lambda: py("dsp_muffle_real.py"))),
     # T10: room reverb present / absent (native_reverb 0), echoes near walls vs open field, native_echo 0, native_props
     ("reverb_echo_basics", lambda: py("reverb_echo_basics.py")),
+    # T12 / T13: Doppler pitch and air absorption of what the module is really handed (gm_flatgrass, a flying prop, 10 m vs 100 m)
+    ("doppler_air_render", lambda: seq(lambda: load("gm_flatgrass"), lambda: py("doppler_air_render.py"))),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
