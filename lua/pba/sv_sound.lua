@@ -404,11 +404,12 @@ local function dispatchBrief(snd)
 		reemitMuffled(snd, muffled, A.WithoutDryMix(data.SoundName))
 		A.stats.relayMuffled = (A.stats.relayMuffled or 0) + #muffled
 	end
+	-- the relayed players apart: their caption arms the client's safety net for a lost relay (pba_caption_net)
 	local told = {}
-	for _, p in ipairs(blocked) do told[#told + 1] = p end
 	for _, p in ipairs(clear) do told[#told + 1] = p end
 	for _, m in ipairs(muffled) do told[#told + 1] = m.ply end
 	A.SendCaption(data, told)
+	A.SendCaption(data, blocked, true)
 	if #blocked == 0 then return false end
 	local e = data.Entity
 	if IsValid(e) and not e:IsWorld() then

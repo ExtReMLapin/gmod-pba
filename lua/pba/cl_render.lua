@@ -433,6 +433,13 @@ local function speechFloor(data, src, L)
 	return speechFloorAt(data.Volume, data.Pos, L, data.SoundLevel)
 end
 
+--- True when sound data is a spoken line (a voice channel, or a loudspeaker's copy): decoded on its first play
+-- (pba_native_line_decode, N.EnsureSound) so the module renders it as the lines around it.
+local function isLine(data)
+	local ch = data.Channel
+	return ch == CHAN_VOICE or ch == CHAN_VOICE2 or bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0
+end
+
 local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited)
 	local floor = slot == 1 and speechFloor(data, src, L) or nil
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
@@ -462,7 +469,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		local wet = A.Native.LoudWet(lvl0)
 		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0)) * wet
 		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
-			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet,
+			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet, line = isLine(data),
 			mix = A.Mix and A.Mix.GroupsOf(data.SoundName, src or data.EntIndex, data.Channel, lvl0) })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
@@ -1166,7 +1173,7 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 			local delay = math.max(voiceDelay({ len = d, pos = S }, L) - waited, 0)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
-				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl),
+				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl), line = isLine(data),
 				mix = A.Mix and A.Mix.GroupsOf(data.SoundName, IsValid(src) and src or data.EntIndex, data.Channel, lvl) })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
@@ -1374,6 +1381,7 @@ net.Receive(NET, function()
 		data.stMs = nil
 	end
 	if not name then return end -- id never received (lost first packets): drop
+	if A.LineKey then A.lineSeen[A.LineKey(name)] = RealTime() end -- (its caption's safety net, pba_caption_net)
 	if A.Native and A.Native.render and A.Enabled() then
 		local lp = LocalPlayer()
 		A.Native.Echo(data, data.Pos, echoOnly, IsValid(lp) and data.EntIndex == lp:EntIndex())
@@ -1423,9 +1431,38 @@ hook.Add("OnCloseCaptionEmit", "pba_caption_once", function(tok, dur, fromPlayer
 	if c and c.ours then return true end -- the engine's copy of a line pba captioned already
 	A.capShown[key] = { t = CurTime() }
 end)
+-- Caption-armed safety net (pba_caption_net): a relayed line's caption (reliable) came, but no relay of its
+-- file (pba_snd, unreliable: lost in a full snapshot, a teleport's) within CAPTION_NET_S: subtitle without a
+-- voice nor a mouth (bug 59, d1_trainstation_05 Breen). The line is then played by the engine on its speaker,
+-- with the level, pitch, volume and channel the caption carries (the mouth moves with it).
+local CAPTION_NET_S = 0.3
+A.lineSeen = A.lineSeen or {} -- line key -> RealTime() of the last relay of that file
+local function captionNet(file, idx, chan, lvl, pitch, vol, spos)
+	if (A.cfg.caption_net or 1) < 0.5 or file == "" or not A.LineKey or A.IsSentence(file) then return end
+	local key, t = A.LineKey(file), RealTime()
+	timer.Simple(CAPTION_NET_S, function()
+		local seen = A.lineSeen[key]
+		if seen and seen >= t - 1 then return end -- its relay came (before or after the caption)
+		-- a speaker out of this client's PVS (a closed areaportal, just teleported) has no entity here: the engine
+		-- keeps the channel under its index all the same (as for vanilla's own), at the position sent
+		local e = Entity(idx)
+		local pos = IsValid(e) and e:GetPos() or spos
+		A.stats.captionNet = (A.stats.captionNet or 0) + 1
+		MsgN("[PBA] line without its sound: played by the engine (", file, ")")
+		vanilla({ SoundName = file, Entity = e, EntIndex = idx, Channel = chan, SoundLevel = lvl, Pitch = pitch, Volume = vol,
+			Flags = 0, DSP = 0, Pos = pos })
+	end)
+end
+A.CaptionNet = captionNet
 net.Receive("pba_caption", function()
 	local tok, dur = net.ReadString(), net.ReadFloat()
 	local file = net.ReadString()
+	-- (a relayed line: the safety net's data, pba_caption_net; a server without it sends none)
+	if net.ReadBool() then
+		local idx, chan = net.ReadUInt(16), net.ReadInt(16)
+		local lvl, pitch, vol = net.ReadUInt(9), net.ReadUInt(8), net.ReadFloat()
+		captionNet(file, idx, chan, lvl, pitch, vol, net.ReadVector())
+	end
 	local txt = language.GetPhrase(tok)
 	if not txt or txt == tok then return end
 	-- a spoken line (not an <sfx> caption): watched by the silent line safety net (pba_handback_speech)

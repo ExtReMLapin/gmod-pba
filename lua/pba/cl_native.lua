@@ -565,7 +565,7 @@ N.decodes = N.decodes or { main = 0, async = 0, prewarm = 0 }
 
 --- Makes sure the module has decoded `name`. Returns true, cleanName when playable natively;
 -- false, nil, "pending" while a large file decodes on the module's worker thread.
-function N.EnsureSound(name)
+function N.EnsureSound(name, now)
 	-- a sentence: its words rendered into one sound (cl_sentences, pba_native_sentences)
 	if A.IsSentence(name) then return A.Sentences.Ensure(name) end
 	local n = cleanName(name)
@@ -589,7 +589,11 @@ function N.EnsureSound(name)
 	if not data or #data == 0 or #data > (A.cfg.native_file_mb or 48) * 1024 * 1024 then N.failed[n] = RealTime() return false end
 	-- large files decode on a worker thread; with pba_native_predecode every file does (a burst's first sounds
 	-- cost the main thread up to 12 ms each: perf bench S11), the first play of each left to the engine
-	local asyncAbove = (A.cfg.native_predecode or 1) >= 0.5 and 0 or 512 * 1024
+	-- now: a spoken line played this frame (pba_native_line_decode): decoded here up to 1.5 MB (a short line is at
+	-- most max_duration long: ~700 KB at 44 kHz, ~5 ms; a WAV decodes at ~7.5 ms per MB), so the module renders its
+	-- first play like every other line (the Breencast's short lines, 340-660 KB, went to the engine's speaker
+	-- preset while its long line, a mirror waiting for its decode, stayed native)
+	local asyncAbove = now and 1536 * 1024 or (A.cfg.native_predecode or 1) >= 0.5 and 0 or 512 * 1024
 	if #data > asyncAbove and pba_native.LoadSoundAsync then
 		pba_native.LoadSoundAsync(n, data)
 		N.loading = N.loading or {}
@@ -1031,9 +1035,9 @@ end
 -- Returns true on success.
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
-	local ok, n = N.EnsureSound(name)
-	if not ok then return false end
 	opt = opt or {}
+	local ok, n = N.EnsureSound(name, opt.line and (A.cfg.native_line_decode or 1) >= 0.5)
+	if not ok then return false end
 	local l, m, h = N.VoiceEQ(lp, opt.len, opt.lpDb)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and opt.sh or nil
