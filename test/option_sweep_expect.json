@@ -354,5 +354,9 @@
  "burst_fair": {
   "pos0": "hook",
   "why": "burst policy (cl_render burstEvaluate), outside P.Compute"
+ },
+ "native_own": {
+  "pos0": "hook",
+  "why": "who plays the player's own sounds (relay audience, cl_render hook), outside P.Compute; covered by native_own"
  }
 }

@@ -204,6 +204,11 @@ local function predictedBy(e, predicted)
 	return e == predicted or e:GetOwner() == predicted
 end
 
+--- True when ply's module plays his own sounds too (userinfo pba_native_own_want, with pba_native_all).
+local function wantsOwn(ply)
+	return A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_own_want", 0) >= 1
+end
+
 --- Fills what the audience of an engine-driven or brief sound reads, once per sound. False: no position.
 local function prepare(snd)
 	local data = snd.data
@@ -262,7 +267,9 @@ function S.Audience(snd, ply, scale)
 	end
 	-- brief
 	local e = data.Entity
-	if (snd.sp and ply == snd.predicted or snd.ownMP and ply ~= snd.skip) and e == ply then return "clear" end
+	-- his own sound: the engine plays it on him, untouched, unless his module plays it like every other sound
+	-- (pba_native_own: the relay below, as for a native-all player's clear sound)
+	if (snd.sp and ply == snd.predicted or snd.ownMP and ply ~= snd.skip) and e == ply and not wantsOwn(ply) then return "clear" end
 	local step = snd.step
 	if ply == snd.skip or (step and ply ~= step and ply:TestPVS(step)) then return nil end
 	local eye = A.PlayerEar(ply)

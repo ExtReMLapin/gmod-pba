@@ -599,6 +599,13 @@ function A.SoundPos(data)
 	if data.Pos then return data.Pos end
 	local e = data.Entity
 	if IsValid(e) then
+		-- the local player's own sound played by the module (pba_native_own): centered, 1 unit ahead of the
+		-- ears (the engine plays the listener's own sounds unspatialized; at the ears the module would have
+		-- no direction), and following the view
+		if CLIENT and e == LocalPlayer() and A.NativeOwn and A.NativeOwn() then
+			local L, ang = A.ListenerPos()
+			if L then return L + ang:Forward() end
+		end
 		if e:IsPlayer() or e:IsNPC() then return e:EyePos() end
 		return e:WorldSpaceCenter()
 	end
