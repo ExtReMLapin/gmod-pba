@@ -596,6 +596,22 @@ function LP.MoverStill(e)
 	return e:GetVelocity():LengthSqr() < 1 and e:GetLocalAngularVelocity():IsZero()
 end
 
+-- An NPC's loops end at its death (pba_loops_npc_death): the game stops them in its death code (its
+-- StopLoopingSounds: a fast zombie's gurgle / breathe, an antlion's wings, a rollermine's motor), with a stop
+-- that never reaches EntityEmitSound, so the mirrors played on until the entity was removed, ~1.9 s later
+-- (sweep 2026-11-14 dead_npc_loop, 121 events on 8 maps). Every loop the NPC plays at the moment it is killed
+-- stops; one started after (a death sound) is new and plays. Aircraft crash with their engines on: left alone.
+LP.NPC_DEATH_KEEP = { npc_helicopter = true, npc_combinegunship = true, npc_combinedropship = true, npc_strider = true }
+hook.Add("OnNPCKilled", "pba_loops_npc_death", function(npc)
+	if (A.cfg.loops_npc_death or 1) < 0.5 or not IsValid(npc) or LP.NPC_DEATH_KEEP[npc:GetClass()] then return end
+	local idx = npc:EntIndex()
+	local ended = {}
+	for _, l in pairs(LP.active) do
+		if l.idx == idx and not l.once then ended[#ended + 1] = l end
+	end
+	for _, l in ipairs(ended) do LP.Stop(idx, l.name, l.chan) end
+end)
+
 --- True when the entity's C++ ended loop l with a StopSound Lua never sees: a mover at rest, a
 -- charger no longer in use, a vehicle whose engine is off (its own sounds only, see l.charger / l.vehicle).
 local function endedInCpp(l)

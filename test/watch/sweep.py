@@ -55,6 +55,28 @@ def lua(realm, code):
     return v[0] if v else None
 
 
+PAGE = 60000  # gmod-mcp returns a string over 64 KiB as {__type: string, truncated: true}: fetched in pages
+
+
+def lua_json(realm, expr, default):
+    """The JSON string `expr` evaluates to in `realm`, decoded, fetched in pages of PAGE characters (a report's
+    rendered list reached 150 KB on d3_c17_10b: returned truncated, it was read as an empty list and every line
+    the server took from the engine counted as speech_silent)."""
+    n = lua(realm, f"PBA_WATCH_JSON = {expr} or '' return #PBA_WATCH_JSON")
+    if not isinstance(n, (int, float)):
+        raise RuntimeError(f"lua_json {realm} {expr}: {n!r}")
+    parts = []
+    for i in range(0, int(n), PAGE):
+        p = lua(realm, f"return string.sub(PBA_WATCH_JSON, {i + 1}, {i + PAGE})")
+        if not isinstance(p, str):
+            raise RuntimeError(f"lua_json {realm} {expr} page {i}: {type(p).__name__}")
+        parts.append(p)
+    s = "".join(parts)
+    if len(s) != int(n):
+        raise RuntimeError(f"lua_json {realm} {expr}: {len(s)} of {int(n)} characters")
+    return json.loads(s) if s else default
+
+
 def wait_lua(realm, code, timeout=60):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -122,7 +144,8 @@ def silent_check(speech, rendered, delay_on, enabled):
     if not enabled:
         return out
     for ev in speech:
-        if ev.get("engine"):
+        # (invalid.wav: a sentence the engine itself could not resolve, nothing to render; metropolice radio)
+        if ev.get("engine") or fkey(ev["name"]) == "invalid.wav":
             continue
         lag = ev["dist"] / SPEED if (delay_on and ev["dist"] > 0) else 0
         f = fkey(ev["name"])
@@ -134,11 +157,15 @@ def silent_check(speech, rendered, delay_on, enabled):
 
 
 def report(m, t_start, cur, info, trig, visited):
-    sv = lua("server", "return PBA_WATCH_SV and PBA_WATCH_SV.Report() or {}") or {}
-    sv["speech"] = json.loads(sv.get("speech") or "[]") if isinstance(sv.get("speech"), str) else (sv.get("speech") or [])
-    idxs = sorted({ev["idx"] for ev in sv.get("speech") or []})
-    cl = lua("client", "return PBA_WATCH_CL and PBA_WATCH_CL.Report() or {}") or {}
-    cl["mouth"] = json.loads(cl["mouth"]) if isinstance(cl.get("mouth"), str) else {}
+    # (the long JSON fields fetched in pages, lua_json; the rest of each report without them)
+    LONG = "local r = PBA_WATCH_R or {} local o = {} for k, v in pairs(r) do if not ({speech = 1, mouth = 1, census = 1, rendered = 1})[k] then o[k] = v end end return o"
+    lua("server", "PBA_WATCH_R = PBA_WATCH_SV and PBA_WATCH_SV.Report() or {} return true")
+    sv = lua("server", LONG) or {}
+    sv["speech"] = lua_json("server", "PBA_WATCH_R.speech", [])
+    lua("client", "PBA_WATCH_R = PBA_WATCH_CL and PBA_WATCH_CL.Report() or {} return true")
+    cl = lua("client", LONG) or {}
+    for k in ("mouth", "census", "rendered"):
+        cl[k] = lua_json("client", f"PBA_WATCH_R.{k}", {} if k != "rendered" else [])
     for side in (cl, sv):
         for a in (side.get("anomalies") or {}).values():
             if isinstance(a.get("samples"), str):
@@ -151,7 +178,7 @@ def report(m, t_start, cur, info, trig, visited):
         if "pba" in blob and "watchdog" not in blob:
             pba_errs[msg] = pba_errs.get(msg, 0) + 1
     mc = mouth_check(sv.get("speech") or [], cl.get("mouth") or {}, sv.get("delay", 0) >= 0.5, sv.get("enabled", 1) >= 0.5)
-    rend = json.loads(cl["rendered"]) if isinstance(cl.get("rendered"), str) else []
+    rend = cl["rendered"]
     mc["speech_silent"] = silent_check(sv.get("speech") or [], rend, sv.get("delay", 0) >= 0.5, sv.get("enabled", 1) >= 0.5)
     anomalies = {}
     for side in (cl.get("anomalies") or {}, sv.get("anomalies") or {}):
@@ -164,7 +191,7 @@ def report(m, t_start, cur, info, trig, visited):
                                   "samples": [{"msg": k, "n": v} for k, v in list(pba_errs.items())[:6]]}
     return {"map": m, "tag": TAG, "sets": SETS, "secs": round(time.time() - t_start), "triggers": len(trig), "visited": visited,
             "scenes": info.get("scenes"), "speech": len(sv.get("speech") or []), "anomalies": anomalies,
-            "loud_census": json.loads(cl["census"]) if isinstance(cl.get("census"), str) else {}}
+            "loud_census": cl["census"]}
 
 
 SAVED = []
