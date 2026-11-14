@@ -53,5 +53,6 @@ class McpEncoding(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    sys.argv = sys.argv[:1]
-    unittest.main(verbosity=2)
+    r = unittest.main(argv=[sys.argv[0]], exit=False, verbosity=1).result
+    print("PASS" if r.wasSuccessful() else "FAIL")
+    sys.exit(0 if r.wasSuccessful() else 1)
