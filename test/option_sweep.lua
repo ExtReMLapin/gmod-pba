@@ -18,8 +18,15 @@ local scene = {
 	pba_noportal = { L = { 256, 256, 64 }, S = { { 784, 256, 40 }, { 784, 400, 40 }, { 500, 256, 40 }, { 784, 100, 40 } },
 		L2 = { 700, 256, 64 }, S2 = { 256, 256, 40 } },
 }
-local sc = scene[game.GetMap()]
-if not sc then return { err = "no sweep scene for " .. game.GetMap() } end
+-- extra scenes on pba_tworooms for the options the plain ones never exercise (PBA_SWEEP_SCENE, set by the driver):
+--  doorline: a closed / ajar door1 (x 520, y 64-112, z 0-112) with the straight line through its leaf
+--  prop: door1 open, a frozen vending machine against the wall on the source side of the doorway (spawned by the driver)
+--  water: util.PointContents stubbed by the driver (a pool under the listener, another under the sources)
+scene.doorline = { L = { 256, 88, 64 }, S = { { 784, 88, 50 }, { 784, 76, 50 }, { 700, 104, 50 }, { 640, 70, 50 } }, L2 = { 256, 100, 64 }, S2 = { 784, 100, 50 } }
+scene.prop = scene.pba_tworooms
+scene.water = scene.pba_tworooms
+local sc = scene[PBA_SWEEP_SCENE or game.GetMap()]
+if not sc then return { err = "no sweep scene for " .. tostring(PBA_SWEEP_SCENE or game.GetMap()) } end
 local couples = {}
 for _, s in ipairs(sc.S) do couples[#couples + 1] = { Vector(s[1], s[2], s[3]), Vector(sc.L[1], sc.L[2], sc.L[3]) } end
 couples[#couples + 1] = { Vector(sc.S2[1], sc.S2[2], sc.S2[3]), Vector(sc.L2[1], sc.L2[2], sc.L2[3]) }

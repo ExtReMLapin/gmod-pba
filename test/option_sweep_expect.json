@@ -36,8 +36,8 @@
   "why": "door leaf in 3-D (the ajar door of pba_tworooms, boombox door of pba_demo)"
  },
  "door_leaf_portal": {
-  "pos0": "same",
-  "why": "door leaf modelled as its doorway: the sweep scenes do not have a line crossing a leaf"
+  "pos0": "differs",
+  "why": "doorline scene: the straight line of the closed / ajar door1 crosses its leaf, modelled as the doorway or as a slab"
  },
  "edge_bound": {
   "pos0": "same",
@@ -204,8 +204,8 @@
   "why": "following of short sounds while they play"
  },
  "path_props": {
-  "pos0": "same",
-  "why": "no props on the sweep scenes (path_obstruction / vehicle_obstacle tests)"
+  "pos0": "differs",
+  "why": "prop scene: door1 open, a frozen vending machine against the wall on the source side of the doorway, on the route's leg"
  },
  "predicted_exact": {
   "pos0": "hook",
@@ -220,8 +220,8 @@
   "why": "server relay decision (sv_relay), outside P.Compute"
  },
  "route_pos_straight": {
-  "pos0": "same",
-  "why": "needs a probe route whose corners all lie on the line: not met"
+  "pos0": "differs",
+  "why": "water scene: the portal voice (a route round the doorway) and the wall's transmission voice both stay audible, the route's apparent position moves"
  },
  "soundtime": {
   "pos0": "hook",
@@ -248,20 +248,20 @@
   "why": "needs the listener closer than 2 u to the last wall exit: not met"
  },
  "trans_route": {
-  "pos0": "same",
-  "why": "needs the probe graph and a floor between source and listener: not met"
+  "pos0": "differs",
+  "why": "water scene: a route and a transmission voice together, the transmission's level follows the route"
  },
  "trans_tilt": {
   "pos0": "same",
   "why": "needs a transmission through several walls of unequal muffling: not met"
  },
  "trans_window_soft": {
-  "pos0": "same",
-  "why": "only matters when a transmission voice sits past trans_window_db of the dominant voice: no such couple on these scenes"
+  "pos0": "differs",
+  "why": "water scene: a transmission voice past trans_window_db of the dominant portal voice (-27 dB below it) is dropped or kept softly"
  },
  "water_planes": {
-  "pos0": "same",
-  "why": "no water on the sweep scenes (water_planes test: d1_canals_06)"
+  "pos0": "differs",
+  "why": "water scene (tworooms, util.PointContents stubbed: a pool under the listener, another under the sources): the two bodies make a water wall"
  },
  "world_edge": {
   "pos0": "differs",
