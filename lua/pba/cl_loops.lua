@@ -669,6 +669,17 @@ function LP.HandleClient(data)
 	if src then LP.finished[src] = nil end -- (restarted: followed again)
 	local cpp = loop and not src and cppPatch(e, name)
 	if cpp and cppDead(e) then return false end -- (a dead one's: left to the engine, which has shut them)
+	-- a loaded save: the engine hands the client the entity's C++ loop twice, the patch it restored (ResumeSound,
+	-- channel 0: the channel is not saved) and the one the entity makes anew (its own channel). One sound, one
+	-- mirror: the restored copy is swallowed (or its mirror replaced by the entity's own), never played at once.
+	if cpp and (A.cfg.patch_restore_dedupe or 1) >= 0.5 then
+		for k, x in pairs(LP.mirrors) do
+			if x.client and x.cpp and x.idx == idx and x.name == name and x.chan ~= chan then
+				if chan == CHAN_AUTO then return true end
+				if x.chan == CHAN_AUTO then stopMirror(x) LP.mirrors[k] = nil end
+			end
+		end
+	end
 	if change and not src and not cpp then
 		if not m then return false end
 		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end

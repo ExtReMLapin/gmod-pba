@@ -498,6 +498,9 @@ function LP.Take(data, snd)
 	end
 	if fresh then
 		if LP.CapCount() >= (A.cfg.loops_max or 64) then -- cap: left to the engine for now
+			-- (a NEW one-shot with a change flag past the cap goes to the brief stage instead, relayed like any new
+			-- sound: A.NewChange; kept out of capped so its later changes are known as a brief sound's)
+			if once and A.NewChange and A.NewChange(data) then return false end
 			LP.capped[key] = l
 			return false
 		end
