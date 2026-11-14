@@ -63,6 +63,24 @@ return {
 				and N.EntrySend ~= nil and N.SlotSend ~= nil and N.LossLin ~= nil and N.Law ~= nil and N.Directivity ~= nil and N.VoiceEQ ~= nil).to.beTrue()
 			expect(near(N.REF_UNITS, 1 / 0.01905, 0.01)).to.beTrue()
 		end },
+		{ name = "InstallProblem: a 32-bit game is told to switch to the x86-64 branch (the module only exists in 64-bit), a missing file names its path", func = function()
+			expect(N.InstallProblem ~= nil).to.beTrue()
+			local has = function() return true end
+			local none = function() return false end
+			-- 64-bit with the file: no problem
+			expect(N.InstallProblem("x64", has)).to.equal(nil)
+			-- 32-bit (the default Steam branch): never "not installed", even with the 64-bit files in place
+			for _, arch in ipairs({ "x86", "x86_32" }) do
+				for _, exists in ipairs({ has, none }) do
+					local msg = N.InstallProblem(arch, exists)
+					expect(type(msg) == "string").to.beTrue()
+					expect(msg:find("32-bit", 1, true) ~= nil).to.beTrue()
+					expect(msg:find("x86-64", 1, true) ~= nil).to.beTrue()
+				end
+			end
+			-- 64-bit without the file: "module not installed" (the menu's own state)
+			expect(N.InstallProblem("x64", none)).to.equal("module not installed")
+		end },
 		{ name = "CheckModule: a module is used only inside the accepted API range; absent, older (no ModuleVersion) or out of range: left unused, with a message", func = function()
 			-- stubs of pba_native: only ModuleVersion is read
 			local lo, hi = N.API_MIN, N.API_MAX
