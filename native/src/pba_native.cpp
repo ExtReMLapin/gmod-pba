@@ -34,6 +34,7 @@
 //     is fed at once), else a free one is taken (never one with a live voice; none: -1, room send
 //     only). A slot lives as long as one of its voices (bind once right after Play; call again on
 //     Update for a moving source), an unbound one 1 s. pos not a Vector: unbinds that voice.
+//     SetMixQuality(limiterMode 0|1|2, hqResample): output limiter / legacy soft clip / hard clip, sinc / linear decode resampling
 //     SetSourceSlots: active pool size (0..16, default 16); the reflections run cost grows with it
 //     send: room reverb send level (linear), independent from gain, which carries the distance law;
 //     absent = keep the voice's (a voice that never received one sends at its gain)
@@ -2485,6 +2486,19 @@ LUA_FUNCTION(SetSourceNear) {
 	return 1;
 }
 
+// SetMixQuality(limiterMode, hqResample) -> limiterMode, hqResample: limiterMode 1 (default) = a lookahead peak
+// limiter, transparent below 0.98; 0 = the legacy soft clip from 0.8; 2 = hard clip at full scale (the engine's
+// int16 mix). hqResample (default true): the windowed-sinc 48 kHz resampler of the sounds decoded from now on
+// instead of the linear one. Absent in older modules (Lua: nil, nothing pushed).
+LUA_FUNCTION(SetMixQuality) {
+	const int lim = LUA->IsType(1, Type::Number) ? (int)LUA->GetNumber(1) : render::OutputMode();
+	const bool hq = LUA->IsType(2, Type::Bool) ? LUA->GetBool(2) : (LUA->IsType(2, Type::Number) ? LUA->GetNumber(2) >= 0.5 : true);
+	render::SetMixQuality(lim, hq);
+	LUA->PushNumber(render::OutputMode());
+	LUA->PushBool(hq);
+	return 2;
+}
+
 LUA_FUNCTION(SetSourceAccum) {
 	if (LUA->IsType(1, Type::Number)) g_srcAccumR = std::clamp((float)LUA->GetNumber(1), 0.0f, 20.0f);
 	if (LUA->IsType(2, Type::Number)) g_srcAccumK = std::clamp((int)LUA->GetNumber(2), 1, 256);
@@ -2693,6 +2707,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetSourceAccum");
 	LUA->PushCFunction(SetSourceNear);
 	LUA->SetField(-2, "SetSourceNear");
+	LUA->PushCFunction(SetMixQuality);
+	LUA->SetField(-2, "SetMixQuality");
 	LUA->PushCFunction(SetOutputMode);
 	LUA->SetField(-2, "SetOutputMode");
 	LUA->PushCFunction(SetReflections);

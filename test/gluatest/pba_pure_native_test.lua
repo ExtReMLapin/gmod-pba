@@ -560,5 +560,37 @@ return {
 			_G.LocalPlayer, A.NativeOwn = savedLP, savedOwn
 			if not ok then error(err, 0) end
 		end },
+		{ name = "ApplySettings pushes the output stage and the resampling to the module (pba_native_limiter, pba_native_resample_hq); a module without SetMixQuality is left alone", func = function()
+			local saved, savedRender = _G.pba_native, N.render
+			local got
+			local stub = {
+				SetReflections = function() end,
+				SetOutputMode = function() end,
+				SetMixQuality = function(mode, hq) got = { mode, hq } end,
+			}
+			_G.pba_native, N.render = stub, true
+			local ok, err = pcall(function()
+				withCfg({ native_limiter = 1, native_resample_hq = 1 }, function()
+					N.ApplySettings()
+					expect(got[1]).to.equal(1)
+					expect(got[2]).to.equal(true)
+				end)
+				withCfg({ native_limiter = 0, native_resample_hq = 0 }, function()
+					N.ApplySettings()
+					expect(got[1]).to.equal(0)
+					expect(got[2]).to.equal(false)
+				end)
+				withCfg({ native_limiter = 2, native_resample_hq = 1 }, function()
+					N.ApplySettings()
+					expect(got[1]).to.equal(2)
+				end)
+				stub.SetMixQuality = nil -- an older module: nothing to call, nothing breaks
+				got = nil
+				withCfg({ native_limiter = 1 }, function() N.ApplySettings() end)
+				expect(got).to.beNil()
+			end)
+			_G.pba_native, N.render = saved, savedRender
+			if not ok then error(err, 0) end
+		end },
 	},
 }

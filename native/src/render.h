@@ -144,8 +144,21 @@ std::vector<float> SoundSide(const std::string& name);
 // soft clip (interleaved), the mono send into the listener room bus and the sum of the source reverb slots'
 // inputs are kept (kBlock frames per block, aligned). CaptureStop hands them over and stops.
 void CaptureStart();
-void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend);
-float OutputClip(float x); // the output soft clip (master volume 1)
+// output: what the audio device receives (after the master volume and the limiter), same frames as mix
+void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend, std::vector<float>* output = nullptr);
+float OutputClip(float x); // the legacy output soft clip (master volume 1)
+// Mix quality (pba_native_limiter, pba_native_resample_hq; both on by default):
+//  limiterMode 1 (default) the output goes through a lookahead peak limiter (ceiling 0.98, gain exactly 1 below it,
+//              OutputLatency() frames of delay); 0 the legacy soft clip whose knee starts at 0.8; 2 a hard clip at
+//              full scale, what the engine's own int16 mix does;
+//  hqResample  sounds decoded from now on are resampled to 48 kHz by a windowed sinc (flat to 20 kHz, no
+//              images) instead of miniaudio's linear interpolation (-1 dB at 10 kHz, images).
+void SetMixQuality(int limiterMode, bool hqResample);
+int OutputMode();         // the limiterMode in force
+void SetLimiterTuning(float fastMs, float slowMs, float slowK); // limiter release (defaults 6, 50, 3); tests
+int OutputLatency();      // frames of delay the output stage adds (0 with the legacy clip)
+float OutputCeiling();    // the largest sample the output stage lets through at master volume 1 (peak of the lookahead)
+float LimiterMinGain();   // lowest gain the limiter has applied since it was last reset (tests, diagnostics)
 // stereo sound: the voice spatialises mid + sel x side (sel 1 = left channel, -1 = right, 0 = (L + R) / 2,
 // the default) and adds width x side unspatialised (0 = none, the default; 1 = the file's full width).
 // Ramped over one block. No effect on a mono sound. false if the voice is gone or dying.

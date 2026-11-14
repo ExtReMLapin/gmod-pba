@@ -32,6 +32,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <numeric>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -245,7 +246,12 @@ float g_roomRt[3] = {0, 0, 0}; // under g_mtx
 std::vector<float> g_mix(kBlock * 2);
 // offline capture (CaptureStart): what every block rendered, before the master volume
 bool g_capOn = false;
-std::vector<float> g_capMix, g_capRoom, g_capSrc; // under g_mtx (the audio thread holds it while rendering)
+std::vector<float> g_capMix, g_capRoom, g_capSrc, g_capOut; // under g_mtx (the audio thread holds it while rendering)
+// mix quality (SetMixQuality): the output stage (limiter / legacy soft clip from 0.8 / hard clip); the decoder's
+// windowed-sinc resampler (true) or miniaudio's linear one (false). Read at the use.
+std::atomic<int> g_limiterMode{1}; // 0 legacy soft clip, 1 limiter, 2 hard clip at full scale (what the engine's int16 mix does)
+std::atomic<bool> g_hqResample{true};
+float g_limFastMs = 6.0f, g_limSlowMs = 50.0f, g_limSlowK = 3.0f; // limiter release tuning (see Limiter)
 std::vector<float> g_side(kBlock); // the side channel of the voice being rendered (stereo sounds)
 // largest lateral shift of the two channels of a stereo-width voice (tangent of the angle each one moves
 // away from the source seen straight ahead: tan 30 deg, a stereo speaker pair)
@@ -362,12 +368,77 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	}
 }
 
+// Legacy output clip (pba_native_limiter 0): a tanh knee that starts at 0.8, so everything above it is squashed
+// (0.9 -> 0.892, a full-scale sample -> 0.952) and a loud tone grows harmonics.
 inline float SoftClip(float x) {
 	const float a = std::fabs(x);
 	if (a <= 0.8f) return x;
 	const float y = 0.8f + 0.2f * std::tanh((a - 0.8f) / 0.2f);
 	return x < 0 ? -y : y;
 }
+
+// Output limiter (default): a lookahead peak limiter on the stereo pair, the gain shared by both ears so the
+// image holds. A frame whose peak stays under the ceiling goes through untouched, only delayed by kLimLook
+// frames (bit for bit: the gain is exactly 1). Over it the gain has already come down along a linear ramp over the
+// kLimLook frames before the peak (no step, no clipping). The sample peak after the gain is <= kLimCeil by
+// construction (the gain at a frame is <= ceiling / peak of that frame).
+// Release, programme dependent, on the deficit d = 1 - gain: a fast part (time constant g_limFastMs) lets the
+// gain recover right after an isolated spike (the HRTF's ringing on a full-scale shot is a few frames wide:
+// holding its gain reduction for 60 ms took 3.5 dB off the whole shot), and a slow part (g_limSlowK x the
+// g_limSlowMs average of the deficit, never more than its slow peak hold) holds the gain down while peaks keep coming (a loud low tone, whose peaks
+// every 10 ms would otherwise modulate the gain at the tone's own period: harmonics). Both only deepen the
+// reduction beyond what the lookahead needs, so the ceiling holds.
+constexpr int kLimLook = 96; // 2 ms at 48 kHz
+constexpr float kLimCeil = 0.98f;
+struct Limiter {
+	float dl[kLimLook + 1][2] = {};  // delayed input frames (ring)
+	float req[kLimLook + 1];         // required gain of each frame of the ring (1 = none)
+	int pos = 0;                     // ring slot of the newest frame
+	int sinceOver = 1 << 30;         // frames since the last required gain < 1
+	float dFast = 0, dAvg = 0, dHold = 0; // release state: fast deficit, slow average and slow peak hold of the lookahead deficit
+	float gain = 1.0f;               // current gain
+	float minGain = 1.0f;            // lowest gain applied since the last reset (diagnostics, tests)
+	Limiter() { std::fill(req, req + kLimLook + 1, 1.0f); }
+	void Reset() { *this = Limiter(); }
+	// one frame in, the frame kLimLook ago out
+	void Process(float inL, float inR, float& outL, float& outR) {
+		if (!std::isfinite(inL)) inL = 0;
+		if (!std::isfinite(inR)) inR = 0;
+		const float pk = std::max(std::fabs(inL), std::fabs(inR));
+		pos = pos == kLimLook ? 0 : pos + 1;
+		dl[pos][0] = inL;
+		dl[pos][1] = inR;
+		const float r = pk > kLimCeil ? kLimCeil / pk : 1.0f;
+		req[pos] = r;
+		sinceOver = r < 1.0f ? 0 : (sinceOver < (1 << 30) ? sinceOver + 1 : sinceOver);
+		// the frame to output is the oldest of the ring (kLimLook frames back); the peak that bounds its gain is
+		// anywhere in the kLimLook frames after it (up to the newest)
+		const int outSlot = pos == kLimLook ? 0 : pos + 1;
+		float g = 1.0f;
+		if (sinceOver <= kLimLook) {
+			for (int j = 0; j <= kLimLook; ++j) {
+				const int slot = outSlot + j > kLimLook ? outSlot + j - (kLimLook + 1) : outSlot + j;
+				const float rj = req[slot];
+				if (rj < 1.0f) g = std::min(g, rj + (1.0f - rj) * (float)j / (float)kLimLook);
+			}
+		}
+		// kept as deficits: near 1 a float gain stops moving (the step is below its resolution)
+		const float dInst = 1.0f - g;
+		const float cf = std::exp(-1.0f / (g_limFastMs * 0.001f * (float)kRate));
+		const float as = 1.0f - std::exp(-1.0f / (g_limSlowMs * 0.001f * (float)kRate));
+		const float cs = std::exp(-1.0f / (g_limSlowMs * 0.001f * (float)kRate));
+		dFast = std::max(dInst, dFast * cf);
+		dAvg += (dInst - dAvg) * as;
+		dHold = std::max(dInst, dHold * cs);
+		float d = std::max(dFast, std::min(g_limSlowK * dAvg, dHold));
+		if (d < 1e-6f) { d = 0; dFast = 0; if (dAvg < 1e-6f) dAvg = 0; if (dHold < 1e-6f) dHold = 0; }
+		gain = 1.0f - d;
+		minGain = std::min(minGain, gain);
+		outL = dl[outSlot][0] * gain;
+		outR = dl[outSlot][1] * gain;
+	}
+};
+Limiter g_limiter; // audio thread, under g_mtx
 
 // Renders one block of kBlock stereo frames into g_mix (audio thread, lock held).
 void RenderBlock() {
@@ -799,7 +870,16 @@ void RenderBlock() {
 		for (int i = kMaxLag; i < kBlock - kMaxLag; ++i) acc += (double)g_mix[i * 2] * g_mix[(i + lag) * 2 + 1];
 		g_xc[lag + kMaxLag] += acc;
 	}
-	for (auto& s : g_mix) s = SoftClip(s * g_master);
+	const int mode = g_limiterMode.load();
+	if (mode == 1) {
+		for (int i = 0; i < kBlock; ++i)
+			g_limiter.Process(g_mix[i * 2] * g_master, g_mix[i * 2 + 1] * g_master, g_mix[i * 2], g_mix[i * 2 + 1]);
+	} else if (mode == 2) {
+		for (auto& s : g_mix) s = std::isfinite(s) ? std::clamp(s * g_master, -1.0f, 1.0f) : 0.0f;
+	} else {
+		for (auto& s : g_mix) s = SoftClip(s * g_master);
+	}
+	if (g_capOn) g_capOut.insert(g_capOut.end(), g_mix.begin(), g_mix.end());
 	const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	g_loadSum += ms;
 	g_loadMax = std::max(g_loadMax, ms);
@@ -903,6 +983,7 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 	g_echoDropped = 0;
 	g_pathFallback = 0;
 	g_paused = false;
+	g_limiter.Reset();
 	IPLAudioSettings as{kRate, kBlock};
 	IPLHRTFSettings hs{};
 	hs.volume = 1.0f;
@@ -1300,12 +1381,15 @@ void CaptureStart() {
 	g_capMix.clear();
 	g_capRoom.clear();
 	g_capSrc.clear();
+	g_capOut.clear();
 	g_capOn = true;
 }
 
-void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend) {
+void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend, std::vector<float>* output) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	g_capOn = false;
+	if (output) *output = std::move(g_capOut);
+	g_capOut.clear();
 	if (mix) *mix = std::move(g_capMix);
 	if (roomSend) *roomSend = std::move(g_capRoom);
 	if (srcSend) *srcSend = std::move(g_capSrc);
@@ -1315,6 +1399,27 @@ void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vec
 }
 
 float OutputClip(float x) { return SoftClip(x); }
+
+void SetMixQuality(int limiterMode, bool hqResample) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	limiterMode = std::clamp(limiterMode, 0, 2);
+	if (limiterMode != g_limiterMode.load()) g_limiter.Reset(); // (no stale frames of an earlier run in the delay line)
+	g_limiterMode = limiterMode;
+	g_hqResample = hqResample;
+}
+int OutputMode() { return g_limiterMode.load(); }
+void SetLimiterTuning(float fastMs, float slowMs, float slowK) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_limFastMs = std::clamp(fastMs, 0.5f, 1000.0f);
+	g_limSlowMs = std::clamp(slowMs, 1.0f, 2000.0f);
+	g_limSlowK = std::clamp(slowK, 0.0f, 10.0f);
+}
+int OutputLatency() { return g_limiterMode.load() == 1 ? kLimLook : 0; }
+float OutputCeiling() { return g_limiterMode.load() == 1 ? kLimCeil : 1.0f; }
+float LimiterMinGain() {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	return g_limiter.minGain;
+}
 
 bool HasSound(const std::string& name) {
 	std::lock_guard<std::mutex> lk(g_mtx);
@@ -1384,19 +1489,93 @@ static std::string FixWavFmt(const void* data, size_t size) {
 	return {};
 }
 
+// Windowed-sinc resampler (decode time, once per file). Kaiser window (beta 8.5), cutoff 0.465 x the lower of the
+// two rates, 2 x 32 taps at 44.1 -> 48 kHz (a down-conversion stretches the kernel so it keeps the same shape at
+// the lower rate): passband flat well past 16 kHz (miniaudio's linear interpolation is -1 dB at 10 kHz and -3 dB
+// at 14 kHz), the images of the 44.1 kHz band above 22 kHz held ~80 dB down (linear: ~ -25 dB at 10 kHz). The
+// kernel is tabulated per fractional phase (exact for rational ratios up to 8192 phases, nearest phase beyond),
+// every phase normalised to a gain of exactly 1 at DC. No delay: output sample m is the signal at m / rout. The
+// edges repeat the first / last sample.
+static double BesselI0(double x) {
+	double sum = 1, term = 1;
+	const double q = x * x / 4;
+	for (int k = 1; k < 60; ++k) {
+		term *= q / ((double)k * k);
+		sum += term;
+		if (term < 1e-14 * sum) break;
+	}
+	return sum;
+}
+
+static void ResampleSinc(const float* in, size_t n, uint32_t rin, uint32_t rout, std::vector<float>& out) {
+	out.clear();
+	if (n == 0) return;
+	if (rin == rout) {
+		out.assign(in, in + n);
+		return;
+	}
+	const uint64_t gdiv = std::gcd((uint64_t)rin, (uint64_t)rout);
+	const uint64_t inG = rin / gdiv, outG = rout / gdiv; // out sample m sits at source position m * inG / outG
+	const int phases = (int)std::min<uint64_t>(outG, 8192);
+	const double wc = 0.465 * std::min(1.0, (double)rout / (double)rin); // cutoff, cycles per source sample
+	const int half = std::clamp((int)std::ceil(32.0 * 0.465 / wc), 32, 256);
+	const int taps = 2 * half;
+	const double beta = 8.5, i0b = BesselI0(beta), pi = 3.14159265358979323846;
+	std::vector<float> table((size_t)phases * taps);
+	std::vector<double> tmp((size_t)taps);
+	for (int ph = 0; ph < phases; ++ph) {
+		const double f = (double)ph / phases; // source sample position of the output sample, fractional part
+		double sum = 0;
+		for (int t = 0; t < taps; ++t) {
+			const double d = (double)(t - (half - 1)) - f; // tap i = ip + t - (half-1): distance to the position
+			const double x = 2 * wc * d;
+			const double sinc = std::fabs(x) < 1e-9 ? 1.0 : std::sin(pi * x) / (pi * x);
+			const double u = d / half;
+			const double w = std::fabs(u) >= 1 ? 0.0 : BesselI0(beta * std::sqrt(1 - u * u)) / i0b;
+			tmp[t] = sinc * w;
+			sum += tmp[t];
+		}
+		for (int t = 0; t < taps; ++t) table[(size_t)ph * taps + t] = (float)(tmp[t] / sum);
+	}
+	// padded input: `half` repeated samples at each end
+	std::vector<float> pad(n + 2 * (size_t)half);
+	std::fill(pad.begin(), pad.begin() + half, in[0]);
+	std::copy(in, in + n, pad.begin() + half);
+	std::fill(pad.begin() + half + n, pad.end(), in[n - 1]);
+	const uint64_t outN = (uint64_t)n * rout / rin;
+	out.resize((size_t)outN);
+	for (uint64_t m = 0; m < outN; ++m) {
+		const uint64_t num = m * inG;
+		size_t ip = (size_t)(num / outG);
+		int ph;
+		if ((uint64_t)phases == outG) ph = (int)(num % outG);
+		else {
+			ph = (int)(((num % outG) * phases + outG / 2) / outG);
+			if (ph >= phases) { ph = 0; ++ip; }
+		}
+		const float* k = &table[(size_t)ph * taps];
+		const float* x = &pad[ip + 1]; // pad index of source sample (ip - (half-1)) is ip + 1
+		float acc = 0;
+		for (int t = 0; t < taps; ++t) acc += k[t] * x[t];
+		out[(size_t)m] = acc;
+	}
+}
+
 std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart, bool* stereo) {
 	uint32_t srcRate = 0;
 	const double loopFrames = WavLoopStart(data, size, &srcRate);
 	const std::string fixed = FixWavFmt(data, size);
 	if (!fixed.empty()) { data = fixed.data(); size = fixed.size(); }
+	const bool hq = g_hqResample.load();
 	// the file's own channel count (0), so a stereo file keeps its two channels (Sound::side); more
-	// than two are downmixed to stereo by miniaudio
-	ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, 0, kRate);
+	// than two are downmixed to stereo by miniaudio. hq: decoded at the file's own rate, the resampling to kRate
+	// is ours (ResampleSinc); otherwise miniaudio resamples to kRate by linear interpolation as it decodes
+	ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, 0, hq ? 0 : kRate);
 	ma_decoder dec;
 	if (ma_decoder_init_memory(data, size, &dc, &dec) != MA_SUCCESS) return "cannot decode " + name;
 	if (dec.outputChannels > 2) {
 		ma_decoder_uninit(&dec);
-		dc = ma_decoder_config_init(ma_format_f32, 2, kRate);
+		dc = ma_decoder_config_init(ma_format_f32, 2, hq ? 0 : kRate);
 		if (ma_decoder_init_memory(data, size, &dc, &dec) != MA_SUCCESS) return "cannot decode " + name;
 	}
 	const ma_uint32 nch = dec.outputChannels;
@@ -1404,25 +1583,41 @@ std::string LoadSound(const std::string& name, const void* data, size_t size, do
 		ma_decoder_uninit(&dec);
 		return "cannot decode " + name;
 	}
+	const uint32_t fileRate = hq ? (uint32_t)dec.outputSampleRate : (uint32_t)kRate;
+	if (fileRate == 0) {
+		ma_decoder_uninit(&dec);
+		return "cannot decode " + name;
+	}
 	auto snd = std::make_shared<Sound>();
 	const uint64_t budget = g_memBudget.load();
+	std::vector<float> mid, side; // at the file's rate (kRate when miniaudio resamples)
 	float buf[4096 * 2];
 	for (;;) {
 		ma_uint64 got = 0;
 		ma_decoder_read_pcm_frames(&dec, buf, 4096, &got);
 		if (got == 0) break;
-		if (nch == 1) snd->pcm.insert(snd->pcm.end(), buf, buf + got);
+		if (nch == 1) mid.insert(mid.end(), buf, buf + got);
 		else
 			for (ma_uint64 i = 0; i < got; ++i) {
-				snd->pcm.push_back((buf[i * 2] + buf[i * 2 + 1]) * 0.5f);
-				snd->side.push_back((buf[i * 2] - buf[i * 2 + 1]) * 0.5f);
+				mid.push_back((buf[i * 2] + buf[i * 2 + 1]) * 0.5f);
+				side.push_back((buf[i * 2] - buf[i * 2 + 1]) * 0.5f);
 			}
-		if (snd->Bytes() > budget) { // a single sound larger than the whole budget
+		// a single sound larger than the whole budget (its size once at kRate)
+		if ((uint64_t)((double)(mid.size() + side.size()) * sizeof(float) * kRate / fileRate) > budget) {
 			ma_decoder_uninit(&dec);
 			return "too long for the memory budget: " + name;
 		}
 	}
 	ma_decoder_uninit(&dec);
+	if (fileRate != (uint32_t)kRate) {
+		// mid and side are linear in the channels, so resampling them equals resampling the channels
+		ResampleSinc(mid.data(), mid.size(), fileRate, kRate, snd->pcm);
+		if (!side.empty()) ResampleSinc(side.data(), side.size(), fileRate, kRate, snd->side);
+	} else {
+		snd->pcm = std::move(mid);
+		snd->side = std::move(side);
+	}
+	if (snd->Bytes() > budget) return "too long for the memory budget: " + name;
 	if (snd->pcm.size() < 2) return "empty sound " + name;
 	// a "stereo" file with identical channels is mono: no side to store or render
 	if (!snd->side.empty()) {
