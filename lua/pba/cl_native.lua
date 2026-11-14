@@ -1165,8 +1165,16 @@ local function removeDyn(id)
 	N.doors[id] = nil
 end
 
+--- True while the module has work to do: pba on, or voices of its own still playing out after pba was switched
+-- off (they keep their listener until they end). pba off and silent: no listener, no door sync, no settings
+-- pushed (the perf bench measured up to 25 ms per frame of door / prop sync with pba_enable 0).
+function N.Busy()
+	return A.Enabled() or (N.live or 0) > 0
+end
+
 function N.SyncDoors()
 	if not N.ready or not pba_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
+	if not A.Enabled() then return end -- caught up when pba is switched on again (the sync diffs the scene)
 	local seen, nProps = {}, 0
 	local wantProps = (A.cfg.native_props or 0) >= 0.5
 	local cap = A.cfg.native_props_max or 64
@@ -1280,7 +1288,7 @@ function N.MasterVolume()
 end
 
 hook.Add("Think", "pba_native_listener", function()
-	if not N.render then return end
+	if not N.render or not N.Busy() then return end
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
 	local ang = ply:EyeAngles()
@@ -1408,6 +1416,7 @@ timer.Create("pba_native_reverb", 0.5, 0, function()
 	if N.echoCvar and N.echoCvar:GetBool() ~= want then RunConsoleCommand("pba_echo_want", want and "1" or "0") end
 	local all = N.render and (A.cfg.native_all or 0) >= 0.5 and A.Enabled() or false
 	if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("pba_native_all_want", all and "1" or "0") end
+	if not N.Busy() then return end -- pba off and silent: nothing to keep in sync (pushed again once on)
 	-- limits apply whatever renders (decoding also serves echoes)
 	if N.ready and pba_native and pba_native.SetLimits then pba_native.SetLimits(A.cfg.native_max_voices or 64, A.cfg.native_mem_mb or 512) end
 	if not N.render or not pba_native or not pba_native.RoomReverb then return end
