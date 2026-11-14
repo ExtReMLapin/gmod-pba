@@ -502,8 +502,8 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	-- the engine's mix value and ducking (cl_mix): the loop's groups, found once
 	if A.Mix and not m.mixG then m.mixG = A.Mix.GroupsOf(m.name, m.ent, m.chan, m.lvl) end
 	local protect = N.ProtectLine(m.chan)
-	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, nil, protect)
-		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, nil, protect)
+	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, nil, protect, N.PauseFlag(m.flags))
+		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, nil, protect, N.PauseFlag(m.flags))
 	-- (pba_loops_native_fail: a voice the module could not start leaves the line to the engine patch below;
 	-- marked started, a long line was then dropped there as "already played": captioned, never heard)
 	if (id or 0) > 0 or (A.cfg.loops_native_fail or 1) < 0.5 then m.started = true end
@@ -746,7 +746,7 @@ function LP.HandleClient(data)
 	local n = 0
 	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end
 	if n >= (A.cfg.loops_max_cl or 32) then return false end -- cap: left to the engine
-	m = { key = key, name = name, idx = idx, chan = chan, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
+	m = { key = key, name = name, idx = idx, chan = chan, flags = flags, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
 		dsp = data.DSP or 0, once = not ((src or cpp) and not once), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
 		src = src and setmetatable({ src }, { __mode = "v" }) or nil, cpp = cpp or nil }
 	-- its end: the file's length at its start pitch (onceEnded)
@@ -828,7 +828,7 @@ net.Receive("pba_loop", function()
 	if not m and once and op == OP_UPDATE and (A.cfg.loops_once_end or 1) >= 0.5 then return end
 	local new = not m
 	if not m then
-		m = { key = key, name = name, idx = idx, chan = chan, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
+		m = { key = key, name = name, idx = idx, chan = chan, flags = d.Flags, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
 		-- a speaker line: its DSP is the speaker preset sv_loops wrote for the flag (none on a server without
 		-- dsp_speaker: this client's own then, for its engine patch)
 		if speaker then

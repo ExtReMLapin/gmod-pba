@@ -1056,7 +1056,7 @@ bool EnsureSimulator() {
 // API compatibility number of the module: raised when a function the Lua calls changes its arguments, its
 // results or its behaviour. lua/pba/cl_native.lua accepts a range (N.API_MIN..N.API_MAX) and leaves an
 // out-of-range module unused.
-static const int PBA_NATIVE_API = 1;
+static const int PBA_NATIVE_API = 2; // 2: SetPaused freezes the voices played with the pausable flag only (Play's argument 15, Echo's 9)
 #ifndef PBA_MODULE_VERSION
 #define PBA_MODULE_VERSION "unknown"
 #endif
@@ -1765,7 +1765,8 @@ static render::VoiceParams ReadVoice(ILuaBase* LUA, int first) {
 
 // optional trailing arguments of Play: delay (seconds), sh {w, sh1, sh2, sh3} (baked path field),
 // diffuse share (0..1), room reverb send level (linear, absent = follows gain), start offset (seconds),
-// protect (true: a spoken line, the voice cap drops any other voice first)
+// protect (true: a spoken line, the voice cap drops any other voice first), pausable (true: the engine pauses
+// this sound with the game, SND_SHOULDPAUSE: SetPaused freezes it)
 static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	if (LUA->IsType(first, Type::Number)) p.delay = (float)LUA->GetNumber(first);
 	if (LUA->IsType(first + 1, Type::Table)) {
@@ -1776,6 +1777,7 @@ static void ReadVoiceExtra(ILuaBase* LUA, int first, render::VoiceParams& p) {
 	if (LUA->IsType(first + 3, Type::Number)) p.send = (float)LUA->GetNumber(first + 3);
 	if (LUA->IsType(first + 4, Type::Number)) p.offset = std::clamp((float)LUA->GetNumber(first + 4), 0.0f, 3600.0f); // inf would make a loop's fmod NaN
 	p.protect = LUA->IsType(first + 5, Type::Bool) && LUA->GetBool(first + 5); // a spoken line: spared by the voice cap
+	p.pausable = LUA->IsType(first + 6, Type::Bool) && LUA->GetBool(first + 6); // frozen by SetPaused
 }
 
 // optional room reverb send at index i (PlayStream, Update): -1 when absent = keep the current one
@@ -1905,7 +1907,7 @@ LUA_FUNCTION(Play) {
 	return 2;
 }
 
-// Echo(name, pos, gain [, key [, pitch [, delay]]]) -> voice id, slot. Reflections only (no direct
+// Echo(name, pos, gain [, key [, pitch [, delay [, aim [, dipole [, pausable]]]]]]) -> voice id, slot. Reflections only (no direct
 // sound): the source position gets one of the echo slots, whose impulse response is simulated
 // by the reflection thread; the voice starts once it is ready. key: source identity (entity
 // index) so that repeated sounds of one source share a slot.
@@ -1990,7 +1992,7 @@ LUA_FUNCTION(Echo) {
 		return 1;
 	}
 	g_reflCv.notify_one();
-	LUA->PushNumber(render::PlayEcho(name, slot, gen, gain, pitch, delay));
+	LUA->PushNumber(render::PlayEcho(name, slot, gen, gain, pitch, delay, LUA->IsType(9, Type::Bool) && LUA->GetBool(9)));
 	LUA->PushNumber(slot);
 	return 2;
 }
@@ -2243,7 +2245,7 @@ LUA_FUNCTION(StreamCollect) {
 	return 1;
 }
 
-// SetPaused(bool): the game is paused (single player menu)
+// SetPaused(bool): the game is paused (single player menu): the voices played with the pausable flag freeze, the others play on
 LUA_FUNCTION(SetPaused) {
 	render::SetPaused(LUA->GetBool(1));
 	return 0;
