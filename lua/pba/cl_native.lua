@@ -265,6 +265,7 @@ function N.Start()
 	if not ok then N.err = err return end
 	-- the world is gathered in a coroutine, 4 ms per frame (large maps: seconds of Lua work),
 	-- then handed to the module in one call
+	N.gathered = nil -- (a world held for calm: replaced by this build)
 	N.building = coroutine.create(function()
 		local t0 = SysTime()
 		local verts, tris, matIdx, mats, mins, maxs = N.BuildWorld()
@@ -277,17 +278,36 @@ end
 hook.Add("Think", "pba_native_build", function()
 	local co = N.building
 	if not co then return end
-	local deadline = SysTime() + 0.004
+	local held = N.gathered
+	if held then
+		-- the world gathered during a fight: its load into the module (one call, tens of ms) waits for calm
+		if A.Sched and A.Sched.HoldLongStep and A.Sched.HoldLongStep() then return end
+		local t1 = SysTime()
+		N.building, N.gathered = nil, nil
+		N.Finish(unpack(held, 1, 6))
+		if A.Sched and A.Sched.NoteBuild then A.Sched.NoteBuild((SysTime() - t1) * 1000) end
+		return
+	end
+	local t0 = SysTime()
+	-- 4 ms per frame, less during a fight (pba_build_ms_combat, cl_sched)
+	local bud = A.Sched and A.Sched.BuildBudget and A.Sched.BuildBudget() or 0.004
+	if bud <= 0 then return end
+	local deadline = t0 + bud
 	local function yield() if SysTime() > deadline then coroutine.yield() end end
 	N.Yield, A.BSP.Yield = yield, yield
 	local ok, verts, tris, matIdx, mats, mins, maxs = coroutine.resume(co)
 	N.Yield, A.BSP.Yield = nil, nil
+	if A.Sched and A.Sched.NoteBuild then A.Sched.NoteBuild((SysTime() - t0) * 1000) end
 	if not ok then
 		N.building, N.err = nil, "world build failed: " .. tostring(verts)
 		MsgN("[PBA] native backend: ", N.err)
 		return
 	end
 	if coroutine.status(co) ~= "dead" then return end
+	if A.Sched and A.Sched.HoldLongStep and A.Sched.HoldLongStep() then
+		N.gathered = { verts, tris, matIdx, mats, mins, maxs } -- (N.building kept: still building)
+		return
+	end
 	N.building = nil
 	N.Finish(verts, tris, matIdx, mats, mins, maxs)
 end)

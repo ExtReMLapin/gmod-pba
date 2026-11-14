@@ -1018,6 +1018,7 @@ end
 function A.Process(data, relayed)
 	local L, ang = listenerPos()
 	local S = data.Pos
+	if A.Sched then A.Sched.NoteSound(data.SoundLevel) end -- a fight heard: background builds slow down (O6)
 	if not L or not S then return false end
 	if A.Mix then A.Mix.NoteSound(data, L) end -- heard: the mixer's ducker (cl_mix)
 	-- a sentence with virtual words (V_...): its words picked now for this sound (cl_sentences_virtual)

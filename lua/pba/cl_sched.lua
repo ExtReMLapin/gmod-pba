@@ -26,6 +26,61 @@ function SC.BudgetExceeded()
 	return pf ~= nil and pf.frame == FrameNumber() and pf.cur >= (A.cfg.frame_budget_ms or 1)
 end
 
+-- ------------------------------------------------------------------ fights and background builds
+-- A fight is heard: COMBAT_N loud sounds (>= COMBAT_LVL dB) within COMBAT_S seconds, or one very loud
+-- (>= COMBAT_BIG dB, an explosion). Noted by A.Process for every sound it is given (pba on).
+local COMBAT_LVL, COMBAT_BIG, COMBAT_N, COMBAT_S = 85, 120, 3, 2
+local BUILD_S = 0.004 -- the background builds' time per frame (probe graph, native world gather)
+SC.loud = SC.loud or {} -- times of the last COMBAT_N loud sounds (ring)
+SC.loudI = SC.loudI or 0
+
+function SC.NoteSound(lvl)
+	if not lvl or lvl < COMBAT_LVL then return end
+	local now = RealTime()
+	SC.loudI = SC.loudI % COMBAT_N + 1
+	SC.loud[SC.loudI] = now
+	if lvl >= COMBAT_BIG then SC.combatUntil = now + COMBAT_S end
+end
+
+--- True while a fight is heard (see above).
+function SC.InCombat()
+	local now = RealTime()
+	if SC.combatUntil and now < SC.combatUntil then return true end
+	if #SC.loud < COMBAT_N then return false end
+	local oldest = math.huge
+	for i = 1, COMBAT_N do oldest = math.min(oldest, SC.loud[i]) end
+	return now - oldest < COMBAT_S
+end
+
+--- Seconds a background build may take now: 4 ms per frame each, or during a fight pba_build_ms_combat per frame
+-- for all of them together (what is left of it this frame; 0: wait for the next frame). Option at 0: 4 ms.
+function SC.BuildBudget()
+	local c = A.cfg.build_ms_combat or 0
+	if c > 0 and SC.InCombat() then
+		local b = SC.build
+		local spent = (b and b.frame == FrameNumber()) and b.cur or 0
+		return math.max(math.min(c, 4) - spent, 0) / 1000
+	end
+	return BUILD_S
+end
+
+--- True when a build's last, indivisible step (the module's world load, the probe graph's preparation: tens of
+-- ms in one frame) must wait for the end of the fight (pba_build_ms_combat on).
+function SC.HoldLongStep()
+	return (A.cfg.build_ms_combat or 0) > 0 and SC.InCombat()
+end
+
+--- A background build ran ms this frame: per-frame totals kept for the diagnostics and tests (SC.build:
+-- frame, cur = this frame's ms, maxCombat / maxCalm = the worst frame during a fight / out of one).
+function SC.NoteBuild(ms)
+	local b = SC.build
+	if not b then b = { frame = -1, cur = 0, maxCombat = 0, maxCalm = 0, frames = 0 } SC.build = b end
+	local fr = FrameNumber()
+	if b.frame ~= fr then b.frame, b.cur, b.frames = fr, 0, b.frames + 1 end
+	b.cur = b.cur + ms
+	if SC.InCombat() then b.maxCombat = math.max(b.maxCombat, b.cur) else b.maxCalm = math.max(b.maxCalm, b.cur) end
+end
+
 --- The cadence rule. o: the sound's own table (o.reeval keeps its last evaluation's stamp); S, L: source
 -- and listener now; tEnd: when it ends (nil: a loop, or an end not known). True when it must be
 -- re-evaluated now (and then stamped).

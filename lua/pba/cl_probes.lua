@@ -545,6 +545,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 	while qh <= #queue and not truncated do -- truncated: rebuilt at a wider spacing (PR.Start), stop here
 		local n = queue[qh]
 		qh = qh + 1
+		if budgetFn then budgetFn(#nodes) end -- (links between existing columns: traces too)
 		-- the storeys above and below in the same column, through a real opening only (a stairwell,
 		-- an atrium): the straight segment between them is clear
 		local c = column(n.i, n.j)
@@ -631,7 +632,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 					end
 				end
 			end
-			if budgetFn and x % 64 == 0 then budgetFn(#nodes) end
+			if budgetFn and x % 8 == 0 then budgetFn(#nodes) end -- (64: up to ~20 ms between two checks)
 		end
 	end
 	return { spacing = s, nodes = nodes, index = index, truncated = truncated, skip = skipLinks }
@@ -793,7 +794,7 @@ end
 PR.LinkSegs = linkSegs
 
 --- Starts loading or building the probe graph for the current map (client, background).
-function PR.Start()
+function PR.Start(noCache)
 	PR.current, PR.building = nil, nil
 	PR.fieldsByKey, PR.seedMemo = nil, nil
 	PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare = nil, nil, nil
@@ -801,7 +802,7 @@ function PR.Start()
 	if not g then return end
 	local map = g.map
 	local hash = PR.Hash(g.bsp)
-	local js = file.Read(cachePath(map), "DATA")
+	local js = not noCache and file.Read(cachePath(map), "DATA") -- (noCache: rebuilt, e.g. by a test)
 	local cached = js and PR.Deserialize(js, hash, A.cfg.probe_spacing)
 	if cached then
 		cached.map, cached.hash, cached.fromCache, cached.area = map, hash, true, g
@@ -825,12 +826,14 @@ function PR.Start()
 	setNativeSegs(seedSegs(seeds))
 	local want = A.cfg.probe_spacing
 	local t0 = SysTime()
+	-- 4 ms per frame, less during a fight (pba_build_ms_combat, cl_sched)
+	local function slice() return A.Sched and A.Sched.BuildBudget and A.Sched.BuildBudget() or 0.004 end
 	local co = coroutine.create(function()
-		local deadline = SysTime() + 0.004
+		local deadline = SysTime() + slice()
 		local function budget()
 			if SysTime() > deadline then
 				coroutine.yield()
-				deadline = SysTime() + 0.004
+				deadline = SysTime() + slice()
 			end
 		end
 		local s = want
@@ -847,12 +850,24 @@ function PR.Start()
 	hook.Add("Think", "pba_probes_build", function()
 		local b = PR.building
 		if not b or b.map ~= game.GetMap() then hook.Remove("Think", "pba_probes_build") return end
-		local ok, res = coroutine.resume(b.co)
-		if not ok then
-			hook.Remove("Think", "pba_probes_build")
-			PR.building = nil
-			ErrorNoHaltWithStack("[PBA] probe build failed: " .. tostring(res))
-			return
+		local hold = A.Sched and A.Sched.HoldLongStep and A.Sched.HoldLongStep()
+		local ok, res
+		local t0 = SysTime()
+		if b.res then
+			-- built during a fight: its preparation and cache write (tens of ms in one frame) wait for calm
+			if hold then return end
+			ok, res = true, b.res
+		else
+			if slice() <= 0 then return end -- (a fight: this frame's build time spent by another build)
+			ok, res = coroutine.resume(b.co)
+			if A.Sched and A.Sched.NoteBuild then A.Sched.NoteBuild((SysTime() - t0) * 1000) end
+			if not ok then
+				hook.Remove("Think", "pba_probes_build")
+				PR.building = nil
+				ErrorNoHaltWithStack("[PBA] probe build failed: " .. tostring(res))
+				return
+			end
+			if coroutine.status(b.co) == "dead" and hold then b.res = res return end
 		end
 		if coroutine.status(b.co) == "dead" then
 			hook.Remove("Think", "pba_probes_build")
@@ -868,6 +883,7 @@ function PR.Start()
 			MsgN(string.format("[PBA] probe graph built: %d probes at spacing %d in %.1f s%s", #res.nodes, res.spacing,
 				res.buildTime, res.truncated and " (WARNING: truncated at the widest spacing, part of the map has no probe)" or ""))
 			if A.Paths then A.Paths.InvalidateCache() end
+			if b.res and A.Sched and A.Sched.NoteBuild then A.Sched.NoteBuild((SysTime() - t0) * 1000) end
 		end
 	end)
 end
