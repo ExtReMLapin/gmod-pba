@@ -843,6 +843,8 @@ function N.Directivity(ent, L, chan, aim)
 	if w <= 0 or not L then return 1 end
 	local owner, now = N.WeaponAim(ent, chan)
 	if not owner then return 1 end
+	-- the listener's own shots (pba_native_own: centered on him): he is the shooter, not behind the muzzle
+	if LocalPlayer and owner == LocalPlayer() and A.NativeOwn and A.NativeOwn() then return 1 end
 	local d = (L - owner:EyePos()):GetNormalized()
 	return math.max((1 - w) + w * (aim or now):Dot(d), 0.05)
 end

@@ -1194,7 +1194,9 @@ function A.Process(data, relayed)
 	local tReq = RealTime()
 	local r, job
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
-	if (A.cfg.burst_budget_ms or 2) > 0 or (A.cfg.burst_mask_db or 25) > 0 then
+	-- the listener's own sound (pba_native_own, centered on him): nothing to save on, never degraded or held
+	local ownSound = IsValid(src) and src == LocalPlayer() and A.NativeOwn and A.NativeOwn()
+	if not ownSound and ((A.cfg.burst_budget_ms or 2) > 0 or (A.cfg.burst_mask_db or 25) > 0) then
 		r, job = burstEvaluate(data, S, L, lvl, IsValid(src) and src or nil)
 	else
 		r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.Render.WaterDry(nil, data.SoundName))
