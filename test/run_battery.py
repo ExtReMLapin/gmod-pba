@@ -588,6 +588,20 @@ def npc_loop_death():
     ok = isinstance(taken, dict) and taken.get("pass") is True and isinstance(dead, dict) and dead.get("pass") is True
     return {"pass": ok, "setup": setup, "taken": taken, "kill": kill, "dead": dead}
 
+def watch_dead_npc():
+    """The watchdog's dead_npc_loop: an alive rollermine (no health at all) is not reported, a killed fast zombie
+    whose mirrors play on (pba_loops_npc_death 0) is (watch_dead_npc*.lua)."""
+    load(TW)
+    with open(os.path.join(TEST, "watch", "watchdog_cl.lua"), encoding="utf-8") as f:
+        call("lua_exec", {"realm": "client", "code": f.read()})
+    lua("client", "PBA_WATCH_CL.anomalies = {} PBA_WATCH_CL.deadT = {} return true")
+    setup = job("server", "watch_dead_npc_setup.lua")
+    res = job("client", "watch_dead_npc.lua")
+    lua("server", "pba.SetOverride('loops_npc_death', nil) for _, c in ipairs({'npc_rollermine', 'npc_fastzombie'}) do for _, e in ipairs(ents.FindByClass(c)) do e:Remove() end end return true")
+    lua("client", "timer.Remove('pba_watch_cl') hook.Remove('EntityEmitSound', 'pba_watch') if PBA_WATCH_CL and PBA_WATCH_CL.orig then hook.Add('EntityEmitSound', 'pba', PBA_WATCH_CL.orig) end PBA_WATCH_CL = nil return true")
+    ok = isinstance(res, dict) and res.get("pass") is True
+    return {"pass": ok, "setup": setup, "res": res}
+
 def cl_set(**kv):
     """Client convars pba_<k> = v, and wait until pba.cfg follows."""
     for k, v in kv.items():
@@ -827,6 +841,8 @@ steps = [
     # a shot manhack's loops stop at its death (vanilla: engine off), not at its removal ~2 s later
     ("manhack_loop_death", lambda: manhack_loop_death()),
     ("npc_loop_death", lambda: npc_loop_death()),
+    # test tool: the watchdog does not take an alive rollermine (no health at all) for a dead NPC
+    ("watch_dead_npc", watch_dead_npc),
     # a long speech line (sv_loops) keeps its subtitle and ducks the other sounds like the short lines
     ("long_line", lambda: long_line()),
     # a long line the module cannot play goes to the engine (side bug 32: captioned, never heard)

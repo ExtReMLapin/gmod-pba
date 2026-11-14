@@ -47,6 +47,7 @@ local SAMPLES = 6
 local DEAD_S, SILENT_S = 1, 3
 local ENGINE_VEHICLES = { prop_vehicle_airboat = true, prop_vehicle_jeep = true, prop_vehicle_jeep_old = true }
 W.deadT = W.deadT or {}         -- mirror key -> CurTime() its NPC was first seen dead
+W.hadHealth = W.hadHealth or setmetatable({}, { __mode = "k" }) -- NPC -> true once seen with health > 0
 
 local function db(x) return 20 * math.log10(math.max(x, 1e-9)) end
 local function note(kind, key, sample)
@@ -282,9 +283,12 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 		end
 		if g ~= last or not lastL then W.mgL[key], W.mgT[key] = L, now end
 		W.mg[key] = g
-		-- an NPC's loop playing on after its death
+		-- an NPC's loop playing on after its death (an NPC seen with health first: a rollermine has none at all, Health()
+		-- 0 from its spawn, damage as events only, it dies by exploding and being removed; in vanilla its motor loops
+		-- play on while it rolls: 21 false reports on d2_coast_05)
 		local e = m.ent
-		if IsValid(e) and e:IsNPC() and e:Health() <= 0 then
+		if IsValid(e) and e:IsNPC() and e:Health() > 0 then W.hadHealth[e] = true end
+		if IsValid(e) and e:IsNPC() and e:Health() <= 0 and W.hadHealth[e] then
 			W.deadT[key] = W.deadT[key] or now
 			if now - W.deadT[key] > DEAD_S then
 				note("dead_npc_loop", key, { sound = name, class = e:GetClass(), since = math.Round(now - W.deadT[key], 1) })
