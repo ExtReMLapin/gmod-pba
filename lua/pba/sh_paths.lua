@@ -1198,6 +1198,66 @@ local function edgeAlong(c, t, sx, sy, sz, lx, ly, lz, len)
 	local x, y, z = c[5] + c[8] * t, c[6] + c[9] * t, c[7] + c[10] * t
 	return x, y, z, math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2 + (z - sz) ^ 2) + math.sqrt((x - lx) ^ 2 + (y - ly) ^ 2 + (z - lz) ^ 2) - len
 end
+-- pba_detour_max_tests: the edges' search with at most `cap` world tests (`valid` calls). A prop against a
+-- floor and a wall had its blocked edges sampled one after the other (up to 27 tests of 2 traces each, ~650
+-- traces when every way round is blocked), in a near sound's synchronous evaluation. Here every edge's best
+-- point is tried first, shortest first, until one is clear (at most 12 tests); then the clear points along
+-- the blocked edges shorter than it, shortest first, as the full search does, while tests are left. Every
+-- answer is a clear point: a cut search only finds a longer way round (more loss), never one through the
+-- world; with tests enough it is the full search's answer (the edges past the first clear best point cannot
+-- beat it). math.huge when no clear point was found within the cap.
+local blockedShared = {}
+local function detourCapped(cand, n, cap, valid, sliced, va, vb, vc, sx, sy, sz, lx, ly, lz, len)
+	local blocked = (sliced and SLICE.co) and {} or blockedShared
+	local nb, tests, best = 0, 0, math.huge
+	for i = 1, n do
+		local c = cand[i]
+		if tests >= cap then break end
+		if sliced then sliceCheck() end
+		tests = tests + 1
+		if valid(Vector(c[2], c[3], c[4]), va, vb, vc) then
+			best = c[1]
+			break
+		end
+		nb = nb + 1
+		blocked[nb] = c
+	end
+	for i = 1, nb do
+		local c = blocked[i]
+		blocked[i] = nil
+		if c[1] < best and tests < cap then
+			local t0 = c[11]
+			for side = -1, 1, 2 do
+				local tEnd = side < 0 and 0 or 1
+				local prev = t0
+				for k = 1, EDGE_SAMPLES do
+					if tests >= cap then break end
+					if sliced then sliceCheck() end
+					local t = t0 + (tEnd - t0) * k / EDGE_SAMPLES
+					local x, y, z, d = edgeAlong(c, t, sx, sy, sz, lx, ly, lz, len)
+					if d >= best then break end
+					tests = tests + 1
+					if valid(Vector(x, y, z), va, vb, vc) then
+						local lo, hi = prev, t -- blocked .. clear (hi stays clear: a cut bisection keeps a clear point)
+						for _ = 1, EDGE_CLEAR_HALVINGS do
+							if tests >= cap then break end
+							if sliced then sliceCheck() end
+							local m = (lo + hi) * 0.5
+							local mx, my, mz = edgeAlong(c, m, sx, sy, sz, lx, ly, lz, len)
+							tests = tests + 1
+							if valid(Vector(mx, my, mz), va, vb, vc) then hi = m else lo = m end
+						end
+						local _, _, _, dc = edgeAlong(c, hi, sx, sy, sz, lx, ly, lz, len)
+						if dc < best then best = dc end
+						break
+					end
+					prev = t
+				end
+			end
+		end
+	end
+	return best < math.huge and math.max(best, 0) or math.huge
+end
 --- sliced: slice checks between its world tests (objectDetour's calls; its scratch list is then its own).
 function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
 	local cand = (sliced and SLICE.co) and {} or candShared
@@ -1241,6 +1301,8 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
 	-- (pba_twodoors, open slide). Edges are tried while their best point could still beat the best way found.
 	table.sort(cand, byFirst)
 	if not valid then return n > 0 and math.max(cand[1][1], 0) or math.huge end
+	local cap = A.cfg and A.cfg.detour_max_tests or 0
+	if cap >= 1 then return detourCapped(cand, n, math.floor(cap), valid, sliced, va, vb, vc, sx, sy, sz, lx, ly, lz, len) end
 	local best = math.huge
 	for i = 1, n do
 		local c = cand[i]
