@@ -2,8 +2,12 @@
 -- native rendering on with pba_native_all). His client predicts his footsteps and gunfire: they reach the
 -- client's EntityEmitSound hook, possibly again for a command predicted twice; the server leaves them out
 -- of his relay. Each one must reach the module exactly once.
--- Pass: footsteps and SMG shots played by the module while walking and firing, no two plays of the same
--- file within 60 ms (a doubled step), each within 2 units of the listener.
+-- Pass: footsteps and SMG shots played by the module while walking and firing, none played twice (two plays of
+-- the same file in one frame, or a play made while the command is being re-predicted: IsFirstTimePredicted()
+-- false), each within 2 units of the listener.
+-- (Not "within 60 ms": at 20 fps the SMG's 75 ms rate reaches the client as shots in consecutive frames, 50 ms
+-- apart, each its own shot with its own hook call: traced, one play per EntityEmitSound call, all first-time.
+-- A time window shorter than the frame interval flagged those as doubled.)
 local N = pba.Native
 if not (N and N.render) then return { pass = false, err = "native renderer not running" } end
 if game.SinglePlayer() then return { pass = false, err = "needs a listen server" } end
@@ -17,7 +21,7 @@ local plays = {}
 local origPlay = pba_native.Play
 pba_native.Play = function(name, pos, ...)
 	local L = pba.ListenerPos()
-	plays[#plays + 1] = { n = tostring(name), t = SysTime(), d = (L and pos) and pos:Distance(L) or -1 }
+	plays[#plays + 1] = { n = tostring(name), t = SysTime(), f = FrameNumber(), ft = IsFirstTimePredicted(), d = (L and pos) and pos:Distance(L) or -1 }
 	return origPlay(name, pos, ...)
 end
 RunConsoleCommand("give", "weapon_smg1")
@@ -37,14 +41,14 @@ job:sleep(0.5)
 pba_native.Play = origPlay
 for c, v in pairs(saved) do RunConsoleCommand(c, v) end
 local steps, shots, doubled, far = 0, 0, 0, 0
-local last = {}
+local lastFrame = {}
 for _, p in ipairs(plays) do
 	local low = string.lower(p.n)
 	local own = string.find(low, "footstep", 1, true) or string.find(low, "smg1", 1, true)
 	if own then
 		if string.find(low, "footstep", 1, true) then steps = steps + 1 else shots = shots + 1 end
-		if last[p.n] and p.t - last[p.n] < 0.06 then doubled = doubled + 1 end
-		last[p.n] = p.t
+		if (lastFrame[p.n] and lastFrame[p.n] == p.f) or not p.ft then doubled = doubled + 1 end
+		lastFrame[p.n] = p.f
 		if p.d < 0 or p.d > 2 then far = far + 1 end
 	end
 end

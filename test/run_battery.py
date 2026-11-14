@@ -1023,7 +1023,7 @@ steps = [
     # a cancelled choreographed scene stops its line with a C++ StopSound: its relayed copy stops too
     ("scene_cancel", lambda: seq(lambda: load(TW), lambda: job("server", "scene_cancel_setup.lua"), lambda: job("client", "scene_cancel_mid.lua"), lambda: job("server", "scene_cancel_next.lua"), lambda: job("client", "scene_cancel.lua"))),
     ("mouth_stop", lambda: seq(lambda: load(TW), lambda: job("server", "scene_cancel_setup.lua"), lambda: job("client", "mouth_stop_mid.lua"), lambda: job("server", "scene_cancel_next.lua"), lambda: job("client", "mouth_stop.lua"))),
-    ("mouth_chan", lambda: seq(lambda: load(TW), lambda: py("mouth_chan.py"))),
+    ("mouth_chan", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("mouth_chan.py"))),
     # other addons' EntityEmitSound hooks run before pba's (pba_hook_last / pba_cl_hook_last): see every sound, their changes stand
     ("hook_order", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: py("hook_order.py"))),
     ("stop_followers", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("client", "stop_followers.lua"))),

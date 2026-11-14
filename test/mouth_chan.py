@@ -16,6 +16,9 @@ Phases (speaker, stop):
   long_server    Barney in clear sight, a 10.5 s line taken over by sv_loops (pba_long_lipsync), server StopSound
   long_pba       same, pba's own stop of the followed line (sv_loops LP.Stop, MouthStop) without the engine's StopSound
   long_scene     same line on CHAN_VOICE, the scene-cancel stop (pba_scenes' OnCanceled input) fired for the speaker
+Needs native rendering on (pba_native_render 1, the default): with it off, a line in clear sight is the engine's own
+sound (nothing taken, no mouth copy) and its server channel plays on after a stop pba alone sends: seen_pba is then
+meaningless, the test refuses to run (the battery step switches it on).
 Pass: before each stop a channel of the line is on the speaker's index (the copy exists), 0.2 s after it none.
 Usage: python -I test/mouth_chan.py <mcp.py> [phase,...] [--off]   (--off: the stop option off, must fail)"""
 import json, re, subprocess, sys, time, os
@@ -70,6 +73,8 @@ return n:EntIndex()""")
 
 
 def phase(name):
+    if lua("client", "local N = pba.Native return N ~= nil and N.render == true") is False:
+        return {"pass": False, "err": "needs native rendering (pba_native_render 1): without it the line in clear sight is the engine's"}
     where, kind = name.split("_")
     long = where == "long"
     idx = spawn(where == "unseen", "npc_barney" if long else "npc_citizen")
