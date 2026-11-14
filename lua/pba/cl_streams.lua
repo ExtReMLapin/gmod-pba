@@ -438,6 +438,8 @@ function ST.Tick()
 	local L = A.ListenerPos()
 	if not L then return end
 	local on = enabled()
+	-- pba off and no stream left to give back: nothing to do (no module call either)
+	if not A.Enabled() and next(ST.chans) == nil then ST.count = 0 return false end
 	local n = 0
 	for ch, r in pairs(ST.chans) do
 		local okv, valid = pcall(ch.IsValid, ch)

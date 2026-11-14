@@ -84,6 +84,7 @@ A.CONFIG = {
 	probe_field_ms  = { 1, 0.1, 10, "cl", "Time per frame (ms) spent keeping the listener's probe field up to date while moving (a full build is ~27 ms on a large map)." },
 	far_sliced      = { 1, 0, 1, "cl", "Far sounds' paths are computed over several frames: sound takes time to arrive (343 m/s, about 0.11 s for 2000 units), so the routes of a far sound are worked out a little each frame and are ready before the sound would reach you; the result is the same, without the frame spikes of new far routes. Near sounds and answers already known are computed at once as before. 0 = every sound computed at once." },
 	far_sliced_ms   = { 1.5, 0.1, 10, "cl", "Time per frame (ms) spent on far sounds' paths (pba_far_sliced). A path due before the next frame is finished at once whatever this budget." },
+	build_ms_combat = { 0, 0, 4, "cl", "Time per frame (ms) left to the background builds after a map load (probe graph, native world) while a fight is heard (loud sounds in the last 2 s); 0 = always 4 ms." },
 	group           = { 0, 0, 1, "cl", "Far sounds share the part of their routes that does not depend on them: a probe's route to you is worked out once and joined to every far sound that sees that probe (each keeps its own straight line, first leg and first corner, length and delay). Only where the source and the probe see each other through no wall, glass, door or prop, their straight lines to you are cut alike, and the probe is within pba_group_angle of the source seen from you. Experimental: not bit-identical to the per-sound routes." },
 	group_angle     = { 5, 0.5, 20, "cl", "Largest angle (degrees, seen from you) between a far sound and a probe whose route it shares (pba_group); 2 is about the smallest change of direction one can hear in front, 5 shares about 78% of far routes for a direction error up to ~3.5 deg (bench of 180 far sources). Entered at three quarters of it, left above it." },
 	group_min_dist  = { 1000, 0, 5000, "cl", "Distance (units) from which a sound shares routes (pba_group); nearer sounds always get their own." },
@@ -233,6 +234,7 @@ A.CONFIG = {
 	native_max_voices = { 64, 4, 128, "cl", "Max sounds played at once by the native module (the quietest is dropped beyond)." },
 	native_mem_mb   = { 512, 16, 4096, "cl", "Memory for sounds decoded by the native module (MB). Least recently played sounds are dropped to make room; a sound larger than this is left to the engine." },
 	native_file_mb  = { 48, 1, 512, "cl", "Largest sound file (MB, compressed) the native module will decode." },
+	native_predecode = { 0, 0, 1, "cl", "Decode every sound off the main thread (not only files over 512 KB): the first play of a sound not decoded yet is left to the engine, muffled by pba as usual. At map load, the likely burst sounds (explosions, breakables, the impacts of the map's props) are decoded ahead in the background." },
 	native_props_max = { 64, 0, 256, "cl", "Max props added to the Steam Audio scene (reflections)." },
 	loops           = { 1, 0, 1, "sv", "Take over looping sounds (vehicles, fire, alarms) and muffle them in place on each client." },
 }

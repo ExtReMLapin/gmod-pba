@@ -265,6 +265,7 @@ function N.Start()
 	if not ok then N.err = err return end
 	-- the world is gathered in a coroutine, 4 ms per frame (large maps: seconds of Lua work),
 	-- then handed to the module in one call
+	N.gathered = nil -- (a world held for calm: replaced by this build)
 	N.building = coroutine.create(function()
 		local t0 = SysTime()
 		local verts, tris, matIdx, mats, mins, maxs = N.BuildWorld()
@@ -277,17 +278,36 @@ end
 hook.Add("Think", "pba_native_build", function()
 	local co = N.building
 	if not co then return end
-	local deadline = SysTime() + 0.004
+	local held = N.gathered
+	if held then
+		-- the world gathered during a fight: its load into the module (one call, tens of ms) waits for calm
+		if A.Sched and A.Sched.HoldLongStep and A.Sched.HoldLongStep() then return end
+		local t1 = SysTime()
+		N.building, N.gathered = nil, nil
+		N.Finish(unpack(held, 1, 6))
+		if A.Sched and A.Sched.NoteBuild then A.Sched.NoteBuild((SysTime() - t1) * 1000) end
+		return
+	end
+	local t0 = SysTime()
+	-- 4 ms per frame, less during a fight (pba_build_ms_combat, cl_sched)
+	local bud = A.Sched and A.Sched.BuildBudget and A.Sched.BuildBudget() or 0.004
+	if bud <= 0 then return end
+	local deadline = t0 + bud
 	local function yield() if SysTime() > deadline then coroutine.yield() end end
 	N.Yield, A.BSP.Yield = yield, yield
 	local ok, verts, tris, matIdx, mats, mins, maxs = coroutine.resume(co)
 	N.Yield, A.BSP.Yield = nil, nil
+	if A.Sched and A.Sched.NoteBuild then A.Sched.NoteBuild((SysTime() - t0) * 1000) end
 	if not ok then
 		N.building, N.err = nil, "world build failed: " .. tostring(verts)
 		MsgN("[PBA] native backend: ", N.err)
 		return
 	end
 	if coroutine.status(co) ~= "dead" then return end
+	if A.Sched and A.Sched.HoldLongStep and A.Sched.HoldLongStep() then
+		N.gathered = { verts, tris, matIdx, mats, mins, maxs } -- (N.building kept: still building)
+		return
+	end
 	N.building = nil
 	N.Finish(verts, tris, matIdx, mats, mins, maxs)
 end)
@@ -309,6 +329,7 @@ function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 		tostring(N.moduleVersion), N.moduleApi or 0, pba_native.Version(), nt, #mats, N.buildMs or 0, SysTime() - (N.buildStart or SysTime()), N.loadMs))
 	if N.ready then N.StartRender() end
 	if N.ready then N.WantReverbBake() end
+	if N.ready then N.Prewarm() end
 	if N.ready and (A.cfg.native_paths or 0) >= 0.5 then
 		-- the probe graph is built in the background: bake once it is there
 		timer.Create("pba_native_bake", 1, 120, function()
@@ -534,6 +555,9 @@ local function cleanName(name)
 	return string.lower(A.SoundFile(name))
 end
 
+-- decodings started: on the main thread (LoadSound), on a worker (LoadSoundAsync), by the map load prewarm
+N.decodes = N.decodes or { main = 0, async = 0, prewarm = 0 }
+
 --- Makes sure the module has decoded `name`. Returns true, cleanName when playable natively;
 -- false, nil, "pending" while a large file decodes on the module's worker thread.
 function N.EnsureSound(name)
@@ -558,17 +582,129 @@ function N.EnsureSound(name)
 	-- an empty read (a file the game lists but cannot read, e.g. inside a mounted package) made
 	-- LoadSound raise "no data" every loop update: left to the engine like an undecodable sound
 	if not data or #data == 0 or #data > (A.cfg.native_file_mb or 48) * 1024 * 1024 then N.failed[n] = RealTime() return false end
-	if #data > 512 * 1024 and pba_native.LoadSoundAsync then
+	-- large files decode on a worker thread; with pba_native_predecode every file does (a burst's first sounds
+	-- cost the main thread up to 12 ms each: perf bench S11), the first play of each left to the engine
+	local asyncAbove = (A.cfg.native_predecode or 0) >= 0.5 and 0 or 512 * 1024
+	if #data > asyncAbove and pba_native.LoadSoundAsync then
 		pba_native.LoadSoundAsync(n, data)
 		N.loading = N.loading or {}
 		N.loading[n] = true
+		N.decodes.async = N.decodes.async + 1
 		return false, nil, "pending"
 	end
+	N.decodes.main = N.decodes.main + 1
 	local okLoad, secs, _, stereo = pcall(pba_native.LoadSound, n, data)
 	if not okLoad or not secs then N.failed[n] = RealTime() return false end
 	N.stereo[n] = stereo == true -- (nil from a module without stereo support: mono)
 	return true, n
 end
+
+-- ------------------------------------------------------------------ prewarm (pba_native_predecode)
+-- At map load (module ready), the sounds a fight brings at once are decoded ahead on worker threads: the
+-- explosion script, the breakables' scripts and the physics sounds (impacts, breaks, scrapes, bullet hits)
+-- of the surfaces of the map's props and of the usual gibs. A coroutine, PREWARM_MS per frame on the main
+-- thread (script lookups, file reads), at most PREWARM_INFLIGHT decodes running at once.
+local PREWARM_MS, PREWARM_INFLIGHT = 0.5, 4
+local PREWARM_SCRIPTS = { "BaseExplosionEffect.Sound", "BaseGrenade.Explode", "ExplosionCore.Wall" }
+local PREWARM_SURFACES = { "metal", "metal_barrel", "metalpanel", "wood", "wood_crate", "wood_plank", "glass",
+	"concrete", "plastic", "plastic_barrel", "dirt", "default" }
+local SURFACE_SOUNDS = { "impactHardSound", "impactSoftSound", "breakSound", "bulletImpactSound",
+	"scrapeRoughSound", "scrapeSmoothSound", "rollingSound", "strainSound" }
+
+--- The wave files of the likely burst sounds of this map (clean names, each once).
+function N.PrewarmList(yield)
+	yield = yield or function() end
+	local scripts, seen, out = {}, {}, {}
+	for _, s in ipairs(PREWARM_SCRIPTS) do scripts[#scripts + 1] = s end
+	for _, s in ipairs(sound.GetTable() or {}) do
+		if string.StartWith(string.lower(s), "breakable.") then scripts[#scripts + 1] = s end
+		yield()
+	end
+	local surfs = {}
+	for _, s in ipairs(PREWARM_SURFACES) do surfs[s] = true end
+	for _, e in ipairs(ents.GetAll()) do
+		local c = e:GetClass()
+		if string.StartWith(c, "prop_physics") or c == "func_breakable" or c == "func_physbox" then surfs[N.SurfaceOf(e)] = true end
+		yield()
+	end
+	for s in pairs(surfs) do
+		local d = util.GetSurfaceData(util.GetSurfaceIndex(s))
+		if d then
+			for _, k in ipairs(SURFACE_SOUNDS) do
+				local v = d[k]
+				if isstring(v) and v ~= "" then scripts[#scripts + 1] = v end
+			end
+		end
+	end
+	for _, s in ipairs(scripts) do
+		local p = sound.GetProperties(s)
+		local w = p and p.sound
+		if isstring(w) then w = { w } end
+		for _, f in ipairs(istable(w) and w or {}) do
+			local n = cleanName(f)
+			if n ~= "" and not seen[n] then seen[n] = true out[#out + 1] = n end
+		end
+		yield()
+	end
+	return out
+end
+
+--- Starts the prewarm (pba_native_predecode 1, module loaded); a running one is restarted.
+function N.Prewarm()
+	N.prewarm = nil
+	if (A.cfg.native_predecode or 0) < 0.5 or not N.ready or not pba_native.LoadSoundAsync then return end
+	local pw = { started = 0, done = false, deadline = 0 }
+	N.prewarm = pw
+	pw.co = coroutine.create(function()
+		local function yield() if SysTime() > pw.deadline then coroutine.yield() end end
+		local list = N.PrewarmList(yield)
+		pw.total = #list
+		local inflight = {}
+		for _, n in ipairs(list) do
+			-- at most PREWARM_INFLIGHT decodes at once (a thread each)
+			while true do
+				for m in pairs(inflight) do if not pba_native.SoundPending(m) then inflight[m] = nil end end
+				if table.Count(inflight) < PREWARM_INFLIGHT then break end
+				coroutine.yield()
+			end
+			local f = N.failed[n]
+			if not (pba_native.HasSound(n) or pba_native.SoundPending(n) or f) then
+				local data = file.Read("sound/" .. n, "GAME")
+				if data and #data > 0 and #data <= (A.cfg.native_file_mb or 48) * 1024 * 1024 and pba_native.LoadSoundAsync(n, data) then
+					N.loading = N.loading or {}
+					N.loading[n] = true
+					inflight[n] = true
+					pw.started = pw.started + 1
+					N.decodes.prewarm = N.decodes.prewarm + 1
+				end
+			end
+			yield()
+		end
+		while next(inflight) do
+			for m in pairs(inflight) do if not pba_native.SoundPending(m) then inflight[m] = nil end end
+			coroutine.yield()
+		end
+	end)
+end
+
+hook.Add("Think", "pba_native_prewarm", function()
+	local pw = N.prewarm
+	if not pw or pw.done then return end
+	if not N.ready then N.prewarm = nil return end
+	if not A.Enabled() then return end -- (pba off: no work; resumed when on again)
+	pw.deadline = SysTime() + PREWARM_MS / 1000
+	local ok, err = coroutine.resume(pw.co)
+	if not ok then
+		pw.done, pw.err = true, tostring(err)
+		ErrorNoHaltWithStack("[PBA] sound prewarm failed: " .. pw.err)
+	elseif coroutine.status(pw.co) == "dead" then
+		pw.done = true
+	end
+end)
+
+cvars.AddChangeCallback("pba_native_predecode", function(_, _, new)
+	if tonumber(new) == 1 then N.Prewarm() else N.prewarm = nil end
+end, "pba_native")
 
 -- ------------------------------------------------------------------ stereo files
 -- The module keeps both channels of a stereo file (pba_native.SetVoiceStereo). Source reads some of them
@@ -1165,8 +1301,16 @@ local function removeDyn(id)
 	N.doors[id] = nil
 end
 
+--- True while the module has work to do: pba on, or voices of its own still playing out after pba was switched
+-- off (they keep their listener until they end). pba off and silent: no listener, no door sync, no settings
+-- pushed (the perf bench measured up to 25 ms per frame of door / prop sync with pba_enable 0).
+function N.Busy()
+	return A.Enabled() or (N.live or 0) > 0
+end
+
 function N.SyncDoors()
 	if not N.ready or not pba_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
+	if not A.Enabled() then return end -- caught up when pba is switched on again (the sync diffs the scene)
 	local seen, nProps = {}, 0
 	local wantProps = (A.cfg.native_props or 0) >= 0.5
 	local cap = A.cfg.native_props_max or 64
@@ -1280,7 +1424,7 @@ function N.MasterVolume()
 end
 
 hook.Add("Think", "pba_native_listener", function()
-	if not N.render then return end
+	if not N.render or not N.Busy() then return end
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
 	local ang = ply:EyeAngles()
@@ -1408,6 +1552,7 @@ timer.Create("pba_native_reverb", 0.5, 0, function()
 	if N.echoCvar and N.echoCvar:GetBool() ~= want then RunConsoleCommand("pba_echo_want", want and "1" or "0") end
 	local all = N.render and (A.cfg.native_all or 0) >= 0.5 and A.Enabled() or false
 	if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("pba_native_all_want", all and "1" or "0") end
+	if not N.Busy() then return end -- pba off and silent: nothing to keep in sync (pushed again once on)
 	-- limits apply whatever renders (decoding also serves echoes)
 	if N.ready and pba_native and pba_native.SetLimits then pba_native.SetLimits(A.cfg.native_max_voices or 64, A.cfg.native_mem_mb or 512) end
 	if not N.render or not pba_native or not pba_native.RoomReverb then return end
