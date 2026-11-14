@@ -14,7 +14,19 @@ local native = A.Native and A.Native.render
 -- (only new copies count: the follower of the face run's copy, still sending its volume ramp after StopAllSounds
 -- as SND_CHANGE_VOL to the stopped copy, counted as a copy of the next run)
 local got = {}
-hook.Add("EntityEmitSound", "pba_test_floor", function(d)
+-- (observes through pba's own hook entry, not a hook of its own: with pba_cl_hook_last 1 the other addons' hooks
+-- never see pba's own engine copies, which are what this test looks for; a wrapper of pba's entry sees every
+-- emission, whatever the hook order and the option)
+local function probe(fn)
+	local orig = rawget(hook.GetTable().EntityEmitSound, "pba")
+	if not orig then return function() end end
+	local wrapped = function(d) pcall(fn, d) return orig(d) end
+	hook.Add("EntityEmitSound", "pba", wrapped)
+	return function()
+		if rawget(hook.GetTable().EntityEmitSound, "pba") == wrapped then hook.Add("EntityEmitSound", "pba", orig) end
+	end
+end
+local probeOff = probe(function(d)
 	if d.SoundName == NAME and (d.Volume or 1) > 0.01 and bit.band(d.Flags or 0, bit.bor(SND_STOP, SND_CHANGE_VOL, SND_CHANGE_PITCH)) == 0 then got[#got + 1] = d.Volume end
 end)
 local origPlay = pba_native and pba_native.Play
@@ -47,7 +59,7 @@ local ok, err = pcall(function()
 end)
 A.Paths.Compute, A.Slicer = origCompute, origSlicer
 if origPlay then pba_native.Play = origPlay end
-hook.Remove("EntityEmitSound", "pba_test_floor")
+probeOff()
 if not ok then return { pass = false, err = err } end
 local floor = A.AC.EngineGain(S:Distance(L), 75) * 10 ^ ((A.cfg.speech_floor_db or -20) / 20)
 local res = { native = native == true, face = A.testFace, noFace = A.testNoFace, floor = floor, checks = {} }
