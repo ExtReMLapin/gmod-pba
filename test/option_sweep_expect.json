@@ -227,6 +227,14 @@
   "pos0": "hook",
   "why": "sound start times (relay)"
  },
+ "soundtime_client": {
+  "pos0": "hook",
+  "why": "client-side sounds stamped with a start time (hook take-over)"
+ },
+ "patch_restart": {
+  "pos0": "hook",
+  "why": "a finished client patch restarted by a change (hook take-over)"
+ },
  "stopsound_watch": {
   "pos0": "hook",
   "why": "console stopsound watch"

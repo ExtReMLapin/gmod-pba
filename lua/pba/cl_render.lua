@@ -1370,6 +1370,9 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	-- long client-side sounds (music of client-side radios): followed like a loop
 	if A.Loops and A.Loops.HandleClient and A.Loops.HandleClient(data) then return false end
 	if not A.Eligible(data) then return end
+	-- (a sound stamped away from now waits for its stamp, as the engine would make it: A.ClientSoundDelay)
+	local stDelay = A.ClientSoundDelay(data)
+	if stDelay > 0 then data.Delay = stDelay end
 	local pos = A.SoundPos(data)
 	if not pos then return end
 	-- soundscape ambience around the ear: the engine's own (before the echoes)
