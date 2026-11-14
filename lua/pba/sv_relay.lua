@@ -48,13 +48,24 @@ end
 
 -- The engine captions a sound script when it emits the ORIGINAL; suppressed (relayed, or the .wav
 -- re-emitted for clear listeners, which has no caption token), its caption is sent on its own.
-local function sendCaption(data, plys)
+-- relayed: those players get the line by the relay (pba_snd, unreliable): their client plays it itself when no
+-- sound of that file reached it (pba_caption_net), from what follows the file: the speaker's index, channel,
+-- level, pitch, volume and position.
+local function sendCaption(data, plys, relayed)
 	local tok = data.OriginalSoundName
 	if #plys == 0 or not tok or tok == "" or tok == data.SoundName or not sound.GetProperties(tok) then return end
 	net.Start("pba_caption")
 	net.WriteString(tok)
 	net.WriteFloat(A.SoundDuration(data.SoundName) or 0)
 	net.WriteString(data.SoundName or "") -- (its file: the client's speech lines, pba_handback_speech)
+	local e = data.Entity
+	net.WriteBool(relayed == true)
+	net.WriteUInt(IsValid(e) and not e:IsWorld() and e:EntIndex() or 0, 16)
+	net.WriteInt(data.Channel or CHAN_AUTO, 16)
+	net.WriteUInt(math.Clamp(data.SoundLevel or 75, 0, 511), 9)
+	net.WriteUInt(math.Clamp(data.Pitch or 100, 0, 255), 8)
+	net.WriteFloat(data.Volume or 1)
+	net.WriteVector(A.SoundPos(data) or vector_origin) -- (a speaker out of the client's PVS: no entity there)
 	net.Send(plys)
 end
 A.SendCaption = sendCaption -- (sv_sound for relayed sounds; the long lines sv_loops takes over: pba_long_captions)
