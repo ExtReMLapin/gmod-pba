@@ -37,7 +37,7 @@ if len(sys.argv) < 2 or sys.argv[1].startswith("--"):
     sys.exit(3)
 MCP = sys.argv[1]  # path to the gmod-mcp client (mcp.py)
 GAME = os.environ.get("PBA_GAME_DIR", r"D:\SteamLibrary\steamapps\common\GarrysMod\garrysmod")  # garrysmod/ folder
-LOG = os.path.join(TEST, "battery_last.log")
+LOG = os.path.join(TEST, "battery_last%s.log" % (("_" + os.environ["MCP_INSTANCE"]) if os.environ.get("MCP_INSTANCE") else ""))  # one per instance: parallel runs no longer mix
 sys.path.insert(0, TEST)
 
 def call(tool, args, mx=200000, timeout=600):
