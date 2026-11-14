@@ -148,7 +148,7 @@ cl_loops.lua:continuous_ramp=0 cl_loops.lua:long_sounds=0 cl_loops.lua:loops=0
 cl_loops.lua:loops_client=0 cl_loops.lua:loops_cpp_client=0 cl_loops.lua:native_quiet_law=0
 cl_loops.lua:native_voice_mix=0 cl_loops.lua:patch_oneshots=0 cl_native.lua:lp_hyst_db=0 cl_native.lua:native_air=0
 cl_native.lua:native_all=0 cl_native.lua:native_dir=0 cl_native.lua:native_doors=0 cl_native.lua:native_doppler=0
-cl_native.lua:native_echo=0 cl_native.lua:native_own=0 cl_native.lua:native_loud_dry=0 cl_native.lua:native_path_fx=0 cl_native.lua:native_props=0
+cl_native.lua:native_echo=0 cl_native.lua:native_loud_dry=0 cl_native.lua:native_path_fx=0 cl_native.lua:native_props=0
 cl_native.lua:native_render=0 cl_native.lua:native_reverb_window=0 cl_native.lua:native_room_open_area=0
 cl_native.lua:native_stereo_width=0 cl_native.lua:native_voice_mix=0 cl_probes.lua:group_angle=2
 cl_probes.lua:native_traces=0 cl_probes.lua:probe_skip_links=0 cl_probes.lua:route_pos_straight=0
@@ -164,7 +164,7 @@ sh_paths.lua:trans_bundle=0 sh_paths.lua:trans_bundle_edge=0 sh_paths.lua:trans_
 sh_paths.lua:trans_pos_clamp=0 sh_paths.lua:trans_route=0 sh_paths.lua:trans_tilt=0 sh_paths.lua:trans_window_soft=0
 sh_paths.lua:wall_merge_graze=0 sh_paths.lua:water_margin=0 sv_loops.lua:long_lipsync=0 sv_loops.lua:long_sounds=0
 sv_loops.lua:loops=0 sv_loops.lua:patch_oneshots=0 sv_loops.lua:phys_loops_muffle=0 sv_sound.lua:far_muffle=0
-sv_sound.lua:relay_name_rate=0 sv_sound.lua:sentences=0
+sv_sound.lua:sentences=0
 """.split())
 cfg_defaults = {n: float(v) for n, v in re.findall(r"^\t(\w+)\s*=\s*\{\s*(-?[\d.]+)", cfg_src, re.M)}
 fb_seen = set()
