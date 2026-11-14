@@ -24,7 +24,125 @@ A.reemitting = false
 --- Registers a hook managed by the master switch.
 function A.AddHook(event, fn)
 	A.hooks[event] = fn
-	if A.hooksInstalled then hook.Add(event, "pba", fn) end
+	if A.hooksInstalled then hook.Add(event, "pba", A.HookFn(event, fn)) end
+end
+
+-- ------------------------------------------------------------------ pba's EntityEmitSound runs after the others
+-- hook.Call stops at the first hook that returns non-nil, and goes through the hooks of an event in the
+-- table's hash order (not the alphabet, not the order they were added in). pba's handler returns false when it
+-- takes a sound over (relay, re-emission): every other addon's EntityEmitSound hook placed after it never saw
+-- the sound, and one that changes it (pitch, volume, name: it returns true) placed before it hid the sound from
+-- pba, which then neither muffled nor relayed it. Wanted: the other hooks see every sound, in their own order,
+-- their verdict is honoured (false = blocked: pba never sees it; true = the changes stand: pba works on the
+-- changed sound), and pba decides last.
+-- What cannot be done, measured in game: wrapping hook.Call (the engine calls the closure it cached when the hook
+-- module loaded: a replaced hook.Call sees no engine event, not even Think; debug.setupvalue does not exist
+-- either, so nothing of that closure can be swapped), and GM:EntityEmitSound (the gamemode function only runs
+-- when every hook returned nil: a hook that changed the sound and returned true hid it from pba again).
+-- What is left is the table the closure reads: hook.Call iterates the hook table of the event with pairs(), whose
+-- order is not ours but whose content is. While the chain is on, that table holds pba's entry alone, and the
+-- other addons' hooks sit in a shadow table behind it: a metatable sends hook.Add / hook.Remove (any write of
+-- a key the table does not hold) to the shadow table, and reads fall through to it, so hook.GetTable()
+-- .EntityEmitSound[name] still answers (pairs() over it lists pba's entry only: the cost of the method, see the
+-- docs). pba's handler (A.EmitDispatcher) runs the shadow table's hooks itself, with hook.Call's rules (a string
+-- key is called with the sound; another key, an entity or a panel, is called with itself first and dropped when
+-- invalid; the first non-nil result wins and ends the chain), each protected so that a broken hook neither stops
+-- the others nor pba, then its own handler last. It returns what hook.Call would have: false when a hook or pba
+-- blocks or takes the sound, true when the changes stand, nil otherwise (the gamemode function runs then).
+-- pba's own re-emissions (A.reemitting: the copies, the fallbacks, the mirrors' patches) reach pba's handler alone:
+-- the original is seen once by the other addons, with their changes in it, and its copies are the engine's
+-- business (a copy shown to a pitch-changing addon a second time would be halved twice).
+-- Without pba's entry in the table (pba off) or with the convar at 0 (pba_hook_last on the server, pba_cl_hook_last
+-- on a client) every hook is back in the table: exactly the engine's own behaviour.
+A.emitChain = A.emitChain or { shadow = {} }
+
+local function onHookError(e) ErrorNoHaltWithStack(e) return e end
+
+--- The handler installed as pba's EntityEmitSound hook: `core` is the handler registered with A.AddHook.
+function A.EmitDispatcher(core)
+	return function(data)
+		if not A.emitChainOn or A.reemitting then return core(data) end
+		local verdict
+		for k, v in next, A.emitChain.shadow do
+			local ok, a
+			if isstring(k) then
+				ok, a = xpcall(v, onHookError, data)
+			elseif IsValid(k) then
+				ok, a = xpcall(v, onHookError, k, data)
+			else
+				A.emitChain.shadow[k] = nil
+				ok = true
+			end
+			if not ok then a = nil end
+			if a ~= nil then verdict = a break end
+		end
+		if verdict == false then return false end
+		local ret = core(data)
+		if ret == nil then return verdict end
+		return ret
+	end
+end
+
+--- pba's handler for `event` as it goes into the hook table.
+function A.HookFn(event, fn)
+	if event == "EntityEmitSound" then return A.EmitDispatcher(fn) end
+	return fn
+end
+
+local function shadowMeta()
+	local c = A.emitChain
+	if not c.meta then
+		c.meta = {
+			-- a key the table does not hold: pba's own entry (removed, then added again) stays in it, the others go behind
+			__newindex = function(t, k, v)
+				if k == "pba" then rawset(t, k, v) else A.emitChain.shadow[k] = v end
+			end,
+			__index = function(t, k) return A.emitChain.shadow[k] end,
+		}
+	end
+	return c.meta
+end
+
+--- Chain switched on or off (pba_hook_last / pba_cl_hook_last and the master switch). Returns whether it is on.
+function A.SetEmitChain(on)
+	local c = A.emitChain
+	local hooks = hook.GetTable()
+	local tbl = rawget(hooks, "EntityEmitSound")
+	if on and tbl and rawget(tbl, "pba") ~= nil then
+		local mt = getmetatable(tbl)
+		if mt ~= nil and mt ~= shadowMeta() then
+			-- somebody else's metatable on the table: left alone
+			c.err = "the hook table has a metatable already"
+			A.emitChainOn = false
+			return false
+		end
+		for k, v in next, tbl do
+			if k ~= "pba" then c.shadow[k] = v tbl[k] = nil end
+		end
+		setmetatable(tbl, shadowMeta())
+		c.err = nil
+		A.emitChainOn = true
+		return true
+	end
+	A.emitChainOn = false
+	if tbl and getmetatable(tbl) == c.meta then
+		setmetatable(tbl, nil)
+	end
+	-- every hook back in the table (also when pba's table went away: they must not be lost in the shadow)
+	local back = tbl or {}
+	if tbl == nil and next(c.shadow) ~= nil then hooks.EntityEmitSound = back end
+	for k, v in next, c.shadow do
+		if rawget(back, k) == nil then rawset(back, k, v) end
+		c.shadow[k] = nil
+	end
+	return false
+end
+
+--- True when this realm's convar asks for the chain.
+function A.EmitChainWanted()
+	local v
+	if SERVER then v = A.cfg.hook_last else v = A.cfg.cl_hook_last end
+	return (v or 1) >= 0.5
 end
 
 -- Engine rule: a new sound on an entity's replacing channel (not CHAN_AUTO / CHAN_STATIC) cuts
@@ -233,9 +351,10 @@ end)
 
 function A.InstallHooks(on)
 	for event, fn in pairs(A.hooks) do
-		if on then hook.Add(event, "pba", fn) else hook.Remove(event, "pba") end
+		if on then hook.Add(event, "pba", A.HookFn(event, fn)) else hook.Remove(event, "pba") end
 	end
 	A.hooksInstalled = on
+	A.SetEmitChain(on and A.EmitChainWanted())
 	if SERVER and A.Doors then
 		if on then A.Doors.Start() else A.Doors.Stop() end
 	end
@@ -252,6 +371,7 @@ end
 
 function A.OnConfigChanged(name)
 	if name == "enable" or name == "cl_enable" then A.Refresh() end
+	if name == (SERVER and "hook_last" or "cl_hook_last") then A.SetEmitChain(A.hooksInstalled and A.EmitChainWanted()) end
 	-- the server learns that this client switched pba off or on (sv_relay pba_relay_cl_enable)
 	if (name == "enable" or name == "cl_enable") and CLIENT and A.SayReady then A.SayReady() end
 	-- loops switched off: their mirrors go back to the engine; on again: taken over again
@@ -653,6 +773,8 @@ concommand.Add("pba_status", function(ply)
 	print(string.format("[PBA] %s %s | enabled=%s hooks=%s | map=%s areas=%s portals=%s build=%.1fms",
 		SERVER and "server" or "client", A.VERSION, tostring(A.Enabled()), tostring(A.hooksInstalled),
 		game.GetMap(), g and g.numAreas or "-", g and #g.portals or "-", g and (g.buildTime or 0) * 1000 or 0))
+	print(string.format("[PBA] %s EntityEmitSound: other addons' hooks run first = %s%s", SERVER and "server" or "client",
+		tostring(A.emitChainOn == true), A.emitChain.err and (" (" .. A.emitChain.err .. ")") or ""))
 end)
 
 --- True when the console command line `cmd` runs stopsound or snd_restart (the engine then stops every
