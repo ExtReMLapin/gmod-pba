@@ -378,6 +378,24 @@ def long_sound_boundary():
         call("console_exec", {"realm": "client", "cmd": "pba_loops_once_end 1"})
     return {"pass": not fails, "fails": fails, "res": res}
 
+def glass_window():
+    """T14: the glass cell of pba_materials loses what AC.WallLoss says (+-3 dB), the lightest muffling class, its voice
+    on the pane, 15 dB less than concrete and less than the metal beside it (glass_window_cells.lua); the open window
+    of pba_window gives one loud portal voice inside the opening (glass_window_open.lua)."""
+    RED = os.environ.get("PBA_RED", "").split(",")  # red proof: glass (glass made concrete) / window (edge diffraction off)
+    load("pba_materials")
+    pre = "RED_GLASS = true" + chr(10) if "glass" in RED else "RED_GLASS = nil" + chr(10)
+    code = pre + open(os.path.join(TEST, "glass_window_cells.lua"), encoding="utf-8").read()
+    r1 = call("lua_job", {"realm": "client", "code": code, "timeout_s": 60}, timeout=120)
+    r1 = r1.get("values", [r1])[0]
+    load("pba_window")
+    pre = "RED_WINDOW = " + ("true" if "window" in RED else "nil") + chr(10)
+    code = pre + open(os.path.join(TEST, "glass_window_open.lua"), encoding="utf-8").read()
+    r2 = call("lua_job", {"realm": "client", "code": code, "timeout_s": 60}, timeout=120)
+    r2 = r2.get("values", [r2])[0]
+    return {"pass": isinstance(r1, dict) and isinstance(r2, dict) and r1.get("pass") is True and r2.get("pass") is True,
+            "cells": r1, "window": r2}
+
 def speaker_once():
     """Long one-shots on a speaker: speaker_once_server.lua starts the lines, speaker_once_check.lua (with its
     result in PBA_SPK) checks the client mirrors end with their file and are replaced on their channel."""
@@ -1003,6 +1021,8 @@ steps = [
     ("levels_off_states", lambda: levels_off_states()),
     # T15: one line either side of max_duration (long sound / short): same wall, subtitle, mouth, end; long_sounds 0 leaves it to the engine
     ("long_sound_boundary", lambda: long_sound_boundary()),
+    # T14: glass loses what the table says, lightest class, voice on the pane; the open window gives a loud portal voice inside the opening
+    ("glass_window", lambda: glass_window()),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
