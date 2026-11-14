@@ -1079,6 +1079,19 @@ function N.PauseFlag(flags)
 	return (A.cfg.native_pause or 1) >= 0.5 and N.PauseSupported() and bit.band(flags or 0, SND_SHOULDPAUSE or 128) ~= 0 or nil
 end
 
+--- True for the listener's own sound (his footsteps, his weapon's shots, his voice and pain: the entity is him or a
+-- weapon he holds) when the module plays it (pba_native_own) and leaves its direct path unspatialised
+-- (pba_native_own_direct): the engine does not spatialise the listener's own sounds, and the HRTF at 1 unit
+-- coloured and softened them (the module's Play flag `own`; a module without it ignores it). nil otherwise.
+function N.OwnDirect(ent, chan)
+	if (A.cfg.native_own_direct or 1) < 0.5 or not (A.NativeOwn and A.NativeOwn()) or not IsValid(ent) then return nil end
+	local lp = LocalPlayer()
+	if not IsValid(lp) then return nil end
+	if ent == lp then return true end
+	local _, owner = A.ShotWeapon(ent, chan)
+	return owner == lp or nil
+end
+
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
 	opt = opt or {}
@@ -1099,8 +1112,8 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local srcPos = opt.srcPos
 	if N.DryMix(name) then roomSend, srcPos = 0, nil end
 	local id
-	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect, opt.pausable)
-	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect, opt.pausable) end
+	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect, opt.pausable, opt.own)
+	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect, opt.pausable, opt.own) end
 	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
 	if id and id > 0 and srcPos and L then
 		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then

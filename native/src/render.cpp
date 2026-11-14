@@ -106,6 +106,11 @@ struct Voice {
 	// kStereoSpread (width 0: both at the source, the sum is the downmix exactly).
 	float sel = 0, selCur = 0, width = 0;
 	int slot2 = -1; // second effect pair of a stereo-width voice (index in the effect pool)
+	// the listener's own sound (VoiceParams::own, Play): the direct path is not spatialised (no HRTF, no panning, no
+	// stereo width, no diffuse share): what the engine does with the listener's own sounds. A stereo file
+	// keeps its two channels on the two ears (slot2 filters the side channel), a mono one is the same on
+	// both. The room sends are the same as for any voice.
+	bool own = false;
 	std::atomic<bool> alive{true};
 	// targets (set from Lua) and current values (smoothed in the audio thread)
 	IPLVector3 pos{};
@@ -238,6 +243,9 @@ bool g_paused = false;
 float g_uw = 0, g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: target, current mix, LP states
 float g_roomRt[3] = {0, 0, 0}; // under g_mtx
 std::vector<float> g_mix(kBlock * 2);
+// offline capture (CaptureStart): what every block rendered, before the master volume
+bool g_capOn = false;
+std::vector<float> g_capMix, g_capRoom, g_capSrc; // under g_mtx (the audio thread holds it while rendering)
 std::vector<float> g_side(kBlock); // the side channel of the voice being rendered (stereo sounds)
 // largest lateral shift of the two channels of a stereo-width voice (tangent of the angle each one moves
 // away from the source seen straight ahead: tan 30 deg, a stereo speaker pair)
@@ -555,7 +563,7 @@ void RenderBlock() {
 		// its direction blurs (binaural spatial blend); the total energy is kept
 		const float encl = g_diffuseRtRef > 0 ? std::clamp(g_roomRt[1] / g_diffuseRtRef, 0.0f, 1.0f) : 1.0f;
 		const float dif = v.diffuse * encl;
-		const float directGain = std::sqrt(std::max(1.0f - dif, 0.0f));
+		const float directGain = v.own ? 1.0f : std::sqrt(std::max(1.0f - dif, 0.0f));
 		const float sendBoost = 1.0f + g_diffuseSend * dif;
 		// path / straight-line share (see Voice::pathMixCur): a voice given a path by Update fades
 		// from the straight line into it over one block, and back when Update drops the path
@@ -625,7 +633,35 @@ void RenderBlock() {
 			// stereo width (Voice::width): the left channel = mid + side and the right one = mid - side,
 			// each at half level (their sum at one place is the mid), apart by the width. Steered in the
 			// listener's frame: the left channel stays on the listener's left whatever the source's bearing.
-			if (v.slot2 >= 0 && v.snd && !v.snd->side.empty() && v.sel == 0 && v.selCur == 0) {
+			if (v.own) {
+				// the listener's own sound: no spatialisation at all (VoiceParams::own). A stereo file (the
+				// two channels not picked apart by sel) goes left to the left ear and right to the right
+				// one, at the file's level; anything else is the same on both ears.
+				float* a = bin_in->data[0];
+				float* l = g_stereo.data[0];
+				float* r = g_stereo.data[1];
+				if (v.slot2 >= 0 && v.snd && !v.snd->side.empty() && v.sel == 0 && v.selCur == 0) {
+					// the side channel through its own EQ and gain, like the mid
+					const float* sd = g_side.data();
+					std::copy(sd, sd + kBlock, g_mono4.data[0]);
+					if (bin_in == &g_mono2) {
+						IPLDirectEffectParams dp{};
+						dp.flags = IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION;
+						for (int q = 0; q < 3; ++q) dp.airAbsorption[q] = v.eq[q];
+						iplDirectEffectApply(g_pool[v.slot2].direct, &dp, &g_mono4, &g_mono3);
+						std::copy(g_mono3.data[0], g_mono3.data[0] + kBlock, g_mono4.data[0]);
+					}
+					applyGain(g_mono4.data[0]);
+					const float* s2 = g_mono4.data[0];
+					for (int i = 0; i < kBlock; ++i) {
+						l[i] = a[i] + s2[i];
+						r[i] = a[i] - s2[i];
+					}
+				} else {
+					std::copy(a, a + kBlock, l);
+					std::copy(a, a + kBlock, r);
+				}
+			} else if (v.slot2 >= 0 && v.snd && !v.snd->side.empty() && v.sel == 0 && v.selCur == 0) {
 				const float k = v.width * kStereoSpread;
 				auto shifted = [&](float dx) {
 					IPLVector3 d{dir.x + dx, dir.y, dir.z};
@@ -692,6 +728,14 @@ void RenderBlock() {
 		}
 	}
 
+	if (g_capOn) {
+		g_capMix.insert(g_capMix.end(), g_mix.begin(), g_mix.end());
+		g_capRoom.insert(g_capRoom.end(), g_room.in.data[0], g_room.in.data[0] + kBlock);
+		const size_t at = g_capSrc.size();
+		g_capSrc.resize(at + kBlock, 0.0f);
+		for (auto& e : g_src)
+			for (int i = 0; i < kBlock; ++i) g_capSrc[at + i] += e.in.data[0][i];
+	}
 	// reflections -> ambisonic bus -> decode
 	ApplyReflection(g_room, g_wetRoom, g_roomRt);
 	// echo and source slots: their own tail, never shorter than the room's (see ApplyReflection)
@@ -1245,6 +1289,33 @@ std::vector<float> SoundPcm(const std::string& name) {
 	return it == g_sounds.end() ? std::vector<float>() : it->second->pcm;
 }
 
+std::vector<float> SoundSide(const std::string& name) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	auto it = g_sounds.find(name);
+	return it == g_sounds.end() ? std::vector<float>() : it->second->side;
+}
+
+void CaptureStart() {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_capMix.clear();
+	g_capRoom.clear();
+	g_capSrc.clear();
+	g_capOn = true;
+}
+
+void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_capOn = false;
+	if (mix) *mix = std::move(g_capMix);
+	if (roomSend) *roomSend = std::move(g_capRoom);
+	if (srcSend) *srcSend = std::move(g_capSrc);
+	g_capMix.clear();
+	g_capRoom.clear();
+	g_capSrc.clear();
+}
+
+float OutputClip(float x) { return SoftClip(x); }
+
 bool HasSound(const std::string& name) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	return g_sounds.count(name) != 0;
@@ -1514,6 +1585,19 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 	v->protect = p.protect;
 	v->pausable = p.pausable;
 	v->cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
+	v->own = p.own;
+	if (p.own && !v->snd->side.empty()) {
+		// a stereo file: the side channel needs an effect pair of its own for the voice's EQ (none free: the
+		// downmix on both ears)
+		const int k = FindEffect();
+		if (k >= 0) {
+			g_pool[k].used = true;
+			iplDirectEffectReset(g_pool[k].direct);
+			iplBinauralEffectReset(g_pool[k].binaural);
+			iplPanningEffectReset(g_pool[k].pan);
+			v->slot2 = k;
+		}
+	}
 	SetVoice(*v, p); // takes a path effect if p.hasSH (see AcquirePath)
 	if (p.offset > 0) {
 		// offset is playback time: at pitch 150 the sound has advanced 1.5 s of pcm per second.

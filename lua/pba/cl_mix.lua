@@ -314,7 +314,7 @@ function M.Wrap()
 	if not pba_native or pba_native.pbaMixWrapped then return end
 	pba_native.pbaMixWrapped = true
 	local play, update, reflect, stop = pba_native.Play, pba_native.Update, pba_native.SourceReflect, pba_native.StopVoice
-	pba_native.Play = function(n, pos, gain, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable)
+	pba_native.Play = function(n, pos, gain, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable, own)
 		local g = M.pending
 		M.pending = nil
 		if g and gain then
@@ -322,7 +322,7 @@ function M.Wrap()
 			gain = gain * k
 			if roomSend then roomSend = roomSend * k end
 		end
-		local id = play(n, pos, gain, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable)
+		local id = play(n, pos, gain, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable, own)
 		if g and id and id > 0 then M.voice[id] = { g = g, t = RealTime() } end
 		local lp = M.lastPlay -- (what the module was given: tests)
 		lp.id, lp.gain = id, gain
