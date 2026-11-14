@@ -922,7 +922,7 @@ steps = [
     # pba_native_predecode (perf O4): no main-thread decode in a burst, map load prewarm of the burst sounds
     ("native_predecode", lambda: seq(lambda: native_on(True), lambda: job("client", "native_predecode.lua", 90))),
     # the prewarm's entity walk spans frames: an entity removed meanwhile is skipped (was: whole prewarm lost)
-    ("prewarm_null_entity", "mcp_encoding (pure)", lambda: job("client", "prewarm_null_entity.lua", 30)),
+    ("prewarm_null_entity", lambda: job("client", "prewarm_null_entity.lua", 30)),
     ("native_props_calm", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_calm_setup.lua"), lambda: job("client", "native_props_calm.lua", 60))),
     ("detour_cap", lambda: seq(lambda: load(TW), lambda: job("server", "detour_cap_setup.lua"), lambda: job("client", "detour_cap.lua", 60))),
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
@@ -1300,6 +1300,12 @@ if ONLY:
         print("unknown step(s): " + "; ".join(hints) + " (" + str(len(known)) + " known steps)")
         sys.exit(3)
     steps = [s_ for s_ in steps if s_[0] in ONLY]
+
+# a step is (label, function): a merge once put two labels in one tuple, the run crashed half-way
+_bad_steps = [s_ for s_ in steps if not (isinstance(s_, tuple) and len(s_) == 2 and callable(s_[1]))]
+if _bad_steps:
+    print("malformed battery step(s): " + "; ".join(repr(s_[:-1]) for s_ in _bad_steps), flush=True)
+    sys.exit(3)
 
 # ------------------------------------------------------------------ preflight
 
