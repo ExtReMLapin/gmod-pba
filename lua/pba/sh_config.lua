@@ -236,6 +236,7 @@ A.CONFIG = {
 	native_file_mb  = { 48, 1, 512, "cl", "Largest sound file (MB, compressed) the native module will decode." },
 	native_predecode = { 0, 0, 1, "cl", "Decode every sound off the main thread (not only files over 512 KB): the first play of a sound not decoded yet is left to the engine, muffled by pba as usual. At map load, the likely burst sounds (explosions, breakables, the impacts of the map's props) are decoded ahead in the background." },
 	native_props_max = { 64, 0, 256, "cl", "Max props added to the Steam Audio scene (reflections)." },
+	native_props_calm = { 0, 0, 1, "cl", "Props in the Steam Audio scene are updated (added, moved, removed) only out of fights and at most once a second: each update rebuilds the whole scene (about 18 ms on a campaign map), and an explosion's flying barrels and debris asked for one every 0.1 s. They are put where they came to rest. Doors are always updated at once." },
 	loops           = { 1, 0, 1, "sv", "Take over looping sounds (vehicles, fire, alarms) and muffle them in place on each client." },
 }
 
