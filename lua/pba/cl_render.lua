@@ -1032,12 +1032,21 @@ end
 -- (P.Cheap: the walls' transmission, never vanilla through a wall). burst_mask_db: within BURST_MASK_S of a
 -- loud sound, a sound more than that many dB quieter at the ear (its level in plain sight, no trace)
 -- gets the cheap model at once. A followed degraded sound gets its full evaluation at its next update.
+-- pba_burst_fair (the cheap model ignores the routes round the walls: an 80 dB impact behind a wall with an
+-- open doorway came out 29 dB under its full result, then jumped up at its first update 0.1-0.26 s later,
+-- +18..+49 dB in the 2026-11-14 sweep): before the cheap model, a new sound takes the recent full result of a
+-- nearby source of its level whatever its emitter (bullet impacts, debris: the world or new entities, never
+-- the same emitter twice); a new sound louder at the ear than the loudest of the window (an explosion) is
+-- never degraded (the budget goes to what is heard).
 local BURST_REUSE_U = 64
+local BURST_NEAR_U, BURST_NEAR_N, BURST_LOUDER_DB = 128, 32, 6
 local BURST_MASK_S = 0.1
 local BURST_REF_U = 36
 A.burst = A.burst or { frame = -1, spent = 0, loudT = -1, loudDb = -math.huge,
 	byEmitter = setmetatable({}, { __mode = "k" }) }
 A.burst.loudT, A.burst.loudDb = A.burst.loudT or -1, A.burst.loudDb or -math.huge -- (a reload over the budget's version)
+A.burst.near = A.burst.near or {} -- (pba_burst_fair) the last BURST_NEAR_N full results, a ring
+A.burst.nearI = A.burst.nearI or 0
 function A.ResetBurstStats() A.burstStats = { full = 0, reused = 0, deferred = 0, cheap = 0, masked = 0 } end
 if not A.burstStats then A.ResetBurstStats() end
 
@@ -1050,25 +1059,47 @@ local function masked(db, now, maskDb)
 	return m
 end
 
+-- (pba_burst_fair) the recent full result of the nearest source within BURST_NEAR_U of S, of level lvl, heard
+-- from within BURST_REUSE_U of L, the world unchanged: whatever its emitter
+local function nearResult(S, L, lvl, now, dry)
+	local B, P = A.burst, A.Paths
+	local best, bd = nil, BURST_NEAR_U * BURST_NEAR_U
+	local r2, maxAge = BURST_REUSE_U * BURST_REUSE_U, A.cfg.reeval_max_s or 1
+	for _, m in pairs(B.near) do
+		if m.gen == P.cacheGen and m.lvl == lvl and m.dry == dry and now - m.t <= maxAge and m.L:DistToSqr(L) <= r2 then
+			local d = m.S:DistToSqr(S)
+			if d <= bd then best, bd = m, d end
+		end
+	end
+	return best and best.r
+end
+
 local function burstEvaluate(data, S, L, lvl, src)
 	local P, B, st = A.Paths, A.burst, A.burstStats
 	local dry = A.Render.WaterDry(nil, data.SoundName)
 	local cfg = dry and P.DRY_SOURCE_CFG or nil
 	local now = RealTime()
 	local maskDb = A.cfg.burst_mask_db or 25
+	local fair = (A.cfg.burst_fair or 1) >= 0.5
+	-- its level at the ear, in plain sight: SNDLVL at 36 u (about 1 m), spherical spreading beyond (the
+	-- engine's gain, clamped to full scale, put a 140 dB explosion 9 dB over an 80 dB impact at 20 m)
+	local db = lvl + 20 * math.log10(math.max(data.Volume or 1, 1e-4)) - 20 * math.log10(math.max(S:Distance(L), BURST_REF_U) / BURST_REF_U)
+	-- (pba_burst_fair) louder than everything of the window by BURST_LOUDER_DB: the one heard, never degraded
+	local loudest = fair and not (B.loudT >= 0 and now - B.loudT <= BURST_MASK_S and db < B.loudDb + BURST_LOUDER_DB)
 	if maskDb > 0 then
-		-- its level at the ear, in plain sight: SNDLVL at 36 u (about 1 m), spherical spreading beyond (the
-		-- engine's gain, clamped to full scale, put a 140 dB explosion 9 dB over an 80 dB impact at 20 m)
-		local db = lvl + 20 * math.log10(math.max(data.Volume or 1, 1e-4)) - 20 * math.log10(math.max(S:Distance(L), BURST_REF_U) / BURST_REF_U)
 		if masked(db, now, maskDb) then
 			st.masked = st.masked + 1
+			local n = fair and nearResult(S, L, lvl, now, dry)
+			if n then st.reused = st.reused + 1 return n end
 			return P.Cheap(S, L, lvl, cfg, src)
 		end
+	elseif fair and (B.loudT < 0 or now - B.loudT > BURST_MASK_S or db >= B.loudDb) then
+		B.loudT, B.loudDb = now, db -- (the window is kept for the loudest rule with masking off)
 	end
 	local budget = (A.cfg.burst_budget_ms or 2) / 1000
 	local fr = FrameNumber()
 	if B.frame ~= fr then B.frame, B.spent = fr, 0 end
-	if budget > 0 and B.spent >= budget then
+	if budget > 0 and B.spent >= budget and not loudest then
 		local m = src and B.byEmitter[src]
 		local r2 = BURST_REUSE_U * BURST_REUSE_U
 		if m and m.gen == P.cacheGen and m.lvl == lvl and now - m.t <= (A.cfg.reeval_max_s or 1)
@@ -1076,6 +1107,8 @@ local function burstEvaluate(data, S, L, lvl, src)
 			st.reused = st.reused + 1
 			return m.r
 		end
+		local n = fair and nearResult(S, L, lvl, now, dry)
+		if n then st.reused = st.reused + 1 return n end
 		local job = A.Slicer and A.Slicer.Defer(S, L, lvl, src, cfg)
 		if job then
 			st.deferred = st.deferred + 1
@@ -1096,8 +1129,16 @@ local function burstEvaluate(data, S, L, lvl, src)
 		m.r, m.t, m.gen, m.lvl, m.S, m.L = r, now, P.cacheGen, lvl, Vector(S), Vector(L)
 		B.byEmitter[src] = m
 	end
+	if r and fair and not r.cheap then
+		B.nearI = B.nearI % BURST_NEAR_N + 1
+		local m = B.near[B.nearI] or {}
+		m.r, m.t, m.gen, m.lvl, m.dry = r, now, P.cacheGen, lvl, dry
+		if m.S then m.S:Set(S) m.L:Set(L) else m.S, m.L = Vector(S), Vector(L) end
+		B.near[B.nearI] = m
+	end
 	return r, job
 end
+A.BurstEvaluate = burstEvaluate -- (tests: test/burst_fair.lua)
 
 function A.Process(data, relayed)
 	local L, ang = listenerPos()
