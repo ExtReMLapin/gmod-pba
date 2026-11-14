@@ -179,15 +179,6 @@ function meta:GetPos()
 	return O.GetPos(self)
 end
 
-function meta:SetVolume(v)
-	local r = ST.chans[self]
-	if not r or not enabled() then return O.SetVolume(self, v) end
-	r.vol = v
-	if r.nativeId and r.reeval then r.reeval.force = true end -- the native gain follows at its next turn
-	local ok = pcall(applyVol, self, r)
-	if not ok then return O.SetVolume(self, v) end
-end
-
 function meta:GetVolume()
 	local r = ST.chans[self]
 	if r and r.vol then return r.vol end
@@ -349,6 +340,36 @@ local function rampStep(ch, r, L, now)
 	end
 	A.Paths.RampTo(r.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, rampTarget(ch, r, L))
 	applyRamp(ch, r, L, now)
+end
+
+--- A volume change of a natively rendered stream: its running ramp scaled by new / old source volume and applied,
+-- or the voice updated from its last evaluation (nativeParams reads the new volume).
+local function volumeNow(ch, r, old)
+	local L = A.ListenerPos()
+	if not (r.nativeId and L and r.pos) then return end
+	local ramp = r.ramp
+	if ramp and ramp.to then
+		local new = srcVol(ch, r)
+		if old <= 1e-6 or new == old then return end
+		local k = new / old
+		ramp.from[1], ramp.to[1] = ramp.from[1] * k, ramp.to[1] * k
+		applyRamp(ch, r, L, RealTime())
+	else
+		nativeUpdate(ch, r, L)
+	end
+end
+
+function meta:SetVolume(v)
+	local r = ST.chans[self]
+	if not r or not enabled() then return O.SetVolume(self, v) end
+	local old = r.nativeId and srcVol(self, r)
+	r.vol = v
+	if r.nativeId and r.reeval then r.reeval.force = true end -- the route follows at its next turn
+	-- the native voice's gain follows at once (pba_streams_vol_now), as BASS's channel does: before, the change
+	-- waited for the forced re-evaluation (up to an update interval, then a ramp over one interval)
+	if old and (A.cfg.streams_vol_now or 1) >= 0.5 then pcall(volumeNow, self, r, old) end
+	local ok = pcall(applyVol, self, r)
+	if not ok then return O.SetVolume(self, v) end
 end
 
 --- Every frame (the scheduler's tick, cl_sched.lua): the streams' ramps.
