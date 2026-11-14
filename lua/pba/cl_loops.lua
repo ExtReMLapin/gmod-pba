@@ -40,12 +40,40 @@ end
 function A.NoteRendered(name, g)
 	if name and (g or 1) > AUDIBLE then A.renderedT[lineKey(name)] = RealTime() end
 end
+-- The lines being watched, by entity index: idx -> { watch = true } (watch = { chan, key }). The channel rule
+-- holds for the net too (pba_handback_channel): a line a newer sound on its entity's channel replaced, or the
+-- engine stopped, is over; giving it back played two lines at once (d3_c17_10b: Barney's ba_yougotgravgun
+-- handed back although ba_rollgrenade replaced it 0.08 s later).
+A.watchedLines = A.watchedLines or {}
+--- The channel of entity idx was cut (chan nil / CHAN_AUTO: every channel), by a new sound or a stop of `name`
+-- ("" / nil: every name): its watched lines there are never handed back (cl_render A.CutChannel, A.StopSource).
+function A.WatchCut(idx, chan, name)
+	local list = idx and A.watchedLines[idx]
+	if not list then return end
+	local any = not chan or chan == CHAN_AUTO
+	local key = name and name ~= "" and lineKey(name) or nil
+	for w in pairs(list) do
+		if (any or w.chan == chan) and (not key or key == w.key) then w.cut = true end
+	end
+end
 --- Watches a line pba took from the engine: `handback()` (the engine plays it) when nothing rendered its file
--- within HANDBACK_S (+ `lag`, its start delay) of now. `why` names the path, for the console line.
-function A.WatchLine(name, lag, why, handback)
+-- within HANDBACK_S (+ `lag`, its start delay) of now. `why` names the path, for the console line. idx, chan:
+-- its entity and channel (A.WatchCut), when it has them.
+function A.WatchLine(name, lag, why, handback, idx, chan)
 	if (A.cfg.silent_handback or 1) < 0.5 or not name then return end
 	local t0, key = RealTime(), lineKey(name)
+	local w
+	if idx and idx > 0 and A.ReplacingChannel(chan) then
+		w = { chan = chan, key = key }
+		A.watchedLines[idx] = A.watchedLines[idx] or {}
+		A.watchedLines[idx][w] = true
+	end
 	timer.Simple(HANDBACK_S + (lag or 0), function()
+		if w then
+			local list = A.watchedLines[idx]
+			if list then list[w] = nil if next(list) == nil then A.watchedLines[idx] = nil end end
+			if w.cut and (A.cfg.handback_channel or 1) >= 0.5 then return end -- (replaced or stopped: over)
+		end
 		local t = A.renderedT[key]
 		if t and t >= t0 - 0.05 then return end
 		if (A.cfg.silent_handback or 1) < 0.5 or not isSpeech(key, t0) then return end
@@ -673,7 +701,7 @@ net.Receive("pba_loop", function()
 	if op == OP_START and once then noteDuck(name, pos, lvl, vol, nil, nil, idx, pitch) end
 	-- a long line taken from the engine: heard within HANDBACK_S, else its engine patch plays it (pba_silent_handback)
 	if new and once and op == OP_START then
-		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end)
+		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end, idx, chan)
 	end
 	if m.nativeId and op == OP_UPDATE then
 		if m.reeval then m.reeval.force = true end
