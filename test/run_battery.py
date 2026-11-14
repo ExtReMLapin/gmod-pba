@@ -1285,6 +1285,11 @@ if _off:
     print("preflight: settings not at their default, reset: " + ", ".join(f"pba_{n}={v} (default {d})" for n, v, d in _off), flush=True)
     for n, v, d in _off:
         call("console_exec", {"realm": "menu", "cmd": f"pba_{n} {d}"})
+        # the session snapshot (SNAP0, restored after every step and at exit) takes the default too,
+        # else the bad value would come back at the end of the run
+        for _realm in SNAP0.values():
+            if n in _realm:
+                _realm[n] = str(d)
     time.sleep(0.5)
 results = []  # (label, seconds, verdict, reason)
 with open(LOG, "w", encoding="utf-8") as f:
