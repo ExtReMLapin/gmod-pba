@@ -40,6 +40,7 @@ SL.FIRST_SHARE = 0.5
 SL.EST0, SL.EST_RATE = 0.004, 0.2
 SL.est = SL.est or SL.EST0
 SL.jobs = SL.jobs or {}
+SL.forcedSpent = SL.forcedSpent or 0 -- (time spent this frame finishing due jobs: pba_far_force_ms)
 SL.seq = SL.seq or 0
 
 function SL.ResetStats()
@@ -49,7 +50,10 @@ function SL.ResetStats()
 		-- longest finish of a job at its deadline
 		segs = 0, maxSegMs = 0, maxFirstMs = 0, maxOverMs = 0, maxForcedMs = 0, maxFrameMs = 0, frames = 0, sumFrameMs = 0,
 		-- when a held job finished, as a share of its time to the deadline: < 0.25, < 0.5, < 0.75, < 1, forced
-		at = { 0, 0, 0, 0, 0 }, maxWaitMs = 0 }
+		at = { 0, 0, 0, 0, 0 }, maxWaitMs = 0,
+		-- pba_far_force_ms: due jobs past the frame's forced share (forceOver), given the cheap model (forceCheap) or
+		-- left to wait with their previous answer (forceWait, playing sounds)
+		forceOver = 0, forceCheap = 0, forceWait = 0 }
 end
 if not SL.stats then SL.ResetStats() end
 
@@ -75,7 +79,7 @@ local function budgetLeft(first)
 			st.frames, st.sumFrameMs = st.frames + 1, st.sumFrameMs + SL.spent * 1000
 			st.maxFrameMs = math.max(st.maxFrameMs, SL.spent * 1000)
 		end
-		SL.frame, SL.spent, SL.spentFirst, SL.need = fr, 0, 0, 0
+		SL.frame, SL.spent, SL.spentFirst, SL.need, SL.forcedSpent = fr, 0, 0, 0, 0
 	end
 	local b = (A.cfg.far_sliced_ms or 1.5) / 1000
 	if first then return math.max(math.min(b * SL.FIRST_SHARE - SL.spentFirst, b - SL.spent), 0) end
@@ -262,6 +266,7 @@ function SL.Run()
 	end
 	budgetLeft()
 	SL.need = need
+	local forceB = (A.cfg.far_force_ms or 0) / 1000
 	local i = 1
 	while i <= #jobs do
 		local j = jobs[i]
@@ -272,14 +277,46 @@ function SL.Run()
 			local due = now + ft >= j.deadline
 			local left = budgetLeft()
 			if not due and left <= 0 then break end -- (sorted: the next ones are not due either)
-			-- its inputs moved under it: an evaluation from now on (S and L as requested)
-			if j.stale or not unchanged(j) then restart(j) end
-			local res = run(j, due and math.huge or A.Paths.slice.clock() + left)
-			if res == "stale" then
-				restart(j)
-				if due then res = run(j, math.huge) end -- (a fresh evaluation: its first slice is its start)
+			-- pba_far_force_ms: a due job's finish within what is left of the frame's forced share
+			local bounded = due and forceB > 0
+			local res
+			if bounded and forceB - SL.forcedSpent <= 0 then
+				res = "over"
+			else
+				-- its inputs moved under it: an evaluation from now on (S and L as requested)
+				if j.stale or not unchanged(j) then restart(j) end
+				local c0 = j.cpu
+				local tEnd = math.huge
+				if bounded then tEnd = A.Paths.slice.clock() + (forceB - SL.forcedSpent)
+				elseif not due then tEnd = A.Paths.slice.clock() + left end
+				res = run(j, tEnd)
+				if res == "stale" then
+					restart(j)
+					-- (a fresh evaluation: its first slice is its start)
+					if due then res = bounded and "over" or run(j, math.huge) end
+				end
+				if bounded then
+					SL.forcedSpent = SL.forcedSpent + (j.cpu - c0)
+					if res == "paused" then res = "over" end
+				end
 			end
-			if res == "paused" or res == "stale" then
+			if res == "over" then
+				st.forceOver = (st.forceOver or 0) + 1
+				if j.canWait then
+					-- a playing sound with an answer: it keeps it (SL.Held) and is first in line next frame
+					st.forceWait = (st.forceWait or 0) + 1
+					i = i + 1
+				else
+					-- a new sound: the cheap model (the walls' transmission, never vanilla through a wall), as
+					-- pba_burst_budget_ms past its budget; a followed one rejoins the full model at its next update
+					table.remove(jobs, i)
+					st.forceCheap = (st.forceCheap or 0) + 1
+					local ok, r = pcall(A.Paths.Cheap, j.S, j.L, j.lvl, j.cfg, j.ent)
+					if ok then j.r = r else j.r = nil ErrorNoHaltWithStack("[PBA] far sound cheap evaluation failed: " .. tostring(r)) end
+					st.maxWaitMs = math.max(st.maxWaitMs, (RealTime() - j.tReq) * 1000)
+					deliver(j)
+				end
+			elseif res == "paused" or res == "stale" then
 				i = i + 1
 			else
 				table.remove(jobs, i)
@@ -323,6 +360,7 @@ function SL.Held(owner, S, L, sndlvl, srcEnt, onReady)
 	owner.pbaSliceSeen = true
 	if not job then return r end
 	owner.pbaSlice = job
+	job.canWait = lag ~= nil -- (it has an answer: past pba_far_force_ms it keeps it rather than the cheap model)
 	job.heldReady, job.heldOwner = onReady, owner
 	job.onDone = heldDone
 	return nil
@@ -351,6 +389,8 @@ if concommand then
 			s.maxFrameMs, s.sumFrameMs / math.max(s.frames, 1), s.frames, s.maxWaitMs, SL.est * 1000))
 		print(string.format("[PBA]   held jobs finished at (share of their time to the deadline) <25%%: %d, <50%%: %d, <75%%: %d, <100%%: %d, at it: %d",
 			s.at[1], s.at[2], s.at[3], s.at[4], s.at[5]))
+		print(string.format("[PBA]   past pba_far_force_ms: %d (%d cheap model, %d kept their answer and waited)",
+			s.forceOver or 0, s.forceCheap or 0, s.forceWait or 0))
 		SL.ResetStats()
 	end)
 end
