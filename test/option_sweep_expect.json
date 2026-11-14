@@ -331,6 +331,18 @@
   "pos0": "hook",
   "why": "garbage collector steps in idle frames (cl_sched), outside P.Compute"
  },
+ "brief_mover_stop": {
+  "pos0": "hook",
+  "why": "stop of a moving brush's brief move sound relayed at its arrival (server), outside P.Compute"
+ },
+ "loops_net_compact": {
+  "pos0": "hook",
+  "why": "wire format of a followed loop's updates (server), outside P.Compute"
+ },
+ "native_pitch_now": {
+  "pos0": "hook",
+  "why": "pitch change applied to the native voice at once (render), outside P.Compute"
+ },
  "native_vol_now": {
   "pos0": "hook",
   "why": "server volume change applied to the native voice at once (render), outside P.Compute"

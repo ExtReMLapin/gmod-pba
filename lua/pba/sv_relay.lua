@@ -289,6 +289,7 @@ function A.NoteBrief(data, took)
 	if not r then r = {} A.recentBrief[idx] = r end
 	for k, x in pairs(r) do if x.t < now then r[k] = nil end end
 	r[briefKey(data.SoundName)] = { t = tEnd, took = took and true or false }
+	if A.Loops and A.Loops.NoteBriefMover then A.Loops.NoteBriefMover(data, took) end
 end
 --- True when data is a volume / pitch change of a brief sound that still plays; second value: pba took it
 -- over (else the engine plays it).

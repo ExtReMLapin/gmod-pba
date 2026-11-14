@@ -777,6 +777,29 @@ def native_vol_now(on=True):
         return {"pass": False, "emit": emit, "check": chk}
     return chk
 
+def loops_net_compact(on=True):
+    """A followed loop's volume / pitch updates are compact (pba_loops_net_compact, audit B-14): the mean pba_loop
+    message of 40 updates under 25 bytes (98 with the full body), and the client mirror still follows (0.3)."""
+    import threading
+    load(TW)
+    at_room_a()
+    call("console_exec", {"realm": "server", "cmd": f"pba_loops_net_compact {1 if on else 0}"})
+    time.sleep(0.5)
+    out = {}
+    def check():
+        out["check"] = job("client", "loops_net_compact_check.lua", 40)
+    try:
+        t = threading.Thread(target=check)
+        t.start()
+        time.sleep(0.5)
+        emit = job("server", "loops_net_compact_emit.lua", 40)
+        t.join()
+    finally:
+        call("console_exec", {"realm": "server", "cmd": "pba_loops_net_compact 1"})
+    chk = out.get("check")
+    return {"pass": bool(isinstance(emit, dict) and emit.get("pass") is True and isinstance(chk, dict) and chk.get("pass") is True),
+            "emit": emit, "check": chk}
+
 def streams_vol_now(on=True):
     """Another addon's radio rendered natively follows its SetVolume at once (pba_streams_vol_now): 0.1 s after
     SetVolume(0.5 -> 0.125) the voice gain is within 1.5 dB of before x 0.25 (#54: it waited for the next
@@ -949,7 +972,11 @@ steps = [
     # the player in room A (a step before may leave him in room B: manhack_loop_kill puts him at x 600, the loop
     # then in clear sight)
     ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_loop_fade_hidden.lua"))),
+    # a pitch change of a hidden native loop reaches its voice within 0.1 s, no path evaluation forced (audit B-6)
+    ("native_pitch_now", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_pitch_now.lua"))),
     ("native_vol_now", lambda: native_vol_now()),
+    # a loop's volume / pitch updates are compact on the wire (audit B-14)
+    ("loops_net_compact", lambda: loops_net_compact()),
     ("streams_vol_now", lambda: seq(any_map, lambda: streams_vol_now())),
     ("loop_fade_tail", lambda: seq(lambda: load(TW), lambda: job("server", "loop_fade_tail.lua"))),
     ("constraint_travel_loop", lambda: seq(lambda: load(TW), lambda: job("server", "constraint_travel_loop.lua"))),
@@ -1086,6 +1113,8 @@ steps = [
     # special sounds: a moving brush's loop (func_door noise1) is stopped by the engine's C++, never
     # seen by Lua: the server mirror must stop with the motion (sets mode B itself)
     ("brush_loop_stop pba_demo", lambda: seq(lambda: load("pba_demo"), lambda: job("server", "brush_loop_stop.lua", 60))),
+    # the brief move sound of a door is stopped with its arrival, as its C++ does (audit B-10)
+    ("brief_mover_stop pba_demo", lambda: seq(lambda: load("pba_demo"), lambda: demo_mode(3), lambda: job("server", "brief_mover_stop.lua", 60))),
     # diffuse model, room 14: the long corridor is heard diffuse (tunnel reverb preset) and a few dB lower, not faded out
     ("diffuse_detour pba_demo", lambda: seq(lambda: load("pba_demo"), lambda: job("client", "diffuse_detour.lua", 30))),
     # diffuse share in the native module: direct down, reverb up, total about constant (demo mode C)
@@ -1358,7 +1387,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "npc_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "streams_vol_now", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "restore_dup", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "soundtime_client", "patch_restart_client", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "relay_name_quota", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "change_new", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "burst_fair", "burst_keep", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "twodoors_unseen", "off_no_work", "native_predecode", "prewarm_null_entity", "mcp_encoding (pure)", "native_props_calm", "detour_cap", "route_alt_street rp_downtown", "sky_route gm_construct", "long_line_decode", "breencast_long_render d1_trainstation_01", "line_first_play", "caption_net", "native_own", "native_own_mp", "mouth_chan"}
+QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "npc_footsteps", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "streams_vol_now", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sp_own_echo", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "speaker_once", "looping_cue", "manhack_loop", "restore_dup", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "soundtime_client", "patch_restart_client", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "relay_name_quota", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "native_mix", "native_duck", "brief_change", "change_new", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "breen_lips d1_trainstation_03", "once_native_end", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "burst_fair", "burst_keep", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "twodoors_unseen", "off_no_work", "native_predecode", "prewarm_null_entity", "mcp_encoding (pure)", "native_props_calm", "detour_cap", "route_alt_street rp_downtown", "sky_route gm_construct", "long_line_decode", "breencast_long_render d1_trainstation_01", "line_first_play", "caption_net", "native_own", "native_own_mp", "mouth_chan", "native_pitch_now", "brief_mover_stop pba_demo", "loops_net_compact"}
 # --smoke: the core, under 2 minutes, to run before every commit (--quick stays the check before a merge)
 SMOKE = {"GLuaTest pure suite", "menu_config_static", "light_no_module", "portal_sweep tworooms",
          "native_doors", "native_features"}

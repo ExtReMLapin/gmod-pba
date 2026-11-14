@@ -21,6 +21,17 @@ LP.released = LP.released or {} -- loops handed back to the engine while pba is 
 LP.capped = LP.capped or {}
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
+-- (pba_loops_net_compact) the volume and pitch of a mirror the player already holds, by its id: ~7 bytes instead of
+-- the key and name strings and the whole body (audit B-14)
+local OP_COMPACT = 3
+local RESYNC = 2 -- a full update at least this often per player: a client that lost its mirror gets it back
+local nextId = 0
+local function newId()
+	local used = {}
+	for _, x in pairs(LP.active) do used[x.id or 0] = true end
+	repeat nextId = nextId % 65535 + 1 until not used[nextId]
+	return nextId
+end
 
 -- A subscribed player leaves only beyond 110 % of the radius: a player pacing at the edge of a
 -- fire's range would otherwise get STOP / START every 0.5 s, the loop restarting from its top each time.
@@ -33,10 +44,19 @@ local function radiusFor(lvl) return A.AudibleRadius(lvl) end
 
 local function send(op, l, plys)
 	if #plys == 0 then return end
+	-- who holds a full copy of the mirror, and since when (the compact updates)
+	if op == OP_STOP then
+		if l.fullT then for _, p in ipairs(plys) do l.fullT[p] = nil end end
+	else
+		l.fullT = l.fullT or setmetatable({}, { __mode = "k" })
+		local now = RealTime()
+		for _, p in ipairs(plys) do l.fullT[p] = now end
+	end
 	net.Start(NET)
 	net.WriteUInt(op, 2)
 	net.WriteString(l.key)
 	if op ~= OP_STOP then
+		net.WriteUInt(l.id or 0, 16) -- (the compact updates' handle)
 		net.WriteString(l.name)
 		-- the common body (sh_core A.WriteSound, as pba_snd's): the speaker flag, SoundTime and face bit with it
 		A.WriteSound({ pos = l.pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
@@ -44,6 +64,26 @@ local function send(op, l, plys)
 		net.WriteBool(l.once or false)
 	end
 	net.Send(plys)
+end
+
+--- A volume / pitch update of mirror l to `plys`: compact (id, volume, pitch) for the players who got a full copy
+-- of it less than RESYNC seconds ago, the full update for the others (a first message, or the periodic resync).
+local function sendUpdate(l, plys)
+	if (A.cfg.loops_net_compact or 1) < 0.5 or not l.id or not l.fullT then return send(OP_UPDATE, l, plys) end
+	local now = RealTime()
+	local full, compact = {}, {}
+	for _, p in ipairs(plys) do
+		local t = l.fullT[p]
+		if t and now - t < RESYNC then compact[#compact + 1] = p else full[#full + 1] = p end
+	end
+	send(OP_UPDATE, l, full)
+	if #compact == 0 then return end
+	net.Start(NET)
+	net.WriteUInt(OP_COMPACT, 2)
+	net.WriteUInt(l.id, 16)
+	net.WriteUInt(math.Clamp(math.Round((l.vol or 1) * 255), 0, 255), 8)
+	net.WriteUInt(math.Clamp(math.floor(l.pitch or 100), 0, 255), 8)
+	net.Send(compact)
 end
 
 --- True when player ply is within the audible radius of followed sound l (scale: the leaving hysteresis).
@@ -457,7 +497,7 @@ function LP.Take(data, snd)
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	local fresh = l == nil
 	if fresh then
-		l = { kind = "mirror", key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
+		l = { kind = "mirror", key = key, id = newId(), ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
 			orig = data.OriginalSoundName, posGiven = data.Pos }
 		-- sounds play in real time whatever the time scale (game.SetTimeScale, host_timescale): ends in real time
 		if once then l.once, l.endT = true, A.PlayEnd(data.SoundName, data.Pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE end
@@ -520,7 +560,7 @@ function LP.Take(data, snd)
 			plys[#plys + 1] = p
 		end
 	end
-	send(update and OP_UPDATE or OP_START, l, plys)
+	if update then sendUpdate(l, plys) else send(OP_START, l, plys) end
 	-- a long line taken over (a scene's speech longer than max_duration): the engine captions the original it
 	-- emits, suppressed here, so its listeners got no subtitle while the short lines around it had theirs
 	-- (Barney's first conversation line on d1_trainstation_06). Sent like a relayed sound's (sv_relay)
@@ -613,6 +653,38 @@ hook.Add("OnNPCKilled", "pba_loops_npc_death", function(npc)
 		if l.idx == idx and not l.once then ended[#ended + 1] = l end
 	end
 	for _, l in ipairs(ended) do LP.Stop(idx, l.name, l.chan) end
+end)
+
+-- BRIEF move sounds of the moving brushes (func_door noise1 on a wave without loop points, a train's or a
+-- func_movelinear's start sound): the same C++ StopSound at the arrival (CBaseDoor::DoorHitTop...), invisible to
+-- Lua. A loop ends with its mover (l.mover); the copies pba relayed of a brief one played to their end over the
+-- arrival sound (audit B-10, pba_brief_mover_stop). Each such sound pba took is kept until its end; the 0.1 s
+-- timer below relays its stop once the mover is at rest.
+LP.briefMovers = LP.briefMovers or {}
+function LP.NoteBriefMover(data, took)
+	if not took or (A.cfg.brief_mover_stop or 1) < 0.5 then return end
+	local e = data.Entity
+	if not IsValid(e) or e:IsWorld() or e:GetMoveType() ~= MOVETYPE_PUSH then return end
+	if not (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating") then return end
+	if not LP.IsMoveSound(e, data.SoundName) then return end
+	local now = CurTime()
+	local tEnd = A.PlayEnd(data.SoundName, data.Pitch, now, 0.1)
+	if not tEnd then return end
+	LP.briefMovers[e:EntIndex() .. ":" .. string.lower(A.SoundFile(data.SoundName))] = { ent = e, name = data.SoundName, t = now, endT = tEnd }
+end
+
+timer.Create("pba_brief_movers", 0.1, 0, function()
+	if next(LP.briefMovers) == nil then return end
+	local now = CurTime()
+	for k, x in pairs(LP.briefMovers) do
+		if now >= x.endT or not IsValid(x.ent) then
+			LP.briefMovers[k] = nil -- (played to its end, or the entity went: its sounds with it)
+		elseif now - x.t > 0.3 and LP.MoverStill(x.ent) then
+			LP.briefMovers[k] = nil
+			A.StopSource(x.ent, x.name)
+			A.stats.moverStops = (A.stats.moverStops or 0) + 1
+		end
+	end
 end)
 
 --- True when the entity's C++ ended loop l with a StopSound Lua never sees: a mover at rest, a
