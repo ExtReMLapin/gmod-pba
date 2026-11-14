@@ -1093,7 +1093,7 @@ end
 local function holdJob(data, S, L, lvl, src, cfg)
 	local hold = (A.cfg.burst_hold_ms or 50) / 1000
 	if hold <= 0 or not A.Slicer then return nil end
-	if (A.cfg.burst_hold_short or 0) < 0.5 and not OS.Wanted((playLength(data.SoundName, data.Pitch))) then return nil end
+	if (A.cfg.burst_hold_short or 1) < 0.5 and not OS.Wanted((playLength(data.SoundName, data.Pitch))) then return nil end
 	return A.Slicer.Defer(S, L, lvl, src, cfg, hold)
 end
 
