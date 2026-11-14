@@ -197,6 +197,7 @@ function Build.native(panel)
 	dep(sld(panel, "Largest sound file (MB)", "native_file_mb"), R)
 	dep(chk(panel, "Decode sounds in the background", "native_predecode"), R)
 	dep(chk(panel, "Decode your weapons' sounds ahead", "native_prewarm_weapons"), R)
+	dep(chk(panel, "Hand a sound decoding late over to native", "native_late_handover"), R)
 	dep(chk(panel, "Decode spoken lines at once", "native_line_decode"), R)
 
 	panel:Help("Baked paths (replace the probe graph):")

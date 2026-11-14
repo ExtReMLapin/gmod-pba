@@ -434,5 +434,9 @@
  "native_pause": {
   "pos0": "hook",
   "why": "single player pause of the module's SND_SHOULDPAUSE voices (the pausable argument of Play, SetPaused from a PreRender hook), outside P.Compute; covered by pause_flag"
+ },
+ "native_late_handover": {
+  "pos0": "hook",
+  "why": "an engine copy of a followed sound handed to the module when its decode ends (render), outside P.Compute"
  }
 }
