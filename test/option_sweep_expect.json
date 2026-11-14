@@ -302,5 +302,9 @@
  "burst_budget_ms": {
   "pos0": "hook",
   "why": "per-frame budget of new sounds' evaluations (cl_render A.Process), outside P.Compute"
+ },
+ "burst_mask_db": {
+  "pos0": "hook",
+  "why": "masking of quiet new sounds under a loud one (cl_render A.Process), outside P.Compute"
  }
 }

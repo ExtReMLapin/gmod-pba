@@ -1015,24 +1015,48 @@ function A.FarMuffle(data, pos)
 	return true
 end
 
--- ------------------------------------------------------------------ bursts (pba_burst_budget_ms)
+-- ------------------------------------------------------------------ bursts (pba_burst_budget_ms, pba_burst_mask_db)
 -- A burst (barrels, an explosion's debris) is dozens of new sounds in one frame, each evaluated at once:
 -- 16 ms per frame behind a wall on gm_construct, up to 125 ms on d1_canals_01 (PERF bench S1, S11).
 -- burst_budget_ms bounds the time new sounds' full evaluations take in a frame; past it a new sound gets, in
 -- this order: its emitter's recent result (same entity, both ends within BURST_REUSE_U, world unchanged, at
 -- most reeval_max_s old), the far slicer when its distance leaves a frame (SL.Defer), else the cheap model
--- (P.Cheap: the walls' transmission, never vanilla through a wall).
--- A followed degraded sound gets its full evaluation at its next update.
+-- (P.Cheap: the walls' transmission, never vanilla through a wall). burst_mask_db: within BURST_MASK_S of a
+-- loud sound, a sound more than that many dB quieter at the ear (its level in plain sight, no trace)
+-- gets the cheap model at once. A followed degraded sound gets its full evaluation at its next update.
 local BURST_REUSE_U = 64
-A.burst = A.burst or { frame = -1, spent = 0, byEmitter = setmetatable({}, { __mode = "k" }) }
-function A.ResetBurstStats() A.burstStats = { full = 0, reused = 0, deferred = 0, cheap = 0 } end
+local BURST_MASK_S = 0.1
+local BURST_REF_U = 36
+A.burst = A.burst or { frame = -1, spent = 0, loudT = -1, loudDb = -math.huge,
+	byEmitter = setmetatable({}, { __mode = "k" }) }
+A.burst.loudT, A.burst.loudDb = A.burst.loudT or -1, A.burst.loudDb or -math.huge -- (a reload over the budget's version)
+function A.ResetBurstStats() A.burstStats = { full = 0, reused = 0, deferred = 0, cheap = 0, masked = 0 } end
 if not A.burstStats then A.ResetBurstStats() end
+
+-- the masking verdict for a new sound at ear level db (dB re full scale), and the loudest of the window
+local function masked(db, now, maskDb)
+	local B = A.burst
+	local live = B.loudT >= 0 and now - B.loudT <= BURST_MASK_S
+	local m = live and db < B.loudDb - maskDb
+	if not live or db >= B.loudDb then B.loudT, B.loudDb = now, db end
+	return m
+end
 
 local function burstEvaluate(data, S, L, lvl, src)
 	local P, B, st = A.Paths, A.burst, A.burstStats
 	local dry = A.Render.WaterDry(nil, data.SoundName)
 	local cfg = dry and P.DRY_SOURCE_CFG or nil
 	local now = RealTime()
+	local maskDb = A.cfg.burst_mask_db or 0
+	if maskDb > 0 then
+		-- its level at the ear, in plain sight: SNDLVL at 36 u (about 1 m), spherical spreading beyond (the
+		-- engine's gain, clamped to full scale, put a 140 dB explosion 9 dB over an 80 dB impact at 20 m)
+		local db = lvl + 20 * math.log10(math.max(data.Volume or 1, 1e-4)) - 20 * math.log10(math.max(S:Distance(L), BURST_REF_U) / BURST_REF_U)
+		if masked(db, now, maskDb) then
+			st.masked = st.masked + 1
+			return P.Cheap(S, L, lvl, cfg, src)
+		end
+	end
 	local budget = (A.cfg.burst_budget_ms or 0) / 1000
 	local fr = FrameNumber()
 	if B.frame ~= fr then B.frame, B.spent = fr, 0 end
@@ -1091,7 +1115,7 @@ function A.Process(data, relayed)
 	local tReq = RealTime()
 	local r, job
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
-	if (A.cfg.burst_budget_ms or 0) > 0 then
+	if (A.cfg.burst_budget_ms or 0) > 0 or (A.cfg.burst_mask_db or 0) > 0 then
 		r, job = burstEvaluate(data, S, L, lvl, IsValid(src) and src or nil)
 	else
 		r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.Render.WaterDry(nil, data.SoundName))
