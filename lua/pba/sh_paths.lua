@@ -1099,7 +1099,8 @@ local doorTrR = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ig
 -- behind it is cut off), and a dormant entity has no collision: the traces above never meet it, and the
 -- routes through its doorway paid nothing (pba_twodoors with both doors shut: as if open). Such a door
 -- is found by its box (kept from its last update) and its state replicated by the server (sh_doors
--- D.byEnt), within the same hull (pba_door_dormant).
+-- D.byEnt), within the same hull (pba_door_dormant). A door never received at all (its areaportal shut since the
+-- map loaded: Entity(idx) NULL) is found by the box the server sends with its shut state (sh_doors D.Ghost).
 local function dormantDoors(a, b, reach, list)
 	local D = A.Doors
 	local idxs = D and D.entIdx
@@ -1110,6 +1111,8 @@ local function dormantDoors(a, b, reach, list)
 	for i = 1, #idxs do
 		local e = Entity(idxs[i])
 		local st = D.byEnt[idxs[i]]
+		-- never received at all (its areaportal shut since the map loaded): its stand-in from the server's box
+		if st and not IsValid(e) and (st.frac or 0) <= CLOSURE_FRAC0 and D.Ghost then e = D.Ghost(idxs[i]) or e end
 		if st and IsValid(e) and e:IsDormant() and DOORS_ONLY[e:GetClass()] then
 			local mn, mx = e:WorldSpaceAABB()
 			if K.SegBoxHit(a.x, a.y, a.z, b.x, b.y, b.z, mn.x, mn.y, mn.z, mx.x, mx.y, mx.z, pad) then

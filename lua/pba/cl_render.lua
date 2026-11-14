@@ -180,6 +180,7 @@ end
 -- brief copies of its channel, a brief one the long mirror).
 -- only: "copies" or "mirrors" restricts the cut to one kind (pba_channel_one_rule 0: each path cut its own).
 function A.CutChannel(idx, chan, only)
+	if A.WatchCut then A.WatchCut(idx, chan) end -- (a watched line there is over: pba_handback_channel)
 	local list = only ~= "mirrors" and A.emitted[idx]
 	if list then
 		for i = #list, 1, -1 do
@@ -1393,7 +1394,7 @@ net.Receive(NET, function()
 			local L = A.ListenerPos()
 			local lag = (data.Delay or 0) + ((A.cfg.delay or 0) >= 0.5 and L and data.Pos and data.Pos:Distance(L) * 0.01905 / 343 or 0)
 			if data.heldUntil then lag = math.max(lag, data.heldUntil - RealTime()) end -- (routes computed in slices)
-			A.WatchLine(name, lag, "relayed line", function() vanilla(data) end)
+			A.WatchLine(name, lag, "relayed line", function() vanilla(data) end, data.EntIndex, data.Channel)
 		end
 		return
 	end
@@ -1455,6 +1456,7 @@ end
 -- an EmitSound with SND_STOP. Every copy of it stops (anchors, native voices, fixed-position copies, mouth
 -- copies, followed one-shots through their copies) and every client-side long sound mirror.
 function A.StopSource(idx, name, chan)
+	if A.WatchCut then A.WatchCut(idx, chan, name) end
 	A.StopCopies(idx, name or "", chan)
 	if A.Loops and A.Loops.StopClient then
 		A.Loops.StopClient(idx, chan ~= CHAN_AUTO and chan or nil, name ~= "" and name or nil)

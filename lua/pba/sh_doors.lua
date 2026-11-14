@@ -181,6 +181,8 @@ if SERVER then
 	D.ents = D.ents or {}    -- every door entity (probe paths may cross unlinked doors)
 	D.entState = D.entState or {} -- entindex -> { q, frac, closedDb }
 	local DOOR_CLASSES = { "prop_door_rotating", "func_door", "func_door_rotating" }
+	local CLASS_ID = {}
+	for i, c in ipairs(DOOR_CLASSES) do CLASS_ID[c] = i end
 
 	function D.Relink()
 		D.links, D.state, D.ents, D.entState = {}, {}, {}, {}
@@ -282,6 +284,17 @@ if SERVER then
 			net.WriteUInt(s.q, 8)
 			net.WriteUInt(math.Clamp(s.closedDb, 0, 255), 8)
 			net.WriteUInt(math.Clamp(s.closedLp or 3, 0, 4), 3)
+			-- a shut door's box (its class, position, angles, bounds): a client that never received the entity
+			-- (its areaportal shut since the map loaded) still finds it on a route (sh_paths dormantDoors,
+			-- pba_door_dormant). About 40 bytes, sent only while shut.
+			local e = Entity(idx)
+			local ci = s.q == 0 and IsValid(e) and CLASS_ID[e:GetClass()]
+			net.WriteBool(ci and true or false)
+			if ci then
+				net.WriteUInt(ci, 2)
+				net.WriteVector(e:GetPos()) net.WriteAngle(e:GetAngles())
+				net.WriteVector(e:OBBMins()) net.WriteVector(e:OBBMaxs())
+			end
 		end
 		-- doors removed: their state is forgotten (an entity index is reused by later entities)
 		net.WriteUInt(#gone, 12)
@@ -362,6 +375,52 @@ if SERVER then
 else
 	D.pending = D.pending or {}
 	D.byEnt = D.byEnt or {}
+	D.boxes = D.boxes or {} -- entindex -> { cls, pos, ang, mins, maxs }: a shut door's box from the server
+	D.ghosts = D.ghosts or {} -- entindex -> its stand-in (D.Ghost)
+	local CLASSES = { "prop_door_rotating", "func_door", "func_door_rotating" }
+
+	-- A door this client never received (Entity(idx) NULL: its areaportal shut since the map loaded, pba_twodoors
+	-- with both doors closed) stands in the paths as a table with the entity methods they use on a shut leaf
+	-- (class, bounds, local frame, index). Same table for one index while its box is unchanged (paths key on it).
+	local GHOST = {}
+	GHOST.__index = GHOST
+	function GHOST:IsValid() return true end
+	function GHOST:IsDormant() return true end
+	function GHOST:IsWorld() return false end
+	function GHOST:EntIndex() return self.idx end
+	function GHOST:GetClass() return self.cls end
+	function GHOST:GetPos() return self.pos end
+	function GHOST:GetAngles() return self.ang end
+	function GHOST:OBBMins() return self.mins end
+	function GHOST:OBBMaxs() return self.maxs end
+	function GHOST:OBBCenter() return (self.mins + self.maxs) * 0.5 end
+	function GHOST:WorldToLocal(v) return (WorldToLocal(v, angle_zero, self.pos, self.ang)) end
+	function GHOST:LocalToWorld(v) return (LocalToWorld(v, angle_zero, self.pos, self.ang)) end
+	function GHOST:WorldSpaceCenter() return self:LocalToWorld(self:OBBCenter()) end
+	function GHOST:WorldSpaceAABB()
+		local mn, mx = self.mins, self.maxs
+		local lo, hi
+		for i = 0, 7 do
+			local c = self:LocalToWorld(Vector(i % 2 == 0 and mn.x or mx.x, i % 4 < 2 and mn.y or mx.y, i < 4 and mn.z or mx.z))
+			if not lo then lo, hi = Vector(c), Vector(c)
+			else
+				lo.x, lo.y, lo.z = math.min(lo.x, c.x), math.min(lo.y, c.y), math.min(lo.z, c.z)
+				hi.x, hi.y, hi.z = math.max(hi.x, c.x), math.max(hi.y, c.y), math.max(hi.z, c.z)
+			end
+		end
+		return lo, hi
+	end
+	D.GHOST = GHOST
+	--- The stand-in of door idx this client never received, from its box (nil: no box, the door not shut).
+	function D.Ghost(idx)
+		local g = D.ghosts[idx]
+		if g then return g end
+		local bx = D.boxes[idx]
+		if not bx then return nil end
+		g = setmetatable({ idx = idx, cls = bx.cls, pos = bx.pos, ang = bx.ang, mins = bx.mins, maxs = bx.maxs }, GHOST)
+		D.ghosts[idx] = g
+		return g
+	end
 
 	net.Receive(NET, function()
 		local n = net.ReadUInt(12)
@@ -373,8 +432,20 @@ else
 		for _ = 1, m do
 			local idx, q, closedDb, closedLp = net.ReadUInt(16), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(3)
 			D.byEnt[idx] = { frac = q / 255, closedDb = closedDb, closedLp = closedLp }
+			D.ghosts[idx] = nil
+			if net.ReadBool() then
+				local ci = net.ReadUInt(2)
+				local pos, ang = net.ReadVector(), net.ReadAngle()
+				local mins, maxs = net.ReadVector(), net.ReadVector()
+				D.boxes[idx] = CLASSES[ci] and { cls = CLASSES[ci], pos = pos, ang = ang, mins = mins, maxs = maxs } or nil
+			else
+				D.boxes[idx] = nil
+			end
 		end
-		for _ = 1, net.ReadUInt(12) do D.byEnt[net.ReadUInt(16)] = nil end
+		for _ = 1, net.ReadUInt(12) do
+			local idx = net.ReadUInt(16)
+			D.byEnt[idx], D.boxes[idx], D.ghosts[idx] = nil, nil, nil
+		end
 		-- the door entities as an array (P.SegmentDoors reads it per segment: no pairs in hot code)
 		local list = {}
 		for idx in pairs(D.byEnt) do list[#list + 1] = idx end

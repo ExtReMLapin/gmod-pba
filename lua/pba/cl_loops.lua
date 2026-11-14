@@ -40,12 +40,40 @@ end
 function A.NoteRendered(name, g)
 	if name and (g or 1) > AUDIBLE then A.renderedT[lineKey(name)] = RealTime() end
 end
+-- The lines being watched, by entity index: idx -> { watch = true } (watch = { chan, key }). The channel rule
+-- holds for the net too (pba_handback_channel): a line a newer sound on its entity's channel replaced, or the
+-- engine stopped, is over; giving it back played two lines at once (d3_c17_10b: Barney's ba_yougotgravgun
+-- handed back although ba_rollgrenade replaced it 0.08 s later).
+A.watchedLines = A.watchedLines or {}
+--- The channel of entity idx was cut (chan nil / CHAN_AUTO: every channel), by a new sound or a stop of `name`
+-- ("" / nil: every name): its watched lines there are never handed back (cl_render A.CutChannel, A.StopSource).
+function A.WatchCut(idx, chan, name)
+	local list = idx and A.watchedLines[idx]
+	if not list then return end
+	local any = not chan or chan == CHAN_AUTO
+	local key = name and name ~= "" and lineKey(name) or nil
+	for w in pairs(list) do
+		if (any or w.chan == chan) and (not key or key == w.key) then w.cut = true end
+	end
+end
 --- Watches a line pba took from the engine: `handback()` (the engine plays it) when nothing rendered its file
--- within HANDBACK_S (+ `lag`, its start delay) of now. `why` names the path, for the console line.
-function A.WatchLine(name, lag, why, handback)
+-- within HANDBACK_S (+ `lag`, its start delay) of now. `why` names the path, for the console line. idx, chan:
+-- its entity and channel (A.WatchCut), when it has them.
+function A.WatchLine(name, lag, why, handback, idx, chan)
 	if (A.cfg.silent_handback or 1) < 0.5 or not name then return end
 	local t0, key = RealTime(), lineKey(name)
+	local w
+	if idx and idx > 0 and A.ReplacingChannel(chan) then
+		w = { chan = chan, key = key }
+		A.watchedLines[idx] = A.watchedLines[idx] or {}
+		A.watchedLines[idx][w] = true
+	end
 	timer.Simple(HANDBACK_S + (lag or 0), function()
+		if w then
+			local list = A.watchedLines[idx]
+			if list then list[w] = nil if next(list) == nil then A.watchedLines[idx] = nil end end
+			if w.cut and (A.cfg.handback_channel or 1) >= 0.5 then return end -- (replaced or stopped: over)
+		end
 		local t = A.renderedT[key]
 		if t and t >= t0 - 0.05 then return end
 		if (A.cfg.silent_handback or 1) < 0.5 or not isSpeech(key, t0) then return end
@@ -216,6 +244,33 @@ local function followQuiet(m, S, L)
 		gain, el, em, eh, pos, pitch = P.RampAt(m.ramp, now, L)
 	end
 	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil end
+end
+
+--- A volume change of a mirror's sound (the server's SND_CHANGE_VOL, a client patch's ChangeVolume) reaches its
+-- native voice at once (pba_native_vol_now), as the engine's channel takes it: the voice's gain, its sends, the
+-- running ramp and the last evaluation scaled by new / old volume, the route kept (the forced re-evaluation
+-- follows at the voice's next turn). Before, the change waited for that turn (half an update_interval at least,
+-- then a ramp over one interval): a dropship's engine fade stayed +8..11 dB over its law meanwhile (d3_c17_10b).
+local function volumeNow(m)
+	if not m.nativeId or (A.cfg.native_vol_now or 1) < 0.5 then return end
+	local old, new = m.appliedVol, m.vol
+	if not (old and new) or old == new or old <= 1e-6 then return end
+	local k = new / old
+	m.appliedVol = new
+	local e = m.lastEval
+	if e then e.gain, e.send = e.gain * k, e.send * k end
+	if m.roomSend then m.roomSend = m.roomSend * k end
+	if m.srcSend then m.srcSend = m.srcSend * k end
+	local ramp = m.ramp
+	local gain, el, em, eh, pos, pitch
+	if ramp and ramp.to then
+		ramp.from[1], ramp.to[1] = ramp.from[1] * k, ramp.to[1] * k
+		gain, el, em, eh, pos, pitch = A.Paths.RampAt(ramp, RealTime(), A.ListenerPos())
+	elseif e then
+		gain, el, em, eh, pos, pitch = e.gain, e.el, e.em, e.eh, e.pos, e.pitch
+	end
+	if not (gain and pos) then return end
+	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, m.roomSend) then m.nativeId = nil end
 end
 
 -- a mirror's far evaluation is ready (cl_slicer): applied at once
@@ -579,7 +634,8 @@ function LP.HandleClient(data)
 			m.patch:ChangeVolume(m.vol * (m.g or 1), 0.1) m.patch:ChangePitch(m.pitch, 0.1)
 			A.reemitting = false
 		end
-		if m.nativeId and m.reeval then m.reeval.force = true end -- applied at its next turn
+		volumeNow(m)
+		if m.nativeId and m.reeval then m.reeval.force = true end -- (the route) at its next turn
 		return true
 	end
 	-- (a new sound: a change flag here is a patch's Play)
@@ -673,9 +729,10 @@ net.Receive("pba_loop", function()
 	if op == OP_START and once then noteDuck(name, pos, lvl, vol, nil, nil, idx, pitch) end
 	-- a long line taken from the engine: heard within HANDBACK_S, else its engine patch plays it (pba_silent_handback)
 	if new and once and op == OP_START then
-		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end)
+		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end, idx, chan)
 	end
 	if m.nativeId and op == OP_UPDATE then
+		volumeNow(m)
 		if m.reeval then m.reeval.force = true end
 		return -- applied at the next tick
 	end
