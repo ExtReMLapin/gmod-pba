@@ -21,6 +21,17 @@ LP.released = LP.released or {} -- loops handed back to the engine while pba is 
 LP.capped = LP.capped or {}
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
+-- (pba_loops_net_compact) the volume and pitch of a mirror the player already holds, by its id: ~7 bytes instead of
+-- the key and name strings and the whole body (audit B-14)
+local OP_COMPACT = 3
+local RESYNC = 2 -- a full update at least this often per player: a client that lost its mirror gets it back
+local nextId = 0
+local function newId()
+	local used = {}
+	for _, x in pairs(LP.active) do used[x.id or 0] = true end
+	repeat nextId = nextId % 65535 + 1 until not used[nextId]
+	return nextId
+end
 
 -- A subscribed player leaves only beyond 110 % of the radius: a player pacing at the edge of a
 -- fire's range would otherwise get STOP / START every 0.5 s, the loop restarting from its top each time.
@@ -33,10 +44,19 @@ local function radiusFor(lvl) return A.AudibleRadius(lvl) end
 
 local function send(op, l, plys)
 	if #plys == 0 then return end
+	-- who holds a full copy of the mirror, and since when (the compact updates)
+	if op == OP_STOP then
+		if l.fullT then for _, p in ipairs(plys) do l.fullT[p] = nil end end
+	else
+		l.fullT = l.fullT or setmetatable({}, { __mode = "k" })
+		local now = RealTime()
+		for _, p in ipairs(plys) do l.fullT[p] = now end
+	end
 	net.Start(NET)
 	net.WriteUInt(op, 2)
 	net.WriteString(l.key)
 	if op ~= OP_STOP then
+		net.WriteUInt(l.id or 0, 16) -- (the compact updates' handle)
 		net.WriteString(l.name)
 		-- the common body (sh_core A.WriteSound, as pba_snd's): the speaker flag, SoundTime and face bit with it
 		A.WriteSound({ pos = l.pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
@@ -44,6 +64,26 @@ local function send(op, l, plys)
 		net.WriteBool(l.once or false)
 	end
 	net.Send(plys)
+end
+
+--- A volume / pitch update of mirror l to `plys`: compact (id, volume, pitch) for the players who got a full copy
+-- of it less than RESYNC seconds ago, the full update for the others (a first message, or the periodic resync).
+local function sendUpdate(l, plys)
+	if (A.cfg.loops_net_compact or 1) < 0.5 or not l.id or not l.fullT then return send(OP_UPDATE, l, plys) end
+	local now = RealTime()
+	local full, compact = {}, {}
+	for _, p in ipairs(plys) do
+		local t = l.fullT[p]
+		if t and now - t < RESYNC then compact[#compact + 1] = p else full[#full + 1] = p end
+	end
+	send(OP_UPDATE, l, full)
+	if #compact == 0 then return end
+	net.Start(NET)
+	net.WriteUInt(OP_COMPACT, 2)
+	net.WriteUInt(l.id, 16)
+	net.WriteUInt(math.Clamp(math.Round((l.vol or 1) * 255), 0, 255), 8)
+	net.WriteUInt(math.Clamp(math.floor(l.pitch or 100), 0, 255), 8)
+	net.Send(compact)
 end
 
 --- True when player ply is within the audible radius of followed sound l (scale: the leaving hysteresis).
@@ -457,7 +497,7 @@ function LP.Take(data, snd)
 	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	local fresh = l == nil
 	if fresh then
-		l = { kind = "mirror", key = key, ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
+		l = { kind = "mirror", key = key, id = newId(), ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},
 			orig = data.OriginalSoundName, posGiven = data.Pos }
 		-- sounds play in real time whatever the time scale (game.SetTimeScale, host_timescale): ends in real time
 		if once then l.once, l.endT = true, A.PlayEnd(data.SoundName, data.Pitch, nil, A.END_GRACE) or RealTime() + A.END_GRACE end
@@ -517,7 +557,7 @@ function LP.Take(data, snd)
 			plys[#plys + 1] = p
 		end
 	end
-	send(update and OP_UPDATE or OP_START, l, plys)
+	if update then sendUpdate(l, plys) else send(OP_START, l, plys) end
 	-- a long line taken over (a scene's speech longer than max_duration): the engine captions the original it
 	-- emits, suppressed here, so its listeners got no subtitle while the short lines around it had theirs
 	-- (Barney's first conversation line on d1_trainstation_06). Sent like a relayed sound's (sv_relay)

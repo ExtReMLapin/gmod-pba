@@ -295,6 +295,7 @@ function Build.server(panel)
 	chk(panel, "Long sound restarts when pba is off", "loops_release_restart")
 	chk(panel, "Changes of a relayed brief sound dropped", "brief_updates")
 	chk(panel, "Brief move sounds stop with the mover", "brief_mover_stop")
+	chk(panel, "Compact loop volume / pitch updates", "loops_net_compact")
 
 	panel:Help("Players' Steam Audio module:")
 	chk(panel, "Allow the module", "allow_native")

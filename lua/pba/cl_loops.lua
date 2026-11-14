@@ -741,8 +741,42 @@ function LP.StopAll()
 	end
 end
 
+--- A volume / pitch change reaching mirror m (the server's update, full or compact): its native voice takes it at
+-- once (volumeNow, pitchNow), an engine patch is moved to it.
+local function updateMirror(m, once, vol, pitch)
+	m.vol, m.pitch = vol, pitch
+	if m.nativeId then
+		local vol0 = m.appliedVol
+		volumeNow(m)
+		local pitched = pitchNow(m)
+		if m.reeval and not (pitched and m.appliedVol == m.vol and vol0 == m.vol) then m.reeval.force = true end
+		return -- applied at the next tick
+	end
+	if m.patch then
+		if onceEnded(m) then m.done = true return end -- (a finished patch would start again from its top)
+		A.reemitting = true
+		m.patch:ChangePitch(pitch, 0.1)
+		m.patch:ChangeVolume(vol * (m.g or 1), 0.1)
+		A.reemitting = false
+	else
+		apply(m, 0)
+	end
+end
+
+-- the mirrors by the server's handle (pba_loops_net_compact): a compact update names its mirror by it
+LP.byId = LP.byId or setmetatable({}, { __mode = "v" })
+local OP_COMPACT = 3
+
 net.Receive("pba_loop", function()
-	local op, key = net.ReadUInt(2), net.ReadString()
+	local op = net.ReadUInt(2)
+	if op == OP_COMPACT then
+		local m = LP.byId[net.ReadUInt(16)]
+		local vol, pitch = net.ReadUInt(8) / 255, net.ReadUInt(8)
+		-- no such mirror here (stopped, or never received): the server's next full update (<= 2 s) brings it back
+		if m and LP.mirrors[m.key] == m and not LP.silenced[m.key] then updateMirror(m, m.once, vol, pitch) end
+		return
+	end
+	local key = net.ReadString()
 	if op == OP_START or op == OP_STOP then LP.silenced[key] = nil
 	elseif LP.silenced[key] then return end
 	if op == OP_STOP then
@@ -750,6 +784,7 @@ net.Receive("pba_loop", function()
 		if m then stopMirror(m) LP.mirrors[key] = nil end
 		return
 	end
+	local sid = net.ReadUInt(16)
 	local name = net.ReadString()
 	local d = A.ReadSound() -- (the common body, sh_core: as pba_snd's)
 	local once = net.ReadBool()
@@ -777,6 +812,7 @@ net.Receive("pba_loop", function()
 		LP.mirrors[key] = m
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
+	if sid ~= 0 then LP.byId[sid] = m end
 	m.vol, m.pitch = vol, pitch
 	-- a long line's start feeds the mixer's ducker as the short lines do (cl_render): a speech ducks the
 	-- other groups in the engine; without it a long line sounded quieter than the short ones around it,
@@ -787,22 +823,8 @@ net.Receive("pba_loop", function()
 		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end, idx, chan,
 			function() return m.decoding == true and not m.done and not m.handBack and LP.mirrors[m.key] == m end)
 	end
-	if m.nativeId and op == OP_UPDATE then
-		local vol0 = m.appliedVol
-		volumeNow(m)
-		local pitched = pitchNow(m)
-		if m.reeval and not (pitched and m.appliedVol == m.vol and vol0 == m.vol) then m.reeval.force = true end
-		return -- applied at the next tick
-	end
-	if m.patch and op == OP_UPDATE then
-		if onceEnded(m) then m.done = true return end -- (a finished patch would start again from its top)
-		A.reemitting = true
-		m.patch:ChangePitch(pitch, 0.1)
-		m.patch:ChangeVolume(vol * (m.g or 1), 0.1)
-		A.reemitting = false
-	else
-		apply(m, 0)
-	end
+	if op == OP_UPDATE and (m.nativeId or m.patch) then return updateMirror(m, once, vol, pitch) end
+	apply(m, 0)
 end)
 
 --- A long line mirror nothing renders: its module voice (if any, inaudible) stopped, the engine patch plays it
