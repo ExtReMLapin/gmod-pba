@@ -1417,6 +1417,121 @@ function P.AddEdge(t, e, L, cfg)
 	return t
 end
 
+-- pba_sky_route: the way over the roofs for two points under open sky. A dropship carrying an APC 1400 u up
+-- had no route but the portals' and the probes' (within probe_dist), which appear and vanish as it flies:
+-- -10 then -70 dB (the transmission's ceiling) within 65 u (d1_canals_12). Over a building the sound goes
+-- over its roof: the upper hull of the world's height profile under the sky between S and L, each corner
+-- raised until its two legs are clear, priced by the corners' diffraction (P.EvalPolyline, as any route).
+do -- (a block: the file is at Lua's 200 locals)
+	local skyTr = { mask = MASK_SOLID_BRUSHONLY, filter = noEnt, output = {} }
+	local SKY_UP, SKY_STEP, SKY_MAXN = 16384, 48, 64
+	local function skyCeiling(p)
+		skyTr.start, skyTr.endpos = p, Vector(p.x, p.y, p.z + SKY_UP)
+		util.TraceLine(skyTr)
+		local o = skyTr.output
+		if o.StartSolid then return nil end
+		if not o.Hit then return p.z + SKY_UP end
+		return o.HitSky and o.HitPos.z or nil
+	end
+	local function raiseClear(a, Q, b)
+		if detClear(a, Q) and detClear(Q, b) then return Q end
+		local lo, hi = 0, nil
+		for _, h in ipairs(EDGE_STEPS) do
+			sliceCheck()
+			local R = Vector(Q.x, Q.y, Q.z + h)
+			if detClear(a, R) and detClear(R, b) then hi = h break end
+			lo = h
+		end
+		if not hi then return nil end
+		for _ = 1, EDGE_REFINE do
+			local mid = (lo + hi) * 0.5
+			local R = Vector(Q.x, Q.y, Q.z + mid)
+			if detClear(a, R) and detClear(R, b) then hi = mid else lo = mid end
+		end
+		return Vector(Q.x, Q.y, Q.z + hi)
+	end
+	function P.SkyRoute(S, L, cfg)
+		cfg = cfg or A.cfg
+		if (cfg.sky_route or 0) < 0.5 then return nil end
+		local dx, dy = L.x - S.x, L.y - S.y
+		local hd = math.sqrt(dx * dx + dy * dy)
+		if hd < 32 then return nil end
+		local cS = skyCeiling(S)
+		if not cS then return nil end
+		local cL = skyCeiling(L)
+		if not cL then return nil end
+		local top = math.min(cS, cL) - 2
+		if top <= math.max(S.z, L.z) then return nil end
+		-- the height profile under the sky along the line (world brushes; a column solid up to the sky: no way over)
+		local n = math.Clamp(math.ceil(hd / SKY_STEP), 4, SKY_MAXN)
+		local prof = { { 0, S.z } }
+		for i = 1, n - 1 do
+			sliceCheck()
+			local t = i / n
+			local z0 = S.z + (L.z - S.z) * t
+			local x, y = S.x + dx * t, S.y + dy * t
+			skyTr.start, skyTr.endpos = Vector(x, y, top), Vector(x, y, z0)
+			util.TraceLine(skyTr)
+			local o = skyTr.output
+			if o.StartSolid then return nil end
+			if o.Hit then prof[#prof + 1] = { t, o.HitPos.z + 1 } end
+		end
+		prof[#prof + 1] = { 1, L.z }
+		-- upper hull (monotone chain, x = t * hd)
+		local hull = {}
+		for _, q in ipairs(prof) do
+			while #hull >= 2 do
+				local a, b = hull[#hull - 1], hull[#hull]
+				local cr = (b[1] - a[1]) * hd * (q[2] - a[2]) - (b[2] - a[2]) * (q[1] - a[1]) * hd
+				if cr >= 0 then hull[#hull] = nil else break end
+			end
+			hull[#hull + 1] = q
+		end
+		if #hull < 3 then return nil end
+		local pts = {}
+		for k, q in ipairs(hull) do
+			pts[k] = (k == 1 and S) or (k == #hull and L) or Vector(S.x + dx * q[1], S.y + dy * q[1], q[2])
+		end
+		for k = 2, #pts - 1 do
+			local R = raiseClear(pts[k - 1], pts[k], pts[k + 1])
+			if not R or R.z > top then return nil end
+			pts[k] = R
+		end
+		-- the last leg checked again with every corner raised
+		if not detClear(pts[#pts - 1], L) then return nil end
+		local p = P.EvalPolyline(pts, cfg)
+		p.sky = true
+		return p
+	end
+	-- The way over the roofs beside the routes found (r.paths): a probe route over the same roof (probes on
+	-- it) is that very way, homotopic to it (P.SameRoute), not a second one. One estimate per way: the
+	-- cheaper one is kept, the others dropped. Summed, the way over a block counted three times (two probe
+	-- routes over its roof and this one, 7.7 dB each): +4.7 dB, lost in one 4 u step when the probes stopped
+	-- finding them (gm_construct's tall block, test sky_route).
+	function P.AddSkyRoute(r, S, L, cfg)
+		local sp = P.SkyRoute(S, L, cfg)
+		if not sp then return end
+		local way = { S }
+		for _, v in ipairs(sp.points) do way[#way + 1] = v end
+		way[#way + 1] = L
+		local keep = {}
+		for _, p in ipairs(r.paths) do
+			local same = false
+			if p.points and #p.points > 0 and not p.native then
+				sliceCheck()
+				local pts = { S }
+				for _, v in ipairs(p.points) do pts[#pts + 1] = v end
+				pts[#pts + 1] = L
+				same = P.SameRoute(way, pts)
+			end
+			if same and (p.lossDb or math.huge) < sp.lossDb then return end -- a cheaper estimate of that way: kept alone
+			if not same then keep[#keep + 1] = p end
+		end
+		keep[#keep + 1] = sp
+		r.paths, r.skyRoute = keep, sp
+	end
+end
+
 --- How much of the clear line's energy a set of arrivals (r.voices) lost on the way, together, in dB:
 -- -10 log10 of the sum of their relative energies 10^(-rawLossDb/10) (losses before any headroom). 0 in clear
 -- sight or for a route bending 0 degrees round a jamb; 17 dB behind a plaster jamb; large behind a wall.
@@ -3312,6 +3427,9 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if #tw > 0 then transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked) end
 		if worldBlocked and #r.paths == 0 and CLIENT and A.Native and A.Native.pathsReady then nativePath(r, S, L, cfg) end
 		sliceCheck()
+		if worldBlocked and (cfg.sky_route or 0) >= 0.5 then
+			P.AddSkyRoute(r, S, L, cfg)
+		end
 		if worldBlocked and r.trans then edgeWay(r, S, L, cfg) end
 		routesObjectsWater(r, S, L, cfg, srcEnt)
 		edgeBounds(r, cfg)
