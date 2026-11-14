@@ -410,5 +410,9 @@
  "native_protect_lines": {
   "pos0": "hook",
   "why": "voice cap of the native module (the protect argument of Play), outside P.Compute; covered by line_protect"
+ },
+ "native_pause": {
+  "pos0": "hook",
+  "why": "single player pause of the module's SND_SHOULDPAUSE voices (the pausable argument of Play, SetPaused from a PreRender hook), outside P.Compute; covered by pause_flag"
  }
 }

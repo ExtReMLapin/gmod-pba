@@ -991,7 +991,7 @@ steps = [
     # spoken lines are dropped last past the native voice cap (audit C-5): pba_native_protect_lines, the protect argument of Play
     ("line_protect", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "line_protect.lua", 40))),
     # the module's sounds pause with the game like the engine's (parity P2-7): the pausable flag (SND_SHOULDPAUSE) and SetPaused from a render hook
-    ("pause_flag", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "pause_flag.lua", 60))),
+    ("pause_flag", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job("client", "pause_flag.lua", 60))),
     # a degraded short sound starts at its level: held until its full result (pba_burst_hold_ms), no glide up
     ("burst_hold", burst_hold),
     # a degraded short sound (not followed) is held too until its full result (pba_burst_hold_short)
