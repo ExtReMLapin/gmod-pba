@@ -4,6 +4,7 @@ native modes), S8 (campaign map load + changelevel, probe / native caches moved 
 
 Usage: MCP_INSTANCE=<id> python -I -u perf_suite.py <mcp.py> [--only=S0,S1,S2,S8] [--s0maps=a,b] [--variants=vue,mur]
        [--modes=off,engine,native,native_noecho,native_echo] [--repeat=5] [--cold] [--diag] [--update-baseline]
+       [--knob=pba_x=v ...]  (repeatable: a setting applied after the defaults, before every mode; A/B of an option)
 
 ONE game instance on the machine (the others closed): parallel games distort every number.
 Launch it with instances_launch preset normal (640x360): the suite sets fps_max 0 / fps_max_nofocus 0 /
@@ -33,7 +34,7 @@ Writes test/perf/last/<scenario>_<variant>.json; --update-baseline also writes
 test/perf/baselines/<scenario>_<variant>__<mode>.json.
 Exit codes: 0 ran, 2 some burst INVALID, 3 usage.
 """
-import json, os, shutil, statistics, subprocess, sys, time
+import json, os, re, shutil, statistics, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PERF = os.path.join(HERE, "perf")
@@ -52,6 +53,12 @@ def opt(name, default):
 
 
 ONLY = opt("only", "S1").split(",")
+KNOBS = [a.split("=", 1)[1] for a in OPTS if a.startswith("--knob=")]  # "pba_x=v", each applied after defaults()
+for _k in KNOBS:
+    if not re.match(r"^pba_\w+=[-0-9.]+$", _k):
+        sys.exit(f"--knob={_k}: expected pba_<name>=<number>")
+if KNOBS and "--update-baseline" in OPTS:
+    sys.exit("--knob with --update-baseline: the baselines are the defaults' (A/B against them instead)")
 VARIANTS_OPT = opt("variants", None)
 MODES_OPT = opt("modes", None)
 MODES = (MODES_OPT or "off,engine,native").split(",")
@@ -178,6 +185,11 @@ def defaults():
     for m in ("engine", "native_echo"):
         MODE_CVARS[m] = [c for c in MODE_CVARS[m] if not c.startswith("pba_native_echo")] + [f"pba_native_echo {echo}"]
     print(f"defaults restored: sv [{changed[0]}] cl [{changed[1]}]", flush=True)
+    for k in KNOBS:
+        name, v = k.split("=", 1)
+        con(f"{name} {v}")
+    if KNOBS:
+        print(f"knobs: {' '.join(KNOBS)}", flush=True)
 
 
 def set_mode(mode):
