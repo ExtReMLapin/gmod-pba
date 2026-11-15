@@ -165,8 +165,10 @@ float OutputClip(float x); // the legacy output soft clip (master volume 1)
 //              OutputLatency() frames of delay); 0 the legacy soft clip whose knee starts at 0.8; 2 a hard clip at
 //              full scale, what the engine's own int16 mix does;
 //  hqResample  sounds decoded from now on are resampled to 48 kHz by a windowed sinc (flat to 20 kHz, no
-//              images) instead of miniaudio's linear interpolation (-1 dB at 10 kHz, images).
-void SetMixQuality(int limiterMode, bool hqResample);
+//              images) instead of miniaudio's linear interpolation (-1 dB at 10 kHz, images);
+//  premaster   the output stage (limiter / clip) acts BEFORE the master volume, as the engine's int16 mix does (its
+//              loud sounds clip at full scale whatever the volume); false: after it, so at a low volume it never acts.
+void SetMixQuality(int limiterMode, bool hqResample, bool premaster = false);
 int OutputMode();         // the limiterMode in force
 void SetLimiterTuning(float fastMs, float slowMs, float slowK); // limiter release (defaults 6, 50, 3); tests
 int OutputLatency();      // frames of delay the output stage adds (0 with the legacy clip)

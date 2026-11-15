@@ -34,7 +34,8 @@
 //     is fed at once), else a free one is taken (never one with a live voice; none: -1, room send
 //     only). A slot lives as long as one of its voices (bind once right after Play; call again on
 //     Update for a moving source), an unbound one 1 s. pos not a Vector: unbinds that voice.
-//     SetMixQuality(limiterMode 0|1|2, hqResample): output limiter / legacy soft clip / hard clip, sinc / linear decode resampling
+//     SetMixQuality(limiterMode 0|1|2, hqResample [, premaster]): output limiter / legacy soft clip / hard clip, sinc / linear decode
+//     resampling; premaster: the output stage acts before the master volume (the engine's order)
 //     CaptureStart(seconds) / CaptureStop(name [, bits]) / CaptureState(): debug capture of the FINAL output (after the limiter
 //     and the master volume) into garrysmod/data/pba/<name>.wav (48 kHz stereo, float or 16 bit; no other folder)
 //     SetSourceSlots: active pool size (0..16, default 16); the reflections run cost grows with it
@@ -2555,14 +2556,16 @@ LUA_FUNCTION(CaptureState) {
 	return 4;
 }
 
-// SetMixQuality(limiterMode, hqResample) -> limiterMode, hqResample: limiterMode 1 (default) = a lookahead peak
+// SetMixQuality(limiterMode, hqResample [, premaster]) -> limiterMode, hqResample: limiterMode 1 (default) = a lookahead peak
 // limiter, transparent below 0.98; 0 = the legacy soft clip from 0.8; 2 = hard clip at full scale (the engine's
 // int16 mix). hqResample (default true): the windowed-sinc 48 kHz resampler of the sounds decoded from now on
-// instead of the linear one. Absent in older modules (Lua: nil, nothing pushed).
+// instead of the linear one. premaster (default false): the limiter / clip acts before the master volume, as the
+// engine's mix does (a loud sound clips at full scale whatever the volume), not after it. Absent in older modules
+// (Lua: nil, nothing pushed); an older module ignores the third argument.
 LUA_FUNCTION(SetMixQuality) {
 	const int lim = LUA->IsType(1, Type::Number) ? (int)LUA->GetNumber(1) : render::OutputMode();
 	const bool hq = LUA->IsType(2, Type::Bool) ? LUA->GetBool(2) : (LUA->IsType(2, Type::Number) ? LUA->GetNumber(2) >= 0.5 : true);
-	render::SetMixQuality(lim, hq);
+	render::SetMixQuality(lim, hq, LUA->IsType(3, Type::Bool) ? LUA->GetBool(3) : false);
 	LUA->PushNumber(render::OutputMode());
 	LUA->PushBool(hq);
 	return 2;

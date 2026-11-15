@@ -431,6 +431,14 @@
   "pos0": "hook",
   "why": "the module's output stage (cl_native ApplySettings -> SetMixQuality), outside P.Compute; covered by the native mix_quality_test"
  },
+ "native_limit_pre": {
+  "pos0": "hook",
+  "why": "the order of the module's output stage and the master volume (cl_native ApplySettings -> SetMixQuality), outside P.Compute; covered by the native premaster_test"
+ },
+ "native_own_gain": {
+  "pos0": "hook",
+  "why": "level of the listener's own sounds in the mix wrapper (cl_mix Wrap), outside P.Compute; covered by own_level"
+ },
  "native_resample_hq": {
   "pos0": "hook",
   "why": "the module's decode resampling (cl_native ApplySettings -> SetMixQuality), outside P.Compute; covered by the native mix_quality_test"
