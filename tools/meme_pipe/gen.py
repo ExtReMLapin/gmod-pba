@@ -1,22 +1,21 @@
 """Synthesizes the metal pipe sounds (sound/pba/pipe/<tier>_<n>.wav) from params.json.
 
-A struck steel tube, by modal synthesis: a sum of exponentially decaying sinusoids (frequency, decay time,
-amplitude, phase per mode) plus a short filtered-noise strike transient. A tier (hard / medium / soft) is a
-harder or softer strike: its own gain, a spectral tilt (dB per octave: a soft strike excites the high modes
-less) and its own strike transient. A variant is a different strike position on the tube: seeded per-mode
-amplitude changes and a slight detune.
+A struck steel tube, by modal synthesis: a sum of exponentially decaying sinusoids (the partials of params.json:
+frequency, level, T60) plus a short noise click for the strike. A tier (hard / medium / soft) is a harder or softer
+strike: its gain, a tilt above 1 kHz (a soft strike excites the high partials less), its click and its decay. A variant
+is a different strike position: seeded per-partial amplitude changes and a slight detune, the same for every tier.
 
-Everything is deterministic from params.json (numpy only, no target needed). params.json is what
-tools/meme_pipe/fit.py optimizes; this file and fit.py share the model (model_numpy here, the same maths in torch there,
-checked equal by `python fit.py --selftest`).
+A first take fitted ~100 modes and a noise bed to the meme recording's spectrum and level curve by gradient descent:
+the recording is brick-wall compressed (flat for 2.4 s, then cut), so the fit made a tone without attack that never
+decays, and its close modes beat at 50-130 Hz: it sounded like a drill. These few separated partials with a real
+attack and decay are what a pipe sounds like; the room comes from pba (Steam Audio), not from the file.
 
-Usage:  python gen.py [--params params.json] [--out ../../sound/pba/pipe] [--check]
-        (--check: prints the peak / duration of every file and fails if a file clips)
+Deterministic, numpy only. Usage:  python gen.py [--params params.json] [--out ../../sound/pba/pipe] [--check]
+(--check prints the peak / duration of every file and fails if one clips)
 """
 import argparse
 import json
 import os
-import struct
 import sys
 import wave
 
@@ -26,125 +25,67 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TIERS = ("hard", "medium", "soft")
 
 
-def variant_draws(p, tier, var, n_modes):
-    """Seeded draws of one (tier, variant): per-mode amplitude jitter (dB) and detune (ratio), the strike noise."""
+def render(p, tier, var):
+    """One file (float, unnormalized): tier name, variant index 1..count."""
+    sr = int(p["sample_rate"])
+    t = np.arange(int(sr * float(p["duration"]))) / sr
+    tr = p["tiers"][tier]
     v = p["variants"]
-    # jitter and detune belong to the variant (the strike position): the same for every tier, only the force differs
-    rng = np.random.RandomState(int(v["seed"]) * 1000 + var)
-    jit = rng.randn(n_modes) * float(v["amp_jitter_db"])
-    det = rng.randn(n_modes) * float(v["detune"])
-    seed = int(v["seed"]) * 1000 + TIERS.index(tier) * 100 + var
-    noise = np.random.RandomState(seed + 7).randn(int(p["noise_len"]))
-    return jit, det, noise
+    rng = np.random.RandomState(int(v["seed"]) * 1000 + var)  # the strike position: same for every tier
+    y = np.zeros_like(t)
+    for f, db, t60 in p["partials"]:
+        f = f * (1 + rng.randn() * float(v["detune"]))
+        a = 10 ** (db / 20) * (1 + rng.randn() * float(v["amp_jitter"]))
+        phase = rng.uniform(0, 2 * np.pi)
+        if f > 1000:
+            a *= 10 ** (float(tr["tilt_db_oct"]) * np.log2(f / 1000) / 20)
+        t60 *= float(p["decay_scale"]) * float(tr["decay"])
+        y += a * np.sin(2 * np.pi * f * t + phase) * np.exp(-6.91 * t / t60)
+    c = p["click"]
+    nrng = np.random.RandomState(int(v["seed"]) * 1000 + TIERS.index(tier) * 100 + var + 7)
+    n = nrng.randn(len(t)) * np.exp(-t / float(c["tau"]))
+    n = np.diff(n, prepend=0.0)
+    y += float(c["level"]) * float(tr["click"]) * n / np.abs(n).max() * np.abs(y).max()
+    y *= np.minimum(1.0, t / float(c["attack"]))
+    k = int(sr * float(p["fade_out"]))
+    y[-k:] *= np.linspace(1.0, 0.0, k)
+    return y * 10 ** (float(tr["gain_db"]) / 20)
 
 
-def bed_noise(p, var, N, fs):
-    """[K, N] seeded white noise shaped by K triangular (log-frequency) windows centred on the bed's knots."""
-    kn = np.array(p["bed"]["knots_hz"], dtype=np.float64)
-    NB = int(4.1 * fs)  # always drawn at this length, then cut: every length shares the same noise
-    rng = np.random.RandomState(int(p["variants"]["seed"]) * 1000 + 500 + var)
-    X = np.fft.rfft(rng.randn(NB))
-    fr = np.fft.rfftfreq(NB, 1.0 / fs)
-    lf = np.log2(np.maximum(fr, 1.0))
-    lk = np.log2(kn)
-    out = np.zeros((len(kn), NB))
-    for k in range(len(kn)):
-        lo = lk[k - 1] if k > 0 else lk[k] - 1.0
-        hi = lk[k + 1] if k < len(kn) - 1 else lk[k] + 1.0
-        w = np.where(lf < lk[k], (lf - lo) / (lk[k] - lo), (hi - lf) / (hi - lk[k]))
-        w = np.clip(w, 0.0, 1.0)
-        out[k] = np.fft.irfft(X * w, NB)
-    return out[:, :N]
+def render_all(p):
+    """{(tier, var): float array}, scaled together so the loudest hard file peaks at p.peak."""
+    out = {(tier, i): render(p, tier, i) for tier in TIERS for i in range(1, int(p["variants"]["count"]) + 1)}
+    scale = float(p["peak"]) / max(np.abs(y).max() for (tier, _), y in out.items() if tier == "hard")
+    return {k: y * scale for k, y in out.items()}
 
 
-def mode_arrays(p):
-    m = p["modes"]
-    f = np.array([x["f"] for x in m], dtype=np.float64)
-    tau = np.array([x["tau"] for x in m], dtype=np.float64)
-    a = np.array([x["a"] for x in m], dtype=np.float64)
-    ph = np.array([x["phase"] for x in m], dtype=np.float64)
-    return f, tau, a, ph
-
-
-def render(p, tier, var, fs, length=None, pitch=1.0):
-    """One dry sound (float64 array). pitch: playback ratio (the game's EmitSound pitch / 100)."""
-    f, tau, a, ph = mode_arrays(p)
-    n = len(f)
-    t_cfg = p["tiers"][tier]
-    length = float(length if length is not None else t_cfg["length_s"])
-    N = int(round(length * fs))
-    t = np.arange(N) / fs
-    jit, det, noise = variant_draws(p, tier, var, n)
-    fi = f * (1.0 + det) * pitch
-    tilt = 10.0 ** (-t_cfg["tilt_db_oct"] * np.log2(np.maximum(f, 20.0) / 1000.0) / 20.0)
-    amp = a * t_cfg["gain"] * tilt * 10.0 ** (jit / 20.0)
-    amp = np.where(fi < 0.45 * fs, amp, 0.0)  # nothing above Nyquist
-    y = np.zeros(N)
-    # chunks of modes, to keep memory bounded
-    for s in range(0, n, 16):
-        sl = slice(s, s + 16)
-        y += (amp[sl, None] * np.exp(-t[None, :] / (tau[sl, None] / pitch)) * np.sin(2 * np.pi * fi[sl, None] * t[None, :] + ph[sl, None])).sum(0)
-    # the diffuse bed: a swarm of unresolved modes, noise in K bands, each with its own level and decay
-    bed = p["bed"]
-    bn = bed_noise(p, var, N, fs)
-    kn = np.array(bed["knots_hz"], dtype=np.float64)
-    bg = np.array(bed["gain"], dtype=np.float64) * t_cfg["gain"] * 10.0 ** (-t_cfg["tilt_db_oct"] * np.log2(kn / 1000.0) / 20.0)
-    bt = np.array(bed["tau"], dtype=np.float64)
-    y += (bg[:, None] * np.exp(-t[None, :] / (bt[:, None] / pitch)) * bn).sum(0)
-    # strike transient: seeded white noise, one-pole-like lowpass (zero phase, in the frequency domain), exponential envelope
-    nl = int(p["noise_len"])
-    X = np.fft.rfft(noise)
-    fr = np.fft.rfftfreq(nl, 1.0 / fs)
-    X *= 1.0 / np.sqrt(1.0 + (fr / t_cfg["strike_lp_hz"]) ** 2)
-    nz = np.fft.irfft(X, nl)
-    nz = nz / (np.sqrt(np.mean(nz ** 2)) + 1e-12)
-    ne = min(nl, N)
-    env = np.exp(-t[:ne] / (t_cfg["strike_tau_ms"] * 1e-3))
-    y[:ne] += t_cfg["strike_gain"] * nz[:ne] * env
-    # fades: 1 ms in (no click), the tail out over tail_fade_ms
-    fi_n = max(1, int(0.001 * fs))
-    y[:fi_n] *= np.linspace(0, 1, fi_n)
-    fo = max(1, int(p["tail_fade_ms"] * 1e-3 * fs))
-    y[-fo:] *= np.linspace(1, 0, fo)
-    return y * float(p["master_gain"])
-
-
-def write_wav(path, y, fs):
-    pcm = np.clip(np.round(y * 32767.0), -32768, 32767).astype("<i2")
+def write_wav(path, y, sr):
+    pcm = np.clip(np.round(y * 32767), -32768, 32767).astype("<i2")
     with wave.open(path, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.setframerate(fs)
+        w.setframerate(sr)
         w.writeframes(pcm.tobytes())
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--params", default=os.path.join(HERE, "params.json"))
-    ap.add_argument("--out", default=os.path.abspath(os.path.join(HERE, "..", "..", "sound", "pba", "pipe")))
+    ap.add_argument("--out", default=os.path.join(HERE, "..", "..", "sound", "pba", "pipe"))
     ap.add_argument("--check", action="store_true")
-    ap.add_argument("--normalize", type=float, default=None, help="rewrite master_gain in the params file so the loudest hard variant peaks at this value (0..1), then exit")
     a = ap.parse_args()
-    p = json.load(open(a.params))
-    if a.normalize is not None:
-        pk = max(float(np.abs(render(p, "hard", v, int(p["sample_rate"]))).max()) for v in range(1, int(p["variants"]["count"]) + 1))
-        p["master_gain"] = float(p["master_gain"]) * a.normalize / pk
-        json.dump(p, open(a.params, "w"), indent=1)
-        print("master_gain ->", p["master_gain"])
-        return
+    with open(a.params) as f:
+        p = json.load(f)
     os.makedirs(a.out, exist_ok=True)
-    fs = int(p["sample_rate"])
     bad = False
-    for tier in TIERS:
-        for var in range(1, int(p["variants"]["count"]) + 1):
-            y = render(p, tier, var, fs)
-            pk = float(np.abs(y).max())
-            if pk > 0.999:
-                bad = True
-            write_wav(os.path.join(a.out, "%s_%d.wav" % (tier, var)), y, fs)
-            print("%s_%d.wav  peak %.3f (%.1f dBFS)  %.2f s" % (tier, var, pk, 20 * np.log10(pk + 1e-12), len(y) / fs))
-    if a.check and bad:
-        print("CLIPPING: lower master_gain in params.json")
+    for (tier, i), y in render_all(p).items():
+        write_wav(os.path.join(a.out, "%s_%d.wav" % (tier, i)), y, int(p["sample_rate"]))
+        if a.check:
+            pk = np.abs(y).max()
+            print("%s_%d  peak %.1f dBFS  %.2f s" % (tier, i, 20 * np.log10(pk), len(y) / int(p["sample_rate"])))
+            bad = bad or pk >= 1.0
+    if bad:
+        print("CLIPPING: lower peak in params.json")
         sys.exit(1)
 
 
