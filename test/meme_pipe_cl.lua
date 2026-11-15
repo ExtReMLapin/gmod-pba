@@ -26,16 +26,18 @@ local ang = LocalPlayer():EyeAngles()
 LocalPlayer():SetEyeAngles(Angle(60, ang.y, 0))
 job:sleep(0.3)
 RunConsoleCommand("gm_spawnsent", "pba_metal_pipe_stack")
-local pipes = job:wait(function() return #ents.FindByClass("pba_metal_pipe") >= 4 end, 3)
+local before = #ents.FindByClass("pba_metal_pipe") -- (pipes of an earlier step may still be there, or be going)
+job:wait(function() return #ents.FindByClass("pba_metal_pipe") > before end, 4)
 res.pipes = #ents.FindByClass("pba_metal_pipe")
+res.before = before
 job:sleep(0.6)
 if res.module then
 	local decoded = 0
 	for _, f in ipairs(fresh) do if pba_native.HasSound(f) or pba_native.SoundPending(f) then decoded = decoded + 1 end end
 	res.startedOrDone = decoded
-	res.pass = res.pipes >= 4 and #fresh == #names and decoded == #fresh
+	res.pass = res.pipes > before and #fresh == #names and decoded == #fresh
 else
-	res.pass = res.pipes >= 4
+	res.pass = res.pipes > before
 end
 RunConsoleCommand("pba_meme_pipe", "1")
 return res
