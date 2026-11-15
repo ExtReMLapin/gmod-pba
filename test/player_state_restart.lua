@@ -13,10 +13,12 @@ if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return { pass = fals
 if not A.PState then return { pass = false, err = "A.PState missing (state still on the entity)" } end
 local res = {}
 -- what a level transition restores on the entity: the previous map's state
-ply.pba_known = { [1] = true, [2] = true, [3] = true }
+-- (ids no dictionary reaches: on a map already used by other steps the client has really acknowledged 1, 2, 3...)
+local STALE = 999991
+ply.pba_known = { [STALE] = true, [STALE + 1] = true, [STALE + 2] = true }
 ply.pba_relayBucket = { tok = -24800, t = CurTime() + 400 }
 ply.pba_nameQ = { n = 1, ["*vo/x.wav"] = { bucket = { tok = -50, t = CurTime() + 400 }, v = {}, nxt = 1 } }
-res.knownIgnored = A.RelayKnown(ply)[1] == nil
+res.knownIgnored = A.RelayKnown(ply)[STALE] == nil
 -- a bucket from a clock that went back (the state's own, e.g. a hot reload across a map change): starts full
 local st = A.PState(ply)
 st.relayBucket = { tok = -24800, t = CurTime() + 400 }
