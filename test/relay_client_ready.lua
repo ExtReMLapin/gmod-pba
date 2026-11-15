@@ -18,7 +18,7 @@ local phys = e:GetPhysicsObject()
 if IsValid(phys) then phys:EnableMotion(false) end
 job:sleep(0.5)
 local function once(ready)
-	ply.pba_ready = ready
+	A.PState(ply).ready = ready
 	local r0, m0 = A.stats.relayed or 0, A.stats.relayMuffled or 0
 	e:EmitSound("vo/npc/male01/question06.wav", 75, 100, 1, CHAN_VOICE)
 	job:sleep(0.3)
@@ -26,9 +26,9 @@ local function once(ready)
 	job:sleep(0.2)
 	return { relayed = (A.stats.relayed or 0) - r0, muffled = (A.stats.relayMuffled or 0) - m0 }
 end
-local was = ply.pba_ready
+local was = A.PState(ply).ready
 local res = { ready = once(true), notReady = once(false) }
-ply.pba_ready = was == nil and true or was
+A.PState(ply).ready = was == nil and true or was
 e:Remove()
 res.pass = res.ready.relayed == 1 and res.notReady.relayed == 0 and res.notReady.muffled == 1
 return res

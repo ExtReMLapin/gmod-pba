@@ -1,7 +1,8 @@
 -- SoundTime relay, part 2 (server lua_job, pba_tworooms, listen server): a bot in the other room fires an
 -- SMG for 1.5 s (see soundtime_probe.lua). Returns the shots fired (clip). With the global
 -- pba_soundtime_drain set (soundtime_reemit), the host's relay budget is kept empty: every shot falls back
--- to an engine re-emission, muffled.
+-- to an engine re-emission, muffled. (The bucket is emptied with its clock at now: a clock in the future, as it was
+-- before A.PState, now counts as a clock gone back and the bucket starts full.)
 local ply = player.GetHumans()[1]
 if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return "needs pba_tworooms with a human" end
 ply:SetPos(Vector(256, 256, 0))
@@ -20,7 +21,7 @@ job:sleep(0.5)
 local wep = bot:GetActiveWeapon()
 wep:SetClip1(45)
 if pba_soundtime_drain then
-	hook.Add("Tick", "pba_soundtime_drain", function() ply.pba_relayBucket = { tok = 0, t = CurTime() + 1 } end)
+	hook.Add("Tick", "pba_soundtime_drain", function() pba.PState(ply).relayBucket = { tok = -1000, t = CurTime() } end)
 end
 hook.Add("StartCommand", "pba_soundtime", function(c, u) if c == bot then u:SetButtons(IN_ATTACK) end end)
 job:sleep(1.5)

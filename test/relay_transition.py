@@ -1,6 +1,6 @@
 """Relayed sounds after a campaign level transition and after a savegame load (real engine, singleplayer).
 Both restart the Lua state of both realms (the relay's sound-name dictionaries start over) but restore the
-player entity's table, with the ids his client acknowledged before (ply.pba_known). Before the fix the server
+player entity's table, with the ids his client acknowledged before (now A.PState(ply).known). Before the fix the server
 sent bare ids his fresh client did not know and the client dropped every relayed sound: own footsteps silent,
 gunfire handed back late by the safety net (user, d1_trainstation_02 -> 03: server known ids 89, server
 dictionary 53, client dictionary 0).
@@ -12,7 +12,7 @@ After each: the marker must have survived (the table did: else the test would pr
 same names are emitted on the player and counted on the client: pba.stats.relayedIn (the relay reached the
 client's name check), A.Process calls for relayed sounds, and, with the module, pba_native.Play calls for the
 footsteps. pass = the relay budget is not capped after the restart (server pba.stats.relayCapped and relayMuffled
-stay 0, every emission relayed: the budget's clock, ply.pba_relayBucket, came from the previous map: -24800 tokens
+stay 0, every emission relayed: the budget's clock, the entity's old pba_relayBucket field, came from the previous map: -24800 tokens
 in the user's d1_trainstation_03 -> 04, every relay refused for minutes, lines played as engine copies muffled
 at -24 dB), and every emitted name was relayed (>= 90 %) and, with the module, played (>= 70 %: the module's own
 masking and voice cap drop a few; green measured 26 of 30), in both.
@@ -125,11 +125,11 @@ return { relayedIn = pba.stats.relayedIn, processed = T and T.relayed, play = T 
 SV_STATE = r"""
 local ply = player.GetHumans()[1]
 local known = 0
-for _ in pairs(ply.pba_known or {}) do known = known + 1 end
--- the relay budget: in the Lua state's table (A.PState) or, before that fix, on the entity
-local b = pba.PState and pba.PState(ply).relayBucket or ply.pba_relayBucket
+for _ in pairs(pba.RelayKnown(ply)) do known = known + 1 end
+-- the relay budget lives in the Lua state's table (A.PState); a stale one on the entity (what the transition restores) must be ignored
+local b = pba.PState(ply).relayBucket
 local S = pba.stats
-return { marker = ply.pba_testMarker, rawKnown = known, knownSession = ply.pba_knownSession, session = pba.dict.session,
+return { marker = ply.pba_testMarker, known = known,
          dictN = pba.dict.n, relayKnownFn = pba.RelayKnown ~= nil, curTime = CurTime(), bucketTok = b and b.tok, bucketT = b and b.t,
          entityBucketTok = ply.pba_relayBucket and ply.pba_relayBucket.tok,
          relayed = S.relayed or 0, capped = S.relayCapped or 0, muffled = S.relayMuffled or 0 }

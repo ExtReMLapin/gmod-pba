@@ -50,7 +50,8 @@ S.Audience = function(snd, p, scale)
 end
 local function run(rate)
 	set("relay_name_rate", rate)
-	ply.pba_relayBucket, ply.pba_echoBucket, ply.pba_nameQ = nil, nil, nil
+	local st = A.PState(ply)
+	st.relayBucket, st.echoBucket, st.nameQ = nil, nil, nil
 	seen = { [FLOOD] = { n = 0 } }
 	for _, n in ipairs(OTHERS) do seen[n] = { n = 0 } end
 	-- one frame: the budget is one bucket of rate tokens

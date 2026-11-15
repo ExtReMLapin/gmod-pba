@@ -1,7 +1,7 @@
 -- relay_after_transition, server half (lua_job, singleplayer, a human): emits TR_N distinct footstep names from
 -- a prop beside the player (not his own sounds: those bypass the relay budget and the name quota, sv_sound
 -- Audience), one every 0.12 s, in the same order each time. Before a level transition / a savegame load it
--- fills his acknowledged ids (ply.pba_known); after it, the same names get the ids of a fresh dictionary,
+-- fills his acknowledged ids (A.RelayKnown(ply), kept in A.PState); after it, the same names get the ids of a fresh dictionary,
 -- which are the ones his old acknowledgements cover. TR_MARK (optional) is written on his entity table first
 -- (does the table survive the transition at all: the precondition of the bug).
 local A = pba
@@ -24,5 +24,5 @@ end
 job:sleep(0.8) -- (the client acknowledges every 0.2 s)
 prop:Remove()
 local known = 0
-for _ in pairs(ply.pba_known or {}) do known = known + 1 end
-return { emitted = n, known = known, dictN = A.dict.n, session = A.dict.session }
+for _ in pairs(A.RelayKnown(ply)) do known = known + 1 end
+return { emitted = n, known = known, dictN = A.dict.n }

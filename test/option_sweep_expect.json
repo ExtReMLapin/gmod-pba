@@ -247,6 +247,10 @@
   "pos0": "hook",
   "why": "client-side sounds stamped with a start time (hook take-over)"
  },
+ "timescale": {
+  "pos0": "hook",
+  "why": "game time vs real time of the waiting checks (relay, safety nets, captions): outside P.Compute (tests timescale, timescale_brief, timescale_net)"
+ },
  "patch_restart": {
   "pos0": "hook",
   "why": "a finished client patch restarted by a change (hook take-over)"

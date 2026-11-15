@@ -23,13 +23,13 @@ local function start()
 	LP.MouthStop(l)
 	return m
 end
-local res = { off = ply.pbaLipsyncOff == true, flexes = npc:GetFlexNum(), long_lipsync = A.cfg.long_lipsync, choice = A.cfg.long_lipsync_choice }
+local res = { off = A.PState(ply).lipsyncOff == true, flexes = npc:GetFlexNum(), long_lipsync = A.cfg.long_lipsync, choice = A.cfg.long_lipsync_choice }
 local ok, err = pcall(function()
 	res.mouth = start()
-	local saved = ply.pbaLipsyncOff
-	ply.pbaLipsyncOff = nil
+	local saved = A.PState(ply).lipsyncOff
+	A.PState(ply).lipsyncOff = nil
 	res.control = start()
-	ply.pbaLipsyncOff = saved
+	A.PState(ply).lipsyncOff = saved
 end)
 if IsValid(npc) then npc:Remove() end
 if not ok then return { pass = false, err = tostring(err) } end
