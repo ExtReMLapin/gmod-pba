@@ -838,7 +838,7 @@ local function animateProps()
 	end
 end
 
-hook.Add("InitPostEntity", "pba_demo", function() timer.Simple(1, animateProps) end)
+A.OnInitPostEntity("pba_demo", function() timer.Simple(1, animateProps) end)
 hook.Add("PostCleanupMap", "pba_demo", function()
 	for _, r in ipairs(DM.rooms) do
 		local st = state(r)

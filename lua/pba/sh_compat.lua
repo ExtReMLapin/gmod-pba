@@ -199,4 +199,4 @@ if SERVER and MPSNDFIX_EMITSOUND then
 	MsgN("[PBA] Multiplayer Distant Sounds Fix detected: distant sounds it sends to every player may be heard twice.")
 end
 
-hook.Add("InitPostEntity", "pba_compat", function() timer.Simple(3, C.Check) end)
+A.OnInitPostEntity("pba_compat", function() timer.Simple(3, C.Check) end)

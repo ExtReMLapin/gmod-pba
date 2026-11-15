@@ -2139,7 +2139,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	return PR.DistinctRoutes(S, L, out)
 end
 
-hook.Add("InitPostEntity", "pba_probes", function() timer.Simple(2, function() if A.Enabled() then PR.Start() end end) end)
+A.OnInitPostEntity("pba_probes", function() timer.Simple(2, function() if A.Enabled() then PR.Start() end end) end)
 -- autorefresh while a map is running: restart (the cache makes it instant)
 if A.probesLoaded then timer.Simple(1, function() if A.Enabled() then PR.Start() end end) end
 A.probesLoaded = true

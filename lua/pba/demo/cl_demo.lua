@@ -121,7 +121,7 @@ timer.Create("pba_demo_cl", 0.5, 0, function()
 	if DM.helloDone and DM.NativeAvailable() ~= DM.sentNative then sendNative() end
 end)
 
-hook.Add("InitPostEntity", "pba_demo", function()
+A.OnInitPostEntity("pba_demo", function()
 	timer.Simple(2, sendNative)
 	timer.Simple(1, function() if DM.BuildDecor then DM.BuildDecor() end end)
 end)

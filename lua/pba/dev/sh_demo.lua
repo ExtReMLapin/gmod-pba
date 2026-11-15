@@ -169,7 +169,7 @@ if SERVER then
 		return out
 	end, "pba_demo <scenario|list|stop> [voice|gun|click|music|<file>] [interval]")
 
-	hook.Add("InitPostEntity", "pba_demo_resume", function()
+	A.OnInitPostEntity("pba_demo_resume", function()
 		local js = file.Read(PENDING, "DATA")
 		if not js then return end
 		file.Delete(PENDING)

@@ -1820,6 +1820,6 @@ timer.Create("pba_native_reverb", 0.5, 0, function()
 	if ok then N.rt = { l, m, h } end
 end)
 
-hook.Add("InitPostEntity", "pba_native", function() timer.Simple(1, N.Start) end)
+A.OnInitPostEntity("pba_native", function() timer.Simple(1, N.Start) end)
 if A.nativeLoaded then timer.Simple(0.5, N.Start) end
 A.nativeLoaded = true

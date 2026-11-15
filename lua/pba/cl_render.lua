@@ -1032,7 +1032,7 @@ function A.SendLipsyncPref()
 	net.WriteBool((A.cfg.lipsync or 1) >= 0.5)
 	net.SendToServer()
 end
-hook.Add("InitPostEntity", "pba_lipsync_pref", A.SendLipsyncPref)
+A.OnInitPostEntity("pba_lipsync_pref", A.SendLipsyncPref)
 timer.Simple(0, A.SendLipsyncPref) -- (a reload after InitPostEntity)
 
 local function mouthCopy(data, src)
@@ -1503,7 +1503,7 @@ local function sayReady()
 end
 A.SayReady = sayReady
 if IsValid(LocalPlayer()) then sayReady() end
-hook.Add("InitPostEntity", "pba_ready", sayReady)
+A.OnInitPostEntity("pba_ready", sayReady)
 timer.Create("pba_ack", 0.2, 0, function()
 	if #pendingAcks == 0 then return end
 	net.Start("pba_snd_ack")

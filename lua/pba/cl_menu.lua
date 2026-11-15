@@ -387,7 +387,7 @@ list.Set("DesktopWindows", "pba", {
 })
 
 -- 3. one chat hint per client, the first time a map is played with pba
-hook.Add("InitPostEntity", "pba_menu_hint", function()
+A.OnInitPostEntity("pba_menu_hint", function()
 	if cookie.GetNumber("pba_menu_hint", 0) >= 1 then return end
 	timer.Simple(8, function()
 		chat.AddText(Color(90, 200, 255), "[PBA] ", color_white,
