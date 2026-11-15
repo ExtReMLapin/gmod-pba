@@ -1,4 +1,8 @@
 {
+ "meme_pipe": {
+  "pos0": "hook",
+  "why": "the metal pipe prop (an entity, not a sound path): tests meme_pipe and meme_pipe_cl"
+ },
  "cl_hook_last": {
   "pos0": "hook",
   "why": "client: other addons' EntityEmitSound hooks run first (test hook_order)"
