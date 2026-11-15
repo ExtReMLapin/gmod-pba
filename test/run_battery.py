@@ -1148,6 +1148,8 @@ steps = [
     # a new sound the engine plays on a line's channel (player now in plain sight) cuts its relayed copy
     ("channel_cut", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "channel_cut_setup.lua"), lambda: job("client", "channel_cut_mid.lua"), lambda: job("server", "channel_cut_next.lua"), lambda: job("client", "channel_cut.lua"))),
     ("player_state_restart", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "player_state_restart.lua"))),
+    # a campaign level transition / a savegame load restarts both Lua states but keeps the player's entity table: the relay must still reach the client (real engine transition, ~85 s: not in QUICK)
+    ("relay_after_transition", lambda: py("relay_transition.py")),
     ("relay_dict_overflow", lambda: seq(lambda: load(TW), lambda: job("client", "relay_dict_capture.lua"), lambda: job("server", "relay_dict_overflow.lua", 30), lambda: job("client", "relay_dict_check.lua"))),
     ("channel_no_overwrite", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(False), lambda: job("client", "channel_no_overwrite.lua", 30))),
     ("channel_no_overwrite_server", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "channel_no_overwrite_server.lua"))),
