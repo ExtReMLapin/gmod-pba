@@ -24,7 +24,11 @@ for _, r in ipairs(A.OneShots.recs or {}) do if r.name == name then rec = r end 
 local res = { followed = rec ~= nil, err = not ok and tostring(err) or nil, adaptive = A.cfg.reeval_adaptive }
 if rec then
 	job:sleep(2.2)
-	res.evals = n
+	-- the re-evaluations the cadence rule decided (P.ReevalDue counts them in rec.reeval.n). Not the calls to
+	-- P.Evaluate: a far sound's evaluation held by the slicer calls it twice (the request, then the delivery,
+	-- cl_slicer) and a late engine-to-module handover once more (lateCheck); they made 4 calls out of 2 decisions.
+	res.evals = rec.reeval and rec.reeval.n or 0
+	res.evaluateCalls = n
 end
 P.Evaluate = ev0
 RunConsoleCommand("pba_reeval_adaptive", tostring(ad0))

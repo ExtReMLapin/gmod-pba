@@ -1317,6 +1317,9 @@ local SUITE = {
 			local cfg = setmetatable({ probes = 0, path_props = 0, cache_ttl = 0.25 }, { __index = CFG })
 			local ok, err = pcall(function()
 				P.InvalidateCache()
+				-- (the sweep's next time is in the game's real clock: a game up for more than this case's clock, 1000-1200 s,
+				-- had it past every call here and nothing was swept, red only on an instance running a while)
+				P.cacheSweepT = nil
 				-- 500 results an hour old (dead: older than cache_ttl), as a long session leaves them
 				for i = 1, 500 do P.cache["stale" .. i] = { t = T - 3600, r = {} } end
 				-- a few minutes of sounds later

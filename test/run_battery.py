@@ -1223,7 +1223,9 @@ steps = [
         lambda: call("lua_exec", {"realm": "server", "code": "for _, n in ipairs({'door_s', 'door_n'}) do for _, d in ipairs(ents.FindByName(n)) do d:Fire('Close') end end return true"}),
         lambda: time.sleep(4), lambda: job("client", "twodoors_closed.lua", 30))),
     # pba_twodoors loaded with both doors closed: never received by the client, found by the box the server sends
-    ("twodoors_unseen", lambda: seq(lambda: load("pba_twodoors"), lambda: time.sleep(4), lambda: job("client", "twodoors_unseen.lua", 30))),
+    # doors this client never received: a map loaded anew (after twodoors_closed on the same map they were received:
+    # the test said inconclusive, counted as a FAIL)
+    ("twodoors_unseen", lambda: seq(lambda: fresh("pba_twodoors"), lambda: time.sleep(4), lambda: job("client", "twodoors_unseen.lua", 30))),
     ("native_volume_sfx", lambda: volume_sfx_step()),
     ("native_law", lambda: job("client", "native_law.lua")),
     # a far moving source keeps its source reverb response (pba_native_src_near): no restart every 1.5 m
