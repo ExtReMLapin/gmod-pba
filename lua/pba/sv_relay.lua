@@ -20,14 +20,15 @@ util.AddNetworkString("pba_ready")
 -- With it, whether he switched pba off on his side (pba_cl_enable 0): he then hears the engine's own
 -- sounds, nothing relayed nor muffled for him (pba_relay_cl_enable). (An older client sends no flag: on.)
 net.Receive("pba_ready", function(_, ply)
-	ply.pba_ready = true
-	ply.pba_off = net.BytesLeft() and net.BytesLeft() > 0 and net.ReadBool() or false
+	local st = A.PState(ply)
+	st.ready = true
+	st.off = net.BytesLeft() and net.BytesLeft() > 0 and net.ReadBool() or false
 end)
 function A.ClientReady(ply) -- (the audience rule, sv_sound)
-	return ply.pba_ready == true or (A.cfg.relay_ready or 1) < 0.5
+	return A.PState(ply).ready == true or (A.cfg.relay_ready or 1) < 0.5
 end
 function A.ClientOff(ply) -- (the audience rule, sv_sound)
-	return ply.pba_off == true and (A.cfg.relay_cl_enable or 1) >= 0.5
+	return A.PState(ply).off == true and (A.cfg.relay_cl_enable or 1) >= 0.5
 end
 
 -- Player:ConCommand("stopsound") from the server (a common way addons silence a player): it runs in his
@@ -78,20 +79,13 @@ A.recentTo = A.recentTo or {} -- entindex -> { [ply] = time }
 -- long-running server), a new name gets id 0: sent in full every time, never stored by the client (an id
 -- past 65535 wrapped on the wire onto an old one, and the client then played the new sound for the old).
 A.dict = A.dict or { ids = {}, names = {}, n = 0 }
--- (this Lua state's dictionary: a campaign level transition restarts the Lua of both realms, the
--- dictionaries start over, but the player entity's table survives with the ids his client acknowledged
--- for the previous map: the server then sent bare ids his fresh client did not know and every relayed
--- sound was dropped, footsteps silent and lines handed back late. The ids a player knows are kept per
--- dictionary session.)
-A.dict.session = A.dict.session or (tostring(SysTime()) .. ":" .. math.random(1, 1e9))
 local MAX_ID = 65535
 
---- The ids player ply acknowledged for THIS dictionary (an older session's are forgotten).
+--- The ids player ply acknowledged for this dictionary (both die with this Lua state: A.PState).
 function A.RelayKnown(ply)
-	if ply.pba_knownSession ~= A.dict.session then
-		ply.pba_known, ply.pba_knownSession = {}, A.dict.session
-	end
-	return ply.pba_known
+	local st = A.PState(ply)
+	st.known = st.known or {}
+	return st.known
 end
 local function nameId(name)
 	local id = A.dict.ids[name]

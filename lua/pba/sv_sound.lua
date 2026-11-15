@@ -144,12 +144,13 @@ local clientReady = function(ply) return A.ClientReady(ply) end
 --- Token bucket of one player: `rate` per second, burst one second. `key`: the player field holding
 -- the bucket, so relays and echo-only relays have separate budgets (a battle's loud gunfire must not
 -- eat the budget that keeps the gunfire behind a wall muffled). `stat`: counter of the misses.
-local function takeToken(ply, key, rate, stat)
+local function takeToken(st, key, rate, stat)
 	local now = CurTime()
-	local b = ply[key]
-	if not b then
+	local b = st[key]
+	if not b or now < b.t then
+		-- (a bucket from a clock that went back: start full rather than owe thousands of tokens)
 		b = { tok = rate, t = now }
-		ply[key] = b
+		st[key] = b
 	end
 	local t = math.min(rate, b.tok + (now - b.t) * rate)
 	b.t = now
@@ -167,13 +168,13 @@ end
 -- volume through the wall: near the cap, gunfire behind a wall flipped between muffled and 20-30 dB
 -- louder shot to shot); he gets it re-emitted by the engine, muffled (see muffleFor).
 local function relayToken(ply)
-	return takeToken(ply, "pba_relayBucket", A.cfg.relay_rate or 80, "relayCapped")
+	return takeToken(A.PState(ply), "relayBucket", A.cfg.relay_rate or 80, "relayCapped")
 end
 
 --- Echo-only relay budget: its own bucket (same rate). Out of tokens the player only misses the
 -- client-side echo tail, he still hears the direct sound: never louder, just drier.
 local function echoToken(ply)
-	return takeToken(ply, "pba_echoBucket", A.cfg.relay_rate or 80, "echoCapped")
+	return takeToken(A.PState(ply), "echoBucket", A.cfg.relay_rate or 80, "echoCapped")
 end
 
 --- Engine muffling for a blocked player over budget (P.MuffleFor): DSP preset and volume factor.
@@ -191,10 +192,11 @@ local NAME_AGE_S = 2          -- ... for this long
 local NAME_MAX = 256          -- names kept per player (the table starts over beyond)
 
 local function nameState(ply, name)
-	local t = ply.pba_nameQ
+	local st = A.PState(ply)
+	local t = st.nameQ
 	if not t or t.n >= NAME_MAX then
 		t = { n = 0 }
-		ply.pba_nameQ = t
+		st.nameQ = t
 	end
 	local s = t[name]
 	if not s then
