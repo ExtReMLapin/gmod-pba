@@ -11,10 +11,14 @@ trigger_changelevel that leads to d1_trainstation_03 (the engine's real transiti
 After each: the marker must have survived (the table did: else the test would prove nothing), then 30 of the
 same names are emitted on the player and counted on the client: pba.stats.relayedIn (the relay reached the
 client's name check), A.Process calls for relayed sounds, and, with the module, pba_native.Play calls for the
-footsteps. pass = every emitted name was relayed (>= 90 %) and, with the module, played (>= 70 %: the module's own
+footsteps. pass = the relay budget is not capped after the restart (server pba.stats.relayCapped and relayMuffled
+stay 0, every emission relayed: the budget's clock, ply.pba_relayBucket, came from the previous map: -24800 tokens
+in the user's d1_trainstation_03 -> 04, every relay refused for minutes, lines played as engine copies muffled
+at -24 dB), and every emitted name was relayed (>= 90 %) and, with the module, played (>= 70 %: the module's own
 masking and voice cap drop a few; green measured 26 of 30), in both.
 Prints one JSON verdict. The savegame pbatest.* is deleted at the end (the engine's own transition files, shared
 with every game of this machine, are left alone).
+(The module is needed: own sounds and pba_native_all, the relays under test, exist with it only.)
 Usage: MCP_INSTANCE=<id> python -I relay_transition.py <mcp.py> [transition|save]   (default: both)
 """
 import json
@@ -122,8 +126,13 @@ SV_STATE = r"""
 local ply = player.GetHumans()[1]
 local known = 0
 for _ in pairs(ply.pba_known or {}) do known = known + 1 end
+-- the relay budget: in the Lua state's table (A.PState) or, before that fix, on the entity
+local b = pba.PState and pba.PState(ply).relayBucket or ply.pba_relayBucket
+local S = pba.stats
 return { marker = ply.pba_testMarker, rawKnown = known, knownSession = ply.pba_knownSession, session = pba.dict.session,
-         dictN = pba.dict.n, relayKnownFn = pba.RelayKnown ~= nil }
+         dictN = pba.dict.n, relayKnownFn = pba.RelayKnown ~= nil, curTime = CurTime(), bucketTok = b and b.tok, bucketT = b and b.t,
+         entityBucketTok = ply.pba_relayBucket and ply.pba_relayBucket.tok,
+         relayed = S.relayed or 0, capped = S.relayCapped or 0, muffled = S.relayMuffled or 0 }
 """
 GOTO_TRIGGER = r"""
 local ply = player.GetHumans()[1]
@@ -164,10 +173,15 @@ def phase(label, how):
     w = lua("client", WRAP)
     r["native"] = (w or {}).get("native")
     base = lua("client", READ)
+    sv0 = lua("server", SV_STATE) or {}
     r["post"] = job("server", f"TR_N = {POST_N}", "relay_transition_emit.lua", 60)
     time.sleep(1)
     now = lua("client", READ)
     lua("client", UNWRAP)
+    sv1 = lua("server", SV_STATE) or {}
+    # the relay budget: nothing refused (muffled engine copies instead of relays), every emission relayed
+    r["svRelayed"], r["svCapped"], r["svMuffled"] = (sv1.get(k, 0) - sv0.get(k, 0) for k in ("relayed", "capped", "muffled"))
+    r["budgetOK"] = not r["native"] or r["svCapped"] == 0 and r["svMuffled"] == 0 and r["svRelayed"] >= POST_N * 0.9
     for k in ("relayedIn", "processed", "play", "steps"):
         r[k] = (now or {}).get(k, 0) - (base or {}).get(k, 0)
     r["clientDictAtStart"] = (base or {}).get("clientDict")
@@ -176,7 +190,7 @@ def phase(label, how):
     need = POST_N * 0.9
     r["relayedOK"] = r["relayedIn"] >= need
     r["playedOK"] = (r["steps"] >= POST_N * 0.7) if r["native"] else True
-    r["pass"] = bool(r["tableSurvived"] and r["relayedOK"] and r["playedOK"])
+    r["pass"] = bool(r["tableSurvived"] and r["relayedOK"] and r["playedOK"] and r["budgetOK"])
     return r
 
 
