@@ -280,7 +280,6 @@ A.CONFIG = {
 	native_props_max = { 64, 0, 256, "cl", "Max props added to the Steam Audio scene (reflections)." },
 	native_props_calm = { 1, 0, 1, "cl", "Props in the Steam Audio scene are updated (added, moved, removed) only out of fights and at most once a second: each update rebuilds the whole scene (about 18 ms on a campaign map), and an explosion's flying barrels and debris asked for one every 0.1 s. They are put where they came to rest. Doors are always updated at once." },
 	meme_pipe       = { 1, 0, 1, "sv", "The \"metal pipe falling\" prop (spawn menu > PBA > Metal pipe, and a stack of four): each impact plays a pipe clang that goes through pba like any world sound. 0 = the entities are not spawnable and existing ones are removed." },
-	pipe_hall_reverb = { 1, 0, 1, "cl", "Map pba_pipe (the metal pipe hall) only: loud sounds keep the hall's reverb (native_loud_dry is switched off there, in memory), so the pipes ring in the room as they should. 0 = the usual rule (a sound above dsp_db_min has its reverb lowered by 20 dB)." },
 	loops           = { 1, 0, 1, "sv", "Take over looping sounds (vehicles, fire, alarms) and muffle them in place on each client." },
 }
 

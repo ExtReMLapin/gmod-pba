@@ -14,7 +14,10 @@ ENT.AdminOnly = false
 ENT.Model = "models/props_canal/mattpipe.mdl"
 ENT.IconOverride = "entities/pba_metal_pipe.png"
 
-local SOUND_LEVEL = 100
+-- 95 dB: the loudest level that keeps the room's reverb. Above dsp_db_min (95 by default) the engine, and pba with
+-- pba_native_loud_dry, lower a sound's reverb as for gunfire in the open (by dsp_db_mixdrop, -20 dB): at 100 dB the
+-- clangs were nearly dry, even in the metal pipe hall.
+local SOUND_LEVEL = 95
 
 local function allowed()
 	return pba and pba.Pipe and pba.Pipe.Allowed()

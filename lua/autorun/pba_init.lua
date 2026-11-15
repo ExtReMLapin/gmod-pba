@@ -44,7 +44,6 @@ local files = {
 	-- metal pipe hall (pba_pipe): the same, returns at once on any other map
 	{ "pba/demo/sh_pipe_gen.lua", "sh" },
 	{ "pba/demo/sv_pipemap.lua", "sv" },
-	{ "pba/demo/cl_pipemap.lua", "cl" },
 }
 -- test bench (pba_demo): present in the repository, excluded from the Workshop package
 if file.Exists("pba/dev/sh_demo.lua", "LUA") then files[#files + 1] = { "pba/dev/sh_demo.lua", "sh" } end

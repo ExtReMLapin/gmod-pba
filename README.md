@@ -168,8 +168,7 @@ admins.
 steel walls, hard roof and floor) made for the metal pipe prop (spawn menu > PBA > "Metal pipe
 stack (4)"): press E on the striped button next to the spawn to drop four pipes on the pad, or spawn
 the stack yourself anywhere. Steam Audio's reverb of the hall (long, with a short low end) is what
-makes the clangs ring. On this map only, loud sounds keep their reverb (`pba_pipe_hall_reverb 0`
-gives the usual rule back).
+makes the clangs ring.
 
 ## How it compares
 

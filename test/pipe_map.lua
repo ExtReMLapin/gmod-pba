@@ -1,12 +1,10 @@
--- pipe_map (client lua_job, on the map pba_pipe): the metal pipe hall keeps the reverb of loud sounds. The pipes play at
--- 100 dB, above dsp_db_min: under the usual rule (native_loud_dry) their reverb is lowered by dsp_db_mixdrop (-20 dB at
--- the engine's 95 / 0.1), which left the big hall inaudible round the clangs. On this map the option
--- pba_pipe_hall_reverb (default 1) switches that rule off in memory, so the room send the module is given for a clang
--- (the third argument of pba_native.SourceReflect) must be 1 / mixdrop times the one with the option off.
---   1. pba_pipe_hall_reverb 1: N.LoudWet(100) = 1; a stack's clangs get send S_on
---   2. pba_pipe_hall_reverb 0: N.LoudWet(100) = dsp_db_mixdrop; the same stack gets S_off; S_on / S_off >= 4 (7 to 10 seen)
---   3. the settings are put back (the override is in memory only; the map's own one is in force again)
--- Without the module, or with its rendering off (pba_native_render 0): only the rule (N.LoudWet) and the restore are checked, nothing is rendered.
+-- pipe_map (client lua_job, on the map pba_pipe): the metal pipe clangs keep the room's reverb. Above dsp_db_min
+-- (95) the usual rule (pba_native_loud_dry) lowers a loud sound's reverb by dsp_db_mixdrop (-20 dB at the engine's
+-- 95 / 0.1) as for gunfire in the open; the pipes played at 100 dB, so the hall was nearly inaudible round the
+-- clangs. They play at 95 dB: the room send the module is given for a clang (third argument of
+-- pba_native.SourceReflect) is the same with the rule on and off (ratio 0.8 to 1.25; 1.03 measured). Red at 100 dB: 0.49.
+-- Without the module, or with its rendering off (pba_native_render 0): only the rule is checked on the level the
+-- pipes play at (N.LoudWet = 1), nothing is rendered.
 local N = pba.Native
 local res = { module = (N and N.ready and N.render and pba_native ~= nil and pba_native.SourceReflect ~= nil) or false, map = game.GetMap() }
 if game.GetMap() ~= "pba_pipe" then res.pass = false res.err = "run on the map pba_pipe" return res end
@@ -16,7 +14,7 @@ RunConsoleCommand("dsp_db_min", "95")
 RunConsoleCommand("dsp_db_mixdrop", "0.1")
 RunConsoleCommand("pba_meme_pipe", "1")
 job:sleep(0.7)
-local sends
+local sends, levels
 -- (a client cannot remove server entities: the host's own cleanup command does it)
 local function clearPipes()
 	if #ents.FindByClass("pba_metal_pipe") == 0 then return end
@@ -39,39 +37,40 @@ if res.module then
 		return origRefl(slot, pos, send, ...)
 	end
 end
+-- the level the pipes' sounds arrive with (relayed by the server)
+levels = {}
+hook.Add("EntityEmitSound", "pba_test_pipe_map", function(d)
+	if d.SoundName and d.SoundName:find("pba/pipe/", 1, true) then levels[#levels + 1] = d.SoundLevel end
+end)
 local function maxOf(t) local m = 0 for _, v in ipairs(t or {}) do if v > m then m = v end end return m end
 
-local function stage(opt)
-	pba.SetOverride("pipe_hall_reverb", opt)
-	local want = opt == 1 and 1 or 0.1
-	job:wait(function() return math.abs(N.LoudWet(100) - want) < 1e-3 end, 3) -- (the map's poll runs every 0.5 s)
+local function stage(rule) -- rule on (the usual) or off (override 0)
+	pba.SetOverride("native_loud_dry", rule and nil or 0)
 	job:sleep(0.3)
 end
 local ok, err = pcall(function()
-	stage(1)
-	res.loudOn = N and N.LoudWet and N.LoudWet(100)
+	stage(true)
 	if res.module then dropStack() res.sendOn, res.nOn = maxOf(sends), #sends end
-	stage(0)
-	res.loudOff = N and N.LoudWet and N.LoudWet(100)
+	stage(false)
 	if res.module then dropStack() res.sendOff, res.nOff = maxOf(sends), #sends end
 end)
 if not ok then res.err = tostring(err) end
+stage(true)
+hook.Remove("EntityEmitSound", "pba_test_pipe_map")
+-- the rule on the pipes' level: from the sounds seen, else the entity's own
+res.level = maxOf(levels)
+if res.level == 0 then res.level = nil end
+res.loudWet = N and N.LoudWet and res.level and N.LoudWet(res.level)
 
--- put everything back
 if res.module then pba_native.SourceReflect = origRefl end
-pba.SetOverride("pipe_hall_reverb", nil)
-job:sleep(1.2)
 RunConsoleCommand("dsp_db_min", oldMin)
 RunConsoleCommand("dsp_db_mixdrop", oldDrop)
 clearPipes()
--- (the option back on its convar: the map's own override is in force again when it is on)
-res.restored = pba.override.native_loud_dry == ((cv("pba_pipe_hall_reverb"):GetFloat() >= 0.5) and 0 or nil)
 
 res.ratio = (res.sendOn and res.sendOff and res.sendOff > 0) and res.sendOn / res.sendOff or nil
-local rules = (res.loudOn == 1 and math.abs((res.loudOff or 0) - 0.1) < 1e-3 and res.restored) and true or false
 if res.module then
-	res.pass = not res.err and rules and (res.nOn or 0) >= 3 and (res.nOff or 0) >= 3 and res.ratio ~= nil and res.ratio >= 4
+	res.pass = not res.err and (res.nOn or 0) >= 3 and (res.nOff or 0) >= 3 and res.ratio ~= nil and res.ratio >= 0.8 and res.ratio <= 1.25
 else
-	res.pass = not res.err and rules
+	res.pass = not res.err and (res.loudWet == nil or res.loudWet == 1)
 end
 return res

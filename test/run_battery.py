@@ -1153,7 +1153,7 @@ steps = [
     ("door_spawned", lambda: seq(lambda: load(TW), lambda: job("server", "door_spawned_setup.lua"), lambda: job("server", "door_spawned_remove.lua"), lambda: job("client", "door_spawned.lua"))),
     ("meme_pipe", lambda: seq(lambda: load(TW), lambda: job("server", "meme_pipe.lua", 60))),
     ("meme_pipe_cl", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "meme_pipe_cl.lua", 60))),
-    # the metal pipe hall (map pba_pipe): loud sounds keep its reverb (pba_pipe_hall_reverb), x10 the room send of the usual rule
+    # the metal pipe hall (map pba_pipe): the clangs keep the room's reverb (not lowered as loud sounds' are)
     ("pipe_map", lambda: seq(lambda: load("pba_pipe", 1), lambda: native_on(True), lambda: job("client", "pipe_map.lua", 60))),
     ("meme_pipe_clang (pure)", lambda: py("test_meme_pipe.py")),
     # a quiet (far) native loop keeps following its distance law, not frozen at its near gain
