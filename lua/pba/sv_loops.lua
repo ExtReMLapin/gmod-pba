@@ -676,7 +676,7 @@ function LP.NoteBriefMover(data, took)
 	if not (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating") then return end
 	if not LP.IsMoveSound(e, data.SoundName) then return end
 	local now = CurTime()
-	local tEnd = A.PlayEnd(data.SoundName, data.Pitch, now, 0.1)
+	local tEnd = A.PlayEnd(data.SoundName, data.Pitch, A.SoundNow(), 0.1) -- (its file's end: real time; the mover's age below: game time)
 	if not tEnd then return end
 	LP.briefMovers[e:EntIndex() .. ":" .. string.lower(A.SoundFile(data.SoundName))] = { ent = e, name = data.SoundName, t = now, endT = tEnd }
 end
@@ -685,7 +685,7 @@ timer.Create("pba_brief_movers", 0.1, 0, function()
 	if next(LP.briefMovers) == nil then return end
 	local now = CurTime()
 	for k, x in pairs(LP.briefMovers) do
-		if now >= x.endT or not IsValid(x.ent) then
+		if A.SoundNow() >= x.endT or not IsValid(x.ent) then
 			LP.briefMovers[k] = nil -- (played to its end, or the entity went: its sounds with it)
 		elseif now - x.t > 0.3 and LP.MoverStill(x.ent) then
 			LP.briefMovers[k] = nil
