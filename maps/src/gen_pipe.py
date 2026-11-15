@@ -197,6 +197,9 @@ VARIANTS = {
     "p": {},                                                    # the final hall
     "q": dict(floor=CONC_FLOOR),                                # same with a concrete floor
     "r": dict(ceil=METAL),                                      # same with a steel roof
+    "w1": dict(wall=TILE_WALL),                                 # white tile walls
+    "w2": dict(L=4096, W=2048, H=960),                          # a bigger hall, steel walls
+    "w3": dict(L=4096, W=2048, H=960, wall=TILE_WALL),
     "g": dict(wall=METAL, ceil=CITADEL, floor=TILE_FLOOR),      # metal walls, hard roof and floor
 }
 
