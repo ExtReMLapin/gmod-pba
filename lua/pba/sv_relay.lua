@@ -78,7 +78,21 @@ A.recentTo = A.recentTo or {} -- entindex -> { [ply] = time }
 -- long-running server), a new name gets id 0: sent in full every time, never stored by the client (an id
 -- past 65535 wrapped on the wire onto an old one, and the client then played the new sound for the old).
 A.dict = A.dict or { ids = {}, names = {}, n = 0 }
+-- (this Lua state's dictionary: a campaign level transition restarts the Lua of both realms, the
+-- dictionaries start over, but the player entity's table survives with the ids his client acknowledged
+-- for the previous map: the server then sent bare ids his fresh client did not know and every relayed
+-- sound was dropped, footsteps silent and lines handed back late. The ids a player knows are kept per
+-- dictionary session.)
+A.dict.session = A.dict.session or (tostring(SysTime()) .. ":" .. math.random(1, 1e9))
 local MAX_ID = 65535
+
+--- The ids player ply acknowledged for THIS dictionary (an older session's are forgotten).
+function A.RelayKnown(ply)
+	if ply.pba_knownSession ~= A.dict.session then
+		ply.pba_known, ply.pba_knownSession = {}, A.dict.session
+	end
+	return ply.pba_known
+end
 local function nameId(name)
 	local id = A.dict.ids[name]
 	if not id then
@@ -91,10 +105,10 @@ local function nameId(name)
 end
 
 net.Receive(NET_ACK, function(_, ply)
-	ply.pba_known = ply.pba_known or {}
+	local known = A.RelayKnown(ply)
 	for _ = 1, math.min(net.ReadUInt(8), 64) do
 		local id = net.ReadUInt(16)
-		if id > 0 then ply.pba_known[id] = true end
+		if id > 0 then known[id] = true end
 	end
 end)
 
@@ -179,7 +193,7 @@ function A.RelaySend(data, pos, plys, echoOnly)
 	local id = nameId(data.SoundName)
 	local full = false
 	for _, ply in ipairs(plys) do
-		if id == 0 or not (ply.pba_known and ply.pba_known[id]) then full = true break end
+		if id == 0 or not A.RelayKnown(ply)[id] then full = true break end
 	end
 	net.Start(NET, true)
 	writeSound(data, pos, id, full, echoOnly)
