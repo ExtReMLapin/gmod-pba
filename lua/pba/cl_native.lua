@@ -700,6 +700,19 @@ local function decodeAhead(n)
 	return false
 end
 
+--- Decodes these files ahead (names as EmitSound takes them), for an entity that is about to make them play (the
+-- metal pipe: the first clang of a fall would otherwise be the engine's, dry, while its file decodes). Returns the
+-- number of decodes started; nothing without the module or with pba_native_predecode off.
+function N.PrewarmFiles(files)
+	if (A.cfg.native_predecode or 1) < 0.5 or not N.ready or not pba_native or not pba_native.LoadSoundAsync then return 0 end
+	local started = 0
+	for _, f in ipairs(files) do
+		local n = cleanName(f)
+		if n ~= "" and decodeAhead(n) then started = started + 1 end
+	end
+	return started
+end
+
 --- The wave files of the likely burst sounds of this map (clean names, each once).
 function N.PrewarmList(yield)
 	yield = yield or function() end

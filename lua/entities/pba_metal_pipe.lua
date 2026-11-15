@@ -20,6 +20,14 @@ local function allowed()
 	return pba and pba.Pipe and pba.Pipe.Allowed()
 end
 
+if CLIENT then
+	-- the module decodes the clangs ahead (a file not decoded yet at its first play goes to the engine, without pba)
+	function ENT:Initialize()
+		local N = pba and pba.Native
+		if N and N.PrewarmFiles then N.PrewarmFiles(pba.Pipe.Files()) end
+	end
+end
+
 if SERVER then
 	-- servers that do not ship the addon through the Workshop send the sound files to the players
 	if pba and pba.Pipe then

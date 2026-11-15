@@ -2965,6 +2965,11 @@ local SUITE = {
 			end
 			for i = 1, Pi.VARIANTS.hard do expect(seen[i] == true).to.beTrue() end
 			expect(Pi.VARIANTS.soft >= 2 and Pi.VARIANTS.medium >= 2 and Pi.VARIANTS.hard >= 2).to.beTrue()
+			-- the files the client decodes ahead: every tier x variant once, the hardest first
+			local files = Pi.Files()
+			expect(#files == Pi.VARIANTS.hard + Pi.VARIANTS.medium + Pi.VARIANTS.soft).to.beTrue()
+			expect(files[1] == "pba/pipe/hard_1.wav").to.beTrue()
+			expect(files[#files] == "pba/pipe/soft_" .. Pi.VARIANTS.soft .. ".wav").to.beTrue()
 			-- the option: on by default, and it blocks the prop when 0
 			expect(A.CONFIG.meme_pipe ~= nil and A.CONFIG.meme_pipe[1] == 1 and A.CONFIG.meme_pipe[4] == "sv").to.beTrue()
 			local keep = A.cfg.meme_pipe

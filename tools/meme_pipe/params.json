@@ -1,8 +1,8 @@
 {
  "sample_rate": 44100,
- "master_gain": 0.05891358850965663,
+ "master_gain": 0.04418519138224247,
  "noise_len": 24000,
- "tail_fade_ms": 120,
+ "tail_fade_ms": 800,
  "variants": {
   "count": 4,
   "seed": 17,
