@@ -93,7 +93,7 @@ function A.WatchLine(name, lag, why, handback, idx, chan, busy)
 		if #A.handedBack >= 16 then table.remove(A.handedBack, 1) end
 		A.handedBack[#A.handedBack + 1] = { name = name, why = why, t = RealTime() }
 	end
-	timer.Simple(HANDBACK_S + (lag or 0), check)
+	timer.Simple(A.RealDelay(HANDBACK_S + (lag or 0)), check)
 end
 
 -- Loops born on this client (CreateSound of an addon: vehicle engines...). The hook sees their start

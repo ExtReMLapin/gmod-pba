@@ -221,6 +221,25 @@ function A.PlaySeconds(name, pitch)
 	if secs and secs > 0 then return A.AtPitch(secs, pitch) end
 end
 
+--- The clock a sound's end is counted on. Sounds play in real time whatever host_timescale / game.SetTimeScale
+-- (the engine does not speed them up), while CurTime() and timer.Simple run at the time scale: pba_timescale 1 counts
+-- sound ends in RealTime(), 0 in CurTime() as before.
+function A.SoundNow()
+	if (A.cfg.timescale or 1) >= 0.5 then return RealTime() end
+	return CurTime()
+end
+
+--- A timer.Simple delay that lasts `secs` real seconds at any time scale (timer.Simple counts game time: at
+-- host_timescale 4 a 0.3 s wait for the network or a decode ends after 0.075 s). Unchanged with pba_timescale 0.
+function A.RealDelay(secs)
+	if (A.cfg.timescale or 1) < 0.5 then return secs end
+	-- (the replicated convar: game.GetTimeScale() reads 1 on a client whatever the scale)
+	A.hostTimescaleCV = A.hostTimescaleCV or GetConVar("host_timescale")
+	local ts = A.hostTimescaleCV and A.hostTimescaleCV:GetFloat()
+	if not (ts and ts > 0) then return secs end
+	return secs * ts
+end
+
 --- When `name`, started at t0 (RealTime when nil) at `pitch`, has played its file, plus `grace` seconds;
 -- nil when its length is unknown.
 function A.PlayEnd(name, pitch, t0, grace)

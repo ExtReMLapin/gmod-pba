@@ -1583,7 +1583,7 @@ A.capShown = A.capShown or {} -- caption text without tags -> { t = CurTime(), o
 local function captionKey(text) return string.Trim((string.gsub(text or "", "<[^>]*>", ""))) end
 local function captionRecent(key)
 	local c = A.capShown[key]
-	return c and CurTime() - c.t < CAPTION_ONCE_S and c or nil
+	return c and A.SoundNow() - c.t < CAPTION_ONCE_S and c or nil
 end
 hook.Add("OnCloseCaptionEmit", "pba_caption_once", function(tok, dur, fromPlayer, text)
 	if (A.cfg.caption_once or 1) < 0.5 or A.addingCaption then return end
@@ -1591,7 +1591,7 @@ hook.Add("OnCloseCaptionEmit", "pba_caption_once", function(tok, dur, fromPlayer
 	if key == "" then return end
 	local c = captionRecent(key)
 	if c and c.ours then return true end -- the engine's copy of a line pba captioned already
-	A.capShown[key] = { t = CurTime() }
+	A.capShown[key] = { t = A.SoundNow() }
 end)
 -- Caption-armed safety net (pba_caption_net): a relayed line's caption (reliable) came, but no relay of its
 -- file (pba_snd, unreliable: lost in a full snapshot, a teleport's) within CAPTION_NET_S: subtitle without a
@@ -1602,7 +1602,7 @@ A.lineSeen = A.lineSeen or {} -- line key -> RealTime() of the last relay of tha
 local function captionNet(file, idx, chan, lvl, pitch, vol, spos)
 	if (A.cfg.caption_net or 1) < 0.5 or file == "" or not A.LineKey or A.IsSentence(file) then return end
 	local key, t = A.LineKey(file), RealTime()
-	timer.Simple(CAPTION_NET_S, function()
+	timer.Simple(A.RealDelay(CAPTION_NET_S), function()
 		local seen = A.lineSeen[key]
 		if seen and seen >= t - 1 then return end -- its relay came (before or after the caption)
 		-- a speaker out of this client's PVS (a closed areaportal, just teleported) has no entity here: the engine
@@ -1632,7 +1632,7 @@ net.Receive("pba_caption", function()
 	if (A.cfg.caption_once or 1) >= 0.5 then
 		local key = captionKey(txt)
 		if captionRecent(key) then return end
-		A.capShown[key] = { t = CurTime(), ours = true }
+		A.capShown[key] = { t = A.SoundNow(), ours = true }
 	end
 	A.addingCaption = true
 	gui.AddCaption(txt, dur > 0 and dur or 2, false)

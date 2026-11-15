@@ -289,7 +289,7 @@ function A.NoteBrief(data, took)
 	if bit.band(data.Flags or 0, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 and not (took and A.newChangeData == data) then return end
 	local e = data.Entity
 	if not IsValid(e) or e:IsWorld() or not isstring(data.SoundName) then return end
-	local now = CurTime()
+	local now = A.SoundNow()
 	local tEnd = A.PlayEnd(data.SoundName, data.Pitch, now, 0.1) -- (the end-of-file rule, sh_core)
 	if not tEnd then return end
 	local idx = e:EntIndex()
@@ -307,7 +307,7 @@ function A.BriefPlaying(data)
 	local e = data.Entity
 	local r = IsValid(e) and A.recentBrief[e:EntIndex()]
 	local x = r and r[briefKey(data.SoundName)]
-	if not x or x.t < CurTime() then return false end
+	if not x or x.t < A.SoundNow() then return false end
 	return true, x.took
 end
 
@@ -328,7 +328,7 @@ function A.NewChange(data)
 	end
 	local r = A.recentBrief[e:EntIndex()]
 	local x = r and r[briefKey(data.SoundName)]
-	if x and x.t >= CurTime() then return false end
+	if x and x.t >= A.SoundNow() then return false end
 	A.newChangeData = data
 	return true
 end

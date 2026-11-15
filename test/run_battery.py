@@ -128,6 +128,15 @@ def cheats():
     call("console_exec", {"realm": "server", "cmd": "sv_cheats 1"})
     time.sleep(0.5)
 
+def at_timescale(n, fn):
+    """Runs fn with host_timescale n on the server (sv_cheats 1 needed), then puts it back to 1 whatever happens."""
+    call("console_exec", {"realm": "server", "cmd": f"host_timescale {n}"})
+    time.sleep(0.8)
+    try:
+        return fn()
+    finally:
+        call("console_exec", {"realm": "server", "cmd": "host_timescale 1"})
+
 def demo_mode(m):
     """pba_demo desk mode (1 A vanilla, 2 B pba engine, 3 C pba native). Mode C needs native rendering:
     switched on here, and waited for (the demo releases the module it held aside)."""
@@ -1119,7 +1128,7 @@ steps = [
     # then in clear sight)
     ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_loop_fade_hidden.lua"))),
     # a pitch change of a hidden native loop reaches its voice within 0.1 s, no path evaluation forced (audit B-6)
-    ("native_pitch_now", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_pitch_now.lua"))),
+    ("native_pitch_now", "timescale", "timescale_brief", "timescale_net", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_pitch_now.lua"))),
     ("native_vol_now", lambda: native_vol_now()),
     # a loop's volume / pitch updates are compact on the wire (audit B-14)
     ("loops_net_compact", lambda: loops_net_compact()),
@@ -1327,6 +1336,9 @@ steps = [
     ("tool_brushes d2_coast_04", lambda: seq(lambda: load("d2_coast_04"), lambda: job("client", "tool_brushes.lua", 120))),
     # time scale: long sounds end in real time (at 2x the server forgot them halfway); any map
     ("timescale", lambda: seq(any_map, lambda: job("server", "timescale.lua", 60))),
+    # time scale: the brief sounds' end (server) and the client's network waits count real seconds
+    ("timescale_brief", lambda: seq(any_map, lambda: job("server", "timescale_brief.lua", 60))),
+    ("timescale_net", lambda: seq(any_map, cheats, lambda: at_timescale(4, lambda: job("client", "timescale_net.lua", 60)))),
     # saved games: ambiences restored by the engine on load are taken over again
     ("save_load_loops d1_town_01", lambda: py("save_load_loops.py")),
     # path quality against an independent single-bend reference (maps without areaportals: probes)
