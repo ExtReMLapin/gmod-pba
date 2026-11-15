@@ -7,6 +7,11 @@ with all its digits.
   --tol=x           relative tolerance on numbers (default 0: bit for bit)
   --regen           write the emitters' positions again (paths_golden_pairs.json, from perf_crowd.lua)
   --nopin           (diagnosis) do not pin the options to their defaults
+  --states=a,b,..   after the first run, run the job again in the SAME game after each perturbation (walk: 150 other
+                    computations; field: a listener walking 60 steps; rebuild: the probe graph built again; frames:
+                    120 frames of upkeep) and compare every run with the reference (paths_golden_perturb.lua)
+  --noreset         (diagnosis) keep the listener fields and memos kept by the earlier computations of the game
+  --rebuild         (diagnosis) build the probe graph in game instead of loading it from the cache (cache write skipped)
   --out=file        (diagnosis) also write this run's rows
 Usage: python -I -u paths_golden.py <mcp.py> [--save] [--tol=1e-9]
 """
@@ -50,6 +55,17 @@ for _ in range(120):
     if lua("client", "return pba.Probes == nil or pba.Probes.current ~= nil"):
         break
     time.sleep(1)
+if "rebuild" in OPT:
+    lua("client", """GOLDEN_FW = GOLDEN_FW or file.Write
+local fw = GOLDEN_FW
+file.Write = function(p, ...) if tostring(p):find("^pba/") then return end return fw(p, ...) end
+pba.Probes.Start(true)
+return true""")
+    for _ in range(300):
+        time.sleep(1)
+        if lua("client", "return pba.Probes.current ~= nil and not pba.Probes.current.fromCache"):
+            break
+    lua("client", "file.Write = GOLDEN_FW return true")
 PAIRS = os.path.join(HERE, "paths_golden_pairs.json")
 if "regen" in OPT:
     # The emitters' positions come from perf_crowd.lua, which draws math.random and yields every 50 tries: any
@@ -85,6 +101,8 @@ pairs = [p + L for p in pos] + [pos[i] + [pos[(i + 7) % len(pos)][0], pos[(i + 7
 fields = [L, pos[0], pos[len(pos) // 2]]
 code = open(os.path.join(HERE, "paths_golden.lua"), encoding="utf-8").read()
 jargs = {"pairs": pairs, "fields": fields}
+if "noreset" in OPT:  # diagnosis: keep the listener fields and their memos from the previous computations
+    jargs["noreset"] = True
 if "nopin" in OPT:  # diagnosis: keep the options as the previous steps left them
     jargs["nopin"] = True
 res = call("lua_job", {"realm": "client", "code": code, "args": jargs, "timeout_s": 600}, timeout=900)
@@ -101,26 +119,43 @@ if "save" in OPT:
 
 NUM = re.compile(r"-?\d+(?:\.\d+)?(?:e[-+]?\d+)?")
 ref = open(REF, encoding="utf-8").read().splitlines()
-diffs, worst = 0, 0.0
-for i, (a, b) in enumerate(zip(ref, rows)):
-    if a == b:
-        continue
-    na, nb = NUM.findall(a), NUM.findall(b)
-    ok = NUM.sub("#", a) == NUM.sub("#", b) and len(na) == len(nb)
-    if ok:
-        for x, y in zip(na, nb):
-            x, y = float(x), float(y)
-            rel = abs(x - y) / max(abs(x), abs(y), 1.0)
-            worst = max(worst, rel)
-            if rel > TOL:
-                ok = False
-    if not ok:
+
+
+def compare(rows, label):
+    diffs, worst = 0, 0.0
+    for i, (a, b) in enumerate(zip(ref, rows)):
+        if a == b:
+            continue
+        na, nb = NUM.findall(a), NUM.findall(b)
+        ok = NUM.sub("#", a) == NUM.sub("#", b) and len(na) == len(nb)
+        if ok:
+            for x, y in zip(na, nb):
+                x, y = float(x), float(y)
+                rel = abs(x - y) / max(abs(x), abs(y), 1.0)
+                worst = max(worst, rel)
+                if rel > TOL:
+                    ok = False
+        if not ok:
+            diffs += 1
+            if diffs <= 5:
+                print(f"[{label}] row {i}:\n  ref {a[:400]}\n  now {b[:400]}")
+    if len(ref) != len(rows):
         diffs += 1
-        if diffs <= 5:
-            print(f"row {i}:\n  ref {a[:400]}\n  now {b[:400]}")
-if len(ref) != len(rows):
-    diffs += 1
-    print(f"row count {len(ref)} -> {len(rows)}")
-print(f"{diffs} differing rows, worst relative number difference {worst:.3g} (tolerance {TOL:g})")
-print("PASS" if diffs == 0 else "FAIL")
-sys.exit(1 if diffs else 0)
+        print(f"[{label}] row count {len(ref)} -> {len(rows)}")
+    print(f"[{label}] {diffs} differing rows, worst relative number difference {worst:.3g} (tolerance {TOL:g})", flush=True)
+    return diffs
+
+
+total = compare(rows, "fresh")
+# the same job again in the same game, after states a previous test could have left (no map reload)
+perturb = open(os.path.join(HERE, "paths_golden_perturb.lua"), encoding="utf-8").read()
+for kind in [k for k in OPT.get("states", "").split(",") if k]:
+    r = call("lua_job", {"realm": "client", "code": perturb, "args": {"kind": kind, "pos": pos}, "timeout_s": 300}, timeout=400)
+    print(f"[after {kind}] perturbation returned {(r.get('values') or [None])[0]}", flush=True)
+    res = call("lua_job", {"realm": "client", "code": code, "args": jargs, "timeout_s": 600}, timeout=900)
+    rows2 = (res.get("values") or [None])[0]
+    if not rows2:
+        sys.exit(f"no result after {kind}: {json.dumps(res)[:600]}")
+    total += compare(rows2, "after " + kind)
+print("PASS" if total == 0 else "FAIL")
+sys.exit(1 if total else 0)

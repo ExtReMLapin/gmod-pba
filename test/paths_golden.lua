@@ -32,7 +32,7 @@ for k, v in pairs({ frame_budget_ms = 20, burst_budget_ms = 0, burst_mask_db = 0
 	if saved[k] == nil then saved[k] = A.override[k] or false end
 	A.SetOverride(k, v, true)
 end
-if PR then
+if PR and not args.noreset then
 	PR.fieldsByKey, PR.seedMemo = nil, nil
 	PR.doorFieldQueue, PR.doorFieldJob, PR.doorFieldSpare = nil, nil, nil
 end

@@ -1336,7 +1336,7 @@ steps = [
     # "^" distance-variant waves: the copy keeps the far wave of a far source (pushed to its real distance)
     ("distvariant gm_construct", lambda: seq(lambda: load("gm_construct"), cheats, lambda: job("client", "distvariant.lua", 60))),
     # golden results of the path computation (perf_crowd scene): bit for bit against paths_golden_ref.txt
-    ("paths_golden gm_construct", lambda: py("paths_golden.py")),  # bit for bit: 10 ^ x and x ^ n are the same compiled or interpreted since #61
+    ("paths_golden gm_construct", lambda: py("paths_golden.py", "--states=walk,field")),  # bit for bit: 10 ^ x and x ^ n are the same compiled or interpreted since #61
     # invisible tool brushes (toolsblockbullets: compiled as glass) cost nothing, do not cut probe links
     ("tool_brushes d2_coast_04", lambda: seq(lambda: load("d2_coast_04"), lambda: job("client", "tool_brushes.lua", 120))),
     # time scale: long sounds end in real time (at 2x the server forgot them halfway); any map
