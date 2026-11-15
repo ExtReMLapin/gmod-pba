@@ -257,6 +257,7 @@ function Build.server(panel)
 	chk(panel, "Players who switched pba off hear the engine", "relay_cl_enable")
 	chk(panel, "Merge paths", "merge")
 	chk(panel, "Debug overlay for all", "allow_debug")
+	chk(panel, "Metal pipe prop (meme)", "meme_pipe")
 
 	panel:Help("Tuning:")
 	sld(panel, "Wall loss x", "trans_scale", 2)

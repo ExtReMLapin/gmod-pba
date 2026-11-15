@@ -2907,6 +2907,74 @@ local SUITE = {
 				expect(worst < 1.5).to.beTrue()
 			end)
 		end },
+		{ name = "Metal pipe (meme prop): impact speed -> tier, volume, per-pipe cooldown, variants (pba.Pipe, lua/pba/sh_pipe.lua)", func = function()
+			local Pi = A.Pipe
+			expect(Pi ~= nil).to.beTrue()
+			-- the physics callback's relative velocity: only the part along the contact normal counts (a pipe sliding or rolling is
+			-- not an impact), a tenth and a half of the sliding speed leaks in so a glancing hit is not silent
+			expect(near(Pi.ImpactSpeed(0, 0, -300, 0, 0, 1), 300, 1e-6)).to.beTrue()
+			expect(Pi.Tier(Pi.ImpactSpeed(300, 0, 0, 0, 0, 1)) == nil).to.beTrue()   -- pure sliding at 300 u/s: nothing
+			expect(Pi.Tier(Pi.ImpactSpeed(0, 0, -300, 0, 0, 1)) == "hard").to.beTrue()
+			-- tiers: nothing below the floor, then soft < medium < hard, no gaps, monotone
+			expect(Pi.Tier(10) == nil).to.beTrue()
+			expect(Pi.Tier(Pi.MIN_SPEED - 1) == nil).to.beTrue()
+			expect(Pi.Tier(Pi.MIN_SPEED) == "soft").to.beTrue()
+			expect(Pi.Tier(Pi.MEDIUM_SPEED - 1) == "soft").to.beTrue()
+			expect(Pi.Tier(Pi.MEDIUM_SPEED) == "medium").to.beTrue()
+			expect(Pi.Tier(Pi.HARD_SPEED - 1) == "medium").to.beTrue()
+			expect(Pi.Tier(Pi.HARD_SPEED) == "hard").to.beTrue()
+			expect(Pi.Tier(5000) == "hard").to.beTrue()
+			-- the stack's fall (a pipe dropped from ~100 u hits at ~350 u/s) is a hard clang, a pipe settling on another a soft one
+			expect(Pi.Tier(350) == "hard").to.beTrue()
+			expect(Pi.Tier(Pi.MIN_SPEED + 5) == "soft").to.beTrue()
+			-- volume: grows with the speed, within (0, 1]
+			local last = 0
+			for v = Pi.MIN_SPEED, 1200, 20 do
+				local vol = Pi.Volume(v)
+				expect(vol > 0 and vol <= 1).to.beTrue()
+				expect(vol >= last - 1e-9).to.beTrue()
+				last = vol
+			end
+			expect(Pi.Volume(Pi.MIN_SPEED) < Pi.Volume(Pi.HARD_SPEED)).to.beTrue()
+			expect(near(Pi.Volume(1e6), 1, 1e-9)).to.beTrue()
+			-- cooldown: a resting / rolling pipe does not machine-gun; the first impact always passes
+			local st = {}
+			expect(Pi.Gate(st, 10.00, 120) == true).to.beTrue()
+			expect(Pi.Gate(st, 10.01, 120) == false).to.beTrue()                     -- same instant: refused
+			expect(Pi.Gate(st, 10.00 + Pi.Cooldown("hard") * 0.5, 120) == false).to.beTrue()
+			expect(Pi.Gate(st, 10.00 + Pi.Cooldown("soft") + 0.01, 120) == true).to.beTrue()
+			-- a refused impact does not push the cooldown back (a rolling pipe is heard every cooldown, not never)
+			local st2 = {}
+			Pi.Gate(st2, 0, 100)
+			for i = 1, 20 do Pi.Gate(st2, i * 0.01, 100) end                         -- 20 hits in 0.2 s, all refused
+			expect(Pi.Gate(st2, Pi.Cooldown("soft") + 0.001, 100) == true).to.beTrue()
+			-- a much harder hit right after a soft one is not swallowed by its cooldown
+			local st3 = {}
+			Pi.Gate(st3, 0, 80)
+			expect(Pi.Gate(st3, 0.05, 90) == false).to.beTrue()
+			expect(Pi.Gate(st3, 0.06, 400) == true).to.beTrue()
+			-- variants: a file of the tier, every variant reachable, never the one just played
+			local seen, prev = {}, nil
+			for i = 1, 200 do
+				local f, idx = Pi.Pick("hard", (i * 0.6180339887) % 1, prev)
+				expect(f == "pba/pipe/hard_" .. idx .. ".wav").to.beTrue()
+				expect(idx >= 1 and idx <= Pi.VARIANTS.hard).to.beTrue()
+				expect(idx ~= prev).to.beTrue()
+				seen[idx] = true
+				prev = idx
+			end
+			for i = 1, Pi.VARIANTS.hard do expect(seen[i] == true).to.beTrue() end
+			expect(Pi.VARIANTS.soft >= 2 and Pi.VARIANTS.medium >= 2 and Pi.VARIANTS.hard >= 2).to.beTrue()
+			-- the option: on by default, and it blocks the prop when 0
+			expect(A.CONFIG.meme_pipe ~= nil and A.CONFIG.meme_pipe[1] == 1 and A.CONFIG.meme_pipe[4] == "sv").to.beTrue()
+			local keep = A.cfg.meme_pipe
+			A.cfg.meme_pipe = 0
+			local off = Pi.Allowed()
+			A.cfg.meme_pipe = 1
+			local on = Pi.Allowed()
+			A.cfg.meme_pipe = keep
+			expect(off == false and on == true).to.beTrue()
+		end },
 	},
 }
 return SUITE

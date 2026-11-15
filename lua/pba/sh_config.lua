@@ -279,6 +279,7 @@ A.CONFIG = {
 	native_prewarm_weapons = { 1, 0, 1, "cl", "With pba_native_own and pba_native_predecode: the sound files of the weapons you hold (the SoundData of a weapon script, a SWEP's Primary.Sound and Secondary.Sound) are decoded ahead as soon as you have them (map load, pickup, give), so the first shot of a weapon is played by the module like the next ones, not by the engine while the file decodes. 0 = decoded when first played: the first shot of each weapon is the engine's." },
 	native_props_max = { 64, 0, 256, "cl", "Max props added to the Steam Audio scene (reflections)." },
 	native_props_calm = { 1, 0, 1, "cl", "Props in the Steam Audio scene are updated (added, moved, removed) only out of fights and at most once a second: each update rebuilds the whole scene (about 18 ms on a campaign map), and an explosion's flying barrels and debris asked for one every 0.1 s. They are put where they came to rest. Doors are always updated at once." },
+	meme_pipe       = { 1, 0, 1, "sv", "The \"metal pipe falling\" prop (spawn menu > PBA > Metal pipe, and a stack of four): each impact plays a pipe clang that goes through pba like any world sound. 0 = the entities are not spawnable and existing ones are removed." },
 	loops           = { 1, 0, 1, "sv", "Take over looping sounds (vehicles, fire, alarms) and muffle them in place on each client." },
 }
 

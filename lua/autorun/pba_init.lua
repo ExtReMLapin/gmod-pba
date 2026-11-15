@@ -16,6 +16,7 @@ local files = {
 	{ "pba/sh_paths.lua", "sh" },
 	{ "pba/sh_doors.lua", "sh" },
 	{ "pba/sh_core.lua", "sh" },
+	{ "pba/sh_pipe.lua", "sh" }, -- metal pipe meme prop: impact rules (lua/entities/pba_metal_pipe.lua)
 	{ "pba/sv_relay.lua", "sv" },
 	{ "pba/sv_loops.lua", "sv" },
 	{ "pba/sv_sound.lua", "sv" }, -- the server's sound object: classify, audience, dispatch (after sv_relay, sv_loops)
