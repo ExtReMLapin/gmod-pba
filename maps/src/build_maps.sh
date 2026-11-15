@@ -1,7 +1,7 @@
 #!/bin/sh
 # Generate and compile the pba test maps into ../ (addon maps/ folder).
 # Usage: sh build_maps.sh [mapname ...]
-# The demo map is not in the default list (slower): sh build_maps.sh pba_demo
+# The demo map and the metal pipe hall are not in the default list (slower): sh build_maps.sh pba_demo pba_pipe
 # (VVIS_ARGS / VRAD_ARGS override the fast settings, e.g. VRAD_ARGS="-final" for a release build).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -10,6 +10,7 @@ GAME="$GM/garrysmod"
 BIN="$GM/bin"
 python -I "$HERE/gen_maps.py" "$HERE"
 python -I "$HERE/gen_demo.py" "$HERE"
+python -I "$HERE/gen_pipe.py" "$HERE" ${PIPE_VARIANTS:+--variants}
 VVIS_ARGS="${VVIS_ARGS:--fast}"
 VRAD_ARGS="${VRAD_ARGS:--fast -bounce 1}"
 MAPS="${*:-pba_tworooms pba_noportal pba_lcorridor pba_twodoors pba_window pba_materials}"

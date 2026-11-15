@@ -1,4 +1,8 @@
 {
+ "pipe_hall_reverb": {
+  "pos0": "hook",
+  "why": "map pba_pipe only (an in-memory override of native_loud_dry): tests pipe_map"
+ },
  "meme_pipe": {
   "pos0": "hook",
   "why": "the metal pipe prop (an entity, not a sound path): tests meme_pipe and meme_pipe_cl"

@@ -162,6 +162,15 @@ Modes live in memory: the map never changes your settings. Text is in English, o
 the game language is French. On a public server, `pba_demo_admin_only 1` keeps the buttons for
 admins.
 
+## Metal pipe hall
+
+`maps/pba_pipe.bsp` ships with the addon: `map pba_pipe`. A single big sealed hangar (68 x 34 x 17 m,
+steel walls, hard roof and floor) made for the metal pipe prop (spawn menu > PBA > "Metal pipe
+stack (4)"): press E on the striped button next to the spawn to drop four pipes on the pad, or spawn
+the stack yourself anywhere. Steam Audio's reverb of the hall (long, with a short low end) is what
+makes the clangs ring. On this map only, loud sounds keep their reverb (`pba_pipe_hall_reverb 0`
+gives the usual rule back).
+
 ## How it compares
 
 **PBA Light** is the Lua addon alone (Workshop). **PBA full** adds the optional native Steam Audio
@@ -242,10 +251,11 @@ same job as PBA and is switched off automatically (`pba_compat_auto`).
   named by `CLAUDE_JSON`); `python -u test/run_battery.py test/mcp.py --quick` runs the fast checks,
   without `--quick` the full battery (about 15 minutes, needs ffmpeg). The pure unit suite also
   runs without the game: `pip install lupa`, then `python test/offline/run_pure.py`.
-- `maps/src/gen_maps.py` and `gen_demo.py` generate the test maps and the demo map;
+- `maps/src/gen_maps.py`, `gen_demo.py` and `gen_pipe.py` generate the test maps, the demo map and the pipe hall;
   `sh maps/src/build_maps.sh [maps]` compiles them with the game's vbsp / vvis / vrad
   (`GM=<GarrysMod folder>` if the game is elsewhere). `gen_demo.py` also writes
-  `lua/pba/demo/sh_rooms_gen.lua`, the only source of the demo's positions.
+  `lua/pba/demo/sh_rooms_gen.lua`, the only source of the demo's positions. `gen_pipe.py` likewise writes
+  `lua/pba/demo/sh_pipe_gen.lua`.
 - `pba_demo <scenario>` (repository only, not in the Workshop package) places the listener and a
   repeating source on a test map: the bench behind `test/run_scenarios.py`.
 - `python tools/make_release.py` builds the release zip (see the script's help).

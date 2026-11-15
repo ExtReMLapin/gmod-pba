@@ -258,6 +258,7 @@ function Build.server(panel)
 	chk(panel, "Merge paths", "merge")
 	chk(panel, "Debug overlay for all", "allow_debug")
 	chk(panel, "Metal pipe prop (meme)", "meme_pipe")
+	chk(panel, "Metal pipe hall: loud sounds keep the reverb", "pipe_hall_reverb")
 
 	panel:Help("Tuning:")
 	sld(panel, "Wall loss x", "trans_scale", 2)
