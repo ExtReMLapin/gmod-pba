@@ -1222,8 +1222,36 @@ end
 -- the voice has a slot (then the room bus must only get the transmission part).
 function N.BindSource(id, S, srcSend)
 	if not (id and pba_native.SourceReflect) then return false end
-	local slot = pba_native.SourceReflect(id, S, srcSend)
+	local slot = pba_native.SourceReflect(id, S, srcSend, N.ProbeLift(S))
 	return slot ~= nil and slot >= 0
+end
+
+local PROBE_M, PROBE_HEIGHT = 52.49, 1.0 -- units per metre; height (m) above the floor the slot's long-window reverb time is estimated at
+local probeCache, probeStamp = {}, 0
+--- Metres above S at which the module estimates the reverb time of the source reverb slot at S (pba_native_source_long_rt, else nil
+-- = the module estimates at S): the estimate is meaningless within ~0.5 m of a floor (a pipe, a footstep, a dropped prop: 0.1 s in
+-- the high band, 20 s in the mid one, in a hall that rings 1.4 / 5.8 s), and the reverb time of a room does not depend on where
+-- in it it is measured. A sound near the floor is lifted to PROBE_HEIGHT above it, never more than under 45 % of the headroom (a low
+-- ceiling, a table). Cached per 0.6 m cell for 5 s: one source's updates cost no trace.
+function N.ProbeLift(S)
+	if (A.cfg.native_source_long_rt or 0) < 0.5 then return nil end
+	local now = RealTime()
+	if now - probeStamp > 5 then probeCache, probeStamp = {}, now end
+	local key = math.floor(S.x / 32) .. "," .. math.floor(S.y / 32) .. "," .. math.floor(S.z / 32)
+	local c = probeCache[key]
+	if c ~= nil then return c or nil end
+	local up = Vector(0, 0, 1)
+	local down = util.TraceLine({ start = S, endpos = S - up * PROBE_M * PROBE_HEIGHT, mask = MASK_SOLID_BRUSHONLY })
+	local lift = false
+	if down.Hit and not down.StartSolid then
+		local h = down.Fraction * PROBE_HEIGHT -- metres above the floor
+		local ceil = util.TraceLine({ start = S, endpos = S + up * PROBE_M * 2, mask = MASK_SOLID_BRUSHONLY })
+		local head = ceil.Hit and ceil.Fraction * 2 or 2
+		local l = math.min(PROBE_HEIGHT - h, 0.45 * head)
+		if l >= 0.05 then lift = l end
+	end
+	probeCache[key] = lift
+	return lift or nil
 end
 
 --- Plays a voice natively. gain: linear, everything included. opt: { len = path length (units),

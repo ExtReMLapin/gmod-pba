@@ -26,7 +26,7 @@
 //     SetListener(pos, fwd, up, master), SetOutputMode(0|1),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
-//     SourceReflect(voiceId, pos [, srcSend]) -> slot | -1, SetSourceReverbScale(k),
+//     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k),
 //     SetSourceSlots(n) -> n, SetSourceAccum(radius, passes) -> radius, passes, SrcSlotStats() -> table
 //     SourceReflect: binds a voice to a source reverb slot (reflections simulated at pos, Vector,
 //     Source units) that the voice feeds at srcSend (linear, absent = keep; 0 at bind) on top of its
@@ -126,6 +126,7 @@ struct EchoSlot {
 	int key = 0;
 	double last = -1e9;
 	IPLVector3 genPos{}; // source reverb slots: where gen was set (pos may drift within kSrcNear)
+	float genLift = 0;   // source reverb slots: metres the long-window reverb time is estimated above genPos (SourceReflect's argument 4)
 };
 EchoSlot g_echo[render::kEchoSlots];
 // source reverb slots (render::kSrcSlotsMax buffers, g_srcPool active): same sources as the echo
@@ -592,7 +593,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 				A.reset[b][k] = false;
 				// own long-window reverb time before the renderer may use the slot (option); a first estimate takes two
 				// passes, the others come with the next full runs
-				UpdateSlotRt(g_rtSrc[k], sl[k].genPos, sceneVer, render::kEchoSlots + k, pendingOnly ? 2 : 1);
+				UpdateSlotRt(g_rtSrc[k], {sl[k].genPos.x, sl[k].genPos.y + sl[k].genLift, sl[k].genPos.z}, sceneVer, render::kEchoSlots + k, pendingOnly ? 2 : 1);
 				render::PublishSrcBank(k, b);
 				render::PublishSimulated(render::kEchoSlots + k, sl[k].gen);
 			}
@@ -2144,7 +2145,9 @@ LUA_FUNCTION(Echo) {
 	return 2;
 }
 
-// SourceReflect(voiceId, pos [, srcSend]) -> slot (0-based) | -1. Source reverb slot for a voice:
+// SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot (0-based) | -1. Source reverb slot for a voice (lift: metres above pos
+// at which the slot's long-window reverb time is estimated, pba_native_source_long_rt: a point within ~0.5 m of the floor gives a
+// meaningless estimate, so Lua lifts a sound on the floor towards head height, under the ceiling; 0 = at pos):
 // reflections simulated from the source's position, so the source room's reverberant field reaches
 // a listener standing outside it. The voice feeds the slot at srcSend on top of its room send (Lua
 // sets the balance: the source-centric simulation does not cross walls and floors, the
@@ -2163,6 +2166,7 @@ LUA_FUNCTION(Echo) {
 LUA_FUNCTION(SourceReflect) {
 	const int id = (int)LUA->CheckNumber(1);
 	const float srcSend = LUA->IsType(3, Type::Number) ? std::max((float)LUA->GetNumber(3), 0.0f) : -1.0f;
+	const float lift = LUA->IsType(4, Type::Number) ? std::clamp((float)LUA->GetNumber(4), 0.0f, 2.0f) : 0.0f;
 	const int n = std::clamp(g_srcPool.load(), 0, render::kSrcSlotsMax);
 	if (!LUA->IsType(2, Type::Vector) || !g_sim || !g_srcSlot[0].src || id <= 0 || n == 0) {
 		render::SetVoiceSrcSlot(id, -1, 0, 0);
@@ -2224,6 +2228,7 @@ LUA_FUNCTION(SourceReflect) {
 			const bool fresh = sg > 0 && g_srcSimulatedVer[slot] == ver && g_srcReady[slot];
 			if (e.gen == 0 || d2(e.genPos, p) > kNear2) {
 				e.genPos = p;
+				e.genLift = lift;
 				e.gen++;
 			} else if (!fresh && sg >= e.gen) {
 				e.gen++; // the scene changed (a door): a stale response must not be reused

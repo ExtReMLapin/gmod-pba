@@ -1238,6 +1238,7 @@ steps = [
     # source reverb slots ring with their own room's reverb time (pba_native_source_long_rt): the steel hangar's capture,
     # a small room (the room's), a sound in another room than the listener (that room's, not the listener's)
     ("source_long_rt hall", lambda: py("source_long_rt.py", "--only=hall")),
+    ("source_long_rt floor", lambda: py("source_long_rt.py", "--only=floor")),
     ("source_long_rt small", lambda: py("source_long_rt.py", "--only=small")),
     ("source_long_rt other", lambda: py("source_long_rt.py", "--only=other")),
     # a source reverb slot reused after a pause, after walking away, after stepping across the anchor radius

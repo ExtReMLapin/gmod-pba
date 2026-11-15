@@ -9,6 +9,9 @@ Three scenes, each measured with the option off then on (test/source_long_rt.lua
          read from the module's FINAL output (pba_native.CaptureStart/Stop) and from the reverb times the slot used
          (pba_native.SlotReverbTimes), must ring like the room (mid band within +-35 % of the room's long estimate) with the
          option on, and under 2 s with it off (the main simulation's cap: this is the red line of the unfixed module).
+  floor  the same hall, sounds lying ON the floor (a pipe on the pad): an estimate taken at the floor is meaningless (0.1 s high band,
+         0.1 to 20 s mid), so the Lua side (N.ProbeLift, SourceReflect's argument 4) takes it ~1 m above the floor: the slot's reverb
+         time must be the room's (+-35 %) and have no degenerate band.
   small  pba_tworooms, listener and sound in room A (512 x 512 x 192 u): option off keeps the main simulation's times; on, the slot
          rings like the room (+-20 % by the getter, +-35 % by the capture). (On and off differ there: the 0.5 s window estimate is
          0.49 s in this concrete room, 1.9 s for the room bus.)
@@ -18,7 +21,7 @@ The RT of a capture: the burst's tail split in the module's three bands (0-800 H
 times), Schroeder backward integration from 0.7 s after the burst (past the 0.5 s convolved part, whose own decay is steeper than the parametric tail the option
 changes), slope fitted between -5 and -25 dB, times 3 (T20 -> RT60).
 
-Usage: python -I -X utf8 test/source_long_rt.py <mcp.py> [--only=hall,small,other] [--gmod=<garrysmod dir>]
+Usage: python -I -X utf8 test/source_long_rt.py <mcp.py> [--only=hall,floor,small,other] [--gmod=<garrysmod dir>]
        python -I -X utf8 test/source_long_rt.py --selftest              (offline: the RT estimator on a synthetic decay)
 MCP_INSTANCE=<id> targets one game. Native rendering is switched on for the run and the option restored.
 """
@@ -260,6 +263,29 @@ def scene_hall():
         check(bool(on.get("long")) and within(mid(on.get("rt")), roomMid, 0.35), "hall, option on: the slot uses a long-window estimate (mid within +-35 % of the room's)", f"{fmt(on.get('rt'))} vs room {fmt(on.get('room'))}")
 
 
+def scene_floor():
+    load("pba_pipe")
+    native_on()
+    pm = lua("client", "return {pba.PipeMap.listener.x, pba.PipeMap.listener.y, pba.PipeMap.listener.z, pba.PipeMap.pad.x, pba.PipeMap.pad.y, pba.PipeMap.pad.z}")
+    lx, ly, lz, px, py_, pz = pm
+    teleport(lx, ly, lz)
+    # sounds ON the floor (a pipe lying on the pad, a footstep): the estimate taken at the floor itself is meaningless (0.1 s in the
+    # high band, 0.1 to 20 s in the mid one in this hall); the Lua side lifts it (N.ProbeLift)
+    rows = []
+    for i, (dx, dy) in enumerate(((0, 0), (300, 150), (600, -200), (-100, 300))):
+        m = measure((px + dx, py_ + dy, pz + 6), "slotrt_floor", False, settle=3.5, opts=(1,))
+        rows.append(m)
+        report(f"floor{i}", m)
+    RESULTS["floor"] = rows
+    for i, m in enumerate(rows):
+        o = (m.get("opts") or [{}])[0]
+        roomMid = mid(o.get("room"))
+        check(bool(o.get("long")) and (o.get("lift") or 0) > 0.3 and within(mid(o.get("rt")), roomMid, 0.35),
+              f"floor sound {i}: lifted, and its reverb time mid is the room's (+-35 %)", f"lift {o.get('lift')}, {fmt(o.get('rt'))} vs room {fmt(o.get('room'))}")
+        rt = o.get("rt") or [0, 0, 0]
+        check(all(x > 0.3 for x in rt), f"floor sound {i}: no degenerate band (all three > 0.3 s)", fmt(rt))
+
+
 def scene_small():
     load("pba_tworooms")
     native_on()
@@ -320,7 +346,7 @@ def main():
             only = a[7:].split(",")
         if a.startswith("--gmod="):
             GMOD = a[7:]
-    scenes = [("hall", scene_hall), ("small", scene_small), ("other", scene_other)]
+    scenes = [("hall", scene_hall), ("floor", scene_floor), ("small", scene_small), ("other", scene_other)]
     saved = lua("client", "return GetConVar('pba_native_source_long_rt') and GetConVar('pba_native_source_long_rt'):GetString()")
     try:
         for name, fn in scenes:

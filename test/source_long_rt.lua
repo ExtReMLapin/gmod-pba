@@ -63,15 +63,16 @@ local function roomRt() local a, b, c = pba_native.RoomReverb(LocalPlayer():EyeP
 local keep, slot
 local function measure(opt)
 	setOpt(opt)
-	local m = { opt = opt }
+	local lift = N.ProbeLift and N.ProbeLift(src) -- (as N.BindSource: a sound on the floor is estimated higher up)
+	local m = { opt = opt, lift = lift }
 	local st0 = pba_native.Stats()
 	keep = pba_native.Play(KEEP, src, 0.0000001, 1, 1, 1, 100, true, 0, nil, 0, 0)
 	if not keep or keep <= 0 then m.err = "play failed" return m end
-	slot = pba_native.SourceReflect(keep, src, 0.0000001)
+	slot = pba_native.SourceReflect(keep, src, 0.0000001, lift)
 	m.slot = slot
 	local t0 = RealTime()
 	while RealTime() - t0 < settle do
-		slot = pba_native.SourceReflect(keep, src, 0.0000001) -- (a loop re-binds as it updates)
+		slot = pba_native.SourceReflect(keep, src, 0.0000001, lift) -- (a loop re-binds as it updates)
 		job:sleep(0.2)
 	end
 	local row = slotRow(slot)
@@ -84,11 +85,11 @@ local function measure(opt)
 		local ok, why = pba_native.CaptureStart(secs + 1)
 		if not ok then m.err = "CaptureStart: " .. tostring(why) else
 			local b = pba_native.Play(BURST, src, 1, 1, 1, 1, 100, false, 0, nil, 0, 0)
-			pba_native.SourceReflect(b, src, 1)
+			pba_native.SourceReflect(b, src, 1, lift)
 			job:sleep(0.1)
 			local t1 = RealTime()
 			while RealTime() - t1 < secs do
-				pba_native.SourceReflect(keep, src, 0.0000001)
+				pba_native.SourceReflect(keep, src, 0.0000001, lift)
 				job:sleep(0.25)
 			end
 			local path, frames, peak = pba_native.CaptureStop((S.name or "slotrt") .. "_o" .. opt, 32)
