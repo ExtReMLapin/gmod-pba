@@ -105,7 +105,7 @@ local r0, m0, u0, b0, c0 = s.relayed, s.relayMuffled or 0, s.untouched, s.bytes 
 local t0 = SysTime()
 local ok, err = pcall(function()
 	local ply = player.GetHumans()[1]
-	ply.pba_relayBucket = nil
+	pba.PState(ply).relayBucket = nil
 	for i = 1, n do
 		e:EmitSound('%s', 90, 100, 1, CHAN_WEAPON)
 		job:sleep(gap)
@@ -119,7 +119,7 @@ return { relayed = s.relayed - r0, muffled = (s.relayMuffled or 0) - m0, untouch
 	bytes = (s.bytes or 0) - b0, dur = dur, capped = (s.relayCapped or 0) - c0, reemits = reemits }"""
 ECHO = """local A = pba
 local ply = player.GetHumans()[1]
-ply.pba_echoBucket = nil
+pba.PState(ply).echoBucket = nil
 local b0 = A.stats.echoBytes or 0
 local pos = ply:EyePos() + ply:GetForward() * 120
 for _ = 1, 3 do EmitSound('weapons/ar2/fire1.wav', pos, 0, CHAN_AUTO, 1, 140, 0, 100) job:sleep(0.3) end

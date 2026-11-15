@@ -23,7 +23,7 @@ local r0 = A.stats.relayed or 0
 e:EmitSound(OLD, 75, 100, 1, CHAN_VOICE)
 job:sleep(1) -- acknowledged (the client acks every 0.2 s)
 local k = A.dict.ids[OLD]
-local acked = k and ply.pba_known and ply.pba_known[k] or false
+local acked = k and A.RelayKnown(ply)[k] or false
 A.dict.n = 65535 + (k or 0)
 e:EmitSound(NEW, 75, 100, 1, CHAN_VOICE)
 job:sleep(1)
