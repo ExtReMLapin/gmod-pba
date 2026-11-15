@@ -133,7 +133,7 @@ function U.Check(now)
 end
 
 -- after the map is ready (HTTP works from then on) and after N.Start (1 s) has read the module's version
-hook.Add("InitPostEntity", "pba_update", function() timer.Simple(5, function() U.Check() end) end)
+A.OnInitPostEntity("pba_update", function() timer.Simple(5, function() U.Check() end) end)
 
 concommand.Add("pba_update_open", function()
 	if U.url then gui.OpenURL(U.url) else MsgN("[PBA] no native module update known") end

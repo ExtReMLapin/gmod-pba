@@ -6,6 +6,40 @@ local A = pba
 
 A.hooks = A.hooks or {} -- event -> fn, registered by sv_relay / cl_render under id "pba"
 
+-- ------------------------------------------------------------------ InitPostEntity, whatever the other addons do
+-- hook.Call stops at the first hook that returns a value. One addon whose InitPostEntity hook returned something
+-- (seen with a Z-City NPC addon) left every pba InitPostEntity hook after it unrun: the native module never started
+-- (the menu said "not installed" with both DLLs in place), the client never told the server it was ready (nothing
+-- relayed to it), no probe field. Each function runs once per map: from the hook, or from this timer when it has
+-- not run 2 s after the world is up (the local player exists, on the client), with a console line saying so.
+A.ipeRan = A.ipeRan or {} -- name -> true once run (kept over an autorefresh: the hook does not come again)
+A.ipePending = {}
+function A.OnInitPostEntity(name, fn)
+	local function run()
+		if A.ipeRan[name] then return end
+		A.ipeRan[name], A.ipePending[name] = true, nil
+		fn()
+	end
+	hook.Add("InitPostEntity", name, run)
+	if not A.ipeRan[name] then A.ipePending[name] = run end
+end
+local ipeUpSince
+timer.Create("pba_ipe_fallback", 0.5, 0, function()
+	if not next(A.ipePending) then return end
+	if CLIENT and not IsValid(LocalPlayer()) then ipeUpSince = nil return end
+	ipeUpSince = ipeUpSince or RealTime()
+	if RealTime() - ipeUpSince < 2 then return end
+	local names = {}
+	for name in pairs(A.ipePending) do names[#names + 1] = name end
+	table.sort(names)
+	MsgC(Color(255, 170, 60), "[PBA] another addon's InitPostEntity hook returned a value, which skips the hooks after it: "
+		.. "pba started " .. table.concat(names, ", ") .. " itself\n")
+	for _, name in ipairs(names) do
+		local run = A.ipePending[name]
+		if run then ProtectedCall(run) end
+	end
+end)
+
 -- periodic work (loop and stream updates): total, calls and worst call per key, for the perf bench
 -- (A.ResetPerf clears it on the client). fn returns false when it did nothing (not counted).
 A.perfTimers = A.perfTimers or {}
@@ -886,7 +920,7 @@ function A.OnMapReady()
 	if CLIENT and A.Doors.RequestSync then A.Doors.RequestSync() end
 end
 
-hook.Add("InitPostEntity", "pba_init", function() A.OnMapReady() end)
+A.OnInitPostEntity("pba_init", function() A.OnMapReady() end)
 hook.Add("PostCleanupMap", "pba_cleanup", function()
 	if SERVER then timer.Simple(0, function() if A.Doors then A.Doors.Relink() A.Doors.Poll(true) A.Doors.Apply() A.Doors.SendAll() end end) end
 end)
