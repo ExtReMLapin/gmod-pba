@@ -368,8 +368,9 @@ if SERVER then
 	end
 
 	net.Receive(NET, function(_, ply) -- client asks for a full sync
-		if IsValid(ply) and (ply.pba_lastSync or 0) < CurTime() - 1 then
-			ply.pba_lastSync = CurTime()
+		local st = IsValid(ply) and A.PState(ply)
+		if st and (st.lastSync or 0) < CurTime() - 1 then
+			st.lastSync = CurTime()
 			D.SendAll(ply)
 		end
 	end)

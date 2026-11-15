@@ -695,6 +695,22 @@ if CLIENT then
 	end
 end
 
+--- Server side: pba's state about a player (relay budgets, per-name quotas, the sound ids his client knows,
+-- whether his pba client runs, his last door sync, his lip sync preference). Kept in this Lua state, not on
+-- the player entity: a campaign level transition or a savegame load restarts the Lua of both realms but
+-- restores the player entity's table, so state stored there survived with the previous map's clock and
+-- dictionary (relay budget at -24800 tokens for minutes: lines played as engine copies muffled at -24 dB,
+-- subtitles without voice; footsteps dropped by a client that no longer knew the ids). A table keyed by the
+-- player dies with this Lua state, whatever restarts it. Weak keys: a player who left is collected.
+if SERVER then
+	A.pstate = A.pstate or setmetatable({}, { __mode = "k" })
+	function A.PState(ply)
+		local s = A.pstate[ply]
+		if not s then s = {} A.pstate[ply] = s end
+		return s
+	end
+end
+
 --- Server side: where a player hears from (his view entity when he looks through a camera).
 function A.PlayerEar(ply)
 	local ve = ply.GetViewEntity and ply:GetViewEntity()

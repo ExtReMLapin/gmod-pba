@@ -728,7 +728,7 @@ function DM.Press(r, b, ply)
 	local id = b.id
 	local m = tonumber(string.match(id, "^mode(%d)$"))
 	if m then
-		if m == 3 and not ply.pba_demoNative then notice(ply, "need_module") return end
+		if m == 3 and not A.PState(ply).demoNative then notice(ply, "need_module") return end
 		local changed = m ~= DM.mode
 		DM.SetMode(m)
 		-- the clients apply the mode on reception: leave them a moment before the sound starts
@@ -756,8 +756,8 @@ end
 net.Receive(NET_PRESS, function(_, ply)
 	if not IsValid(ply) or not ply:Alive() then return end
 	local now = CurTime()
-	if (ply.pba_demoNext or 0) > now then return end
-	ply.pba_demoNext = now + 0.25
+	if (A.PState(ply).demoNext or 0) > now then return end
+	A.PState(ply).demoNext = now + 0.25
 	local ri, bi = net.ReadUInt(5), net.ReadUInt(5)
 	local r = DM.rooms[ri]
 	local b = r and r.all[bi]
@@ -773,11 +773,11 @@ end)
 net.Receive(NET_NATIVE, function(_, ply)
 	if not IsValid(ply) then return end
 	local now = CurTime()
-	if (ply.pba_demoNativeNext or 0) > now then return end
-	ply.pba_demoNativeNext = now + 0.4
-	ply.pba_demoNative = net.ReadBool()
-	if not ply.pba_demoHello then
-		ply.pba_demoHello = true
+	if (A.PState(ply).demoNativeNext or 0) > now then return end
+	A.PState(ply).demoNativeNext = now + 0.4
+	A.PState(ply).demoNative = net.ReadBool()
+	if not A.PState(ply).demoHello then
+		A.PState(ply).demoHello = true
 		net.Start(NET_MODE)
 		net.WriteUInt(DM.mode, 2)
 		net.Send(ply)
@@ -789,7 +789,7 @@ net.Receive(NET_NATIVE, function(_, ply)
 		end
 	end
 	-- the only player who could hear C lost the module: fall back to B
-	if DM.mode == 3 and not ply.pba_demoNative and #player.GetHumans() == 1 then DM.SetMode(2) end
+	if DM.mode == 3 and not A.PState(ply).demoNative and #player.GetHumans() == 1 then DM.SetMode(2) end
 end)
 
 -- ------------------------------------------------------------------ rooms: entry, empty rooms
@@ -848,7 +848,7 @@ hook.Add("PostCleanupMap", "pba_demo", function()
 	end
 	timer.Simple(1, animateProps)
 end)
-hook.Add("PlayerInitialSpawn", "pba_demo", function(ply) ply.pba_demoHello = nil end)
+hook.Add("PlayerInitialSpawn", "pba_demo", function(ply) A.PState(ply).demoHello = nil end)
 
 -- autorefresh: the map is already running
 if DM.serverLoaded then timer.Simple(0.5, animateProps) end
