@@ -184,6 +184,14 @@ bool LoadSoundAsync(const std::string& name, std::string data);
 int LoaderThreads();
 // Room reverb times (s, 3 bands, air-corrected) replacing the main simulator's estimate; nullptr = off.
 void SetRoomReverbOverride(const float* rt);
+// Long-window reverb times (s, 3 bands, air-corrected) of ONE echo or source reverb slot, simulated at the slot's own position
+// (pba_native_source_long_rt): they replace the 0.5 s main simulation's estimate for that slot's tail. slot as PublishSimulated
+// (0..kEchoSlots-1 echo, kEchoSlots + k source slot k, both banks); rt nullptr = back to the main simulator's.
+void SetSlotReverbTimes(int slot, const float* rt);
+void ClearSlotReverbTimes();
+// Reverb times the slot's tail used at its last block (debug), the main simulation's own estimate, and whether the used ones were the
+// long-window ones; false: no such slot
+bool SlotReverbTimes(int slot, float used[3], float mainRt[3], bool* longOn);
 void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory budget (LRU eviction)
 void Memory(double* mb, int* sounds, int* voices);
 bool SoundPending(const std::string& name);

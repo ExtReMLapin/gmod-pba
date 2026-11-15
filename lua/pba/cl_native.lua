@@ -552,6 +552,8 @@ function N.ApplySettings()
 		A.cfg.native_bounces or 16, A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
 	-- a far moving source keeps its source reverb response over a fraction of its distance (module 1.2.0+)
 	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.cfg.native_src_near or 0.1) end
+	-- each source reverb slot / echo rings with the long-window reverb time of its own position (newer modules)
+	if pba_native.SetSourceLongRt then pba_native.SetSourceLongRt((A.cfg.native_source_long_rt or 0) >= 0.5) end
 	-- output stage and decode resampling (newer modules; an older module keeps its soft clip and linear resampling)
 	if pba_native.SetMixQuality then
 		pba_native.SetMixQuality(math.floor((A.cfg.native_limiter or 1) + 0.5), (A.cfg.native_resample_hq or 1) >= 0.5, (A.cfg.native_limit_pre or 1) >= 0.5)

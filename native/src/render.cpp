@@ -176,6 +176,11 @@ struct Reflection {
 	// fed but not convolved (a source slot bank weighted out): its input history is missing, so it
 	// restarts from silence when weighted in again instead of replaying input from long ago
 	bool stale = false;
+	// long-window reverb times of this slot's own position (SetSlotReverbTimes), and the ones its last block used
+	std::atomic<float> rtLong[3] = {0, 0, 0};
+	std::atomic<bool> rtLongOn{false};
+	std::atomic<float> rtUsed[3] = {0, 0, 0};
+	std::atomic<float> rtMain[3] = {0, 0, 0}; // what the main simulation estimated (0.5 s window), for comparison
 };
 
 IPLContext g_ctx = nullptr;
@@ -325,10 +330,20 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	if (!rtOut && (wet <= 0 || over)) return;
 	IPLSimulationOutputs out{};
 	iplSourceGetOutputs(r.src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
-	// reverb times: the long-window estimate for the room, else the main simulator's
+	// reverb times: the long-window estimate for the room; for an echo or source slot, the one simulated at its own
+	// position when there is one (a band at 0 keeps the main simulator's); else the main simulator's
 	float rt[3];
 	const bool ov = rtOut && g_rtOvOn.load();
-	for (int b = 0; b < 3; ++b) rt[b] = ov ? g_rtOv[b].load() : out.reflections.reverbTimes[b];
+	const bool slotLong = !rtOut && r.rtLongOn.load();
+	for (int b = 0; b < 3; ++b) {
+		rt[b] = ov ? g_rtOv[b].load() : out.reflections.reverbTimes[b];
+		r.rtMain[b] = out.reflections.reverbTimes[b];
+		if (slotLong) {
+			const float l = r.rtLong[b].load();
+			if (l > 0) rt[b] = l;
+		}
+		r.rtUsed[b] = rt[b];
+	}
 	r.tailBlocks = TailBlocks(rt);
 	if (rtOut)
 		for (int b = 0; b < 3; ++b) rtOut[b] = rt[b];
@@ -2082,5 +2097,45 @@ void SetRoomReverbOverride(const float* rt) {
 	}
 	for (int b = 0; b < 3; ++b) g_rtOv[b] = rt[b];
 	g_rtOvOn = true;
+}
+
+namespace {
+void SetReflectionRt(Reflection& r, const float* rt) {
+	if (!rt) {
+		r.rtLongOn = false;
+		return;
+	}
+	for (int b = 0; b < 3; ++b) r.rtLong[b] = rt[b];
+	r.rtLongOn = true;
+}
+Reflection* SlotReflection(int slot, bool bankB) {
+	if (slot >= 0 && slot < kEchoSlots) return bankB ? nullptr : &g_echo[slot];
+	const int k = slot - kEchoSlots;
+	if (k < 0 || k >= kSrcSlotsMax) return nullptr;
+	if (!bankB) return &g_src[k];
+	return k < kSrcBankB ? &g_srcB[k] : nullptr;
+}
+} // namespace
+
+void SetSlotReverbTimes(int slot, const float* rt) {
+	for (int bank = 0; bank < 2; ++bank)
+		if (Reflection* r = SlotReflection(slot, bank == 1)) SetReflectionRt(*r, rt);
+}
+
+void ClearSlotReverbTimes() {
+	for (auto& e : g_echo) e.rtLongOn = false;
+	for (auto& s : g_src) s.rtLongOn = false;
+	for (auto& s : g_srcB) s.rtLongOn = false;
+}
+
+bool SlotReverbTimes(int slot, float used[3], float mainRt[3], bool* longOn) {
+	const Reflection* r = SlotReflection(slot, false);
+	if (!r) return false;
+	for (int b = 0; b < 3; ++b) {
+		used[b] = r->rtUsed[b].load();
+		mainRt[b] = r->rtMain[b].load();
+	}
+	*longOn = r->rtLongOn.load();
+	return true;
 }
 } // namespace render

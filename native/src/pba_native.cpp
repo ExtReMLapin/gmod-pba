@@ -34,6 +34,8 @@
 //     is fed at once), else a free one is taken (never one with a live voice; none: -1, room send
 //     only). A slot lives as long as one of its voices (bind once right after Play; call again on
 //     Update for a moving source), an unbound one 1 s. pos not a Vector: unbinds that voice.
+//     SetSourceLongRt(on [, passes]) -> on, simulatorAvailable, SlotReverbTimes() -> table: echo / source slots' own long-window
+//     reverb times (off by default, see g_optSrcLongRt)
 //     SetMixQuality(limiterMode 0|1|2, hqResample [, premaster]): output limiter / legacy soft clip / hard clip, sinc / linear decode
 //     resampling; premaster: the output stage acts before the master volume (the engine's order)
 //     CaptureStart(seconds) / CaptureStop(name [, bits]) / CaptureState(): debug capture of the FINAL output (after the limiter
@@ -213,6 +215,26 @@ IPLProbeBatch g_revBatch = nullptr;  // baked room reverb (option), on the same 
 std::atomic<bool> g_revBaked{false};
 float g_revRt[3] = {0, 0, 0};       // reflection thread
 std::atomic<float> g_revMs{0};
+// ---- per-slot long-window reverb time (option SetSourceLongRt, default off). An echo or source reverb slot renders its
+// tail with the reverb times of the MAIN simulation (window kIRSeconds = 0.5 s), which saturate near 1.2 s whatever
+// the room (the reason g_revSim exists, only wired to the room bus until now). With the option, each slot gets its own
+// long-window estimate, simulated at ITS position (listener and source both there, as the room's at the listener: a
+// source in another room than the listener has that room's reverb time, not the listener's). One pass costs the same
+// as the room's (g_revMs); an estimate is made once per place and scene version (kRtPasses passes averaged), nothing
+// runs while a slot stays where it is. Reflection thread only, except the atomics.
+std::atomic<bool> g_optSrcLongRt{false};
+std::atomic<int> g_rtEpoch{0};          // bumped when the option changes: every estimate is redone
+std::atomic<int> g_optRtPasses{4};
+IPLSimulator g_slotRevSim = nullptr;
+IPLSource g_slotRevSrc = nullptr;
+std::atomic<float> g_slotRevMs{0};
+std::atomic<int> g_slotRevRuns{0};
+struct SlotRt {
+	IPLVector3 pos{};
+	int scene = -1, epoch = -1, n = 0;
+	float rt[3] = {0, 0, 0};
+};
+SlotRt g_rtEcho[render::kEchoSlots], g_rtSrc[render::kSrcSlotsMax];
 // pauses: listener still, scene unchanged, no echo -> the simulation converges; run it less often
 std::atomic<int> g_stillPasses{0};
 std::atomic<float> g_reflMs{0}, g_reflMaxMs{0};
@@ -336,6 +358,86 @@ bool SlotPending(double now) {
 
 inline float Dist2(IPLVector3 a, IPLVector3 b) {
 	return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
+}
+
+// One long-window parametric pass at p (listener and source both there, as the room's): the reverb times a source
+// standing at p has in its own room, false when the pass failed (g_slotRevSim, see g_optSrcLongRt).
+bool EstimateRtAt(IPLVector3 p, float out[3]) {
+	if (!g_slotRevSim || !g_slotRevSrc) return false;
+	const auto t0 = std::chrono::steady_clock::now();
+	bool done = false;
+	WaitSceneCommit();
+	{
+		std::lock_guard<std::mutex> lk(g_simMtx);
+		IPLSimulationSharedInputs sh{};
+		sh.listener.right = {1, 0, 0};
+		sh.listener.up = {0, 1, 0};
+		sh.listener.ahead = {0, 0, -1};
+		sh.listener.origin = p;
+		sh.numRays = g_optRevRays.load();
+		sh.numBounces = 256; // the window bounds the tracing (duration * c), not the bounces
+		sh.duration = g_optRevWindow.load();
+		sh.order = 0;
+		sh.irradianceMinDistance = 0.25f;
+		iplSimulatorSetSharedInputs(g_slotRevSim, IPL_SIMULATIONFLAGS_REFLECTIONS, &sh);
+		IPLSimulationInputs in{};
+		in.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+		in.source.right = {1, 0, 0};
+		in.source.up = {0, 1, 0};
+		in.source.ahead = {0, 0, -1};
+		in.source.origin = {p.x, p.y + 0.1f, p.z};
+		in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+		iplSourceSetInputs(g_slotRevSrc, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
+		try {
+			iplSimulatorRunReflections(g_slotRevSim);
+			done = true;
+		} catch (...) {
+		}
+		if (done) {
+			IPLSimulationOutputs o{};
+			iplSourceGetOutputs(g_slotRevSrc, IPL_SIMULATIONFLAGS_REFLECTIONS, &o);
+			for (int b = 0; b < 3; ++b) {
+				out[b] = o.reflections.reverbTimes[b];
+				if (!std::isfinite(out[b]) || out[b] < 0) done = false;
+			}
+		}
+	}
+	const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+	g_slotRevMs = g_slotRevMs * 0.9f + ms * 0.1f;
+	g_slotRevRuns++;
+	return done;
+}
+
+// Brings the long-window estimate of an echo or source slot (renderSlot as render::SetSlotReverbTimes) up to date for
+// its place: up to `passes` more passes while fewer than g_optRtPasses were averaged for this place and scene version,
+// publishing the running mean to the renderer after each. Nothing runs for a settled slot, nor with the option off.
+// true when a pass ran.
+bool UpdateSlotRt(SlotRt& st, IPLVector3 pos, int scene, int renderSlot, int passes) {
+	if (!g_optSrcLongRt.load() || !g_slotRevSim) return false;
+	const int ep = g_rtEpoch.load();
+	if (st.epoch != ep || st.scene != scene || Dist2(st.pos, pos) > 1e-6f) {
+		st.n = 0; // a new place (or scene): its estimate starts over, the previous one stays rendered until then
+		st.pos = pos;
+		st.scene = scene;
+		st.epoch = ep;
+	}
+	const int want = std::max(1, g_optRtPasses.load());
+	bool ran = false;
+	for (int i = 0; i < passes && st.n < want; ++i) {
+		float v[3];
+		if (!EstimateRtAt(pos, v)) {
+			st.n = want; // failed: the main simulator's estimate for this place (not the previous place's), no retry every pass
+			render::SetSlotReverbTimes(renderSlot, nullptr);
+			break;
+		}
+		for (int b = 0; b < 3; ++b) st.rt[b] = st.n == 0 ? v[b] : (st.rt[b] * st.n + v[b]) / (st.n + 1);
+		st.n++;
+		render::SetSlotReverbTimes(renderSlot, st.rt);
+		ran = true;
+	}
+	// the option went off meanwhile (SetSourceLongRt clears, then we must not publish after it)
+	if (ran && !g_optSrcLongRt.load()) render::ClearSlotReverbTimes();
+	return ran;
 }
 
 // Simulates the source reverb slots in the slot simulator (reflection thread), see g_slotSim.
@@ -488,6 +590,9 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 				A.scene[b][k] = sceneVer;
 				A.pow[b][k] = pw[k];
 				A.reset[b][k] = false;
+				// own long-window reverb time before the renderer may use the slot (option); a first estimate takes two
+				// passes, the others come with the next full runs
+				UpdateSlotRt(g_rtSrc[k], sl[k].genPos, sceneVer, render::kEchoSlots + k, pendingOnly ? 2 : 1);
 				render::PublishSrcBank(k, b);
 				render::PublishSimulated(render::kEchoSlots + k, sl[k].gen);
 			}
@@ -589,7 +694,10 @@ bool RunSlotPass() {
 		if (failed) g_reflErrors++;
 		else
 			for (int k = 0; k < render::kEchoSlots; ++k)
-				if (pend[k]) render::PublishSimulated(k, e[k].gen);
+				if (pend[k]) {
+					UpdateSlotRt(g_rtEcho[k], e[k].pos, g_sceneVersion.load(), k, 2); // own long-window reverb time (option)
+					render::PublishSimulated(k, e[k].gen);
+				}
 		{
 			// failed: marked simulated anyway, so that a failing slot does not spin the loop
 			std::lock_guard<std::mutex> lk(g_stageMtx);
@@ -727,6 +835,10 @@ void ReflectionLoop() {
 			const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - r0).count();
 			g_revMs = g_revMs * 0.9f + ms * 0.1f;
 		}
+		// echo slots' own long-window reverb times, one more pass each until averaged (option)
+		if (ok && g_optSrcLongRt.load())
+			for (int k = 0; k < render::kEchoSlots; ++k)
+				if (active[k]) UpdateSlotRt(g_rtEcho[k], pos[k], g_sceneVersion.load(), k, 1);
 		if (ok) RunSlotPass(); // echoes fired during the long-window pass
 		// still listener + unchanged scene + no echo: the result has converged (Steam Audio averages
 		// successive passes), simulate once a second instead of four times
@@ -873,6 +985,17 @@ void ReleaseWorld() {
 		iplSimulatorCommit(g_revSim);
 		iplSimulatorRelease(&g_revSim);
 	}
+	render::ClearSlotReverbTimes();
+	if (g_slotRevSim) {
+		if (g_slotRevSrc) {
+			iplSourceRemove(g_slotRevSrc, g_slotRevSim);
+			iplSourceRelease(&g_slotRevSrc);
+		}
+		iplSimulatorCommit(g_slotRevSim);
+		iplSimulatorRelease(&g_slotRevSim);
+	}
+	for (auto& s : g_rtEcho) s = SlotRt{};
+	for (auto& s : g_rtSrc) s = SlotRt{};
 	if (g_revBatch) iplProbeBatchRelease(&g_revBatch);
 	g_revBaked = false;
 	if (g_sim) {
@@ -1048,6 +1171,25 @@ bool EnsureSimulator() {
 			iplSimulatorCommit(g_revSim);
 		} else {
 			g_revSim = nullptr;
+		}
+	}
+	// per-slot long-window simulator (see g_optSrcLongRt): created with the long-window room one, idle unless the option is on
+	if (win > render::kIRSeconds + 0.01f) {
+		IPLSimulationSettings rs = sim;
+		rs.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+		rs.reflectionType = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
+		rs.maxDuration = win;
+		rs.maxNumSources = 1;
+		rs.maxOrder = 0;
+		rs.maxNumRays = g_optRevRays.load();
+		if (iplSimulatorCreate(g_ctx, &rs, &g_slotRevSim) == IPL_STATUS_SUCCESS) {
+			iplSimulatorSetScene(g_slotRevSim, g_scene);
+			IPLSourceSettings ss{};
+			ss.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
+			if (iplSourceCreate(g_slotRevSim, &ss, &g_slotRevSrc) == IPL_STATUS_SUCCESS) iplSourceAdd(g_slotRevSrc, g_slotRevSim);
+			iplSimulatorCommit(g_slotRevSim);
+		} else {
+			g_slotRevSim = nullptr;
 		}
 	}
 	for (float& v : g_revRt) v = 0;
@@ -2125,6 +2267,68 @@ LUA_FUNCTION(SetSourceSlots) {
 	return 1;
 }
 
+// SetSourceLongRt(on [, passes]) -> on, simulatorAvailable : each echo and source reverb slot renders its tail with the
+// long-window (pba_native_reverb_window) reverb times simulated at its own position, instead of the main simulation's
+// 0.5 s-window ones, which saturate near 1.2 s (see g_optSrcLongRt). passes (1..16, default 4): passes averaged per place.
+// Off by default; no simulation runs for it while off. Needs the long window on (reverbWindow > 0.5 in SetSimOptions).
+LUA_FUNCTION(SetSourceLongRt) {
+	const bool on = LUA->IsType(1, Type::Bool) ? LUA->GetBool(1) : LUA->CheckNumber(1) >= 0.5;
+	if (LUA->IsType(2, Type::Number)) g_optRtPasses = std::clamp((int)LUA->GetNumber(2), 1, 16);
+	if (g_optSrcLongRt.exchange(on) != on) {
+		g_rtEpoch++;
+		if (!on) render::ClearSlotReverbTimes();
+	}
+	LUA->PushBool(on);
+	LUA->PushBool(g_slotRevSim != nullptr);
+	return 2;
+}
+
+// SlotReverbTimes() -> { { kind = "src" | "echo", slot, gen, long, n, rt = {lo, mid, hi}, mainRt = {...} }, ... }: for every echo and
+// source slot with a generation, the reverb times its tail used at the last block (rt), the main simulation's own estimate
+// (mainRt), whether rt is the long-window estimate of the slot's place (long) and the passes averaged into it (n). Debug / tests.
+LUA_FUNCTION(SlotReverbTimes) {
+	int gen[render::kEchoSlots + render::kSrcSlotsMax];
+	int ns[render::kEchoSlots + render::kSrcSlotsMax];
+	{
+		std::lock_guard<std::mutex> lk(g_stageMtx);
+		for (int k = 0; k < render::kEchoSlots; ++k) gen[k] = g_echo[k].gen;
+		for (int k = 0; k < render::kSrcSlotsMax; ++k) gen[render::kEchoSlots + k] = g_srcSlot[k].gen;
+	}
+	LUA->CreateTable();
+	int row = 0;
+	for (int s = 0; s < render::kEchoSlots + render::kSrcSlotsMax; ++s) {
+		if (gen[s] == 0) continue;
+		float used[3], mainRt[3];
+		bool lg = false;
+		if (!render::SlotReverbTimes(s, used, mainRt, &lg)) continue;
+		const bool echo = s < render::kEchoSlots;
+		ns[s] = echo ? g_rtEcho[s].n : g_rtSrc[s - render::kEchoSlots].n; // (reflection thread's: a debug read)
+		LUA->PushNumber(++row);
+		LUA->CreateTable();
+		LUA->PushString(echo ? "echo" : "src");
+		LUA->SetField(-2, "kind");
+		LUA->PushNumber(echo ? s : s - render::kEchoSlots);
+		LUA->SetField(-2, "slot");
+		LUA->PushNumber(gen[s]);
+		LUA->SetField(-2, "gen");
+		LUA->PushBool(lg);
+		LUA->SetField(-2, "long");
+		LUA->PushNumber(ns[s]);
+		LUA->SetField(-2, "n");
+		for (int pass = 0; pass < 2; ++pass) {
+			LUA->CreateTable();
+			for (int b = 0; b < 3; ++b) {
+				LUA->PushNumber(b + 1);
+				LUA->PushNumber(pass == 0 ? used[b] : mainRt[b]);
+				LUA->SetTable(-3);
+			}
+			LUA->SetField(-2, pass == 0 ? "rt" : "mainRt");
+		}
+		LUA->SetTable(-3);
+	}
+	return 1;
+}
+
 // SetSourceReverbScale(k): level of the source reverb slots relative to the room reverb (0..16)
 LUA_FUNCTION(SetSourceReverbScale) {
 	render::SetSourceReverbScale((float)LUA->CheckNumber(1));
@@ -2419,6 +2623,13 @@ LUA_FUNCTION(Stats) {
 		LUA->SetField(-2, "srcRetiring");
 		LUA->PushNumber(g_srcMs.load());
 		LUA->SetField(-2, "srcMs");
+		// per-slot long-window reverb time (SetSourceLongRt): on, ms per pass (smoothed), passes run since the world load
+		LUA->PushBool(g_optSrcLongRt.load());
+		LUA->SetField(-2, "srcLongRt");
+		LUA->PushNumber(g_slotRevMs.load());
+		LUA->SetField(-2, "slotRevMs");
+		LUA->PushNumber(g_slotRevRuns.load());
+		LUA->SetField(-2, "slotRevRuns");
 	}
 	return 1;
 }
@@ -2769,6 +2980,10 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "Echo");
 	LUA->PushCFunction(SourceReflect);
 	LUA->SetField(-2, "SourceReflect");
+	LUA->PushCFunction(SetSourceLongRt);
+	LUA->SetField(-2, "SetSourceLongRt");
+	LUA->PushCFunction(SlotReverbTimes);
+	LUA->SetField(-2, "SlotReverbTimes");
 	LUA->PushCFunction(SetSourceSlots);
 	LUA->SetField(-2, "SetSourceSlots");
 	LUA->PushCFunction(SetSourceReverbScale);
