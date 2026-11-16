@@ -92,11 +92,11 @@ The module is 64-bit only: start the 64-bit game (`gmod_win64.exe`, Steam's 64-b
 not the 32-bit `gmod.exe`. A 32-bit game says so in the Steam Audio tab instead of loading the module.
 
 The `phonon.dll` we use comes from [our Steam Audio fork](https://github.com/ExtReMLapin/steam-audio/releases/tag/v4.8.1-pba.3):
-4.8.1 (current `master`) plus eight fixes, seven of them sent upstream
+4.8.1 (current `master`) plus eight fixes, all sent upstream
 ([#595](https://github.com/ValveSoftware/steam-audio/pull/595), [#596](https://github.com/ValveSoftware/steam-audio/pull/596),
 [#597](https://github.com/ValveSoftware/steam-audio/pull/597), [#599](https://github.com/ValveSoftware/steam-audio/pull/599),
 [#601](https://github.com/ValveSoftware/steam-audio/pull/601), [#603](https://github.com/ValveSoftware/steam-audio/pull/603),
-[#609](https://github.com/ValveSoftware/steam-audio/pull/609)) and one for the level of the hybrid reverb tail that is not sent yet. `native/fetch_deps.py` downloads it
+[#609](https://github.com/ValveSoftware/steam-audio/pull/609), [#611](https://github.com/ValveSoftware/steam-audio/pull/611)). `native/fetch_deps.py` downloads it
 (`--official-phonon` keeps Valve's), and we will go back to the official one once Valve releases
 a fixed version. The fork has no Linux build, so on Linux `libphonon.so` is still the official 4.8.1.
 
