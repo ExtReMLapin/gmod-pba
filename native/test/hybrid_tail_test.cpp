@@ -22,7 +22,7 @@
 //     energy field) is not the one of the reconstructed impulse response at that time (checks 1-3, with the simulation's own times);
 //  H3 PBA's own mixing: not involved, nothing of the module is linked into this test, and the step is there.
 // The cause is in Steam Audio (HybridReverbEffect / HybridReverbEstimator), so the test needs a phonon.dll with the fix (fork branch
-// fix-hybrid-tail-level); with the one that has the original constant of 16 every check fails (short room -12 dB, long room -18 dB
+// fix-hybrid-tail-level, in the fork release v4.8.1-pba.3); with the one that has the original constant of 16 every check fails (short room -12 dB, long room -18 dB
 // re truth, level depending on the reverb times by -6 dB).
 #include <phonon.h>
 

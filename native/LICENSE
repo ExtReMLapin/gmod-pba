@@ -20,6 +20,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-The phonon.dll we ship comes from our Steam Audio fork release v4.8.1-pba.2
+The phonon.dll we ship comes from our Steam Audio fork release v4.8.1-pba.3
 (https://github.com/ExtReMLapin/steam-audio), built without Intel IPP: Steam Audio
 and the Embree it links are both Apache-2.0 (licence texts in that release zip).
