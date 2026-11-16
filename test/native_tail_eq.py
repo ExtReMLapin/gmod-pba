@@ -3,9 +3,12 @@ pba_demo room 13 (concrete), listener at the centre: the air absorption must be 
 Steam Audio 4.8.1 took the hybrid tail EQ from the energy field without air while the IR it
 continues has it (Steam Audio issue #602); the native module compensated with kAirTailEq.
 With the fork's fix (v4.8.1-pba.2) that compensation counts the air twice (~10 dB darker highs).
-The reference tilt is recorded once with the compensated state (pba.1 DLL + kAirTailEq):
+The reference tilt is recorded with:
   python -I -u native_tail_eq.py <mcp.py> --record
-then every run must stay within 1.5 dB of it.
+then every run must stay within 1.5 dB of it. History: -11.91 dB with the pba.1 DLL + kAirTailEq at 16 bounces;
+re-recorded 2026-11-16 (-13.46 dB, pba.3 DLL, pba_native_bounces 128 = the new default): with 16 bounces the energy
+field is empty after 0.2 s in this room and the tilt reads -12.10 dB, with 128 and 256 it is -13.45 / -13.45 (the
+converged value, measured with a scene rebuild per setting), and air counted twice would be about -10 dB lower.
 """
 import json
 import math
