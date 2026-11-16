@@ -227,15 +227,39 @@ return {
 				end
 			end)
 		end },
-		{ name = "LoudWet: with pba_native_loud_dry a sound above dsp_db_min keeps dsp_db_mixdrop of its reverb send (the engine's convars, read live: 95 dB / 0.1 measured once, 80 / 0.5 in another game), others all of it; off: all", func = function()
-			local cMin, cDrop = GetConVar("dsp_db_min"), GetConVar("dsp_db_mixdrop")
-			local dbMin = cMin and cMin:GetFloat() or 95
-			local drop = math.Clamp(cDrop and cDrop:GetFloat() or 0.1, 0, 1)
-			withCfg({ fullscale_db = 90, native_loud_dry = 1 }, function()
-				expect(near(N.LoudWet(140), drop, 1e-6)).to.beTrue()
-				expect(N.LoudWet(dbMin)).to.equal(1)
-				expect(N.LoudWet(dbMin - 20)).to.equal(1)
-				expect(near(N.PhysSrcSend(140, 10 * REF), 10 * drop, 1e-6)).to.beTrue()
+		{ name = "LoudWet: with pba_native_loud_dry only very loud sounds (gunfire) lose reverb, through a continuous ramp; ordinary sounds, 80-95 dB included, keep all of it; independent of the engine's dsp_db_min / dsp_db_mixdrop; off: all", func = function()
+			-- The engine's own rule (dsp_db_min / dsp_db_mixdrop = the values of the CURRENT room preset, 80 / 0.5 in most
+			-- rooms, 95 / 0.1 in some outdoor ones) lowers the room mix of the sounds BELOW db_min, a step at db_min: measured
+			-- in game (recorded engine mix, 2026-11-16). A loud sound is never dried by it, so those convars say nothing about
+			-- gunfire; the module's loud-dry rule is its own: nothing up to _from, down to _db dB over _range dB, no step.
+			local cfg = { fullscale_db = 90, native_loud_dry = 1, native_loud_dry_from = 95, native_loud_dry_range = 15, native_loud_dry_db = 20 }
+			withCfg(cfg, function()
+				for _, lvl in ipairs({ 0, 45, 60, 75, 79, 80, 81, 85, 90, 95 }) do
+					if N.LoudWet(lvl) ~= 1 then error(string.format("a level %d sound lost reverb: x%.3f", lvl, N.LoudWet(lvl))) end
+				end
+				expect(near(N.LoudWet(110), 0.1, 1e-6)).to.beTrue()
+				expect(near(N.LoudWet(140), 0.1, 1e-6)).to.beTrue()
+				-- a ramp: never rising, never a jump above 1.5 dB per dB of level, passing through the middle
+				local prev, worst = 1, 0
+				for l10 = 900, 1500 do
+					local w = N.LoudWet(l10 / 10)
+					if w > prev + 1e-9 then error(string.format("rises at level %.1f", l10 / 10)) end
+					worst = math.max(worst, math.abs(20 * math.log10(w / prev)) * 10)
+					prev = w
+				end
+				if worst > 1.5 then error(string.format("steps %.2f dB per dB of level", worst)) end
+				expect(near(20 * math.log10(N.LoudWet(102.5)), -10, 0.01)).to.beTrue()
+				expect(near(N.PhysSrcSend(140, 10 * REF), 10 * 0.1, 1e-6)).to.beTrue()
+			end)
+			-- the options move the ramp
+			withCfg({ fullscale_db = 90, native_loud_dry = 1, native_loud_dry_from = 100, native_loud_dry_range = 10, native_loud_dry_db = 12 }, function()
+				expect(N.LoudWet(100)).to.equal(1)
+				expect(near(20 * math.log10(N.LoudWet(105)), -6, 0.01)).to.beTrue()
+				expect(near(20 * math.log10(N.LoudWet(120)), -12, 0.01)).to.beTrue()
+			end)
+			withCfg({ fullscale_db = 90, native_loud_dry = 1, native_loud_dry_from = 95, native_loud_dry_range = 0, native_loud_dry_db = 20 }, function()
+				expect(N.LoudWet(95)).to.equal(1)
+				expect(near(N.LoudWet(95.5), 0.1, 1e-6)).to.beTrue()
 			end)
 			withCfg({ fullscale_db = 90, native_loud_dry = 0 }, function()
 				expect(N.LoudWet(140)).to.equal(1)
