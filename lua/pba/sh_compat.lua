@@ -12,8 +12,10 @@
 --     off). Its distance falloff (full up to 120 u, nothing past 900 u) is replaced too: pba takes the
 --     radio's knob volume and a real law (full up to rRadio's FullVolumeDistance, then min / d), so the radio
 --     carries and reverberates like any sound (user's decision 2026-11-12: a boombox in a concrete hangar was
---     -39 dB at 15 m, silent at 17 m, its reverb gone with it; now -16 dB). rRadio still unloads the stream
---     past MaxHearingDistance x UnloadDistanceFactor (2250 u by default).
+--     -39 dB at 15 m, silent at 17 m, its reverb gone with it; now -16 dB). rRadio still loads the stream
+--     only within MaxHearingDistance x LoadDistanceFactor (2 by default) and unloads it past x UnloadDistanceFactor
+--     (2.5 by default): pba fades the radio out to silence at its load distance (C.RRadioSilentAt), so
+--     neither the load nor the unload is heard as a jump.
 
 local A = pba
 A.Compat = A.Compat or {}
@@ -158,9 +160,46 @@ function C.RRadio()
 		C.rradioOcc = nil
 	end
 end
+-- The last share of the way to a stream's silent distance over which it fades out (rRadio, below).
+C.EDGE_FADE = 0.25
+
+--- Fade-out gain of a source at distance d from the listener that must be silent from `silentAt` on (nil: no
+-- fade): 1 up to silentAt x (1 - C.EDGE_FADE), then cos over the last quarter, 0 from silentAt. Equal-power
+-- shape (the energy goes as cos^2): its slope is 0 where the fade starts, so no audible kink there, and a
+-- 450 u zone (900 u radio) takes a 300 u/s walk 1.5 s, slow enough to read as distance rather than a gate.
+function C.EdgeFade(d, silentAt)
+	if not silentAt or silentAt <= 0 then return 1 end
+	local from = silentAt * (1 - C.EDGE_FADE)
+	if d <= from then return 1 end
+	if d >= silentAt then return 0 end
+	return math.cos((d - from) / (silentAt - from) * math.pi / 2)
+end
+
+--- Distance from which rRadio's own load / unload of the stream can happen without a jump, i.e. where the
+-- radio must already be silent (nil: rRadio never loads or unloads by distance). rRadio loads a station
+-- only within MaxHearingDistance x LoadDistanceFactor (default 2) when ConditionalStationLoad is on, and
+-- unloads it past MaxHearingDistance x UnloadDistanceFactor (default 2.5) when ConditionalStationUnload is on:
+-- a radio still audible there (pba's law is far longer than rRadio's own, -25 dB at 2288 u) appears and
+-- disappears with a jump. Silent at the nearer of the two limits, hence silent at both: the hysteresis between
+-- them (load below 900 x 2 u, unload past 900 x 2.5 u) then hides every load and unload, whichever way it walks.
+function C.RRadioSilentAt(conf, typeCfg, maxD)
+	if not istable(conf) then return nil end
+	maxD = maxD or tonumber(typeCfg and typeCfg.MaxHearingDistance) or 900
+	local at
+	if conf.ConditionalStationLoad ~= false then at = maxD * (tonumber(conf.LoadDistanceFactor) or 2) end
+	if conf.ConditionalStationUnload ~= false then
+		local u = maxD * (tonumber(conf.UnloadDistanceFactor) or 2.5)
+		if not at or u < at then at = u end
+	end
+	return at
+end
+
 --- rRadio's distance falloff (cl_streams adapter): the source's power is the radio's knob volume (clamped
 -- like rRadio does, 0 when muted) and its law min is the radio type's FullVolumeDistance. A volume of exactly
 -- 0 inside its hearing range is rRadio stopping or fading it out: kept (its 250 ms fades are not followed).
+-- The knob is also faded out to its load distance (C.RRadioSilentAt): srcVol (cl_streams) is the source's power
+-- everywhere (BASS volume, native gain, both reverb sends, ramps), so the fade, a function of the straight
+-- distance to the radio like rRadio's own load, is applied once there rather than in the path-length law.
 function C.RRadioVolume(ch, r)
 	local R = rRadio
 	local e = r.emitter
@@ -182,8 +221,9 @@ function C.RRadioVolume(ch, r)
 	local cfg = istable(R.config) and R.config[ent.ConfigKey or ""] or {}
 	local full = math.max(tonumber(cfg.FullVolumeDistance) or 120, 1)
 	local maxD = tonumber(cfg.MaxHearingDistance) or 900
-	if (r.vol or 1) <= 0 and ent:GetPos():Distance(A.ListenerPos() or ent:GetPos()) < maxD then knob = 0 end
-	return knob, full
+	local d = ent:GetPos():Distance(A.ListenerPos() or ent:GetPos())
+	if (r.vol or 1) <= 0 and d < maxD then knob = 0 end
+	return knob * C.EdgeFade(d, C.RRadioSilentAt(R.config, cfg, maxD)), full
 end
 
 if CLIENT then

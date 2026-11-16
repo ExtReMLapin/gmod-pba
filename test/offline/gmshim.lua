@@ -96,3 +96,4 @@ game = { GetMap = function() return "" end }
 function SoundDuration() return 0 end
 function ErrorNoHaltWithStack(m) print(m) end
 function ErrorNoHalt(m) print(m) end
+function istable(t) return type(t) == "table" end

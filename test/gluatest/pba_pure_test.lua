@@ -2907,6 +2907,85 @@ local SUITE = {
 				expect(worst < 1.5).to.beTrue()
 			end)
 		end },
+		{ name = "rRadio: the radio fades to silence before rRadio's load distance (MaxHearingDistance x LoadDistanceFactor), continuously both ways, so its load and unload never jump (user, pba_pipe: heard -25 dB at 2288 u, cut by rRadio's unload at 2250 u)", func = function()
+			local C = A.Compat
+			expect(C ~= nil and C.RRadioVolume ~= nil).to.beTrue()
+			local pos = Vector(0, 0, 0)
+			local ent = { ConfigKey = "Boombox", IsValid = function() return true end, GetPos = function() return pos end }
+			local conf = {
+				Boombox = { MaxHearingDistance = 900, FullVolumeDistance = 120 },
+				Radio = { MaxHearingDistance = 500, FullVolumeDistance = 60 },
+				LoadDistanceFactor = 2, UnloadDistanceFactor = 2.5, ConditionalStationLoad = true, ConditionalStationUnload = true,
+			}
+			local mock = { config = conf,
+				util = { GetRadioEntity = function() return ent end },
+				client = { radio = { state = { GetVolume = function() return 1 end } }, audio = { manager = {} } } }
+			local oldR, oldL = _G.rRadio, A.ListenerPos
+			_G.rRadio, A.ListenerPos = mock, function() return Vector(0, 0, 0) end
+			local ok, err = pcall(function()
+				-- what the adapter makes of the radio at distance d: the knob volume x the law min / d it declares
+				local function heard(d)
+					pos = Vector(d, 0, 0)
+					local knob, full = C.RRadioVolume(nil, { emitter = ent, vol = 1 })
+					return knob * math.min(1, full / math.max(d, 1)), knob
+				end
+				local _, k0 = heard(100)
+				expect(k0 > 0).to.beTrue()
+				local function fade(d) local _, k = heard(d) return k / k0 end
+				-- silent at the load distance and beyond (rRadio's unload, 2250 u, is then silent too)
+				for _, d in ipairs({ 1800, 1801, 2000, 2250, 2288, 5000 }) do
+					if fade(d) ~= 0 then error("not silent at " .. d .. ": " .. fade(d)) end
+				end
+				-- near and mid range are rRadio's real law, untouched
+				expect(fade(100)).to.equal(1)
+				expect(fade(900)).to.equal(1)
+				-- continuous both ways from 1000 u (past the law's own knee at 120 u) to 2400 u: no step of more than 0.5 % of full scale per 5 u,
+				-- no step above 1 dB while the fade still leaves at least 20 % of the amplitude
+				for _, dir in ipairs({ 1, -1 }) do
+					local d, prev = dir > 0 and 1000 or 2400, nil
+					local worstLin, worstDb = 0, 0
+					for _ = 1, 281 do
+						local g, k = heard(d)
+						if prev then
+							worstLin = math.max(worstLin, math.abs(g - prev.g))
+							if k / k0 >= 0.2 and prev.k / k0 >= 0.2 then
+								worstDb = math.max(worstDb, math.abs(20 * math.log10(g / prev.g)))
+							end
+						end
+						prev, d = { g = g, k = k }, d + dir * 5
+					end
+					if worstLin > 0.005 or worstDb > 1 then error(string.format("dir %d: step %.4f (lin), %.2f dB", dir, worstLin, worstDb)) end
+				end
+				-- it does fade (not just a late cut): well under full a little before the load distance
+				expect(fade(1700) < 0.5).to.beTrue()
+				-- read from rRadio.config at runtime: the factor, the hearing distance of the radio's type
+				conf.LoadDistanceFactor, conf.UnloadDistanceFactor = 3, 4
+				expect(fade(2000) > 0.99).to.beTrue()
+				expect(fade(2700)).to.equal(0)
+				-- an unload nearer than the load (odd config): silent by the nearer limit, the one that jumps first
+				conf.UnloadDistanceFactor = 2.5
+				expect(fade(2250)).to.equal(0)
+				conf.LoadDistanceFactor = 2
+				ent.ConfigKey = "Radio"
+				expect(fade(1000)).to.equal(0)
+				expect(fade(300) > 0.99).to.beTrue()
+				ent.ConfigKey = "Boombox"
+				-- no conditional load: the stream is not loaded by distance, nothing to hide; with the unload on
+				-- and the load off, the radio is silent at the unload distance
+				conf.ConditionalStationLoad, conf.ConditionalStationUnload = false, false
+				expect(fade(2288)).to.equal(1)
+				conf.ConditionalStationUnload = true
+				expect(fade(1500) > 0.99).to.beTrue()
+				expect(fade(2250)).to.equal(0)
+				conf.ConditionalStationLoad, conf.ConditionalStationUnload = true, true
+				-- fallbacks of rRadio when the config lacks the values: 900, 2, 2.5
+				conf.LoadDistanceFactor, conf.UnloadDistanceFactor, conf.Boombox.MaxHearingDistance = nil, nil, nil
+				expect(fade(1800)).to.equal(0)
+				expect(fade(1000) > 0.99).to.beTrue()
+			end)
+			_G.rRadio, A.ListenerPos = oldR, oldL
+			if not ok then error(err, 0) end
+		end },
 	},
 }
 return SUITE
