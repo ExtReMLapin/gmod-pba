@@ -2,7 +2,7 @@
 
 The module rendered an echo or source reverb slot's tail with the reverb times of its main simulation (window 0.5 s, saturating
 near 1.2 s whatever the room); only the listener's room bus had the long-window estimate (pba_native_reverb_window, 2.5 s). With
-the option each slot gets its own long-window estimate, simulated at its own position (docs/JOURNAL.md 2026-11-15).
+the option each slot gets its own long-window estimate, simulated at its own position.
 
 Three scenes, each measured with the option off then on (test/source_long_rt.lua, one client lua_job per scene):
   hall   pba_pipe (68 x 34 x 17 m steel hangar), a sound at the drop pad 8 m from the listener, the same room: the slot's tail,
