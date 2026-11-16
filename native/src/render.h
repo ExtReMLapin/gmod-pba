@@ -121,6 +121,15 @@ void RoomReverbTimes(float rt[3]);
 // hybrid tail EQ last applied to the room reverb (3 bands)
 void RoomTailEq(float eq[3]);
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir);
+// Diffuse-field equaliser of the room reverb bus's binaural decode (designed from the loaded HRTF at Start, see
+// render.cpp). Always on in the module; these serve the offline tests and diagnostics.
+void SetDiffuseFieldEq(bool on);
+bool DiffuseFieldEqOn();                      // designed and enabled
+std::vector<double> DiffuseFieldEqGainDb();   // designed gain (dB) at the bins 0 .. 2048 of a 4096-point FFT at 48 kHz; empty: none
+// Offline tests: decodes `frames` (a multiple of 512) of a 4-channel ambisonic signal (amb[c] = channel c, listener
+// facing -z) exactly as the audio thread decodes the room bus (output mode, HRTF or panning, then the equaliser),
+// on a decoder of its own. Needs Start().
+void DecodeReverbBus(const float* const amb[4], int frames, float* l, float* r);
 void TestBinaural(IPLVector3 dir, double* eL, double* eR);
 bool HasSound(const std::string& name);
 // loopStart: where a loop restarts (seconds; 0 without a loop marker in the WAV)
