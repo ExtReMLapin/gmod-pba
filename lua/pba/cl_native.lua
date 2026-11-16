@@ -327,7 +327,7 @@ end)
 function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	local t0 = SysTime()
 	-- the simulator is created with the current ray count (it fixes the ray directions)
-	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays, A.cfg.native_bounces or 16)
+	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays, A.cfg.native_bounces or 128)
 	if pba_native.SetSimOptions then
 		pba_native.SetSimOptions(A.cfg.native_scene or 1, A.cfg.native_threads or 0, A.cfg.native_reverb_window or 2.5, 512)
 	end
@@ -549,7 +549,7 @@ function N.ApplySettings()
 	pba_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
 	local k = N.wetScale or 1
 	pba_native.SetReflections(wetLevel(A.cfg.native_reverb, k), wetLevel(A.cfg.native_echo, k), A.cfg.native_rays,
-		A.cfg.native_bounces or 16, A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
+		A.cfg.native_bounces or 128, A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
 	-- a far moving source keeps its source reverb response over a fraction of its distance (module 1.2.0+)
 	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.cfg.native_src_near or 0.1) end
 	-- each source reverb slot / echo rings with the long-window reverb time of its own position (newer modules)
