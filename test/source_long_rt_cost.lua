@@ -5,6 +5,9 @@
 -- slots' pass, slotRevMs = one long-window estimate, slotRevRuns = estimates made; all smoothed by the module, averaged here),
 -- the estimates made in the first 4 s (the slots arriving) and in the rest (settled slots: none expected); the pass times of the last 3 s (settled: the module smooths them over ~10 runs, so the arrival burst has left), and the time until every
 -- slot holds its estimate (SlotReverbTimes: long, n >= passes).
+-- Caution: srcMs / reflMs are averages updated only when a pass runs. Read at two moments they mix the arrival burst, the warm-up from 0 and
+-- the stale value of a settled slot (no pass runs): the 'srcMsSettled' difference of the two option values is NOT the cost of the
+-- estimates. test/source_long_rt_runs.lua reads every pass on its own.
 local N = pba.Native
 local res = { opts = {} }
 if not (N and N.render and pba_native and pba_native.SlotReverbTimes) then res.err = "module without SlotReverbTimes" return res end

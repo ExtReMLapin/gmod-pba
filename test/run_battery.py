@@ -1241,6 +1241,8 @@ steps = [
     ("source_long_rt floor", lambda: py("source_long_rt.py", "--only=floor")),
     ("source_long_rt small", lambda: py("source_long_rt.py", "--only=small")),
     ("source_long_rt other", lambda: py("source_long_rt.py", "--only=other")),
+    # what the long-window estimates add to a source slot pass, pass by pass (a cost test: alone on its instance)
+    ("source_long_rt_runs", lambda: seq(lambda: load("pba_pipe", 1), lambda: native_on(True), lambda: job("client", "source_long_rt_runs.lua", 120))),
     # a source reverb slot reused after a pause, after walking away, after stepping across the anchor radius
     ("source_slot_reuse", lambda: seq(lambda: load("gm_construct", 1), cheats, lambda: native_on(True),
                                       lambda: job("client", "source_slot_reuse.lua", 200))),

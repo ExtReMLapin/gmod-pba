@@ -553,7 +553,7 @@ function N.ApplySettings()
 	-- a far moving source keeps its source reverb response over a fraction of its distance (module 1.2.0+)
 	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.cfg.native_src_near or 0.1) end
 	-- each source reverb slot / echo rings with the long-window reverb time of its own position (newer modules)
-	if pba_native.SetSourceLongRt then pba_native.SetSourceLongRt((A.cfg.native_source_long_rt or 0) >= 0.5) end
+	if pba_native.SetSourceLongRt then pba_native.SetSourceLongRt((A.cfg.native_source_long_rt or 1) >= 0.5) end
 	-- output stage and decode resampling (newer modules; an older module keeps its soft clip and linear resampling)
 	if pba_native.SetMixQuality then
 		pba_native.SetMixQuality(math.floor((A.cfg.native_limiter or 1) + 0.5), (A.cfg.native_resample_hq or 1) >= 0.5, (A.cfg.native_limit_pre or 1) >= 0.5)
@@ -1234,7 +1234,7 @@ local probeCache, probeStamp = {}, 0
 -- in it it is measured. A sound near the floor is lifted to PROBE_HEIGHT above it, never more than under 45 % of the headroom (a low
 -- ceiling, a table). Cached per 0.6 m cell for 5 s: one source's updates cost no trace.
 function N.ProbeLift(S)
-	if (A.cfg.native_source_long_rt or 0) < 0.5 then return nil end
+	if (A.cfg.native_source_long_rt or 1) < 0.5 then return nil end
 	local now = RealTime()
 	if now - probeStamp > 5 then probeCache, probeStamp = {}, now end
 	local key = math.floor(S.x / 32) .. "," .. math.floor(S.y / 32) .. "," .. math.floor(S.z / 32)
