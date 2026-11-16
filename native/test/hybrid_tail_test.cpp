@@ -52,7 +52,8 @@ struct Room {
 	IPLContext ctx = nullptr;
 	IPLScene scene = nullptr;
 	IPLStaticMesh mesh = nullptr;
-	bool Build(IPLContext c, float X, float Y, float Z, float absorb, float scatter) {
+	// onlyBand >= 0: the walls absorb every other band, so the energy field has that band alone
+	bool Build(IPLContext c, float X, float Y, float Z, float absorb, float scatter, int onlyBand = -1) {
 		ctx = c;
 		IPLSceneSettings ss{};
 		ss.type = IPL_SCENETYPE_DEFAULT;
@@ -62,6 +63,8 @@ struct Room {
 		                              {{3, 2, 6}}, {{3, 6, 7}}, {{0, 3, 7}}, {{0, 7, 4}}, {{1, 5, 6}}, {{1, 6, 2}}};
 		std::vector<IPLint32> mi(t.size(), 0);
 		IPLMaterial mat{{absorb, absorb, absorb}, scatter, {0.0f, 0.0f, 0.0f}};
+		for (int b = 0; b < 3; ++b)
+			if (onlyBand >= 0 && b != onlyBand) mat.absorption[b] = 1.0f;
 		IPLStaticMeshSettings ms{};
 		ms.numVertices = (IPLint32)v.size();
 		ms.numTriangles = (IPLint32)t.size();
@@ -238,6 +241,10 @@ static double Edc(const std::vector<float>& h, double t, double ref) {
 }
 
 static const double kLo[3] = {0, 800, 8000}, kHi[3] = {800, 8000, 24000}; // the three bands of Steam Audio
+// The middle of each band. Steam Audio's band filters overlap (the reconstructor's are single biquads, 6 dB per octave out of
+// the band; the reverb's are shelves): where a band decays faster than its neighbour (the air absorbs the highest band
+// 54 dB/s faster than the middle one), its edges, and with the reconstructor all of it, read the neighbour's level.
+static const double kMidLo[3] = {0, 2000, 14000}, kMidHi[3] = {250, 4000, 24000};
 
 struct Case {
 	const char* name;
@@ -246,7 +253,8 @@ struct Case {
 };
 
 struct Result {
-	double off = 0, offBand[3] = {0, 0, 0}, maxStep = 0, rtIndep[3] = {0, 0, 0};
+	double off = 0, offBand[3] = {0, 0, 0}, offBandFull[3] = {0, 0, 0}, maxStep = 0, rtIndep[3] = {0, 0, 0};
+	int minBand = 0; // the band with the shortest reverb time: tone correction leaves it alone
 };
 
 static double Median(std::vector<double> v) {
@@ -255,7 +263,9 @@ static double Median(std::vector<double> v) {
 }
 
 // One measurement of a room: the hybrid response against the truth.
-static bool Measure(IPLContext ctx, Room& room, const Case& c, double total, const std::vector<float>& ht, Result* r, bool print) {
+// htb[b]: the truth of the room whose walls absorb every band but b
+static bool Measure(IPLContext ctx, Room& room, const Case& c, double total, const std::vector<float>& ht, const std::vector<float>* htb, Result* r,
+                    bool print) {
 	const IPLVector3 lis{0.3f, 0.1f, 0.2f}, sp{0.3f, 0.2f, 0.2f};
 	Sim hy, par;
 	if (!hy.Run(room, IPL_REFLECTIONEFFECTTYPE_HYBRID, render::kIRSeconds, 1, 2048, g_bounces, lis, sp)) return false;
@@ -283,7 +293,13 @@ static bool Measure(IPLContext ctx, Room& room, const Case& c, double total, con
 	}
 	// 1. level after the handover (0.5 - 0.6 s: the convolved part is over, the tail alone) against the truth
 	r->off = EDb(h, 0.5, 0.6) - EDb(ht, 0.5, 0.6);
-	for (int b = 0; b < 3; ++b) r->offBand[b] = BandDb(h, 0.5, 0.6, kLo[b], kHi[b]) - BandDb(ht, 0.5, 0.6, kLo[b], kHi[b]);
+	// per band: the middle of the band, against the truth of that band alone (in the whole truth, the highest band reads the middle
+	// one's level once the air has absorbed it, through the reconstructor's band filters: -12 to -14 dB at 0.5 s for a tail that is
+	// right; the whole band against the whole truth is printed for reference)
+	for (int b = 0; b < 3; ++b) {
+		r->offBand[b] = BandDb(h, 0.5, 0.6, kMidLo[b], kMidHi[b]) - BandDb(htb[b], 0.5, 0.6, kMidLo[b], kMidHi[b]);
+		r->offBandFull[b] = BandDb(h, 0.5, 0.6, kLo[b], kHi[b]) - BandDb(ht, 0.5, 0.6, kLo[b], kHi[b]);
+	}
 	// 2. no step: over the 50 ms windows from the end of the convolved part's full weight (0.3 s) to 0.6 s
 	r->maxStep = 0;
 	for (double t = 0.3; t < 0.59; t += 0.05) r->maxStep = std::max(r->maxStep, std::fabs(EDb(h, t, t + 0.05) - EDb(ht, t, t + 0.05)));
@@ -292,12 +308,13 @@ static bool Measure(IPLContext ctx, Room& room, const Case& c, double total, con
 	// (13.8 / RT nepers per second from the start of the tail at 0.375 s)
 	float flat[3];
 	const float mn = std::min({rt[0], rt[1], rt[2]});
+	r->minBand = (int)(std::min_element(rt, rt + 3) - rt);
 	for (int b = 0; b < 3; ++b) flat[b] = mn;
 	const std::vector<float> hf = Impulse(ctx, IPL_REFLECTIONEFFECTTYPE_HYBRID, hy, irSize, flat, total);
 	for (int b = 0; b < 3; ++b) {
 		const double dt = 0.575 - 0.375;
 		const double decay = -10 * std::log10(std::exp(1.0)) * 13.8 * dt * (1.0 / rt[b] - 1.0 / flat[b]);
-		r->rtIndep[b] = BandDb(h, 0.55, 0.6, kLo[b], kHi[b]) - BandDb(hf, 0.55, 0.6, kLo[b], kHi[b]) - decay;
+		r->rtIndep[b] = BandDb(h, 0.55, 0.6, kMidLo[b], kMidHi[b]) - BandDb(hf, 0.55, 0.6, kMidLo[b], kMidHi[b]) - decay;
 	}
 	hy.Free();
 	par.Free();
@@ -329,26 +346,47 @@ int main(int argc, char** argv) {
 		if (!truth.Run(room, IPL_REFLECTIONEFFECTTYPE_CONVOLUTION, (float)total, 1, 4096, 256, lis, sp)) { std::printf("FAIL truth sim\n"); return 1; }
 		const std::vector<float> ht = Impulse(ctx, IPL_REFLECTIONEFFECTTYPE_CONVOLUTION, truth, (int)(total * kRate), nullptr, total);
 		truth.Free();
-		std::vector<double> off, step, band[3], indep[3];
+		// the truth of each band alone
+		std::vector<float> htb[3];
+		for (int b = 0; b < 3; ++b) {
+			Room bandRoom;
+			Sim bandTruth;
+			if (!bandRoom.Build(ctx, c.X, c.Y, c.Z, c.absorb, 0.1f, b) ||
+			    !bandTruth.Run(bandRoom, IPL_REFLECTIONEFFECTTYPE_CONVOLUTION, (float)total, 1, 4096, 256, lis, sp)) {
+				std::printf("FAIL band truth sim\n");
+				return 1;
+			}
+			htb[b] = Impulse(ctx, IPL_REFLECTIONEFFECTTYPE_CONVOLUTION, bandTruth, (int)(total * kRate), nullptr, total);
+			bandTruth.Free();
+			bandRoom.Free();
+		}
+		std::vector<double> off, step, band[3], bandFull[3], indep[3];
+		Result last;
 		for (int i = 0; i < g_repeat; ++i) {
 			Result r;
-			if (!Measure(ctx, room, c, total, ht, &r, g_explore && i == 0)) { std::printf("FAIL hybrid sim\n"); return 1; }
+			if (!Measure(ctx, room, c, total, ht, htb, &r, g_explore && i == 0)) { std::printf("FAIL hybrid sim\n"); return 1; }
 			off.push_back(r.off);
+			last = r;
 			step.push_back(r.maxStep);
 			for (int b = 0; b < 3; ++b) {
 				band[b].push_back(r.offBand[b]);
+				bandFull[b].push_back(r.offBandFull[b]);
 				indep[b].push_back(r.rtIndep[b]);
 			}
 		}
 		res[k].off = Median(off);
+		res[k].minBand = last.minBand;
 		res[k].maxStep = Median(step);
 		for (int b = 0; b < 3; ++b) {
 			res[k].offBand[b] = Median(band[b]);
+			res[k].offBandFull[b] = Median(bandFull[b]);
 			res[k].rtIndep[b] = Median(indep[b]);
 		}
-		std::printf("  tail 0.5-0.6 s minus truth: %+.1f dB (bands %+.1f %+.1f %+.1f); largest gap to the truth over 0.3-0.6 s: %.1f dB; "
+		std::printf("  tail 0.5-0.6 s minus truth: %+.1f dB (middle of each band vs that band alone %+.1f %+.1f %+.1f; whole bands vs whole truth "
+		            "%+.1f %+.1f %+.1f); largest gap to the truth over 0.3-0.6 s: %.1f dB; "
 		            "level vs the reverb times given (flat RT minus given, decay removed): %+.1f %+.1f %+.1f dB\n",
-		            res[k].off, res[k].offBand[0], res[k].offBand[1], res[k].offBand[2], res[k].maxStep, res[k].rtIndep[0], res[k].rtIndep[1], res[k].rtIndep[2]);
+		            res[k].off, res[k].offBand[0], res[k].offBand[1], res[k].offBand[2], res[k].offBandFull[0], res[k].offBandFull[1],
+		            res[k].offBandFull[2], res[k].maxStep, res[k].rtIndep[0], res[k].rtIndep[1], res[k].rtIndep[2]);
 		room.Free();
 	}
 	std::printf("\n");
@@ -360,8 +398,12 @@ int main(int argc, char** argv) {
 	double worstBand = 0;
 	for (int b = 0; b < 3; ++b) worstBand = std::max(worstBand, std::fabs(res[1].offBand[b]));
 	Check(worstBand <= 8.0, "long room: every band of the tail is within 8 dB of the truth", worstBand, 8.0);
+	// Only the bands that tone correction scales: the band with the shortest reverb time keeps a gain of 1 in both responses, and in
+	// the long room it is the highest band, 20 dB or more under the middle one at the handover once the air absorbs it at its full
+	// rate, so what it reads there is the middle band through the reverb's shelving filters (+5 to +7 dB), not tone correction.
 	double worstIndep = 0;
-	for (int b = 0; b < 3; ++b) worstIndep = std::max(worstIndep, std::fabs(res[1].rtIndep[b]));
+	for (int b = 0; b < 3; ++b)
+		if (b != res[1].minBand) worstIndep = std::max(worstIndep, std::fabs(res[1].rtIndep[b]));
 	Check(worstIndep <= 3.0, "long room: the level of the tail at the handover does not depend on the reverb times it is given (H1: tone correction)",
 	      worstIndep, 3.0);
 	std::printf(fails ? "FAILED\n" : "ALL OK\n");
