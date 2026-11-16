@@ -1322,6 +1322,9 @@ steps = [
     ("native_options", lambda: py("native_options.py")),
     # room reverb tail EQ: air absorption counted once (Steam Audio bug 6, fixed in the fork's DLL)
     ("native_tail_eq", lambda: py("native_tail_eq.py")),
+    # the room reverb TAIL starts at its level with the DEFAULT pba_native_bounces: a ray stops at the 0.5 s window, not after 16 bounces
+    # (pba_tworooms, 4.2 m mean free path: tail EQ 26.6 dB under the 256-bounce reference with 16, within 6 dB with the default)
+    ("native_bounces_tail", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_bounces_tail.lua", 90))),
     # a one-shot followed while it plays: the voice reaches the source once the listener steps into sight
     # (pba_demo court, native then engine rendering)
     ("oneshot_follow pba_demo", lambda: py("oneshot_follow.py")),

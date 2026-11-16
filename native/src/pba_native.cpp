@@ -167,7 +167,7 @@ IPLCoordinateSpace3 g_stageLis{};
 bool g_stageLisOk = false;
 std::thread g_reflThread;
 std::atomic<bool> g_reflRun{false}, g_reflWanted{false};
-std::atomic<int> g_reflRays{2048}, g_reflBounces{16}, g_reflRuns{0}, g_reflErrors{0};
+std::atomic<int> g_reflRays{2048}, g_reflBounces{128}, g_reflRuns{0}, g_reflErrors{0};
 // rays the simulator was created for: Steam Audio generates the listener ray directions for
 // maxNumRays (azimuth = 2*pi*i/maxNumRays) and traces the FIRST numRays of them, so numRays below
 // maxNumRays covers only part of the horizon (2048 of 8192 = one fixed quadrant). Both are equal.
@@ -334,8 +334,8 @@ void SetSharedReflInputs(const IPLCoordinateSpace3& lis, IPLSimulator sim = null
 	IPLSimulationSharedInputs sh{};
 	sh.listener = lis;
 	sh.numRays = std::min(g_reflRays.load(), g_simMaxRays.load());
-	// enough bounces to fill the simulated window: with too few, the energy of a
-	// reflective room stops early and the reverb time estimate is capped (~0.8 s)
+	// a cap, not the bound (a ray also stops at duration x c, 0.5 s = 171 m): with too few the energy of a
+	// room stops early (16 bounces in a 4 m mean free path room: 0.2 s), the hybrid EQ and the reverb time come out too low
 	sh.numBounces = g_reflBounces.load();
 	sh.duration = render::kIRSeconds;
 	sh.order = 1;
