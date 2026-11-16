@@ -15,7 +15,7 @@ if not (N and N.ready) then return { pass = false, err = "native not ready" } en
 local function opt(n) local c = GetConVar(n) return c == nil or c:GetInt() ~= 0 end
 local rateOn, stopOn = opt("pba_streams_rate"), opt("pba_streams_stop_now")
 local saved = {}
-for _, c in ipairs({ "pba_native_render", "pba_streams_native", "pba_streams" }) do
+for _, c in ipairs({ "pba_native_render", "pba_streams_native", "pba_streams", "pba_native_reverb", "pba_native_echo" }) do
 	saved[c] = GetConVar(c):GetString()
 end
 RunConsoleCommand("pba_native_render", "1")
@@ -171,6 +171,14 @@ if not ok1 then out.err1 = tostring(err1) end
 out.rateFollowed = ok1 and rateOK
 -- ---------- 2 Pause / Play / Stop latency ------------------------------------------------------------
 local LIM = 0.12
+-- The latency of the voice, not of the room: the energy read is the module's whole output, and the room reverb
+-- (pba_native_reverb) and the echoes ring out after a cut like in any room: with the new default of 128 bounces the
+-- tail holds enough energy to stay above 10 % of the steady level for 0.13-0.18 s (the direct voice is silent in
+-- 0.034 s, two frames, whatever the bounce count: measured 16 to 256 on a quiet machine, and 0.034 s at 16 and 128 with the
+-- reverb at 0). So the reverb levels are 0 for the cuts; the burst counts above are read with the defaults.
+RunConsoleCommand("pba_native_reverb", "0")
+RunConsoleCommand("pba_native_echo", "0")
+job:sleep(1.5) -- the 0.5 s poll applies them
 -- a cut's latency depends on where BASS's buffers stood at the call (and is read in 40 ms bins): the median of four
 local ok2, err2 = pcall(function()
 	local ch, err = open(fTone, {})
