@@ -1532,7 +1532,9 @@ def _check_loop_removed(d):
                                         f"{d.get('serverLeft')} mirrors left after (want 0)")
 
 CHECKS = {"GLuaTest pure suite": _check_pure,
-          "GLuaTest pure suite (native helpers)": lambda v: _check_pure(v, "GLuaTest pure suite (native helpers)"), "menu_fit": _check_menu, "loop_removed": _check_loop_removed}
+          "GLuaTest pure suite (native helpers)": lambda v: _check_pure(v, "GLuaTest pure suite (native helpers)"),
+          "GLuaTest pure suite (update check)": lambda v: _check_pure(v, "GLuaTest pure suite (update check)"),
+          "menu_fit": _check_menu, "loop_removed": _check_loop_removed}
 
 def judge_py(o):
     # _cvsnap's notes come after the verdict (at exit): they would hide the last JSON object
@@ -1557,6 +1559,9 @@ def judge_py(o):
         n, t = map(int, m[-1])
         return (PASS, "") if n == t and t > 0 else (FAIL, f"{n}/{t} passed")
     if any(l.startswith("PASS") for l in lines):
+        return PASS, ""
+    # a Python unittest run ends its stderr with "OK" (test_meme_pipe.py): that is its PASS
+    if o.rc == 0 and next((l for l in reversed(o.err.splitlines()) if l.strip()), "").strip() == "OK":
         return PASS, ""
     return INCONC, "no PASS / FAIL / pass verdict in the output: " + last[:150]
 
