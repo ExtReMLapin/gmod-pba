@@ -457,6 +457,42 @@ end
 local SUITE = {
 	groupName = "pba pure functions",
 	cases = {
+		{ name = "Default migration: a saved pba_native_bounces of 16 (the old default) moves to 128 once, a later choice of 16 stays", func = function()
+			expect(A.CONFIG.native_bounces[1]).to.equal(128)
+			expect(type(A.MigrateDefaults)).to.equal("function")
+			local G = _G
+			local saved = { cookie = G.cookie, rcc = G.RunConsoleCommand, cv = A.cv.native_bounces }
+			local store, cmds, stored = {}, {}, 16
+			G.cookie = {
+				GetNumber = function(k, d) local v = store[k] if v == nil then return d end return tonumber(v) end,
+				GetString = function(k, d) local v = store[k] if v == nil then return d end return v end,
+				Set = function(k, v) store[k] = tostring(v) end,
+			}
+			G.RunConsoleCommand = function(name, val) cmds[#cmds + 1] = name .. " " .. val if name == "pba_native_bounces" then stored = tonumber(val) end end
+			A.cv.native_bounces = { GetFloat = function() return stored end, GetName = function() return "pba_native_bounces" end }
+			local ok, err = pcall(function()
+				-- first launch with the old default saved: moved to the new default
+				A.MigrateDefaults()
+				local n = 0
+				for _, c in ipairs(cmds) do if c == "pba_native_bounces 128" then n = n + 1 end end
+				expect(n).to.equal(1)
+				expect(stored).to.equal(128)
+				-- the player then chooses 16 on purpose: the next launches keep it
+				stored, cmds = 16, {}
+				A.MigrateDefaults()
+				A.MigrateDefaults()
+				expect(#cmds).to.equal(0)
+				expect(stored).to.equal(16)
+				-- another saved value is never touched, and the migration is remembered all the same
+				store, cmds, stored = {}, {}, 64
+				A.MigrateDefaults()
+				expect(#cmds).to.equal(0)
+				expect(stored).to.equal(64)
+				expect(store.pba_mig_native_bounces_v1).to.equal("1")
+			end)
+			G.cookie, G.RunConsoleCommand, A.cv.native_bounces = saved.cookie, saved.rcc, saved.cv
+			if not ok then error(err, 0) end
+		end },
 		{ name = "EngineGain: 1 near the source, decreasing, level 0 = no attenuation", func = function()
 			expect(AC.EngineGain(0, 75) <= 1).to.beTrue()
 			expect(AC.EngineGain(100, 75) > AC.EngineGain(1000, 75)).to.beTrue()

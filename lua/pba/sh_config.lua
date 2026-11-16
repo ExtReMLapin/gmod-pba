@@ -319,7 +319,8 @@ end
 -- Defaults that changed after a release: a saved value equal to the OLD default is the old default kept
 -- by the config file, not the player's choice: moved to the new one, once (a cookie remembers it, so a
 -- player who sets the old value again later keeps it).
-if CLIENT and cookie then
+function A.MigrateDefaults()
+	if not (CLIENT and cookie) then return end
 	local MIGRATE = {
 		-- 1.0.x: 0.15 with the send following the direct gain; the send now follows the distance (1.1)
 		{ name = "native_reverb", old = 0.15, key = "pba_mig_native_reverb_v2" },
@@ -335,6 +336,8 @@ if CLIENT and cookie then
 		{ name = "build_ms_combat", old = 0, key = "pba_mig_build_ms_combat_v1" },
 		{ name = "native_props_calm", old = 0, key = "pba_mig_native_props_calm_v1" },
 		{ name = "far_force_ms", old = 0, key = "pba_mig_far_force_ms_v1" },
+		-- 2026-11-16: 16 bounces left the reverb tail silent in rooms under about 10 m mean free path (the window, not the bounce count, must end a ray)
+		{ name = "native_bounces", old = 16, key = "pba_mig_native_bounces_v1" },
 	}
 	-- Options merged into another (refactor step 8: one option per feature, not one per path): a player who
 	-- had switched the old one off keeps the feature off, once. The old convar is read from its saved value.
@@ -358,6 +361,7 @@ if CLIENT and cookie then
 		end
 	end
 end
+A.MigrateDefaults()
 
 -- Change callbacks do not fire on the client for replicated convars: poll them.
 if CLIENT then
