@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <complex>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -297,6 +298,231 @@ void ReleaseVoice(Voice& v) {
 	if (v.pathSlot >= 0 && v.pathSlot < (int)g_pathPool.size()) g_pathPool[v.pathSlot].used = false;
 	v.slot = v.pathSlot = -1;
 	v.srcSlot = -1;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Diffuse-field equaliser of the reverb bus's binaural decode.
+// The room reverb reaches the ears through a first-order ambisonic decode (g_decode), and the reverb is nearly
+// all in the omni channel W: the parametric tail only writes there and the convolved part is mostly diffuse. That
+// decode is the HRTF projected on the first-order spherical harmonics, and what it keeps of a diffuse field is
+// the sphere mean of the (complex) HRTF: at low frequencies every direction gives the same ear signal and it is
+// all kept, but from ~700 Hz the interaural delay makes the directions cancel in that mean. Against the full
+// HRTF averaged over all directions (what a diffuse field really gives at the ears; the default HRTF's is flat
+// within 1 dB) the decode is 0 dB below 500 Hz, -5 dB at 1 kHz and -11 .. -14 dB at 2 .. 8 kHz (measured, by
+// DiffuseFieldEq below, on the default HRTF): the reverb came out bass-heavy and the echo of a bright sound
+// (a metal clang) far too weak. The speakers decode (panning) is flat and is left alone.
+// The filter is measured, not tuned: at start-up, from the loaded HRTF, the gain at each frequency that brings the
+// decoded W-channel field to the direct HRTF's mean over 240 directions, smoothed to a third of an octave, scaled
+// so that the 707 - 1414 Hz octave keeps its level (the wet level was set by ear on it), as a
+// minimum-phase FIR of kDfTaps taps applied to both ears of the decoded reverb bus.
+constexpr int kDfTaps = 256;
+constexpr int kDfFft = 4096;
+struct DfEq {
+	std::vector<float> h; // taps (h[0] first), empty = no equaliser
+	std::vector<double> gainDb; // the designed magnitude at the bins of a kDfFft FFT (tests, diagnostics)
+};
+DfEq g_dfEq;
+// per ear: the last kDfTaps - 1 input samples, then the block being filtered
+struct DfState {
+	float w[2][kDfTaps - 1 + kBlock] = {};
+};
+DfState g_dfState;
+bool g_dfOn = true;
+
+void Fft(std::vector<std::complex<double>>& a, bool inverse) {
+	const size_t n = a.size();
+	for (size_t i = 1, j = 0; i < n; ++i) {
+		size_t bit = n >> 1;
+		for (; j & bit; bit >>= 1) j ^= bit;
+		j ^= bit;
+		if (i < j) std::swap(a[i], a[j]);
+	}
+	for (size_t len = 2; len <= n; len <<= 1) {
+		const double ang = (inverse ? 2 : -2) * 3.14159265358979323846 / (double)len;
+		const std::complex<double> wl(std::cos(ang), std::sin(ang));
+		for (size_t i = 0; i < n; i += len) {
+			std::complex<double> w(1);
+			for (size_t k = 0; k < len / 2; ++k) {
+				const std::complex<double> u = a[i + k], v = a[i + k + len / 2] * w;
+				a[i + k] = u + v;
+				a[i + k + len / 2] = u - v;
+				w *= wl;
+			}
+		}
+	}
+	if (inverse)
+		for (auto& x : a) x /= (double)n;
+}
+
+// power spectrum (both ears summed) of a stereo impulse response, on the kDfFft grid
+void AddEarPower(const std::vector<float>& l, const std::vector<float>& r, std::vector<double>& acc) {
+	for (const std::vector<float>* ear : {&l, &r}) {
+		std::vector<std::complex<double>> a(kDfFft);
+		for (size_t i = 0; i < ear->size() && i < (size_t)kDfFft; ++i) a[i] = (*ear)[i];
+		Fft(a, false);
+		for (int k = 0; k <= kDfFft / 2; ++k) acc[k] += std::norm(a[k]);
+	}
+}
+
+// the gain (amplitude) at each bin 0 .. kDfFft / 2 that the decode needs; empty on failure
+std::vector<double> DiffuseFieldGain(IPLContext ctx, IPLHRTF hrtf) {
+	constexpr int kDirs = 240;
+	constexpr int kBlocksIr = 3; // 1536 samples: longer than any HRIR the effects handle
+	IPLAudioSettings as{kRate, kBlock};
+	std::vector<double> direct(kDfFft / 2 + 1, 0.0), decoded(kDfFft / 2 + 1, 0.0);
+	IPLAudioBuffer mono{}, ster{}, amb{};
+	iplAudioBufferAllocate(ctx, 1, kBlock, &mono);
+	iplAudioBufferAllocate(ctx, 2, kBlock, &ster);
+	iplAudioBufferAllocate(ctx, kAmbi, kBlock, &amb);
+	bool ok = mono.data && ster.data && amb.data;
+	const double ga = 3.14159265358979323846 * (3 - std::sqrt(5.0));
+	for (int d = 0; ok && d < kDirs; ++d) {
+		const double y = 1 - 2 * (d + 0.5) / kDirs, r = std::sqrt(1 - y * y), a = ga * d;
+		IPLBinauralEffectSettings bs{hrtf};
+		IPLBinauralEffect be = nullptr;
+		if (iplBinauralEffectCreate(ctx, &as, &bs, &be) != IPL_STATUS_SUCCESS) { ok = false; break; }
+		std::vector<float> l, rr;
+		for (int b = 0; b < kBlocksIr; ++b) {
+			std::fill(mono.data[0], mono.data[0] + kBlock, 0.0f);
+			if (b == 0) mono.data[0][0] = 1;
+			IPLBinauralEffectParams bp{};
+			bp.direction = {(float)(std::cos(a) * r), (float)y, (float)(std::sin(a) * r)};
+			bp.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
+			bp.spatialBlend = 1.0f;
+			bp.hrtf = hrtf;
+			iplBinauralEffectApply(be, &bp, &mono, &ster);
+			l.insert(l.end(), ster.data[0], ster.data[0] + kBlock);
+			rr.insert(rr.end(), ster.data[1], ster.data[1] + kBlock);
+		}
+		iplBinauralEffectRelease(&be);
+		AddEarPower(l, rr, direct);
+	}
+	if (ok) {
+		// the omni channel of a unit plane wave (Y00): the field the reverb is, seen through the decoder
+		IPLAmbisonicsDecodeEffectSettings ds{};
+		ds.speakerLayout = Stereo();
+		ds.hrtf = hrtf;
+		ds.maxOrder = 1;
+		IPLAmbisonicsDecodeEffect de = nullptr;
+		if (iplAmbisonicsDecodeEffectCreate(ctx, &as, &ds, &de) != IPL_STATUS_SUCCESS) ok = false;
+		else {
+			std::vector<float> l, rr;
+			for (int b = 0; b < kBlocksIr; ++b) {
+				for (int c = 0; c < kAmbi; ++c) std::fill(amb.data[c], amb.data[c] + kBlock, 0.0f);
+				if (b == 0) amb.data[0][0] = 0.28209479f;
+				IPLAmbisonicsDecodeEffectParams dp{};
+				dp.order = 1;
+				dp.hrtf = hrtf;
+				dp.orientation = {{1, 0, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 0}};
+				dp.binaural = IPL_TRUE;
+				iplAmbisonicsDecodeEffectApply(de, &dp, &amb, &ster);
+				l.insert(l.end(), ster.data[0], ster.data[0] + kBlock);
+				rr.insert(rr.end(), ster.data[1], ster.data[1] + kBlock);
+			}
+			iplAmbisonicsDecodeEffectRelease(&de);
+			AddEarPower(l, rr, decoded);
+		}
+	}
+	for (IPLAudioBuffer* b : {&mono, &ster, &amb})
+		if (b->data) iplAudioBufferFree(ctx, b);
+	if (!ok) return {};
+	// power ratio, smoothed over a third of an octave (power mean), then to amplitude
+	const int nb = kDfFft / 2 + 1;
+	const double binHz = (double)kRate / kDfFft;
+	std::vector<double> ratio(nb), gain(nb);
+	for (int k = 0; k < nb; ++k) ratio[k] = direct[k] / (double)kDirs / std::max(decoded[k], 1e-20);
+	const double half = std::pow(2.0, 1.0 / 6.0);
+	for (int k = 0; k < nb; ++k) {
+		const double f = k * binHz;
+		const int lo = std::max(0, (int)std::floor(f / half / binHz)), hi = std::min(nb - 1, (int)std::ceil(f * half / binHz));
+		double sum = 0;
+		for (int j = lo; j <= hi; ++j) sum += ratio[j];
+		gain[k] = std::sqrt(sum / (double)(hi - lo + 1));
+	}
+	// above 16 kHz (HRTF data of no use, and nothing to correct there) and below 40 Hz the gain is held
+	for (int k = 0; k < nb; ++k) {
+		const double f = k * binHz;
+		if (f > 16000) gain[k] = gain[(int)(16000 / binHz)];
+		if (f < 40) gain[k] = gain[(int)(40 / binHz) + 1];
+	}
+	// the mid band keeps its level: over 707 - 1414 Hz the decoded field gets as much power with the equaliser as without
+	double before = 0, after = 0;
+	for (int k = 0; k < nb; ++k) {
+		const double f = k * binHz;
+		if (f >= 707.1 && f < 1414.2) {
+			before += decoded[k];
+			after += decoded[k] * gain[k] * gain[k];
+		}
+	}
+	if (before <= 0 || after <= 0) return {};
+	const double norm = std::sqrt(before / after);
+	for (auto& g : gain) g = std::clamp(g * norm, 0.05, 20.0);
+	return gain;
+}
+
+// minimum-phase FIR (cepstral method) of the given magnitude (bins 0 .. kDfFft / 2)
+std::vector<float> MinimumPhase(const std::vector<double>& gain, int taps) {
+	std::vector<std::complex<double>> c(kDfFft);
+	for (int k = 0; k < kDfFft; ++k) c[k] = std::log(gain[k <= kDfFft / 2 ? k : kDfFft - k]);
+	Fft(c, true); // real cepstrum
+	std::vector<std::complex<double>> f(kDfFft);
+	f[0] = c[0].real();
+	for (int n = 1; n < kDfFft / 2; ++n) f[n] = 2 * c[n].real();
+	f[kDfFft / 2] = c[kDfFft / 2].real();
+	Fft(f, false);
+	for (auto& x : f) x = std::exp(x);
+	Fft(f, true);
+	std::vector<float> h(taps);
+	const int fade = taps / 4;
+	for (int i = 0; i < taps; ++i) {
+		double w = 1;
+		if (i >= taps - fade) {
+			const double t = (double)(i - (taps - fade)) / fade;
+			w = 0.5 + 0.5 * std::cos(3.14159265358979323846 * t);
+		}
+		h[i] = (float)(f[i].real() * w);
+	}
+	return h;
+}
+
+void DesignDiffuseEq() {
+	g_dfEq = DfEq{};
+	std::memset(&g_dfState, 0, sizeof g_dfState);
+#ifdef PBA_TEST_NO_DF_EQ
+	return;
+#endif
+	const std::vector<double> gain = DiffuseFieldGain(g_ctx, g_hrtf);
+	if (gain.empty()) return; // no equaliser: the decode as it was
+	g_dfEq.h = MinimumPhase(gain, kDfTaps);
+	g_dfEq.gainDb.resize(gain.size());
+	for (size_t k = 0; k < gain.size(); ++k) g_dfEq.gainDb[k] = 20 * std::log10(gain[k]);
+}
+
+// filters both ears of the decoded reverb bus in place
+void ApplyDfEq(DfState& st, const std::vector<float>& h, IPLAudioBuffer& b) {
+	for (int ch = 0; ch < 2; ++ch) {
+		float* w = st.w[ch];
+		float* x = b.data[ch];
+		std::memcpy(w + kDfTaps - 1, x, kBlock * sizeof(float));
+		std::fill(x, x + kBlock, 0.0f);
+		for (int k = 0; k < kDfTaps; ++k) {
+			const float hk = h[k];
+			const float* src = w + kDfTaps - 1 - k;
+			for (int i = 0; i < kBlock; ++i) x[i] += hk * src[i];
+		}
+		std::memmove(w, w + kBlock, (kDfTaps - 1) * sizeof(float));
+	}
+}
+
+// the reverb bus's decode: the ambisonic bus to the ears, HRTF (then the diffuse-field equaliser) or panning
+void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpace3& lis, IPLAudioBuffer* in, IPLAudioBuffer* out) {
+	IPLAmbisonicsDecodeEffectParams dp{};
+	dp.order = 1;
+	dp.hrtf = g_hrtf;
+	dp.orientation = lis;
+	dp.binaural = g_outMode == 0 ? IPL_TRUE : IPL_FALSE;
+	iplAmbisonicsDecodeEffectApply(fx, &dp, in, out);
+	if (dp.binaural && g_dfOn && !g_dfEq.h.empty()) ApplyDfEq(st, g_dfEq.h, *out);
 }
 
 // Applies one reflection effect (if simulated) and adds its ambisonic output to g_amb.
@@ -839,12 +1065,7 @@ void RenderBlock() {
 		g_srcESec += (double)kBlock / kRate;
 	}
 	if (g_decode) {
-		IPLAmbisonicsDecodeEffectParams dp{};
-		dp.order = 1;
-		dp.hrtf = g_hrtf;
-		dp.orientation = lis;
-		dp.binaural = g_outMode == 0 ? IPL_TRUE : IPL_FALSE;
-		iplAmbisonicsDecodeEffectApply(g_decode, &dp, &g_amb, &g_ambOut);
+		DecodeBus(g_decode, g_dfState, lis, &g_amb, &g_ambOut);
 		for (int i = 0; i < kBlock; ++i) {
 			g_mix[i * 2] += g_ambOut.data[0][i];
 			g_mix[i * 2 + 1] += g_ambOut.data[1][i];
@@ -1046,6 +1267,7 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 		ds.maxOrder = 1;
 		if (iplAmbisonicsDecodeEffectCreate(g_ctx, &as, &ds, &g_decode) != IPL_STATUS_SUCCESS) return "ambisonics decoder creation failed";
 	}
+	DesignDiffuseEq();
 	g_pool.assign(kMaxVoices, EffectPair{});
 	for (auto& e : g_pool) {
 		IPLDirectEffectSettings ds{1};
@@ -1307,6 +1529,39 @@ void Load(double* avgMs, double* maxMs, int* blocks) {
 	*blocks = g_loadN;
 	g_loadSum = g_loadMax = 0;
 	g_loadN = 0;
+}
+
+void SetDiffuseFieldEq(bool on) {
+	std::lock_guard<std::mutex> lk(g_mtx);
+	g_dfOn = on;
+}
+
+bool DiffuseFieldEqOn() { return g_dfOn && !g_dfEq.h.empty(); }
+
+std::vector<double> DiffuseFieldEqGainDb() { return g_dfEq.gainDb; }
+
+void DecodeReverbBus(const float* const amb[4], int frames, float* l, float* r) {
+	IPLAudioSettings as{kRate, kBlock};
+	IPLAmbisonicsDecodeEffectSettings ds{};
+	ds.speakerLayout = Stereo();
+	ds.hrtf = g_hrtf;
+	ds.maxOrder = 1;
+	IPLAmbisonicsDecodeEffect fx = nullptr;
+	if (!g_hrtf || iplAmbisonicsDecodeEffectCreate(g_ctx, &as, &ds, &fx) != IPL_STATUS_SUCCESS) return;
+	IPLAudioBuffer in{}, out{};
+	iplAudioBufferAllocate(g_ctx, kAmbi, kBlock, &in);
+	iplAudioBufferAllocate(g_ctx, 2, kBlock, &out);
+	auto st = std::make_unique<DfState>();
+	const IPLCoordinateSpace3 lis{{1, 0, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 0}};
+	for (int at = 0; at + kBlock <= frames; at += kBlock) {
+		for (int c = 0; c < kAmbi; ++c) std::copy(amb[c] + at, amb[c] + at + kBlock, in.data[c]);
+		DecodeBus(fx, *st, lis, &in, &out);
+		std::copy(out.data[0], out.data[0] + kBlock, l + at);
+		std::copy(out.data[1], out.data[1] + kBlock, r + at);
+	}
+	iplAudioBufferFree(g_ctx, &in);
+	iplAudioBufferFree(g_ctx, &out);
+	iplAmbisonicsDecodeEffectRelease(&fx);
 }
 
 // Offline check of the HRTF path: white noise through a fresh binaural effect, direction in
