@@ -1,14 +1,15 @@
 -- Reverb of loud sounds in the open (client lua_job, native rendering, pba_native_all 1, the player standing
 -- in the open air, e.g. gm_construct's field at (-1750, 2000, -20) facing yaw 45).
--- The engine keeps loud sounds dry: above dsp_db_min (95 dB in GMod) their room DSP wet mix is multiplied by
--- dsp_db_mixdrop (0.1 in GMod, about -20 dB). With pba_native_all the module fed a loud sound's source reverb
--- slot at its full 1 m power: an SMG shot at 300 u in the open got as much reflected energy as direct sound
--- (+1.4 dB, mostly the ground; the echo-only mode put the same reflections ~19 dB below), heard as muddled
--- gunfire (Workshop report). pba_native_loud_dry applies the engine's rule to the module's reverb sends.
+-- The module keeps loud sounds dry (pba_native_loud_dry, its own rule: nothing up to pba_native_loud_dry_from,
+-- a ramp to -20 dB over 15 dB of level; the engine itself dries the QUIET sounds, not the loud ones). With
+-- pba_native_all the module fed a loud sound's source reverb slot at its full 1 m power: an SMG shot at 300 u in
+-- the open got as much reflected energy as direct sound (+1.4 dB, mostly the ground; the echo-only mode put the
+-- same reflections ~19 dB below), heard as muddled gunfire (Workshop report).
 -- Measure: the module's own mix energy (N.energyL/R) of one shot, with pba_native_reverb 0 (direct only) and
 -- at the player's setting; reverb = total - direct. Each shot after a warm-up shot (the slot's simulation).
--- Pass: a level 105 shot's reverb at most -10 dB re its direct with the option on; a level 75 sound's
--- unchanged by the option (within 1.5 dB).
+-- Pass: a level 140 shot's (SNDLVL_GUNFIRE, the level of the real weapons) reverb at most -8 dB re its direct with
+-- the option on, at least 8 dB under the option off; a level 75 sound's and a level 95 sound's (a metal bang: the
+-- ramp starts above it) unchanged by the option (within 1.5 dB).
 local N = pba.Native
 if not (N and N.render) then return { pass = false, err = "native renderer not running" } end
 if (pba.cfg.native_all or 0) < 0.5 then return { pass = false, err = "needs pba_native_all 1" } end
@@ -41,13 +42,14 @@ end
 local LOUD, QUIET = "^weapons/smg1/npc_smg1_fire1.wav", "vo/npc/male01/hi01.wav"
 local res = {}
 set("pba_native_reverb", "0")
-local dLoud, dQuiet = measure(LOUD, 105, 0.7), measure(QUIET, 75, 1)
-res.direct = { loud = math.Round(10 * math.log10(math.max(dLoud, 1e-12)), 2), quiet = math.Round(10 * math.log10(math.max(dQuiet, 1e-12)), 2) }
+local dLoud, dQuiet, dMid = measure(LOUD, 140, 0.7), measure(QUIET, 75, 1), measure(LOUD, 95, 0.7)
+res.direct = { loud = math.Round(10 * math.log10(math.max(dLoud, 1e-12)), 2), quiet = math.Round(10 * math.log10(math.max(dQuiet, 1e-12)), 2), mid = math.Round(10 * math.log10(math.max(dMid, 1e-12)), 2) }
 set("pba_native_reverb", saved.reverb == "0" and "0.4" or saved.reverb)
 local function revDb(tot, dir) return math.Round(10 * math.log10(math.max(tot - dir, 1e-9) / math.max(dir, 1e-9)), 1) end
 for _, dry in ipairs({ "0", "1" }) do
 	set("pba_native_loud_dry", dry)
-	res["loud" .. dry] = revDb(measure(LOUD, 105, 0.7), dLoud)
+	res["loud" .. dry] = revDb(measure(LOUD, 140, 0.7), dLoud)
+	res["mid" .. dry] = revDb(measure(LOUD, 95, 0.7), dMid)
 	res["quiet" .. dry] = revDb(measure(QUIET, 75, 1), dQuiet)
 end
 e:Remove()
@@ -55,5 +57,5 @@ RunConsoleCommand("pba_native_reverb", saved.reverb)
 RunConsoleCommand("pba_native_loud_dry", saved.dry)
 -- measured: -10.4 dB on (2026-11-13), -9.9 dB on (2026-11-14, same map): the bound -10 sat on the noise; the option's
 -- effect (+2.4 / +3.0 off, 12.8 dB lower on) is the criterion: at most -8 dB on and at least 8 dB under off
-res.pass = res.loud1 <= -8 and res.loud0 - res.loud1 >= 8 and math.abs(res.quiet1 - res.quiet0) <= 1.5
+res.pass = res.loud1 <= -8 and res.loud0 - res.loud1 >= 8 and math.abs(res.quiet1 - res.quiet0) <= 1.5 and math.abs(res.mid1 - res.mid0) <= 1.5
 return res

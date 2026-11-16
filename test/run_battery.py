@@ -210,7 +210,7 @@ def py(script, *args, timeout=1500):
 
 def loud_dry_reverb():
     """gm_construct's open field (-1750, 2000, -20, yaw 45), native render and pba_native_all 1 for the run
-    (loud_dry_reverb.lua): a loud shot's reverb <= -10 dB re its direct with pba_native_loud_dry 1."""
+    (loud_dry_reverb.lua): a level 140 shot's reverb <= -8 dB re its direct with pba_native_loud_dry 1, a level 75 and a level 95 sound unchanged."""
     load("gm_construct")
     native_on(True)
     was = (lua("client", "return GetConVar('pba_native_all'):GetString()") or "1")

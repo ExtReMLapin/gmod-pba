@@ -1093,16 +1093,23 @@ end
 function N.PhysSrcSend(lvl, d)
 	return N.SlotSend(N.Law(lvl), d, spread(lvl, N.REF_UNITS)) * N.LoudWet(lvl)
 end
---- Reverb share kept by a sound of level lvl (pba_native_loud_dry): the engine's own rule for its room DSP,
--- a sound above dsp_db_min (95 dB in GMod) has its wet mix multiplied by dsp_db_mixdrop (0.1, -20 dB),
--- which keeps gunfire and explosions sharp. The module's reverb of a loud sound is physical (fed at its 1 m
--- power): in the open an SMG shot at 300 u got as much reflected energy as direct sound (+1.4 dB, mostly
--- the ground, rendered as Steam Audio's noise-built response), heard as muddled. Applied to every reverb
--- send of the sound (source slot, listener room, room bus without a slot), never to its direct sound.
-local dspDbMin, dspMixDrop = GetConVar("dsp_db_min"), GetConVar("dsp_db_mixdrop")
+--- Reverb share kept by a sound of level lvl (pba_native_loud_dry): the module's own rule to keep gunfire and
+-- explosions sharp, not the engine's (the engine's dsp_db_min / dsp_db_mixdrop, the values of the current room
+-- preset, lower the room mix of the sounds BELOW db_min: a quiet sound is dried, a loud one never is; measured on
+-- the engine's recorded mix, so those convars are not read here). The module's reverb of a loud sound is physical
+-- (fed at its 1 m power): in the open an SMG shot at 300 u got as much reflected energy as direct sound (+1.4 dB,
+-- mostly the ground, rendered as Steam Audio's noise-built response), heard as muddled. Nothing up to
+-- native_loud_dry_from (ordinary sounds, a 95 dB metal bang included, keep all of theirs), then a ramp in dB over
+-- native_loud_dry_range levels down to native_loud_dry_db dB (a step only when the range is 0). Applied to every
+-- reverb send of the sound (source slot, listener room, room bus without a slot), never to its direct sound.
 function N.LoudWet(lvl)
-	if (A.cfg.native_loud_dry or 0) < 0.5 or (lvl or 75) <= (dspDbMin and dspDbMin:GetFloat() or 95) then return 1 end
-	return math.Clamp(dspMixDrop and dspMixDrop:GetFloat() or 0.1, 0, 1)
+	local cfg = A.cfg
+	if (cfg.native_loud_dry or 0) < 0.5 then return 1 end
+	local over = (lvl or 75) - (cfg.native_loud_dry_from or 95)
+	if over <= 0 then return 1 end
+	local range = cfg.native_loud_dry_range or 15
+	local t = range > 0 and math.min(over / range, 1) or 1
+	return 10 ^ (-(cfg.native_loud_dry_db or 20) * t / 20)
 end
 --- 1/r from 1 m without a sound level (full scale at 1 m). Not the law of other addons' BASS streams: they keep
 -- the channel's own (cl_streams, bassGain: the addon chose the range; a radio set to Set3DFadeDistance(1e6)
