@@ -180,6 +180,13 @@ int main() {
 	std::vector<int> ids, stopped;
 	int lastId = 0, plays = 0, playsOk = 0, echoes = 0, updates = 0, captures = 0;
 	const auto start = Clock::now();
+	// kSeconds at least, and until the stress has done something (a loaded machine slows every thread), 30 s at most
+	auto running = [&] {
+		const auto t = Clock::now() - start;
+		if (t < std::chrono::duration<double>(kSeconds)) return true;
+		const bool enough = blocks.load() > 1000 && playsOk > 100 && loads.load() > 50;
+		return !enough && t < std::chrono::seconds(30);
+	};
 	auto randomName = [&]() -> std::string {
 		const int r = (int)(rng() % 10);
 		if (r < 3) return "base" + std::to_string(rng() % 4);
@@ -215,18 +222,21 @@ int main() {
 		lastId = id;
 		ids.push_back(id);
 	};
-	while (Clock::now() - start < std::chrono::duration<double>(kSeconds)) {
+	while (running()) {
 		const int op = (int)(rng() % 100);
 		if (op < 22) {
 			bool fb = false;
 			const render::VoiceParams p = params();
-			const int id = render::Play(randomName(), p, rng() % 4 == 0, &fb);
+			const std::string name = randomName();
+			const int id = render::Play(name, p, rng() % 4 == 0, &fb);
 			++plays;
 			playsOk += id > 0 ? 1 : 0;
 			newId(id);
-			// a voice just started is there for the calls of the same frame (Update / Stop right after Play); a start offset
-			// may put a one-shot past its end (it ends on its first block), hence offset 0 only
-			if (id > 0 && p.offset == 0 && !render::Update(id, params())) Fail(playLost, "a voice just played answers Update", id);
+			// a voice just started is there for the calls of the same frame (Update / Stop right after Play). Only for a
+			// sound longer than a few blocks at any pitch (the base ones, >= 0.5 s), played from its start: a short
+			// sentence or a start offset past the end ends on the first block, which may render between the two calls
+			if (id > 0 && p.offset == 0 && name.compare(0, 4, "base") == 0 && !render::Update(id, params()))
+				Fail(playLost, "a voice just played answers Update", id);
 		} else if (op < 27) {
 			const int id = render::PlayEcho(randomName(), (int)(rng() % render::kEchoSlots), 1 + (int)(rng() % 5), 0.1f, 100, 0, rng() % 2 == 0);
 			++echoes;
@@ -318,7 +328,9 @@ int main() {
 	render::SetMixQuality(1, true, false);
 	for (int id = 1; id <= lastId + 10; ++id) render::StopVoice(id);
 	std::vector<float> buf(512 * 2);
-	for (int i = 0; i < 8; ++i) render::RenderOutput(buf.data(), 512);
+	// (a stopped echo voice held back by its echo slot's generation, which the reflection thread above publishes at
+	// random, ends when dropped: after kEchoWaitBlocks, 24 blocks)
+	for (int i = 0; i < 40; ++i) render::RenderOutput(buf.data(), 512);
 	double mb = 0, eL = 0, eR = 0;
 	int ns = 0, nv = 0;
 	render::Memory(&mb, &ns, &nv);
@@ -344,6 +356,94 @@ int main() {
 	Check(nv == 1, "drained: only the voice just played is left", nv);
 	Check(pathUsed == 0, "drained: no path effect held", pathUsed);
 	Check(echoLive == 0 && srcLive == 0, "drained: no echo or source slot fed", echoLive, srcLive);
+
+	// A path dropped by a voice the game keeps updating faster than the blocks (a loop followed every frame at 150+
+	// frames per second) goes back to the pool once faded out: the audio thread never sees the voice's very latest
+	// update before the next one comes.
+	{
+		render::VoiceParams pp = p;
+		pp.hasSH = true;
+		pp.sh[0] = 0.8f;
+		bool fb = false;
+		Check(render::Update(last, pp, &fb) && !fb, "path: the voice takes a path effect");
+		for (int i = 0; i < 4; ++i) render::RenderOutput(buf.data(), 512);
+		render::Counters(&dropped, &fallback, &pathUsed);
+		Check(pathUsed == 1, "path: one path effect held", pathUsed);
+		render::VoiceParams pc = p;
+		pc.clearSH = true;
+		render::Update(last, pc);
+		std::atomic<bool> go{true};
+		std::thread a2([&] {
+			std::vector<float> b2(512 * 2);
+			while (go.load()) {
+				render::RenderOutput(b2.data(), 512);
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+		});
+		// updates without a pause (many per block), the pool read between them: back to 0 within 300 ms
+		int freedAt = -1;
+		const auto t0 = Clock::now();
+		for (int i = 0; Clock::now() - t0 < std::chrono::milliseconds(300); ++i) {
+			render::Update(last, p);
+			render::Counters(&dropped, &fallback, &pathUsed);
+			if (pathUsed == 0 && freedAt < 0) freedAt = (int)std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
+		}
+		go = false;
+		a2.join();
+		Check(freedAt >= 0, "path: dropped and faded out, the effect is back in the pool although updates keep coming (ms)", freedAt);
+		Check(render::Update(last, p), "path: the voice itself still plays (the effect came back by the path report, not by its end)");
+	}
+
+	// The audio thread stalls (no block rendered: a lost device) while the game goes on: plays (the voice cap cancels the
+	// oldest ones), updates, stops. The commands waiting stay bounded (a few per live voice: the parameter updates keep
+	// only their latest value, a voice cancelled before it sounded leaves nothing behind), and once blocks render again
+	// the state is the game's: the latest parameters, every stopped voice gone, no effect held.
+	{
+		render::SetLimits(64, 512);
+		render::VoiceParams q = p;
+		q.gain = 0.4f;
+		const int keep = render::Play("base0", q, true); // a loop playing before the stall
+		for (int i = 0; i < 4; ++i) render::RenderOutput(buf.data(), 512);
+		int maxBacklog = 0, played = 0;
+		for (int i = 0; i < 20000; ++i) {
+			render::VoiceParams r = p;
+			r.gain = 0.2f;
+			if (i % 3 == 0) {
+				r.hasSH = true;
+				r.sh[0] = 0.5f;
+			}
+			const int id = render::Play(i % 2 ? "base0" : "base1", r, true);
+			played += id > 0 ? 1 : 0;
+			render::Update(id, r);
+			if (i % 5 == 0) render::StopVoice(id);
+			q.gain = i == 19999 ? 0.0f : 0.4f; // the loop's last update before the stall ends: silent
+			render::Update(keep, q);
+			double eL, eR;
+			render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 1.0f, &eL, &eR);
+			maxBacklog = std::max(maxBacklog, render::QueueBacklog());
+		}
+		std::printf("stall: %d voices played, largest backlog %d commands\n", played, maxBacklog);
+		Check(played == 20000, "stall: every play accepted (the cap makes room)", played);
+		Check(maxBacklog < 2000, "stall: the commands waiting stay bounded", maxBacklog, 2000);
+		for (int id = last; id <= last + 30000; ++id)
+			if (id != keep) render::StopVoice(id);
+		// blocks again, the game's calls of a few frames (each sends what waited), the voices that ended reaped by a Play
+		double eL = 0, eR = 0;
+		for (int f = 0; f < 6; ++f) {
+			render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 1.0f, &eL, &eR);
+			for (int i = 0; i < 10; ++i) render::RenderOutput(buf.data(), 512);
+		}
+		render::StopVoice(render::Play("base1", p, false)); // (a Play reaps the voices gone; this one never sounds)
+		render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 1.0f, &eL, &eR);
+		for (int i = 0; i < 8; ++i) render::RenderOutput(buf.data(), 512);
+		render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 1.0f, &eL, &eR);
+		render::Memory(&mb, &ns, &nv);
+		render::Counters(&dropped, &fallback, &pathUsed);
+		Check(nv == 1 && render::Update(keep, q), "stall over: only the loop left, still playing", nv);
+		Check(eL + eR < 1e-9, "stall over: the loop's latest update (silent) is the one in force", eL + eR);
+		Check(pathUsed == 0, "stall over: no path effect held", pathUsed);
+		Check(render::QueueBacklog() == 0, "stall over: nothing left waiting", render::QueueBacklog());
+	}
 
 	std::printf("blocks %lld, plays %d (%d started), echoes %d, updates %d, captures %d, loads %d + %d async, sentences %d, peak %.3f\n",
 	            blocks.load(), plays, playsOk, echoes, updates, captures, loads.load(), asyncLoads.load(), sentences.load(), peak.load());

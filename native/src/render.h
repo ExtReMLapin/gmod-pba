@@ -86,7 +86,8 @@ void SetUnderwater(float amount);
 // game paused (single player menu): the voices started with VoiceParams::pausable freeze where they are
 // (they feed nothing, their cursor stays); every other voice keeps playing
 void SetPaused(bool paused);
-// reflection sources owned by the simulator (nullptr to detach before releasing them);
+// reflection sources owned by the simulator (nullptr to detach before releasing them): returns once no block can read
+// the previous ones any more (it waits for the end of the audio callback in flight, if one is: at most one render);
 // srcs: the source reverb slots' sources (kSrcSlotsMax)
 // srcsB: bank 1 of the first kSrcBankB source slots (nullptr: none)
 void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IPLSource* srcs = nullptr, int nSrc = 0,
@@ -158,7 +159,8 @@ std::vector<float> SoundPcm(const std::string& name);
 std::vector<float> SoundSide(const std::string& name);
 // Offline capture (tests): from CaptureStart on, every rendered block's stereo mix BEFORE the master volume and
 // soft clip (interleaved), the mono send into the listener room bus and the sum of the source reverb slots'
-// inputs are kept (kBlock frames per block, aligned). CaptureStop hands them over and stops.
+// inputs are kept (kBlock frames per block, aligned; 60 s at most, the buffers are allocated at the start: the audio
+// thread never allocates). CaptureStop hands over the blocks rendered so far and stops.
 void CaptureStart();
 // output: what the audio device receives (after the master volume and the limiter), same frames as mix
 void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend, std::vector<float>* output = nullptr);
@@ -209,6 +211,9 @@ void ClearSlotReverbTimes();
 // long-window ones; false: no such slot
 bool SlotReverbTimes(int slot, float used[3], float mainRt[3], bool* longOn);
 void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory budget (LRU eviction)
+// commands waiting for room in the audio thread's queue (diagnostics, tests): 0 while the audio thread keeps up; bounded
+// (a few per live voice) when it stalls, the parameter updates then only keep their latest value
+int QueueBacklog();
 void Memory(double* mb, int* sounds, int* voices);
 bool SoundPending(const std::string& name);
 // voice id, 0 on failure. pathFallback (optional): set when p.hasSH but every path slot is taken,
