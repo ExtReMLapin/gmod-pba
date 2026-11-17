@@ -2041,10 +2041,20 @@ float SaneEq(float x) {
 	return std::clamp(x, kMinEq, kMaxEq);
 }
 
+// A voice's gain or send as the effects can take it: the Lua computes it, and a NaN, an infinite or a negative one (a
+// division by a null distance, a log of 0) went through the effects as it was (NaN in the output, the energies, the room
+// send and the limiter; a huge or inverted signal). Not finite or negative: silence (a voice that does not know its level
+// stays quiet, it does not blast); otherwise at most kMaxGain (+36 dB, far over any real level: the limiter does the rest).
+constexpr float kMaxGain = 64.0f;
+float SaneGain(float x) {
+	if (!std::isfinite(x) || x < 0) return 0.0f;
+	return std::min(x, kMaxGain);
+}
+
 // Play / Update parameters into a voice's control fields; returns the reset flag of a path effect just taken
 uint8_t SetVoiceCtl(ControlVoice& v, const VoiceParams& p) {
 	v.c.pos = p.pos;
-	v.c.gain = p.gain;
+	v.c.gain = SaneGain(p.gain);
 	v.c.rate = std::clamp(p.pitch / 100.0f, 0.05f, 4.0f);
 	for (int b = 0; b < 3; ++b) v.c.eq[b] = SaneEq(p.eq[b]);
 	// baked path: new coefficients (acquiring a path effect if the voice had none), or back to the
@@ -2059,7 +2069,7 @@ uint8_t SetVoiceCtl(ControlVoice& v, const VoiceParams& p) {
 	}
 	const uint8_t f = AcquirePath(v);
 	if (p.diffuse >= 0) v.c.diffuse = std::clamp(p.diffuse, 0.0f, 1.0f); // < 0: unchanged (Update without it)
-	if (p.send >= 0) v.c.send = p.send; // < 0: unchanged (Update without it)
+	if (p.send >= 0 || std::isnan(p.send)) v.c.send = SaneGain(p.send); // < 0: unchanged (Update without it); NaN: silence
 	return f;
 }
 
@@ -3225,7 +3235,7 @@ int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch
 	v.c.echoSlot = slot;
 	v.c.pausable = pausable;
 	v.c.needGen = gen;
-	v.c.gain = gain;
+	v.c.gain = SaneGain(gain);
 	v.c.rate = std::clamp(pitch / 100.0f, 0.05f, 4.0f);
 	const double cursor = -std::clamp(delay, 0.0f, 3.0f) * kRate;
 	return AddVoice(std::move(v), 0, cursor, 0, 0);
