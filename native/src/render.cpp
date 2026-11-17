@@ -13,6 +13,38 @@
 //                  reverberant field, heard through doorways) -> ambisonic bus
 //   ambisonic bus -> IPLAmbisonicsDecodeEffect (HRTF / speakers) -> mix
 // The engine still plays every sound pba does not take over (clear line of sight...).
+//
+// Threads. The audio thread never waits for another one, and no other thread ever waits for a render:
+//   audio thread  the device callback (miniaudio; RenderOutput offline): applies the commands queued since the previous
+//                 block, renders the block, reports. No lock, no allocation, nothing freed.
+//   game thread   the Lua calls (pba_native.cpp): Play, Update, StopVoice, SetListener, settings, stats, captures...
+//   reflection    pba_native's simulation thread: SetSrcBlend, PublishSimulated, PublishSrcBank, SrcBankSilent,
+//                 SrcSlotLive, RoomReverbTimes, SetRoomReverbOverride, SetSlotReverbTimes
+//   decoders      LoadSoundAsync's threads (LoadSound into the sound store)
+// Shared data (writer -> reader):
+//   g_sounds, g_soundBytes, g_pending   game, decoders -> game, decoders, under g_sndMtx. Never the audio thread.
+//   a Sound's samples                   its decoder, before it is stored (immutable after) -> audio thread through a raw
+//                                       pointer, the sound kept alive by the control side (ControlVoice::snd, Retired)
+//   control state g_c (the voices as    game, reflection -> same, under g_ctlMtx (short: bookkeeping only).
+//     the API sees them, pools in use,  Never the audio thread.
+//     settings, listener, bank targets,
+//     capture buffers)
+//   command ring g_ring                 control side (one producer at a time, g_ctlMtx) -> audio thread, start of block
+//   voice records g_rec, play list,     audio thread only (from the commands)
+//     settings replicas, limiter, buses
+//   g_start[record]                     control side (pending, cancelled) / audio thread (started), compare-exchange
+//   g_endedId, g_pathIdle, g_feedback,  audio thread -> control side (Drain, at the start of each call)
+//     g_appliedSeq
+//   meters (energies, debug, load,      audio thread (AddTo, once per block) -> the call that reads them (exchange)
+//     source slot energies)
+//   g_pub (bank weights, room reverb    audio thread (end of each block) -> any thread (Published::Read)
+//     times, last direction, limiter)
+//   Reflection::src                     SetReflectionSources -> audio thread, once per block (grace period: g_cbEpoch)
+//   Reflection::simGen / rtLong, g_rtOv reflection thread -> audio thread (atomics)
+//   a StreamBuf's samples               BASS's DSP thread (streams.cpp) -> audio thread (lock-free ring, streambuf.h)
+// What a call changes reaches the audio thread at the start of the next block, in call order (a call's commands go
+// together). What a call answers (voice ids, Update's false for a voice gone, counts) comes from the control side, which
+// takes in at the start of each call what the audio thread reported (voices ended, path effects faded out).
 // Licence: MIT (see native/LICENSE).
 #define NOMINMAX
 #define MA_NO_ENCODING
@@ -34,6 +66,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <numeric>
 #include <mutex>
@@ -163,68 +196,82 @@ struct Sound {
 	std::atomic<uint64_t> lastUse{0}; // Play counter, for least-recently-used eviction
 };
 
-std::atomic<int> g_maxVoices{64};               // SetLimits
+std::atomic<int> g_maxVoices{64};               // SetLimits (read by Reap, control side)
 std::atomic<uint64_t> g_memBudget{512ull << 20}; // decoded PCM bytes kept, SetLimits
 std::atomic<uint64_t> g_useClock{0};
-uint64_t g_soundBytes = 0;                       // under g_mtx
+uint64_t g_soundBytes = 0;                       // under g_sndMtx
 
-struct Voice {
-	int id = 0;
-	std::shared_ptr<Sound> snd;
-	std::shared_ptr<StreamBuf> stream; // captured stream instead of a decoded sound
-	double sfrac = 0;                  // fractional read position in the stream
-	bool primed = false;               // enough buffered to start (or restart after a gap)
-	double cursor = 0; // < 0: start delay still running (output samples)
-	double startAt = 0; // cursor once the start delay has run (VoiceParams::offset, in pcm samples)
-	int fadeIn = 0;     // samples of the start fade-in left (a start offset cuts into the waveform)
+// What the game sets for a voice. The control side (Play, Update, StopVoice... under g_ctlMtx) holds the authoritative
+// copy (ControlVoice::c) and sends it whole to the audio thread (commands Add / Set), whose Voice is a replica: the audio
+// thread only reads these fields.
+struct VoiceCtl {
+	IPLVector3 pos{};
+	float gain = 0;
+	float eq[3] = {1, 1, 1};
 	float rate = 1;
 	bool loop = false;
-	bool wrapped = false; // a loop has wrapped at least once (the interpolator then reads the loop's tail before its start)
-	// stereo sound (Sound::side): the voice's signal is pcm + sel x side (0 = the mid, a mono downmix;
-	// 1 = the left channel; -1 = the right one), smoothed over a block like gain. width > 0 (with sel 0):
-	// the two channels are spatialised apart, each at half level through its own binaural effect (slot2),
-	// the left one shifted towards the listener's left and the right one towards the right by up to
-	// kStereoSpread (width 0: both at the source, the sum is the downmix exactly).
-	float sel = 0, selCur = 0, width = 0;
-	int slot2 = -1; // second effect pair of a stereo-width voice (index in the effect pool)
 	// the listener's own sound (VoiceParams::own, Play): the direct path is not spatialised (no HRTF, no panning, no
 	// stereo width, no diffuse share): what the engine does with the listener's own sounds. A stereo file
 	// keeps its two channels on the two ears (slot2 filters the side channel), a mono one is the same on
 	// both. The room sends are the same as for any voice.
 	bool own = false;
-	std::atomic<bool> alive{true};
-	// targets (set from Lua) and current values (smoothed in the audio thread)
-	IPLVector3 pos{};
-	float gain = 0, gainCur = -1;
-	float eq[3] = {1, 1, 1};
-	bool protect = false; // a spoken line: the voice cap takes it last (VoiceParams::protect)
+	bool protect = false;  // a spoken line: the voice cap takes it last (VoiceParams::protect)
 	bool pausable = false; // frozen while the game is paused (VoiceParams::pausable)
-	bool wasPaused = false; // skipped during the previous block: fades in on resuming (no step in the waveform)
-	bool hasSH = false; // wants the baked path rendering (pathSlot may be missing: pool full)
+	bool hasSH = false;    // wants the baked path rendering (pathSlot may be missing: pool full)
+	bool dying = false;    // fading to 0 over one block, then dead
 	float sh[4] = {0, 0, 0, 0};
-	// share of the output taken from the path effect (0 straight line .. 1 baked path), smoothed over
-	// one block: a voice switching between the two (Update with or without sh) crossfades instead of
-	// jumping from one spatialisation to the other mid-sound. -1: not rendered yet
-	float pathMixCur = -1;
-	bool pathFallback = false; // wants a path, none free: rendered as a straight line (counted once)
+	// stereo sound (Sound::side): the voice's signal is pcm + sel x side (0 = the mid, a mono downmix;
+	// 1 = the left channel; -1 = the right one), smoothed over a block like gain. width > 0 (with sel 0):
+	// the two channels are spatialised apart, each at half level through its own binaural effect (slot2),
+	// the left one shifted towards the listener's left and the right one towards the right by up to
+	// kStereoSpread (width 0: both at the source, the sum is the downmix exactly).
+	float sel = 0, width = 0;
 	float diffuse = 0; // see VoiceParams::diffuse
-	float send = -1, sendCur = -1; // room reverb send (see VoiceParams::send); -1: follows gain
-	int slot = -1;     // index in the effect pool
-	int pathSlot = -1; // index in the path effect pool
-	int echoSlot = -1; // reflections-only voice
-	int needGen = 0;
+	float send = -1;   // room reverb send (see VoiceParams::send); -1: follows gain
 	// source reverb slot (SetVoiceSrcSlot): fed once simulated at srcGen (the generation at bind
 	// time; later re-simulations of a moving source keep the previous response meanwhile)
 	int srcSlot = -1;
 	int srcGen = 0;
-	// send into the slot, smoothed like send; srcSendCur is the level fed into srcFedSlot during the
-	// last block. Unbinding or rebinding fades the old slot's input to 0 over one block from there
-	// (a radio whose slot was dropped stopped feeding it in one step: a click in its reverb)
-	float srcSend = 0, srcSendCur = -1;
+	float srcSend = 0; // send into the slot
+	int slot = -1;     // index in the effect pool
+	int slot2 = -1;    // second effect pair of a stereo-width voice (index in the effect pool)
+	int pathSlot = -1; // index in the path effect pool (held by the control side until the audio thread reports it idle)
+	int echoSlot = -1; // reflections-only voice
+	int needGen = 0;
+};
+
+// A voice as the audio thread renders it: the control fields above (replica) and the render state, which only the
+// audio thread touches. No owning pointer: the sound and the stream are kept alive by the control side (ControlVoice)
+// until the audio thread has reported the voice gone, so nothing is ever freed on the audio thread.
+struct Voice : VoiceCtl {
+	int id = 0;
+	const Sound* snd = nullptr;
+	StreamBuf* stream = nullptr; // captured stream instead of a decoded sound
+	double sfrac = 0;            // fractional read position in the stream
+	bool primed = false;         // enough buffered to start (or restart after a gap)
+	double cursor = 0;  // < 0: start delay still running (output samples)
+	double startAt = 0; // cursor once the start delay has run (VoiceParams::offset, in pcm samples)
+	int fadeIn = 0;     // samples of the start fade-in left (a start offset cuts into the waveform)
+	bool wrapped = false; // a loop has wrapped at least once (the interpolator then reads the loop's tail before its start)
+	float selCur = 0;
+	bool alive = false;
+	bool started = false; // claimed its first block (see g_start): a stop no longer cancels it, it fades out
+	float gainCur = -1;   // current values, smoothed towards the targets over each block
+	bool wasPaused = false; // skipped during the previous block: fades in on resuming (no step in the waveform)
+	// share of the output taken from the path effect (0 straight line .. 1 baked path), smoothed over
+	// one block: a voice switching between the two (Update with or without sh) crossfades instead of
+	// jumping from one spatialisation to the other mid-sound. -1: not rendered yet
+	float pathMixCur = -1;
+	float sendCur = -1;
+	// srcSendCur is the level fed into srcFedSlot during the last block. Unbinding or rebinding fades the old
+	// slot's input to 0 over one block from there (a radio whose slot was dropped stopped feeding it in one step:
+	// a click in its reverb)
+	float srcSendCur = -1;
 	int srcFedSlot = -1;
 	float srcFbCur = -1; // the slot share sent to the room bus until the slot is simulated (smoothed)
 	int waited = 0;
-	bool dying = false; // fading to 0 over one block, then dead
+	uint64_t ctlSeq = 0;     // version of the control fields applied (ControlVoice::ctl)
+	uint64_t pathIdleAt = 0; // ctlSeq under which the path was last reported idle (g_pathIdle, ControlVoice::pathDropCtl)
 };
 
 // Effects are expensive to create (the binaural one sets up its HRTF filters): pools are
@@ -233,15 +280,15 @@ struct EffectPair {
 	IPLDirectEffect direct = nullptr;
 	IPLBinauralEffect binaural = nullptr;
 	IPLPanningEffect pan = nullptr;
-	bool used = false;
 };
 struct PathFx {
 	IPLPathEffect fx = nullptr;
-	bool used = false;
 };
 
 struct Reflection {
-	IPLSource src = nullptr;
+	// the simulated source whose outputs this bus renders: swapped by SetReflectionSources (any thread), read by the
+	// audio thread once per block (see SetReflectionSources for when the previous one may be released)
+	std::atomic<IPLSource> src{nullptr};
 	IPLReflectionEffect fx = nullptr;
 	IPLAudioBuffer in{}; // mono input accumulated this block
 	std::atomic<int> simGen{0};
@@ -264,17 +311,29 @@ struct Reflection {
 	std::atomic<int> delayUsed{0};
 };
 
+// ---------------------------------------------------------------------------------------------------------------
+// Shared between threads: fixed at Start (before the device runs), read-only afterwards until Stop (after it stopped)
 IPLContext g_ctx = nullptr;
 IPLHRTF g_hrtf = nullptr;
 std::string g_hrtfInfo = "default";
 ma_device g_dev;
-bool g_devOk = false;
-std::mutex g_mtx;
+bool g_devOk = false;   // a device (or the offline renderer) is set up; Start / Stop only
+std::atomic<bool> g_running{false}; // Running(): blocks are being rendered (read by the reflection thread too)
+std::vector<EffectPair> g_pool;  // the effects; which voice uses which: the control side (Control::fxUsed)
+std::vector<PathFx> g_pathPool;  // same, Control::pathUsed
+
+// ---------------------------------------------------------------------------------------------------------------
+// The decoded sounds: any non-audio thread (game, decoding threads), under g_sndMtx. Never taken by the audio thread.
+std::mutex g_sndMtx;
 std::unordered_map<std::string, std::shared_ptr<Sound>> g_sounds;
-std::vector<std::unique_ptr<Voice>> g_voices;
-std::vector<EffectPair> g_pool;
-std::vector<PathFx> g_pathPool;
-int g_nextId = 1;
+std::unordered_set<std::string> g_pending; // LoadSoundAsync still decoding
+// mix quality: the decoder's windowed-sinc resampler (true) or miniaudio's linear one (false), read by decoders
+std::atomic<bool> g_hqDecode{true};
+
+// ---------------------------------------------------------------------------------------------------------------
+// Audio thread state: written and read by the audio thread only (Callback -> ApplyCommands, RenderBlock), set up by
+// Start before the device runs. The settings below are replicas of the control side's (Control::mix / lis), applied
+// from the command queue at the start of a block.
 IPLVector3 g_lisPos{}, g_lisAhead{0, 0, -1}, g_lisUp{0, 1, 0};
 float g_master = 1;
 int g_outMode = 0; // 0 binaural, 1 panning
@@ -283,15 +342,11 @@ int g_outMode = 0; // 0 binaural, 1 panning
 // plane (6-16 kHz 4 to 7 dB under the file's own spectrum in front and behind, +2 dB at 2-6 kHz), where the engine's
 // panning leaves the spectrum alone; the blend gives some of that timbre back for less precise localisation.
 std::atomic<float> g_hrtfBlend{1.0f};
-double g_energyL = 0, g_energyR = 0; // since the last SetListener (validation / meters)
 IPLVector3 g_lastDir{};                // last binaural direction computed (debug)
-double g_dbgIn = 0, g_dbgL = 0, g_dbgR = 0; int g_dbgVoices = 0;
 constexpr int kMaxLag = 48;           // +-1 ms at 48 kHz
-double g_xc[kMaxLag * 2 + 1] = {};    // L/R cross-correlation of the mix (ITD meter)
-// the debug meters (g_xc, g_dbgIn/L/R) run only once Debug() was called (a test reads them): the ITD
+// the debug meters (g_xc, dbgIn/L/R) run only once Debug() was called (a test reads them): the ITD
 // cross-correlation alone is ~40 000 multiply-adds per block on the audio thread
 bool g_debugOn = false;
-double g_loadSum = 0, g_loadMax = 0; int g_loadN = 0;
 
 // audio-thread scratch buffers
 IPLAudioBuffer g_mono{}, g_mono2{}, g_stereo{}, g_amb{}, g_ambTmp{}, g_ambOut{};
@@ -320,43 +375,270 @@ Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same 
 // response. Current weights (audio thread) ramp towards the targets at kSrcBlendStep per block.
 float g_srcW[kSrcSlotsMax][2], g_srcT[kSrcSlotsMax][2];
 constexpr float kSrcBlendStep = (float)kBlock / (0.2f * kRate); // full swing in 0.2 s
-double g_srcE[kSrcSlotsMax] = {}; // W-channel energy of each slot's wet output (SrcSlotStates)
-double g_srcInE[kSrcSlotsMax] = {}; // energy of each slot's mono input (SrcSlotStates)
-double g_srcESec = 0;
 std::vector<float> g_slotW(kBlock); // one slot's W-channel output this block (both banks summed)
-void ResetSrcBlend() {
-	for (int k = 0; k < kSrcSlotsMax; ++k) {
-		g_srcW[k][0] = g_srcT[k][0] = 1; // one bank, as before the banks existed
-		g_srcW[k][1] = g_srcT[k][1] = 0;
-		g_srcE[k] = 0;
-		g_srcInE[k] = 0;
-	}
-	g_srcESec = 0;
-}
 float g_wetRoom = 0, g_wetEcho = 0;
 float g_srcScale = 1; // source reverb level, relative to the room reverb's wet
 bool g_paused = false;
 float g_uw = 0, g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: target, current mix, LP states
-float g_roomRt[3] = {0, 0, 0}; // under g_mtx
+float g_roomRt[3] = {0, 0, 0};
 std::vector<float> g_mix(kBlock * 2);
-// offline capture (CaptureStart): what every block rendered, before the master volume
-bool g_capOn = false;
-bool g_capOutOnly = false; // Lua debug capture (CaptureBegin): only the final output is kept
-size_t g_capMaxFrames = 0; // 0 = unlimited; else the output stops growing there (stereo frames)
-std::vector<float> g_capMix, g_capRoom, g_capSrc, g_capOut; // under g_mtx (the audio thread holds it while rendering)
-// mix quality (SetMixQuality): the output stage (limiter / legacy soft clip from 0.8 / hard clip); the decoder's
-// windowed-sinc resampler (true) or miniaudio's linear one (false). Read at the use.
-std::atomic<bool> g_limiterPre{false}; // the output stage works before the master volume (SetMixQuality premaster)
-std::atomic<int> g_limiterMode{1}; // 0 legacy soft clip, 1 limiter, 2 hard clip at full scale (what the engine's int16 mix does)
-std::atomic<bool> g_hqResample{true};
+// mix quality (SetMixQuality): the output stage (limiter / legacy soft clip from 0.8 / hard clip); the voices'
+// windowed-sinc reader (true) or linear interpolation (false)
+bool g_limiterPre = false; // the output stage works before the master volume (SetMixQuality premaster)
+int g_limiterMode = 1; // 0 legacy soft clip, 1 limiter, 2 hard clip at full scale (what the engine's int16 mix does)
+bool g_hqResample = true;
 float g_limFastMs = 6.0f, g_limSlowMs = 50.0f, g_limSlowK = 3.0f; // limiter release tuning (see Limiter)
 std::vector<float> g_side(kBlock); // the side channel of the voice being rendered (stereo sounds)
 // largest lateral shift of the two channels of a stereo-width voice (tangent of the angle each one moves
 // away from the source seen straight ahead: tan 30 deg, a stereo speaker pair)
 constexpr float kStereoSpread = 0.577f;
-std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet consumed
+std::vector<float> g_fifo; // interleaved stereo frames rendered but not yet consumed (capacity set at Start)
 size_t g_fifoPos = 0;
-std::unordered_set<std::string> g_pending; // under g_mtx
+// the voices: fixed records (the index the commands name, chosen by the control side), and the live ones in the order
+// they were played (the mix sums them in that order)
+Voice g_rec[kMaxVoices];
+int g_act[kMaxVoices];
+int g_nAct = 0;
+bool g_isActive[kMaxVoices] = {};
+
+// ---------------------------------------------------------------------------------------------------------------
+// Captures (CaptureStart / CaptureBegin): buffers allocated whole by the control side, written by the audio thread up to
+// their capacity, never resized there. `frames` is published after each block written.
+struct CaptureBuf {
+	bool outOnly = false;      // Lua debug capture: only the final output
+	size_t maxFrames = 0;      // the capacity (frames)
+	size_t limitFrames = 0;    // CaptureBegin's length: the output stops growing past it
+	std::unique_ptr<float[]> mix, room, src, out; // stereo, mono, mono, stereo
+	std::atomic<size_t> frames{0};
+};
+CaptureBuf* g_cap = nullptr; // audio thread's view (CmdCapture)
+constexpr double kTestCaptureSeconds = 60.0; // CaptureStart's capacity
+
+// ---------------------------------------------------------------------------------------------------------------
+// Audio thread -> any thread: published without a lock. The audio thread never waits for a reader.
+//  - meters accumulated since their last read: atomic doubles, added once per block (AddTo), taken by exchange
+std::atomic<double> g_energyL{0}, g_energyR{0};           // SetListener
+std::atomic<double> g_dbgIn{0}, g_dbgL{0}, g_dbgR{0};     // Debug
+std::atomic<int> g_dbgVoices{0};
+std::atomic<double> g_xc[kMaxLag * 2 + 1];                // L/R cross-correlation of the mix (ITD meter, Debug)
+std::atomic<double> g_loadSum{0}, g_loadMax{0};           // Load
+std::atomic<int> g_loadN{0};
+std::atomic<double> g_srcE[kSrcSlotsMax];   // W-channel energy of each slot's wet output (SrcSlotStates)
+std::atomic<double> g_srcInE[kSrcSlotsMax]; // energy of each slot's mono input (SrcSlotStates)
+std::atomic<double> g_srcESec{0};
+inline void AddTo(std::atomic<double>& a, double v) {
+	double c = a.load(std::memory_order_relaxed);
+	while (!a.compare_exchange_weak(c, c + v, std::memory_order_relaxed)) {
+	}
+}
+inline void MaxTo(std::atomic<double>& a, double v) {
+	double c = a.load(std::memory_order_relaxed);
+	while (c < v && !a.compare_exchange_weak(c, v, std::memory_order_relaxed)) {
+	}
+}
+//  - a snapshot of the audio thread's state at the end of each block (Published below)
+struct AudioPub {
+	float srcW[kSrcSlotsMax][2] = {}; // the source slots' bank weights after the block
+	float roomRt[3] = {0, 0, 0};       // the room reverb times the block used
+	IPLVector3 lastDir{};
+	float limMinGain = 1;
+	uint64_t applied = 0;              // the last command applied before the block (Cmd::seq)
+};
+// Single writer (the audio thread), any number of readers, none ever blocks the writer: two slots, the writer fills the
+// one not marked latest then marks it; a reader copies the latest and retries only if the writer came round to that
+// slot meanwhile (the reader was preempted for a whole block). Payload in relaxed atomic words: no data race.
+template <class T>
+class Published {
+	static constexpr size_t kWords = (sizeof(T) + 7) / 8;
+	struct Slot {
+		std::atomic<uint32_t> seq{0};
+		std::atomic<uint64_t> w[kWords];
+	};
+	Slot slots_[2];
+	std::atomic<int> latest_{0};
+
+public:
+	Published() {
+		for (auto& s : slots_)
+			for (auto& w : s.w) w.store(0, std::memory_order_relaxed);
+	}
+	void Write(const T& v) {
+		uint64_t buf[kWords] = {};
+		std::memcpy(buf, &v, sizeof(T));
+		const int i = latest_.load(std::memory_order_relaxed) ^ 1;
+		Slot& s = slots_[i];
+		const uint32_t q = s.seq.load(std::memory_order_relaxed);
+		s.seq.store(q + 1, std::memory_order_relaxed);
+		std::atomic_thread_fence(std::memory_order_release);
+		for (size_t k = 0; k < kWords; ++k) s.w[k].store(buf[k], std::memory_order_relaxed);
+		s.seq.store(q + 2, std::memory_order_release);
+		latest_.store(i, std::memory_order_release);
+	}
+	T Read() const {
+		uint64_t buf[kWords];
+		for (;;) {
+			const Slot& s = slots_[latest_.load(std::memory_order_acquire)];
+			const uint32_t q = s.seq.load(std::memory_order_acquire);
+			if (q & 1) continue;
+			for (size_t k = 0; k < kWords; ++k) buf[k] = s.w[k].load(std::memory_order_relaxed);
+			std::atomic_thread_fence(std::memory_order_acquire);
+			if (s.seq.load(std::memory_order_relaxed) == q) break;
+		}
+		T v;
+		std::memcpy(&v, buf, sizeof(T));
+		return v;
+	}
+};
+Published<AudioPub> g_pub;
+//  - per voice record: what became of the voice the control side put there (Control::Drain reads them)
+std::atomic<int> g_endedId[kMaxVoices];        // id of the voice that ended in that record (one-shot over, faded out...)
+std::atomic<uint64_t> g_pathIdle[kMaxVoices];  // its path effect faded out under this control version (Voice::ctlSeq)
+std::atomic<uint32_t> g_feedback{0};           // bumped after any of the above changed
+std::atomic<uint64_t> g_appliedSeq{0};         // the last command applied (Cmd::seq)
+// odd while the audio thread is inside a callback (RenderOutput offline): SetReflectionSources waits for the end of the
+// callback in flight before the caller may release the sources it replaced
+std::atomic<uint64_t> g_cbEpoch{0};
+// Start claim of each record, packed (voice id << 2 | state): the control side writes (id, kPending) when it puts a voice
+// there; the audio thread moves it to kStarted just before the voice's first block, a stop moves it to kCancelled
+// instead (one compare-exchange each: exactly one wins). A voice cancelled never sounded: it is gone at once for
+// the control side, which frees its effects, as the renderer always did with a voice stopped before its first block.
+enum : int64_t { kPending = 0, kStarted = 1, kCancelled = 2 };
+std::atomic<int64_t> g_start[kMaxVoices];
+inline int64_t StartState(int id, int64_t st) { return ((int64_t)id << 2) | st; }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Commands: control side -> audio thread, through a single-producer ring (the producers serialise on g_ctlMtx), applied
+// in order at the start of the next block (ApplyCommands): what a call changes takes effect at the next block, as
+// when the calls took the renderer's lock between blocks.
+enum class Op : uint8_t { Add, Set, Kill, Listener, Mix, SrcBlend, SrcReset, Capture };
+enum : uint8_t {
+	kResetSlot = 1,  // the voice's effect pair was just given to it: reset before use
+	kResetSlot2 = 2, // same, its second pair
+	kResetPath = 4,  // same, its path effect
+	kSelInit = 8,    // SetVoiceStereo before the voice's first block: start at the new channel mix (no ramp)
+};
+struct MixSettings {
+	int outMode = 0;
+	int limiterMode = 1;
+	float uw = 0;
+	float wetRoom = 0, wetEcho = 0;
+	float diffuseSend = 1.5f, diffuseRtRef = 1.0f;
+	float srcScale = 1;
+	float limFastMs = 6.0f, limSlowMs = 50.0f, limSlowK = 3.0f;
+	bool paused = false;
+	bool dfOn = true;
+	bool limiterPre = false;
+	bool hqRead = true;
+	bool debugOn = false;
+};
+struct ListenerState {
+	IPLVector3 pos{}, ahead{0, 0, -1}, up{0, 1, 0};
+	float master = 1;
+};
+struct Cmd {
+	uint64_t seq = 0;
+	Op op = Op::Set;
+	uint8_t flags = 0;
+	int rec = -1, id = 0;
+	uint64_t ctl = 0;     // Add / Set: the control version
+	VoiceCtl c;           // Add / Set
+	const Sound* snd = nullptr; // Add
+	StreamBuf* stream = nullptr;
+	double cursor = 0, startAt = 0;
+	int fadeIn = 0;
+	int k = 0;            // SrcBlend: slot
+	float w[2] = {0, 0};  // SrcBlend: targets
+	bool snap = false;
+	ListenerState lis;    // Listener
+	MixSettings mix;      // Mix
+	CaptureBuf* cap = nullptr; // Capture (nullptr: off)
+};
+template <class T, size_t N>
+class SpscRing {
+	static_assert((N & (N - 1)) == 0, "power of two");
+	T buf_[N];
+	alignas(64) std::atomic<size_t> head_{0}; // published by the producer (Commit)
+	alignas(64) std::atomic<size_t> tail_{0}; // advanced by the consumer
+	size_t staged_ = 0;                       // producer: written, not yet published
+
+public:
+	// producer: false when full. Not visible to the consumer before Commit (a call's commands go together).
+	bool Push(const T& v) {
+		if (staged_ - tail_.load(std::memory_order_acquire) >= N) return false;
+		buf_[staged_ & (N - 1)] = v;
+		++staged_;
+		return true;
+	}
+	bool Full() const { return staged_ - tail_.load(std::memory_order_acquire) >= N; }
+	void Commit() { head_.store(staged_, std::memory_order_release); }
+	// consumer
+	template <class F>
+	void Drain(F&& f) {
+		size_t t = tail_.load(std::memory_order_relaxed);
+		const size_t h = head_.load(std::memory_order_acquire);
+		for (; t != h; ++t) f(buf_[t & (N - 1)]);
+		tail_.store(t, std::memory_order_release);
+	}
+	// nobody else touches the ring (Start / Stop)
+	void Reset() {
+		head_.store(0);
+		tail_.store(0);
+		staged_ = 0;
+	}
+};
+constexpr size_t kRingSize = 2048;
+SpscRing<Cmd, kRingSize> g_ring;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Control side: the voices as the API sees them, the pools, the settings, the producer side of the queue. Any non-audio
+// thread, under g_ctlMtx (held for bookkeeping only: never across a render, never taken by the audio thread).
+std::mutex g_ctlMtx;
+struct ControlVoice {
+	int id = 0;
+	int rec = -1;         // record of the audio thread (g_rec)
+	VoiceCtl c;           // the authoritative control fields
+	bool alive = true;    // false: ended (reported) or cancelled; erased at the next Reap, as the renderer always did
+	bool pathFallback = false; // wants a path, none free: rendered as a straight line (counted once)
+	bool hasSide = false; // its sound is stereo
+	bool dirty = false;   // its latest control fields still to send (the queue was full: Flush sends them)
+	uint8_t flags = 0;    // the effect resets still to send with them
+	uint64_t ctl = 0;     // version of c last sent
+	// the first version sent without the path (hasSH false) since the voice last had one; 0: the last sent wants it.
+	// Every version sent from it on renders no path: an idle report of any of them frees the effect.
+	uint64_t pathDropCtl = 0;
+	std::shared_ptr<Sound> snd;        // keeps the sound alive while the audio thread may read it
+	std::shared_ptr<StreamBuf> stream;
+};
+// a resource the audio thread may still use: freed once it has applied command `seq` (a voice removed by Kill...)
+struct Retired {
+	uint64_t seq = 0;
+	std::shared_ptr<Sound> snd;
+	std::shared_ptr<StreamBuf> stream;
+	std::unique_ptr<CaptureBuf> cap;
+};
+struct Control {
+	std::vector<ControlVoice> voices; // in play order
+	bool recUsed[kMaxVoices] = {};
+	bool fxUsed[kMaxVoices] = {};
+	bool pathUsed[kMaxPathVoices] = {};
+	int nextId = 1;
+	MixSettings mix;
+	ListenerState lis;
+	bool mixDirty = false, lisDirty = false;
+	float srcT[kSrcSlotsMax][2] = {};     // the bank targets as set (SrcBankSilent, SrcSlotStates)
+	uint64_t raiseSeq[kSrcSlotsMax][2] = {}; // last SrcBlend that may raise a weight (target > 0)
+	bool blendDirty[kSrcSlotsMax] = {}, blendSnap[kSrcSlotsMax] = {};
+	uint64_t seq = 0;   // commands numbered (Cmd::seq)
+	uint64_t ctlVer = 0;
+	std::deque<Cmd> overflow; // commands that did not fit in the ring, in order (Flush moves them)
+	int dirtyVoices = 0;
+	std::vector<Retired> retired;
+	uint32_t feedbackSeen = 0;
+	std::unique_ptr<CaptureBuf> cap; // the capture running
+};
+Control g_c;
+
+// ---------------------------------------------------------------------------------------------------------------
 // decoding threads: joined at Stop (the DLL may be unloaded after); the finished ones are joined and dropped
 // at the next LoadSoundAsync (their handles piled up for the whole session)
 struct Loader {
@@ -383,13 +665,15 @@ IPLCoordinateSpace3 ListenerSpace() {
 	return c;
 }
 
-void ReleaseVoice(Voice& v) {
-	if (v.slot >= 0 && v.slot < (int)g_pool.size()) g_pool[v.slot].used = false;
-	if (v.slot2 >= 0 && v.slot2 < (int)g_pool.size()) g_pool[v.slot2].used = false;
-	v.slot2 = -1;
-	if (v.pathSlot >= 0 && v.pathSlot < (int)g_pathPool.size()) g_pathPool[v.pathSlot].used = false;
-	v.slot = v.pathSlot = -1;
-	v.srcSlot = -1;
+// the source slots' bank blend back to one bank, their meters cleared (audio thread, or Start)
+void ResetSrcBlend() {
+	for (int k = 0; k < kSrcSlotsMax; ++k) {
+		g_srcW[k][0] = g_srcT[k][0] = 1; // one bank, as before the banks existed
+		g_srcW[k][1] = g_srcT[k][1] = 0;
+		g_srcE[k].store(0);
+		g_srcInE[k].store(0);
+	}
+	g_srcESec.store(0);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -418,7 +702,7 @@ struct DfState {
 	float w[2][kDfTaps - 1 + kBlock] = {};
 };
 DfState g_dfState;
-bool g_dfOn = true;
+bool g_dfOn = true; // audio thread (the control side's: Control::mix.dfOn)
 
 void Fft(std::vector<std::complex<double>>& a, bool inverse) {
 	const size_t n = a.size();
@@ -604,13 +888,15 @@ void ApplyDfEq(DfState& st, const std::vector<float>& h, IPLAudioBuffer& b) {
 }
 
 // the reverb bus's decode: the ambisonic bus to the ears, HRTF (then the diffuse-field equaliser) or panning
-void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpace3& lis, IPLAudioBuffer* in, IPLAudioBuffer* out) {
+// (outMode / dfOn: the settings of the thread that decodes, the audio thread's or a test's)
+void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpace3& lis, IPLAudioBuffer* in, IPLAudioBuffer* out, int outMode,
+               bool dfOn) {
 	IPLAmbisonicsDecodeEffectParams dp{};
 	dp.order = 1;
 	dp.hrtf = g_hrtf;
 	dp.orientation = lis;
-	dp.binaural = g_outMode == 0 ? IPL_TRUE : IPL_FALSE;
-	if (dp.binaural && g_dfOn && !g_dfEq.h.empty()) ApplyDfEq(st, g_dfEq.h, *in);
+	dp.binaural = outMode == 0 ? IPL_TRUE : IPL_FALSE;
+	if (dp.binaural && dfOn && !g_dfEq.h.empty()) ApplyDfEq(st, g_dfEq.h, *in);
 	iplAmbisonicsDecodeEffectApply(fx, &dp, in, out);
 }
 
@@ -633,13 +919,14 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	if (r.fed) r.idle = 0;
 	else if (r.idle < (1 << 20)) r.idle++;
 	r.fed = false;
-	if (!r.src || !r.fx || r.simGen.load() == 0) return;
+	IPLSource src = r.src.load(std::memory_order_acquire);
+	if (!src || !r.fx || r.simGen.load() == 0) return;
 	const int tail = std::max(r.tailBlocks, minTail);
 	const bool over = r.idle > tail + kTailFadeBlocks;
 	if (over) r.silent = true;
 	if (!rtOut && (wet <= 0 || over)) return;
 	IPLSimulationOutputs out{};
-	iplSourceGetOutputs(r.src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
+	iplSourceGetOutputs(src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
 	// reverb times: the long-window estimate for the room; for an echo or source slot, the one simulated at its own
 	// position when there is one (a band at 0 keeps the main simulator's); else the main simulator's
 	float rt[3];
@@ -770,11 +1057,19 @@ struct Limiter {
 		outR = dl[outSlot][1] * gain;
 	}
 };
-Limiter g_limiter; // audio thread, under g_mtx
+Limiter g_limiter; // audio thread
 
-// Renders one block of kBlock stereo frames into g_mix (audio thread, lock held).
+// The audio thread claims a voice's first block (see g_start): false when the control side cancelled it first.
+inline bool ClaimStart(int rec, int id) {
+	int64_t want = StartState(id, kPending);
+	return g_start[rec].compare_exchange_strong(want, StartState(id, kStarted), std::memory_order_acq_rel);
+}
+
+// Renders one block of kBlock stereo frames into g_mix (audio thread, the commands of the block already applied).
 void RenderBlock() {
 	const auto t0 = std::chrono::steady_clock::now();
+	double dbgIn = 0, dbgL = 0, dbgR = 0; // debug meters of this block (published at its end)
+	int dbgVoices = 0;
 	std::fill(g_mix.begin(), g_mix.end(), 0.0f);
 	for (int c = 0; c < kAmbi; ++c) std::fill(g_amb.data[c], g_amb.data[c] + kBlock, 0.0f);
 	std::fill(g_room.in.data[0], g_room.in.data[0] + kBlock, 0.0f);
@@ -782,9 +1077,10 @@ void RenderBlock() {
 	for (auto& e : g_src) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
 	const IPLCoordinateSpace3 lis = ListenerSpace();
 
-	for (auto& vp : g_voices) {
-		Voice& v = *vp;
-		if (!v.alive.load()) continue;
+	for (int ai = 0; ai < g_nAct; ++ai) {
+		const int rec = g_act[ai];
+		Voice& v = g_rec[rec];
+		if (!v.alive) continue;
 		// game paused: a voice the engine would pause feeds nothing and stays where it is (a stopped one
 		// still fades out: its slot must come back)
 		if (g_paused && v.pausable && !v.dying) {
@@ -802,6 +1098,14 @@ void RenderBlock() {
 				g_echoDropped++; // the reflection thread was too slow (Stats().echoDropped)
 			}
 			continue;
+		}
+		// its first block: claimed, unless a stop came first (then it never sounds: gone, as before its first block)
+		if (!v.started) {
+			if (!ClaimStart(rec, v.id)) {
+				v.alive = false;
+				continue;
+			}
+			v.started = true;
 		}
 		float* m = g_mono.data[0];
 		if (v.stream) {
@@ -851,7 +1155,7 @@ void RenderBlock() {
 		if (st) std::fill(g_side.begin(), g_side.end(), 0.0f);
 		// a voice off its file's own speed (pitch, Doppler) or between two samples reads the 48 kHz copy through the
 		// windowed-sinc interpolator (SetMixQuality hqResample); at pitch 100 on a whole sample the sample itself
-		const bool hqRead = g_hqResample.load(std::memory_order_relaxed);
+		const bool hqRead = g_hqResample;
 		InterpLoop il;
 		il.loop = v.loop && len > 1;
 		il.wrapped = v.wrapped;
@@ -992,6 +1296,9 @@ void RenderBlock() {
 		const bool pathOn = v.pathSlot >= 0 && (pw0 > 0 || pw1 > 0);
 		const bool directOn = pw0 < 1 || pw1 < 1;
 		if (pathOn) {
+			// the path effect was not used by the previous block (taken now, or kept by the control side while it faded
+			// out and taken again): from silence, as a path effect just taken from the pool
+			if (pw0 <= 0) iplPathEffectReset(g_pathPool[v.pathSlot].fx);
 			// own copy: the straight-line branch below still needs the untouched signal
 			std::copy(m, m + kBlock, g_monoP.data[0]);
 			feedRoom(g_monoP.data[0], v.eq[1] * sendBoost, pw0, pw1); // before the gain is applied
@@ -1117,9 +1424,9 @@ void RenderBlock() {
 				spatialise(v.slot, dir, bin_in, &g_stereo);
 			}
 			if (g_debugOn)
-				for (int i = 0; i < kBlock; ++i) g_dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
+				for (int i = 0; i < kBlock; ++i) dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
 		}
-		g_dbgVoices++;
+		dbgVoices++;
 		for (int i = 0; i < kBlock; ++i) {
 			const float w = pw0 + (pw1 - pw0) * (float)i / kBlock; // path share at this sample
 			float l = 0, r = 0;
@@ -1134,26 +1441,26 @@ void RenderBlock() {
 			l *= directGain;
 			r *= directGain;
 			if (g_debugOn) {
-				g_dbgL += (double)l * l;
-				g_dbgR += (double)r * r;
+				dbgL += (double)l * l;
+				dbgR += (double)r * r;
 			}
 			g_mix[i * 2] += l;
 			g_mix[i * 2 + 1] += r;
 		}
-		// path dropped and faded out: its effect goes back to the pool for another voice
-		if (!v.hasSH && v.pathSlot >= 0 && pw1 <= 0) {
-			g_pathPool[v.pathSlot].used = false;
-			v.pathSlot = -1;
-		}
+		// (path dropped and faded out: its effect goes back to the pool for another voice, see EndBlock)
 	}
 
-	if (g_capOn && !g_capOutOnly) {
-		g_capMix.insert(g_capMix.end(), g_mix.begin(), g_mix.end());
-		g_capRoom.insert(g_capRoom.end(), g_room.in.data[0], g_room.in.data[0] + kBlock);
-		const size_t at = g_capSrc.size();
-		g_capSrc.resize(at + kBlock, 0.0f);
+	// captures: written up to the buffer's capacity, never grown here
+	CaptureBuf* const cap = g_cap;
+	const size_t capAt = cap ? cap->frames.load(std::memory_order_relaxed) : 0;
+	const bool capBlock = cap && capAt + kBlock <= cap->maxFrames;
+	if (capBlock && !cap->outOnly) {
+		std::copy(g_mix.begin(), g_mix.end(), cap->mix.get() + capAt * 2);
+		std::copy(g_room.in.data[0], g_room.in.data[0] + kBlock, cap->room.get() + capAt);
+		float* s = cap->src.get() + capAt;
+		std::fill(s, s + kBlock, 0.0f);
 		for (auto& e : g_src)
-			for (int i = 0; i < kBlock; ++i) g_capSrc[at + i] += e.in.data[0][i];
+			for (int i = 0; i < kBlock; ++i) s[i] += e.in.data[0][i];
 	}
 	// reflections -> ambisonic bus -> decode
 	ApplyReflection(g_room, g_wetRoom, g_roomRt);
@@ -1175,19 +1482,19 @@ void RenderBlock() {
 			{
 				double ei = 0;
 				for (int i = 0; i < kBlock; ++i) ei += (double)g_src[k].in.data[0][i] * g_src[k].in.data[0][i];
-				g_srcInE[k] += ei;
+				AddTo(g_srcInE[k], ei);
 			}
 			std::fill(g_slotW.begin(), g_slotW.end(), 0.0f);
 			ApplyReflection(g_src[k], wet, nullptr, g_room.tailBlocks, p0, w[0], g_slotW.data());
 			if (k < kSrcBankB) ApplyReflection(g_srcB[k], wet, nullptr, g_room.tailBlocks, p1, w[1], g_slotW.data());
 			double e = 0;
 			for (int i = 0; i < kBlock; ++i) e += (double)g_slotW[i] * g_slotW[i];
-			g_srcE[k] += e;
+			AddTo(g_srcE[k], e);
 		}
-		g_srcESec += (double)kBlock / kRate;
+		AddTo(g_srcESec, (double)kBlock / kRate);
 	}
 	if (g_decode) {
-		DecodeBus(g_decode, g_dfState, lis, &g_amb, &g_ambOut);
+		DecodeBus(g_decode, g_dfState, lis, &g_amb, &g_ambOut, g_outMode, g_dfOn);
 		for (int i = 0; i < kBlock; ++i) {
 			g_mix[i * 2] += g_ambOut.data[0][i];
 			g_mix[i * 2 + 1] += g_ambOut.data[1][i];
@@ -1207,22 +1514,33 @@ void RenderBlock() {
 		}
 		if (g_uw == 0 && g_uwCur < 1e-4f) g_uwCur = 0;
 	}
-	for (int i = 0; i < kBlock; ++i) {
-		g_energyL += (double)g_mix[i * 2] * g_mix[i * 2];
-		g_energyR += (double)g_mix[i * 2 + 1] * g_mix[i * 2 + 1];
+	{
+		double eL = 0, eR = 0;
+		for (int i = 0; i < kBlock; ++i) {
+			eL += (double)g_mix[i * 2] * g_mix[i * 2];
+			eR += (double)g_mix[i * 2 + 1] * g_mix[i * 2 + 1];
+		}
+		AddTo(g_energyL, eL);
+		AddTo(g_energyR, eR);
 	}
 	// cross-correlation: xc[lag] = sum L[i] * R[i + lag]; R lagging behind L (lag > 0) means the
 	// sound reaches the left ear first
 	for (int lag = -kMaxLag; g_debugOn && lag <= kMaxLag; ++lag) {
 		double acc = 0;
 		for (int i = kMaxLag; i < kBlock - kMaxLag; ++i) acc += (double)g_mix[i * 2] * g_mix[(i + lag) * 2 + 1];
-		g_xc[lag + kMaxLag] += acc;
+		AddTo(g_xc[lag + kMaxLag], acc);
 	}
-	const int mode = g_limiterMode.load();
+	if (g_debugOn) {
+		AddTo(g_dbgIn, dbgIn);
+		AddTo(g_dbgL, dbgL);
+		AddTo(g_dbgR, dbgR);
+	}
+	g_dbgVoices.fetch_add(dbgVoices, std::memory_order_relaxed);
+	const int mode = g_limiterMode;
 	// the output stage (limiter / clip) before the master volume, as the engine does (its mix is clipped at full scale
 	// and the volume applies after: at a low volume its loud sounds clip all the same), or after it (the legacy order:
 	// at a low master volume the stage never acted)
-	const bool pre = g_limiterPre.load();
+	const bool pre = g_limiterPre;
 	const float stageIn = pre ? 1.0f : g_master;
 	const float stageOut = pre ? g_master : 1.0f;
 	if (mode == 1) {
@@ -1236,22 +1554,179 @@ void RenderBlock() {
 	} else {
 		for (auto& s : g_mix) s = SoftClip(s * stageIn) * stageOut;
 	}
-	if (g_capOn && (g_capMaxFrames == 0 || g_capOut.size() < g_capMaxFrames * 2))
-		g_capOut.insert(g_capOut.end(), g_mix.begin(), g_mix.end());
+	if (capBlock && (!cap->outOnly || capAt < cap->limitFrames)) {
+		std::copy(g_mix.begin(), g_mix.end(), cap->out.get() + capAt * 2);
+		cap->frames.store(capAt + kBlock, std::memory_order_release);
+	}
 	const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-	g_loadSum += ms;
-	g_loadMax = std::max(g_loadMax, ms);
-	g_loadN++;
+	AddTo(g_loadSum, ms);
+	MaxTo(g_loadMax, ms);
+	g_loadN.fetch_add(1, std::memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Audio thread: the commands sent since the previous block, in order (no lock, no allocation, nothing freed)
+void RemoveActive(int rec) {
+	if (!g_isActive[rec]) return;
+	g_isActive[rec] = false;
+	for (int i = 0; i < g_nAct; ++i)
+		if (g_act[i] == rec) {
+			std::memmove(g_act + i, g_act + i + 1, (size_t)(g_nAct - i - 1) * sizeof(int));
+			--g_nAct;
+			return;
+		}
+}
+
+void ResetEffects(int slot) {
+	if (slot < 0 || slot >= (int)g_pool.size()) return;
+	iplDirectEffectReset(g_pool[slot].direct);
+	iplBinauralEffectReset(g_pool[slot].binaural);
+	iplPanningEffectReset(g_pool[slot].pan);
+}
+
+// the effects a command gives a voice start from silence; SetVoiceStereo before the first block: no channel-mix ramp
+void ApplyVoiceFlags(Voice& v, uint8_t flags) {
+	if (flags & kResetSlot) ResetEffects(v.slot);
+	if (flags & kResetSlot2) ResetEffects(v.slot2);
+	if ((flags & kResetPath) && v.pathSlot >= 0 && v.pathSlot < (int)g_pathPool.size()) iplPathEffectReset(g_pathPool[v.pathSlot].fx);
+	if ((flags & kSelInit) && v.gainCur < 0) v.selCur = v.sel;
+}
+
+void ApplyMix(const MixSettings& m) {
+	g_outMode = m.outMode;
+	g_paused = m.paused;
+	g_uw = m.uw;
+	g_wetRoom = m.wetRoom;
+	g_wetEcho = m.wetEcho;
+	g_diffuseSend = m.diffuseSend;
+	g_diffuseRtRef = m.diffuseRtRef;
+	g_srcScale = m.srcScale;
+	g_dfOn = m.dfOn;
+	if (m.limiterMode != g_limiterMode) g_limiter.Reset(); // (no stale frames of an earlier run in the delay line)
+	g_limiterMode = m.limiterMode;
+	g_limiterPre = m.limiterPre;
+	g_hqResample = m.hqRead;
+	g_limFastMs = m.limFastMs;
+	g_limSlowMs = m.limSlowMs;
+	g_limSlowK = m.limSlowK;
+	g_debugOn = m.debugOn;
+}
+
+void ApplyCommand(const Cmd& c) {
+	switch (c.op) {
+	case Op::Add: {
+		RemoveActive(c.rec); // (a voice cancelled before its first block may still hold the record)
+		Voice& v = g_rec[c.rec];
+		v = Voice{};
+		static_cast<VoiceCtl&>(v) = c.c;
+		v.id = c.id;
+		v.snd = c.snd;
+		v.stream = c.stream;
+		v.cursor = c.cursor;
+		v.startAt = c.startAt;
+		v.fadeIn = c.fadeIn;
+		v.ctlSeq = c.ctl;
+		v.alive = true;
+		ApplyVoiceFlags(v, c.flags);
+		g_act[g_nAct++] = c.rec;
+		g_isActive[c.rec] = true;
+		break;
+	}
+	case Op::Set: {
+		Voice& v = g_rec[c.rec];
+		if (!g_isActive[c.rec] || v.id != c.id || !v.alive) break; // gone meanwhile (its end is reported)
+		static_cast<VoiceCtl&>(v) = c.c;
+		v.ctlSeq = c.ctl;
+		ApplyVoiceFlags(v, c.flags);
+		break;
+	}
+	case Op::Kill: // the voice cap's hard ceiling: removed at once, no fade (the control side reused its effects)
+		if (g_isActive[c.rec] && g_rec[c.rec].id == c.id) {
+			g_rec[c.rec].alive = false;
+			RemoveActive(c.rec);
+		}
+		break;
+	case Op::Listener:
+		g_lisPos = c.lis.pos;
+		g_lisAhead = c.lis.ahead;
+		g_lisUp = c.lis.up;
+		g_master = c.lis.master;
+		break;
+	case Op::Mix:
+		ApplyMix(c.mix);
+		break;
+	case Op::SrcBlend:
+		for (int b = 0; b < 2; ++b) {
+			g_srcT[c.k][b] = c.w[b];
+			if (c.snap && c.w[b] > g_srcW[c.k][b]) g_srcW[c.k][b] = c.w[b];
+		}
+		break;
+	case Op::SrcReset:
+		ResetSrcBlend();
+		break;
+	case Op::Capture:
+		g_cap = c.cap;
+		break;
+	}
+}
+
+void ApplyCommands() {
+	uint64_t last = 0;
+	g_ring.Drain([&](const Cmd& c) {
+		ApplyCommand(c);
+		last = c.seq;
+	});
+	if (last) g_appliedSeq.store(last, std::memory_order_release);
+}
+
+// End of a block: the voices that ended leave the play list and are reported, so are the path effects that faded out,
+// and the state the other threads read is published.
+void EndBlock() {
+	bool told = false;
+	int w = 0;
+	for (int i = 0; i < g_nAct; ++i) {
+		const int rec = g_act[i];
+		Voice& v = g_rec[rec];
+		if (!v.alive) {
+			g_isActive[rec] = false;
+			g_endedId[rec].store(v.id, std::memory_order_release);
+			told = true;
+			continue;
+		}
+		// path dropped and faded out: its effect may go back to the pool for another voice (the control side frees it)
+		if (v.pathSlot >= 0 && !v.hasSH && v.pathMixCur == 0 && v.pathIdleAt != v.ctlSeq) {
+			v.pathIdleAt = v.ctlSeq;
+			g_pathIdle[rec].store(v.ctlSeq, std::memory_order_release);
+			told = true;
+		}
+		g_act[w++] = rec;
+	}
+	g_nAct = w;
+	if (told) g_feedback.fetch_add(1, std::memory_order_release);
+	AudioPub p;
+	std::memcpy(p.srcW, g_srcW, sizeof p.srcW);
+	std::copy(g_roomRt, g_roomRt + 3, p.roomRt);
+	p.lastDir = g_lastDir;
+	p.limMinGain = g_limiter.minGain;
+	p.applied = g_appliedSeq.load(std::memory_order_relaxed);
+	g_pub.Write(p);
 }
 
 void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 	float* o = (float*)out;
-	std::lock_guard<std::mutex> lk(g_mtx);
+#ifdef PBA_RENDER_LOCK_LEGACY
+	// red run of test/render_lock_test.cpp: the callback holds the control locks for its whole render again, as the single
+	// renderer lock did, so every API call made meanwhile waits for the render
+	std::scoped_lock legacy(g_ctlMtx, g_sndMtx);
+#endif
+	g_cbEpoch.fetch_add(1, std::memory_order_acq_rel); // odd: inside
 	ma_uint32 done = 0;
 	while (done < frames) {
 		if (g_fifoPos >= g_fifo.size()) {
+			ApplyCommands();
 			RenderBlock();
-			g_fifo.assign(g_mix.begin(), g_mix.end());
+			EndBlock();
+			g_fifo.assign(g_mix.begin(), g_mix.end()); // (same size: no allocation)
 			g_fifoPos = 0;
 		}
 		const size_t avail = (g_fifo.size() - g_fifoPos) / 2;
@@ -1260,6 +1735,7 @@ void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 		g_fifoPos += n * 2;
 		done += (ma_uint32)n;
 	}
+	g_cbEpoch.fetch_add(1, std::memory_order_acq_rel); // even: out
 }
 
 bool CreateReflection(Reflection& r, IPLAudioSettings& as) {
@@ -1281,68 +1757,420 @@ void ReleaseReflection(Reflection& r) {
 	r.in = {};
 }
 
+// ===============================================================================================================
+// Control side (any non-audio thread, g_ctlMtx held): the voices as the API sees them, kept in step with the audio
+// thread by the commands below and by what it reports (g_endedId, g_pathIdle).
+
+// Sends a command whose order matters (a voice added, removed, stopped, given or relieved of an effect; a capture
+// buffer swapped...): through the ring, or after the commands already waiting when the ring is full. Returns its number.
+uint64_t Push(Cmd& c) {
+	c.seq = ++g_c.seq;
+	if (!g_running.load(std::memory_order_relaxed)) return c.seq; // nothing renders: the control state is the state (Start copies it)
+	if (g_c.overflow.empty() && g_ring.Push(c)) return c.seq;
+	g_c.overflow.push_back(c);
+	return c.seq;
+}
+// Is the queue backed up (the audio thread not keeping up, or stalled)? State updates (a voice's parameters, the
+// listener, the settings) then wait as "dirty" and only their latest value is sent (Flush): the queue stays bounded.
+bool Backlog() { return !g_c.overflow.empty() || g_ring.Full(); }
+
+Cmd VoiceCmd(Op op, ControlVoice& v) {
+	Cmd c;
+	c.op = op;
+	c.rec = v.rec;
+	c.id = v.id;
+	c.c = v.c;
+	c.flags = v.flags;
+	v.flags = 0;
+	if (v.dirty) {
+		v.dirty = false;
+		--g_c.dirtyVoices;
+	}
+	c.ctl = v.ctl = ++g_c.ctlVer;
+	if (v.c.hasSH) v.pathDropCtl = 0;
+	else if (v.pathDropCtl == 0) v.pathDropCtl = c.ctl;
+	return c;
+}
+// a voice's control fields changed. structural: the change involves a pool slot (taken, released) or a stop: it keeps
+// its place in the order; otherwise only the latest values matter
+void SendVoice(ControlVoice& v, uint8_t flags = 0, bool structural = false) {
+	v.flags |= flags;
+	if (!structural && Backlog()) {
+		if (!v.dirty) {
+			v.dirty = true;
+			++g_c.dirtyVoices;
+		}
+		return;
+	}
+	Cmd c = VoiceCmd(Op::Set, v);
+	Push(c);
+}
+void SendListener() {
+	if (Backlog()) {
+		g_c.lisDirty = true;
+		return;
+	}
+	Cmd c;
+	c.op = Op::Listener;
+	c.lis = g_c.lis;
+	g_c.lisDirty = false;
+	Push(c);
+}
+void SendMix() {
+	if (Backlog()) {
+		g_c.mixDirty = true;
+		return;
+	}
+	Cmd c;
+	c.op = Op::Mix;
+	c.mix = g_c.mix;
+	g_c.mixDirty = false;
+	Push(c);
+}
+void SendBlend(int k, bool snap) {
+	g_c.blendSnap[k] = g_c.blendSnap[k] || snap;
+	if (Backlog()) {
+		g_c.blendDirty[k] = true;
+		return;
+	}
+	Cmd c;
+	c.op = Op::SrcBlend;
+	c.k = k;
+	c.w[0] = g_c.srcT[k][0];
+	c.w[1] = g_c.srcT[k][1];
+	c.snap = g_c.blendSnap[k];
+	g_c.blendDirty[k] = g_c.blendSnap[k] = false;
+	const uint64_t seq = Push(c);
+	for (int b = 0; b < 2; ++b)
+		if (c.w[b] > 0) g_c.raiseSeq[k][b] = seq;
+}
+
+// End of every call: what waited goes into the ring as far as it fits, then the call's commands are published together.
+void Flush() {
+	while (!g_c.overflow.empty() && g_ring.Push(g_c.overflow.front())) g_c.overflow.pop_front();
+	if (g_c.overflow.empty()) {
+		if (g_c.mixDirty && !g_ring.Full()) SendMix();
+		if (g_c.lisDirty && !g_ring.Full()) SendListener();
+		for (int k = 0; k < kSrcSlotsMax && !g_ring.Full(); ++k)
+			if (g_c.blendDirty[k]) SendBlend(k, false);
+		for (size_t i = 0; g_c.dirtyVoices > 0 && i < g_c.voices.size() && !g_ring.Full(); ++i)
+			if (g_c.voices[i].dirty) SendVoice(g_c.voices[i]);
+	}
+	g_ring.Commit();
+}
+
+// frees what a voice held (effects, path effect, record); its sound and stream are kept until the audio thread has
+// applied command `seq` (0: it never will read them again already)
+void FreeVoice(ControlVoice& v, uint64_t seq) {
+	if (v.c.slot >= 0) g_c.fxUsed[v.c.slot] = false;
+	if (v.c.slot2 >= 0) g_c.fxUsed[v.c.slot2] = false;
+	if (v.c.pathSlot >= 0) g_c.pathUsed[v.c.pathSlot] = false;
+	v.c.slot = v.c.slot2 = v.c.pathSlot = -1;
+	v.c.srcSlot = -1;
+	if (v.rec >= 0) g_c.recUsed[v.rec] = false;
+	v.rec = -1;
+	if (v.dirty) {
+		v.dirty = false;
+		--g_c.dirtyVoices;
+	}
+	if (seq > g_appliedSeq.load(std::memory_order_acquire) && (v.snd || v.stream)) {
+		Retired r;
+		r.seq = seq;
+		r.snd = std::move(v.snd);
+		r.stream = std::move(v.stream);
+		g_c.retired.push_back(std::move(r));
+	}
+	v.snd.reset();
+	v.stream.reset();
+}
+
+// Start of every call: frees what the audio thread no longer uses, and takes in what it reported: the voices that
+// ended (dead for the API at once, erased at the next Reap as before) and the path effects that faded out.
+void Drain() {
+	if (!g_c.retired.empty()) {
+		const uint64_t applied = g_appliedSeq.load(std::memory_order_acquire);
+		g_c.retired.erase(std::remove_if(g_c.retired.begin(), g_c.retired.end(), [&](const Retired& r) { return r.seq <= applied; }),
+		                  g_c.retired.end());
+	}
+	const uint32_t fb = g_feedback.load(std::memory_order_acquire);
+	if (fb == g_c.feedbackSeen) return;
+	g_c.feedbackSeen = fb;
+	for (auto& v : g_c.voices) {
+		if (!v.alive || v.rec < 0) continue;
+		if (g_endedId[v.rec].load(std::memory_order_acquire) == v.id) {
+			v.alive = false; // (its effects are freed at the next Reap, as the renderer did)
+			continue;
+		}
+		// faded out under control fields sent after the path was dropped (not necessarily the latest: a voice updated more
+		// often than the blocks always has a newer version in flight): the path effect goes back to the pool
+		if (v.c.pathSlot >= 0 && !v.c.hasSH && v.pathDropCtl != 0 && g_pathIdle[v.rec].load(std::memory_order_acquire) >= v.pathDropCtl) {
+			g_c.pathUsed[v.c.pathSlot] = false;
+			v.c.pathSlot = -1;
+			SendVoice(v, 0, true);
+		}
+	}
+}
+
+// RAII of an API call on the control side
+struct CtlCall {
+	std::unique_lock<std::mutex> lk;
+	CtlCall() : lk(g_ctlMtx) { Drain(); }
+	~CtlCall() { Flush(); }
+};
+
+ControlVoice* FindVoice(int id) {
+	for (auto& v : g_c.voices)
+		if (v.id == id && v.alive) return &v;
+	return nullptr;
+}
+
 int FindEffect() {
 	for (int i = 0; i < (int)g_pool.size(); ++i)
-		if (!g_pool[i].used) return i;
+		if (!g_c.fxUsed[i]) return i;
 	return -1;
+}
+int FindRecord() {
+	for (int i = 0; i < kMaxVoices; ++i)
+		if (!g_c.recUsed[i]) return i;
+	return -1;
+}
+
+// a stop before the voice's first block cancels it (it never sounds): true, and it is dead for the API at once
+bool TryCancel(ControlVoice& v) {
+	if (v.rec < 0) return false;
+	int64_t want = StartState(v.id, kPending);
+	if (!g_start[v.rec].compare_exchange_strong(want, StartState(v.id, kCancelled), std::memory_order_acq_rel)) return false;
+	v.alive = false;
+	if (v.dirty) {
+		v.dirty = false;
+		--g_c.dirtyVoices;
+	}
+	// its commands still waiting for room in the queue (the audio thread stalled) go: it never existed there. Without
+	// it, every voice played and capped during a stall stayed in the backlog.
+	if (!g_c.overflow.empty())
+		g_c.overflow.erase(std::remove_if(g_c.overflow.begin(), g_c.overflow.end(),
+		                                  [&](const Cmd& c) { return c.id == v.id && (c.op == Op::Add || c.op == Op::Set); }),
+		                   g_c.overflow.end());
+	return true;
+}
+
+// stops a voice: it fades out over one block (or never sounds, if it had not started yet)
+void StopCtl(ControlVoice& v) {
+	v.c.dying = true;
+	v.c.gain = 0;
+	v.c.send = 0; // the reverb send fades out with the direct sound
+	v.c.srcSend = 0; // fades out too; a dying voice no longer holds its slot (SrcSlotLive)
+	if (!TryCancel(v)) SendVoice(v, 0, true);
 }
 
 // how much a voice is heard, for the voice cap: its direct gain alone ranked a distant voice with a
 // strong reverb (send carries no distance law) as the quietest
-float Audibility(const Voice& v) {
-	const float send = v.send < 0 ? v.gain : v.send;
-	return std::max({v.gain, send * g_wetRoom, v.srcSend * g_wetRoom * g_srcScale});
+float Audibility(const ControlVoice& v) {
+	const float send = v.c.send < 0 ? v.c.gain : v.c.send;
+	return std::max({v.c.gain, send * g_c.mix.wetRoom, v.c.srcSend * g_c.mix.wetRoom * g_c.mix.srcScale});
 }
 
 // drops dead voices; caps the voice count: the least audible voices fade out (dying, one block)
-// instead of being cut. Lock held.
+// instead of being cut.
 void Reap() {
-	g_voices.erase(std::remove_if(g_voices.begin(), g_voices.end(),
-	                              [](const std::unique_ptr<Voice>& v) {
-		                              if (v->alive.load()) return false;
-		                              ReleaseVoice(*v);
-		                              return true;
-	                              }),
-	               g_voices.end());
+	for (auto& v : g_c.voices)
+		if (!v.alive) FreeVoice(v, 0); // ended (reported: nothing of it is read any more) or cancelled (never read)
+	g_c.voices.erase(std::remove_if(g_c.voices.begin(), g_c.voices.end(), [](const ControlVoice& v) { return !v.alive; }),
+	                 g_c.voices.end());
 	int n = 0;
-	for (auto& v : g_voices) n += v->dying ? 0 : 1;
+	for (auto& v : g_c.voices) n += v.c.dying ? 0 : 1;
 	while (n >= g_maxVoices.load()) {
 		// the quietest voice goes; a protected one (a spoken line) only when nothing else is left
-		Voice* q = nullptr;
-		for (auto& v : g_voices) {
-			if (v->dying) continue;
-			if (!q || (q->protect && !v->protect) || (q->protect == v->protect && Audibility(*v) < Audibility(*q))) q = v.get();
+		ControlVoice* q = nullptr;
+		for (auto& v : g_c.voices) {
+			if (v.c.dying) continue;
+			if (!q || (q->c.protect && !v.c.protect) || (q->c.protect == v.c.protect && Audibility(v) < Audibility(*q))) q = &v;
 		}
 		if (!q) break;
-		q->dying = true;
-		q->gain = 0;
-		q->send = 0;
-		q->srcSend = 0;
-		if (q->gainCur < 0) q->alive = false; // never rendered yet
+		StopCtl(*q);
 		--n;
 	}
 	// hard ceiling (the effect pool): fading voices still hold their effects for one block
-	while ((int)g_voices.size() >= kMaxVoices) {
-		auto q = std::min_element(g_voices.begin(), g_voices.end(), [](const auto& a, const auto& b) {
-			if (a->dying != b->dying) return a->dying; // the fading ones first
-			if (a->protect != b->protect) return !a->protect; // then the unprotected ones
-			return Audibility(*a) < Audibility(*b);
+	while ((int)g_c.voices.size() >= kMaxVoices) {
+		auto q = std::min_element(g_c.voices.begin(), g_c.voices.end(), [](const ControlVoice& a, const ControlVoice& b) {
+			if (a.c.dying != b.c.dying) return a.c.dying; // the fading ones first
+			if (a.c.protect != b.c.protect) return !a.c.protect; // then the unprotected ones
+			return Audibility(a) < Audibility(b);
 		});
-		ReleaseVoice(**q);
-		g_voices.erase(q);
+		uint64_t seq = 0;
+		if (q->alive && !TryCancel(*q)) {
+			// it has sounded: removed at once from the audio thread too
+			Cmd c;
+			c.op = Op::Kill;
+			c.rec = q->rec;
+			c.id = q->id;
+			seq = Push(c);
+		}
+		FreeVoice(*q, seq);
+		g_c.voices.erase(q);
 	}
+}
+
+// Gives a voice that wants a baked path a path effect from the pool. A voice that finds
+// the pool full renders the straight line meanwhile (counted once per episode, g_pathFallback):
+// with 16 path voices playing, a 17th gunshot behind a corner came straight through the wall with
+// nothing to tell why. Retried on every Update, so it moves onto the path once a slot frees up
+// (crossfaded by the renderer). Returns the reset flag when it took one.
+uint8_t AcquirePath(ControlVoice& v) {
+	if (!v.c.hasSH || v.c.pathSlot >= 0) {
+		v.pathFallback = false;
+		return 0;
+	}
+	for (int i = 0; i < (int)g_pathPool.size(); ++i)
+		if (!g_c.pathUsed[i]) {
+			g_c.pathUsed[i] = true;
+			v.c.pathSlot = i;
+			v.pathFallback = false;
+			return kResetPath;
+		}
+	if (!v.pathFallback) g_pathFallback++;
+	v.pathFallback = true;
+	return 0;
+}
+
+// One band of a voice's 3-band EQ, as Steam Audio's effects can take it. The direct effect floors every band at 1/16 of the
+// strongest, but IPLPathEffect (normalizeEQ off) applies the bands as given and its band filters divide by the gain: a mid
+// band of exactly 0 is 0/0 (NaN in the voice's output, then in the energies, the room send and the limiter), a negative one
+// the square root of a negative, an infinite or NaN one NaN as well. A wall that transmits nothing in a band, an absorbing
+// material or an extreme setting reaches here as such a value. Not a number or infinite: no filtering (1: the level is the
+// gain's business); otherwise kMinEq (-80 dB, far under anything the Lua asks for: its own floors are 1e-3 and 1e-4) to
+// kMaxEq (+24 dB: Steam Audio's own EQ range, 16x).
+constexpr float kMinEq = 1e-4f, kMaxEq = 16.0f;
+float SaneEq(float x) {
+	if (!std::isfinite(x)) return 1.0f;
+	return std::clamp(x, kMinEq, kMaxEq);
+}
+
+// A voice's gain or send as the effects can take it: the Lua computes it, and a NaN, an infinite or a negative one (a
+// division by a null distance, a log of 0) went through the effects as it was (NaN in the output, the energies, the room
+// send and the limiter; a huge or inverted signal). Not finite or negative: silence (a voice that does not know its level
+// stays quiet, it does not blast); otherwise at most kMaxGain (+36 dB, far over any real level: the limiter does the rest).
+constexpr float kMaxGain = 64.0f;
+float SaneGain(float x) {
+	if (!std::isfinite(x) || x < 0) return 0.0f;
+	return std::min(x, kMaxGain);
+}
+
+// Play / Update parameters into a voice's control fields; returns the reset flag of a path effect just taken
+uint8_t SetVoiceCtl(ControlVoice& v, const VoiceParams& p) {
+	v.c.pos = p.pos;
+	v.c.gain = SaneGain(p.gain);
+	v.c.rate = std::clamp(p.pitch / 100.0f, 0.05f, 4.0f);
+	for (int b = 0; b < 3; ++b) v.c.eq[b] = SaneEq(p.eq[b]);
+	// baked path: new coefficients (acquiring a path effect if the voice had none), or back to the
+	// straight line (the renderer fades the path out, then the effect is released); neither: kept. A
+	// voice followed by Update used to keep its Play-time arrival field forever while its position
+	// was ignored (the path branch renders from sh only).
+	if (p.hasSH) {
+		std::copy(p.sh, p.sh + 4, v.c.sh);
+		v.c.hasSH = true;
+	} else if (p.clearSH) {
+		v.c.hasSH = false;
+	}
+	const uint8_t f = AcquirePath(v);
+	if (p.diffuse >= 0) v.c.diffuse = std::clamp(p.diffuse, 0.0f, 1.0f); // < 0: unchanged (Update without it)
+	if (p.send >= 0 || std::isnan(p.send)) v.c.send = SaneGain(p.send); // < 0: unchanged (Update without it); NaN: silence
+	return f;
+}
+
+// a voice joins: its record and start claim, the Add command
+int AddVoice(ControlVoice&& v, uint8_t flags, double cursor, double startAt, int fadeIn) {
+	const int rec = FindRecord(); // (always one: Reap keeps the voices under kMaxVoices)
+	if (rec < 0) {
+		FreeVoice(v, 0);
+		return 0;
+	}
+	v.rec = rec;
+	v.id = g_c.nextId++;
+	g_c.recUsed[rec] = true;
+	g_start[rec].store(StartState(v.id, kPending), std::memory_order_release);
+	v.flags = flags;
+	Cmd c = VoiceCmd(Op::Add, v);
+	c.snd = v.snd.get();
+	c.stream = v.stream.get();
+	c.cursor = cursor;
+	c.startAt = startAt;
+	c.fadeIn = fadeIn;
+	Push(c);
+	const int id = v.id;
+	g_c.voices.push_back(std::move(v));
+	return id;
 }
 
 } // namespace
 
-std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
+static bool g_offline = false; // StartOffline: no device, RenderOutput pulls the blocks
+
+static std::string StartImpl(IPLContext ctx, const void* sofa, size_t sofaSize, bool device);
+std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) { return StartImpl(ctx, sofa, sofaSize, true); }
+std::string StartOffline(IPLContext ctx, const void* sofa, size_t sofaSize) { return StartImpl(ctx, sofa, sofaSize, false); }
+void RenderOutput(float* out, unsigned frames) {
+	if (g_offline) Callback(nullptr, out, nullptr, frames);
+}
+
+// The audio thread's state set from the control side's, the queue and the reports emptied: before the device runs.
+static void ResetThreadState() {
+	std::lock_guard<std::mutex> lk(g_ctlMtx);
+	g_c.voices.clear();
+	std::fill(std::begin(g_c.recUsed), std::end(g_c.recUsed), false);
+	std::fill(std::begin(g_c.fxUsed), std::end(g_c.fxUsed), false);
+	std::fill(std::begin(g_c.pathUsed), std::end(g_c.pathUsed), false);
+	g_c.overflow.clear();
+	g_c.retired.clear();
+	g_c.dirtyVoices = 0;
+	g_c.mixDirty = g_c.lisDirty = false;
+	for (int k = 0; k < kSrcSlotsMax; ++k) {
+		g_c.srcT[k][0] = 1;
+		g_c.srcT[k][1] = 0;
+		g_c.raiseSeq[k][0] = g_c.raiseSeq[k][1] = 0;
+		g_c.blendDirty[k] = g_c.blendSnap[k] = false;
+	}
+	g_c.cap.reset();
+	g_c.mix.paused = false;
+	g_ring.Reset();
+	g_appliedSeq.store(g_c.seq);
+	for (int r = 0; r < kMaxVoices; ++r) {
+		g_rec[r] = Voice{};
+		g_isActive[r] = false;
+		g_endedId[r].store(0);
+		g_pathIdle[r].store(0);
+		g_start[r].store(StartState(0, kCancelled));
+	}
+	g_nAct = 0;
+	g_feedback.store(0);
+	g_c.feedbackSeen = 0;
+	g_cap = nullptr;
+	ApplyMix(g_c.mix);
+	g_lisPos = g_c.lis.pos;
+	g_lisAhead = g_c.lis.ahead;
+	g_lisUp = g_c.lis.up;
+	g_master = g_c.lis.master;
+	g_limiter.Reset();
+	ResetSrcBlend();
+	for (auto* a : {&g_energyL, &g_energyR, &g_dbgIn, &g_dbgL, &g_dbgR, &g_loadSum, &g_loadMax}) a->store(0);
+	for (auto& x : g_xc) x.store(0);
+	g_dbgVoices.store(0);
+	g_loadN.store(0);
+	g_fifo.clear();
+	g_fifo.reserve(kBlock * 2); // (the callback then reuses it: no allocation there)
+	g_fifoPos = 0;
+	AudioPub p;
+	std::memcpy(p.srcW, g_srcW, sizeof p.srcW);
+	p.applied = g_c.seq;
+	g_pub.Write(p);
+}
+
+static std::string StartImpl(IPLContext ctx, const void* sofa, size_t sofaSize, bool device) {
 	if (g_devOk) return "";
 	InterpT(); // the interpolation table, built here and not on the audio thread
 	g_ctx = ctx;
 	g_echoDropped = 0;
 	g_pathFallback = 0;
-	g_paused = false;
-	g_limiter.Reset();
 	IPLAudioSettings as{kRate, kBlock};
 	IPLHRTFSettings hs{};
 	hs.volume = 1.0f;
@@ -1382,7 +2210,6 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 		if (!CreateReflection(e, as)) return "reflection effect creation failed";
 	for (auto& e : g_srcB)
 		if (!CreateReflection(e, as)) return "reflection effect creation failed";
-	ResetSrcBlend();
 	{
 		IPLAmbisonicsDecodeEffectSettings ds{};
 		ds.speakerLayout = Stereo();
@@ -1410,6 +2237,13 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 		ps.hrtf = g_hrtf;
 		if (iplPathEffectCreate(g_ctx, &as, &ps, &p.fx) != IPL_STATUS_SUCCESS) return "path effect pool creation failed";
 	}
+	ResetThreadState();
+	if (!device) {
+		g_offline = true;
+		g_devOk = true;
+		g_running = true;
+		return "";
+	}
 	ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
 	cfg.playback.format = ma_format_f32;
 	cfg.playback.channels = 2;
@@ -1417,7 +2251,9 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 	cfg.periodSizeInFrames = kBlock;
 	cfg.dataCallback = Callback;
 	if (ma_device_init(nullptr, &cfg, &g_dev) != MA_SUCCESS) return "ma_device_init failed";
+	g_running = true;
 	if (ma_device_start(&g_dev) != MA_SUCCESS) {
+		g_running = false;
 		ma_device_uninit(&g_dev);
 		return "ma_device_start failed";
 	}
@@ -1442,15 +2278,31 @@ int LoaderThreads() {
 
 void Stop() {
 	JoinLoaders();
+	g_running = false;
 	if (g_devOk) {
-		ma_device_uninit(&g_dev); // joins the audio thread
+		if (!g_offline) ma_device_uninit(&g_dev); // joins the audio thread
 		g_devOk = false;
+		g_offline = false;
 	}
-	std::lock_guard<std::mutex> lk(g_mtx);
-	for (auto& v : g_voices) ReleaseVoice(*v);
-	g_voices.clear();
-	g_sounds.clear();
-	g_soundBytes = 0;
+	// nothing renders any more: everything the audio thread could read goes
+	{
+		std::lock_guard<std::mutex> lk(g_ctlMtx);
+		g_c.voices.clear();
+		g_c.overflow.clear();
+		g_c.retired.clear();
+		g_c.dirtyVoices = 0;
+		g_c.cap.reset();
+		g_cap = nullptr;
+		g_ring.Reset();
+		g_nAct = 0;
+		for (auto& v : g_rec) v = Voice{};
+		std::fill(std::begin(g_isActive), std::end(g_isActive), false);
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_sndMtx);
+		g_sounds.clear();
+		g_soundBytes = 0;
+	}
 	for (auto& e : g_pool) {
 		if (e.direct) iplDirectEffectRelease(&e.direct);
 		if (e.binaural) iplBinauralEffectRelease(&e.binaural);
@@ -1474,63 +2326,95 @@ void Stop() {
 	g_fifoPos = 0;
 }
 
-bool Running() { return g_devOk; }
+bool Running() { return g_running.load(); }
 std::string HrtfInfo() { return g_hrtfInfo; }
 
+// ------------------------------------------------------------------ settings: the control side's copy, sent whole
 void SetOutputMode(int mode) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_outMode = mode == 1 ? 1 : 0;
+	CtlCall cc;
+	g_c.mix.outMode = mode == 1 ? 1 : 0;
+	SendMix();
 }
 
 void SetHrtfBlend(float blend) { g_hrtfBlend = std::clamp(blend, 0.0f, 1.0f); }
 
 void SetPaused(bool paused) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_paused = paused;
+	CtlCall cc;
+	g_c.mix.paused = paused;
+	SendMix();
 }
 
 void SetUnderwater(float amount) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_uw = std::clamp(amount, 0.0f, 1.0f);
+	CtlCall cc;
+	g_c.mix.uw = std::clamp(amount, 0.0f, 1.0f);
+	SendMix();
 }
 
 void SetWet(float room, float echo) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_wetRoom = std::clamp(room, 0.0f, 4.0f);
-	g_wetEcho = std::clamp(echo, 0.0f, 4.0f);
+	CtlCall cc;
+	g_c.mix.wetRoom = std::clamp(room, 0.0f, 4.0f);
+	g_c.mix.wetEcho = std::clamp(echo, 0.0f, 4.0f);
+	SendMix();
 }
 
 void SetDiffuseRtRef(float s) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_diffuseRtRef = std::clamp(s, 0.0f, 10.0f);
+	CtlCall cc;
+	g_c.mix.diffuseRtRef = std::clamp(s, 0.0f, 10.0f);
+	SendMix();
 }
 
 void SetDiffuseSend(float k) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_diffuseSend = std::clamp(k, 0.0f, 8.0f);
+	CtlCall cc;
+	g_c.mix.diffuseSend = std::clamp(k, 0.0f, 8.0f);
+	SendMix();
 }
 
+// The audio thread reads a bus's source once per block. The previous sources are released by the caller as soon as
+// this returns (pba_native, world unload), so it waits for the end of the callback in flight, if one is (at most one
+// render, at a world load or unload only): every later block reads the new ones. The bindings and the banks' blend of
+// the previous simulator go with them, from the next block on.
 void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IPLSource* srcs, int nSrc,
                           const IPLSource* srcsB, int nSrcB) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_room.src = room;
+	// generations first: a block that sees a new source sees it unsimulated
 	g_room.simGen = 0;
+	g_room.src.store(room, std::memory_order_release);
 	for (int k = 0; k < kEchoSlots; ++k) {
-		g_echo[k].src = (echo && k < n) ? echo[k] : nullptr;
 		g_echo[k].simGen = 0;
+		g_echo[k].src.store((echo && k < n) ? echo[k] : nullptr, std::memory_order_release);
 	}
 	// new simulator: the slots restart at generation 1; bindings of the previous one are dropped
 	// (their generations would never be reached again)
 	for (int k = 0; k < kSrcSlotsMax; ++k) {
-		g_src[k].src = (srcs && k < nSrc) ? srcs[k] : nullptr;
 		g_src[k].simGen = 0;
+		g_src[k].src.store((srcs && k < nSrc) ? srcs[k] : nullptr, std::memory_order_release);
 	}
 	for (int k = 0; k < kSrcBankB; ++k) {
-		g_srcB[k].src = (srcsB && k < nSrcB) ? srcsB[k] : nullptr;
 		g_srcB[k].simGen = 0;
+		g_srcB[k].src.store((srcsB && k < nSrcB) ? srcsB[k] : nullptr, std::memory_order_release);
 	}
-	ResetSrcBlend();
-	for (auto& v : g_voices) v->srcSlot = -1;
+	{
+		CtlCall cc;
+		for (int k = 0; k < kSrcSlotsMax; ++k) {
+			g_c.srcT[k][0] = 1;
+			g_c.srcT[k][1] = 0;
+			g_c.blendDirty[k] = g_c.blendSnap[k] = false;
+		}
+		Cmd c;
+		c.op = Op::SrcReset;
+		const uint64_t seq = Push(c);
+		for (int k = 0; k < kSrcSlotsMax; ++k) {
+			g_c.raiseSeq[k][0] = seq;
+			g_c.raiseSeq[k][1] = 0;
+		}
+		for (auto& v : g_c.voices)
+			if (v.alive && v.c.srcSlot != -1) {
+				v.c.srcSlot = -1;
+				SendVoice(v);
+			}
+	}
+	const uint64_t e = g_cbEpoch.load(std::memory_order_acquire);
+	if (e & 1)
+		while (g_cbEpoch.load(std::memory_order_acquire) == e) std::this_thread::yield();
 }
 
 void PublishSrcBank(int k, int bank) {
@@ -1540,55 +2424,59 @@ void PublishSrcBank(int k, int bank) {
 
 void SetSrcBlend(int k, float w0, float w1, bool snap) {
 	if (k < 0 || k >= kSrcSlotsMax) return;
-	std::lock_guard<std::mutex> lk(g_mtx);
-	const float t[2] = {std::clamp(w0, 0.0f, 1.0f), k < kSrcBankB ? std::clamp(w1, 0.0f, 1.0f) : 0.0f};
-	for (int b = 0; b < 2; ++b) {
-		g_srcT[k][b] = t[b];
-		if (snap && t[b] > g_srcW[k][b]) g_srcW[k][b] = t[b];
-	}
+	CtlCall cc;
+	g_c.srcT[k][0] = std::clamp(w0, 0.0f, 1.0f);
+	g_c.srcT[k][1] = k < kSrcBankB ? std::clamp(w1, 0.0f, 1.0f) : 0.0f;
+	SendBlend(k, snap);
 }
 
+// The weights are the audio thread's (published after each block), the targets the control side's. A target above 0
+// sent but not applied yet may still raise a weight: not silent until the block after it is published.
 bool SrcBankSilent(int bank) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	const AudioPub p = g_pub.Read();
+	std::lock_guard<std::mutex> lk(g_ctlMtx);
 	// slots beyond kSrcBankB have bank 0 only and never take part in a swap
 	for (int k = 0; k < kSrcBankB; ++k)
-		if (g_srcW[k][bank] > 0 || g_srcT[k][bank] > 0) return false;
+		if (p.srcW[k][bank] > 0 || g_c.srcT[k][bank] > 0 || g_c.blendDirty[k] || p.applied < g_c.raiseSeq[k][bank]) return false;
 	return true;
 }
 
 void SrcSlotStates(SrcSlotState* out, double* seconds) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	const AudioPub p = g_pub.Read();
+	std::lock_guard<std::mutex> lk(g_ctlMtx);
 	for (int k = 0; k < kSrcSlotsMax; ++k) {
 		for (int b = 0; b < 2; ++b) {
-			out[k].w[b] = g_srcW[k][b];
-			out[k].target[b] = g_srcT[k][b];
+			out[k].w[b] = p.srcW[k][b];
+			out[k].target[b] = g_c.srcT[k][b];
 		}
-		out[k].energy = g_srcE[k];
-		g_srcE[k] = 0;
-		out[k].inEnergy = g_srcInE[k];
-		g_srcInE[k] = 0;
+		out[k].energy = g_srcE[k].exchange(0);
+		out[k].inEnergy = g_srcInE[k].exchange(0);
 		for (int b = 0; b < 2; ++b) {
 			const Reflection* r = b == 0 ? &g_src[k] : (k < kSrcBankB ? &g_srcB[k] : nullptr);
 			for (int q = 0; q < 3; ++q) out[k].eq[b][q] = r ? r->eqUsed[q].load() : 0.0f;
 			out[k].delay[b] = r ? r->delayUsed.load() : 0;
 		}
 	}
-	if (seconds) *seconds = g_srcESec;
-	g_srcESec = 0;
+	const double s = g_srcESec.exchange(0);
+	if (seconds) *seconds = s;
 }
 
 void SetSourceReverbScale(float k) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_srcScale = std::clamp(k, 0.0f, 16.0f);
+	CtlCall cc;
+	g_c.mix.srcScale = std::clamp(k, 0.0f, 16.0f);
+	SendMix();
 }
 
 bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	Voice* t = nullptr;
-	for (auto& v : g_voices)
-		if (v->id == id && v->alive.load() && !v->dying && v->echoSlot < 0) t = v.get();
+	CtlCall cc;
+	ControlVoice* t = nullptr;
+	for (auto& v : g_c.voices)
+		if (v.id == id && v.alive && !v.c.dying && v.c.echoSlot < 0) t = &v;
 	if (slot < 0 || slot >= kSrcSlotsMax) {
-		if (t) t->srcSlot = -1;
+		if (t) {
+			t->c.srcSlot = -1;
+			SendVoice(*t);
+		}
 		return t != nullptr && slot < 0;
 	}
 	if (!t || !g_src[slot].fx) return false;
@@ -1596,33 +2484,37 @@ bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend) {
 	// at that place has simGen >= gen and is fed at once; one moved (or just taken) waits, the
 	// voice keeping its room send meanwhile. The other voices of the slot keep theirs: they go on
 	// feeding the previous response until the new one replaces it.
-	// srcSendCur / srcFbCur are left alone: the renderer fades the previous slot's input (or the
-	// room-bus stand-in) out from their current level over one block (see Voice::srcSendCur)
-	if (t->srcSlot != slot || gen < t->srcGen) { // new binding (or a new simulator)
-		t->srcGen = gen;
-		if (t->srcSlot != slot) t->srcSend = 0;
+	// The renderer fades the previous slot's input (or the room-bus stand-in) out from its current level over one
+	// block (see Voice::srcSendCur)
+	if (t->c.srcSlot != slot || gen < t->c.srcGen) { // new binding (or a new simulator)
+		t->c.srcGen = gen;
+		if (t->c.srcSlot != slot) t->c.srcSend = 0;
 	}
-	t->srcSlot = slot;
-	if (srcSend >= 0) t->srcSend = srcSend;
+	t->c.srcSlot = slot;
+	if (srcSend >= 0) t->c.srcSend = srcSend;
+	SendVoice(*t);
 	return true;
 }
 
 int SrcSlotLive(int live[kSrcSlotsMax], int id) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	CtlCall cc;
 	for (int k = 0; k < kSrcSlotsMax; ++k) live[k] = 0;
 	int mine = -1;
-	for (auto& v : g_voices)
-		if (v->srcSlot >= 0 && v->srcSlot < kSrcSlotsMax && v->alive.load() && !v->dying) {
-			live[v->srcSlot]++;
-			if (id > 0 && v->id == id) mine = v->srcSlot;
+	for (auto& v : g_c.voices)
+		if (v.c.srcSlot >= 0 && v.c.srcSlot < kSrcSlotsMax && v.alive && !v.c.dying) {
+			live[v.c.srcSlot]++;
+			if (id > 0 && v.id == id) mine = v.c.srcSlot;
 		}
 	return mine;
 }
 
 void LimitSrcSlots(int n) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	for (auto& v : g_voices)
-		if (v->srcSlot >= n) v->srcSlot = -1; // back to the room send alone (fades through srcSendCur)
+	CtlCall cc;
+	for (auto& v : g_c.voices)
+		if (v.alive && v.c.srcSlot >= n) {
+			v.c.srcSlot = -1; // back to the room send alone (fades through srcSendCur)
+			SendVoice(v);
+		}
 }
 
 void RoomTailEq(float eq[3]) {
@@ -1630,8 +2522,8 @@ void RoomTailEq(float eq[3]) {
 }
 
 void RoomReverbTimes(float rt[3]) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	std::copy(g_roomRt, g_roomRt + 3, rt);
+	const AudioPub p = g_pub.Read();
+	std::copy(p.roomRt, p.roomRt + 3, rt);
 }
 
 void PublishSimulated(int slot, int gen) {
@@ -1641,38 +2533,52 @@ void PublishSimulated(int slot, int gen) {
 }
 
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	{
+		CtlCall cc;
+		if (!g_c.mix.debugOn) {
+			g_c.mix.debugOn = true; // the meters run from the next block on
+			SendMix();
+		}
+	}
+	double xc[kMaxLag * 2 + 1];
+	for (int k = 0; k < kMaxLag * 2 + 1; ++k) xc[k] = g_xc[k].exchange(0);
 	int best = 0;
 	for (int k = 1; k < kMaxLag * 2 + 1; ++k)
-		if (g_xc[k] > g_xc[best]) best = k;
-	*lis = {(float)g_dbgIn, (float)g_dbgL, (float)g_dbgR};
-	*ahead = {(float)g_dbgVoices, (float)(best - kMaxLag), 0}; // y = ITD lag in samples (+ = left ear first)
-	std::fill(std::begin(g_xc), std::end(g_xc), 0.0);
-	*lastDir = g_lastDir;
-	g_dbgIn = g_dbgL = g_dbgR = 0;
-	g_dbgVoices = 0;
-	g_debugOn = true;
+		if (xc[k] > xc[best]) best = k;
+	*lis = {(float)g_dbgIn.exchange(0), (float)g_dbgL.exchange(0), (float)g_dbgR.exchange(0)};
+	*ahead = {(float)g_dbgVoices.exchange(0), (float)(best - kMaxLag), 0}; // y = ITD lag in samples (+ = left ear first)
+	*lastDir = g_pub.Read().lastDir;
 }
 
 void Load(double* avgMs, double* maxMs, int* blocks) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	*avgMs = g_loadN ? g_loadSum / g_loadN : 0;
-	*maxMs = g_loadMax;
-	*blocks = g_loadN;
-	g_loadSum = g_loadMax = 0;
-	g_loadN = 0;
+	const int n = g_loadN.exchange(0);
+	const double sum = g_loadSum.exchange(0);
+	*avgMs = n ? sum / n : 0;
+	*maxMs = g_loadMax.exchange(0);
+	*blocks = n;
 }
 
 void SetDiffuseFieldEq(bool on) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_dfOn = on;
+	CtlCall cc;
+	g_c.mix.dfOn = on;
+	SendMix();
 }
 
-bool DiffuseFieldEqOn() { return g_dfOn && !g_dfEq.h.empty(); }
+bool DiffuseFieldEqOn() {
+	std::lock_guard<std::mutex> lk(g_ctlMtx);
+	return g_c.mix.dfOn && !g_dfEq.h.empty();
+}
 
 std::vector<double> DiffuseFieldEqGainDb() { return g_dfEq.gainDb; }
 
 void DecodeReverbBus(const float* const amb[4], int frames, float* l, float* r) {
+	int outMode = 0;
+	bool dfOn = true;
+	{
+		std::lock_guard<std::mutex> lk(g_ctlMtx);
+		outMode = g_c.mix.outMode;
+		dfOn = g_c.mix.dfOn;
+	}
 	IPLAudioSettings as{kRate, kBlock};
 	IPLAmbisonicsDecodeEffectSettings ds{};
 	ds.speakerLayout = Stereo();
@@ -1687,7 +2593,7 @@ void DecodeReverbBus(const float* const amb[4], int frames, float* l, float* r) 
 	const IPLCoordinateSpace3 lis{{1, 0, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 0}};
 	for (int at = 0; at + kBlock <= frames; at += kBlock) {
 		for (int c = 0; c < kAmbi; ++c) std::copy(amb[c] + at, amb[c] + at + kBlock, in.data[c]);
-		DecodeBus(fx, *st, lis, &in, &out);
+		DecodeBus(fx, *st, lis, &in, &out, outMode, dfOn);
 		std::copy(out.data[0], out.data[0] + kBlock, l + at);
 		std::copy(out.data[1], out.data[1] + kBlock, r + at);
 	}
@@ -1733,7 +2639,7 @@ void TestBinaural(IPLVector3 dir, double* eL, double* eR) {
 
 bool LoadSoundAsync(const std::string& name, std::string data) {
 	{
-		std::lock_guard<std::mutex> lk(g_mtx);
+		std::lock_guard<std::mutex> lk(g_sndMtx);
 		if (g_sounds.count(name) || g_pending.count(name)) return false;
 		g_pending.insert(name);
 	}
@@ -1752,7 +2658,7 @@ bool LoadSoundAsync(const std::string& name, std::string data) {
 		double secs = 0;
 		LoadSound(name, data.data(), data.size(), &secs); // inserts into g_sounds on success
 		{
-			std::lock_guard<std::mutex> lk2(g_mtx);
+			std::lock_guard<std::mutex> lk2(g_sndMtx);
 			g_pending.erase(name);
 		}
 		done->store(true);
@@ -1762,68 +2668,95 @@ bool LoadSoundAsync(const std::string& name, std::string data) {
 }
 
 bool SoundPending(const std::string& name) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	std::lock_guard<std::mutex> lk(g_sndMtx);
 	return g_pending.count(name) != 0;
 }
 
 std::vector<float> SoundPcm(const std::string& name) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	std::lock_guard<std::mutex> lk(g_sndMtx);
 	auto it = g_sounds.find(name);
 	return it == g_sounds.end() ? std::vector<float>() : it->second->pcm;
 }
 
 std::vector<float> SoundSide(const std::string& name) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	std::lock_guard<std::mutex> lk(g_sndMtx);
 	auto it = g_sounds.find(name);
 	return it == g_sounds.end() ? std::vector<float>() : it->second->side;
 }
 
+// ------------------------------------------------------------------ captures
+namespace {
+// a capture buffer for `frames` frames, rounded up to whole blocks (the audio thread writes whole blocks)
+std::unique_ptr<CaptureBuf> NewCapture(size_t frames, bool outOnly) {
+	auto c = std::make_unique<CaptureBuf>();
+	c->outOnly = outOnly;
+	c->limitFrames = frames;
+	c->maxFrames = (frames + kBlock - 1) / kBlock * kBlock;
+	c->out.reset(new float[c->maxFrames * 2]);
+	if (!outOnly) {
+		c->mix.reset(new float[c->maxFrames * 2]);
+		c->room.reset(new float[c->maxFrames]);
+		c->src.reset(new float[c->maxFrames]);
+	}
+	return c;
+}
+// the audio thread writes into `next` from the next block on (nullptr: no capture); the buffer it wrote into is freed
+// once it has switched (g_ctlMtx held)
+void SwapCapture(std::unique_ptr<CaptureBuf> next) {
+	Cmd c;
+	c.op = Op::Capture;
+	c.cap = next.get();
+	const uint64_t seq = Push(c);
+	if (g_c.cap) {
+		Retired r;
+		r.seq = seq;
+		r.cap = std::move(g_c.cap);
+		g_c.retired.push_back(std::move(r));
+	}
+	g_c.cap = std::move(next);
+}
+} // namespace
+
 void CaptureStart() {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_capMix.clear();
-	g_capRoom.clear();
-	g_capSrc.clear();
-	g_capOut.clear();
-	g_capOutOnly = false;
-	g_capMaxFrames = 0;
-	g_capOn = true;
+	CtlCall cc;
+	SwapCapture(NewCapture((size_t)(kTestCaptureSeconds * kRate), false));
 }
 
 void CaptureStop(std::vector<float>* mix, std::vector<float>* roomSend, std::vector<float>* srcSend, std::vector<float>* output) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_capOn = false;
-	if (output) *output = std::move(g_capOut);
-	g_capOut.clear();
-	if (mix) *mix = std::move(g_capMix);
-	if (roomSend) *roomSend = std::move(g_capRoom);
-	if (srcSend) *srcSend = std::move(g_capSrc);
-	g_capMix.clear();
-	g_capRoom.clear();
-	g_capSrc.clear();
+	CtlCall cc;
+	for (auto* v : {mix, roomSend, srcSend, output})
+		if (v) v->clear();
+	CaptureBuf* c = g_c.cap.get();
+	if (c) {
+		const size_t n = c->frames.load(std::memory_order_acquire); // the blocks rendered so far
+		if (output) output->assign(c->out.get(), c->out.get() + n * 2);
+		if (!c->outOnly) {
+			if (mix) mix->assign(c->mix.get(), c->mix.get() + n * 2);
+			if (roomSend) roomSend->assign(c->room.get(), c->room.get() + n);
+			if (srcSend) srcSend->assign(c->src.get(), c->src.get() + n);
+		}
+	}
+	SwapCapture(nullptr);
 }
 
 // ------------------------------------------------------------------ debug capture of the final output (Lua)
 std::string CaptureBegin(double seconds) {
 	if (!(seconds > 0) || seconds > kCaptureMaxSeconds) return "seconds must be in ]0, " + std::to_string((int)kCaptureMaxSeconds) + "]";
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_capMix.clear();
-	g_capRoom.clear();
-	g_capSrc.clear();
-	g_capOut.clear();
-	g_capOut.reserve((size_t)(seconds * kRate) * 2 + (size_t)kBlock * 2);
-	g_capOutOnly = true;
-	g_capMaxFrames = (size_t)std::ceil(seconds * kRate);
-	g_capOn = true;
+	CtlCall cc;
+	SwapCapture(NewCapture((size_t)std::ceil(seconds * kRate), true));
 	return "";
 }
 
 CaptureState CaptureStatus() {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	std::lock_guard<std::mutex> lk(g_ctlMtx);
 	CaptureState st;
-	st.recording = g_capOn && g_capOutOnly;
-	st.frames = g_capOut.size() / 2;
-	st.maxFrames = g_capMaxFrames;
-	st.full = st.recording && st.frames >= g_capMaxFrames;
+	const CaptureBuf* c = g_c.cap.get();
+	st.recording = c && c->outOnly;
+	if (c) {
+		st.frames = c->frames.load(std::memory_order_acquire);
+		st.maxFrames = c->limitFrames;
+	}
+	st.full = st.recording && st.frames >= st.maxFrames;
 	return st;
 }
 
@@ -1849,14 +2782,12 @@ std::string CaptureFinish(const std::string& dir, const std::string& name, int b
 	if (bits != 16 && bits != 32) return "bits must be 16 or 32";
 	std::vector<float> out;
 	{
-		std::lock_guard<std::mutex> lk(g_mtx);
-		if (!(g_capOn && g_capOutOnly)) return "no capture running (CaptureStart first)";
-		g_capOn = false;
-		g_capOutOnly = false;
-		out = std::move(g_capOut);
-		g_capOut.clear();
-		if (g_capMaxFrames && out.size() > g_capMaxFrames * 2) out.resize(g_capMaxFrames * 2);
-		g_capMaxFrames = 0;
+		CtlCall cc;
+		CaptureBuf* c = g_c.cap.get();
+		if (!(c && c->outOnly)) return "no capture running (CaptureStart first)";
+		const size_t n = std::min(c->frames.load(std::memory_order_acquire), c->limitFrames);
+		out.assign(c->out.get(), c->out.get() + n * 2);
+		SwapCapture(nullptr);
 	}
 	if (out.empty()) return "nothing was rendered (audio thread not running?)";
 	const uint32_t n = (uint32_t)(out.size() / 2), ch = 2, rate = (uint32_t)kRate;
@@ -1894,34 +2825,37 @@ std::string CaptureFinish(const std::string& dir, const std::string& name, int b
 float OutputClip(float x) { return SoftClip(x); }
 
 void SetMixQuality(int limiterMode, bool hqResample, bool premaster) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_limiterPre = premaster;
-	limiterMode = std::clamp(limiterMode, 0, 2);
-	if (limiterMode != g_limiterMode.load()) g_limiter.Reset(); // (no stale frames of an earlier run in the delay line)
-	g_limiterMode = limiterMode;
-	g_hqResample = hqResample;
+	CtlCall cc;
+	g_c.mix.limiterPre = premaster;
+	g_c.mix.limiterMode = std::clamp(limiterMode, 0, 2); // (the audio thread resets the limiter on a change)
+	g_c.mix.hqRead = hqResample;
+	g_hqDecode = hqResample;
+	SendMix();
 }
-int OutputMode() { return g_limiterMode.load(); }
+int OutputMode() {
+	std::lock_guard<std::mutex> lk(g_ctlMtx);
+	return g_c.mix.limiterMode;
+}
 void SetLimiterTuning(float fastMs, float slowMs, float slowK) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_limFastMs = std::clamp(fastMs, 0.5f, 1000.0f);
-	g_limSlowMs = std::clamp(slowMs, 1.0f, 2000.0f);
-	g_limSlowK = std::clamp(slowK, 0.0f, 10.0f);
+	CtlCall cc;
+	g_c.mix.limFastMs = std::clamp(fastMs, 0.5f, 1000.0f);
+	g_c.mix.limSlowMs = std::clamp(slowMs, 1.0f, 2000.0f);
+	g_c.mix.limSlowK = std::clamp(slowK, 0.0f, 10.0f);
+	SendMix();
 }
-int OutputLatency() { return g_limiterMode.load() == 1 ? kLimLook : 0; }
-float OutputCeiling() { return g_limiterMode.load() == 1 ? kLimCeil : 1.0f; }
-float LimiterMinGain() {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	return g_limiter.minGain;
-}
+int OutputLatency() { return OutputMode() == 1 ? kLimLook : 0; }
+float OutputCeiling() { return OutputMode() == 1 ? kLimCeil : 1.0f; }
+float LimiterMinGain() { return g_pub.Read().limMinGain; }
 
 bool HasSound(const std::string& name) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	std::lock_guard<std::mutex> lk(g_sndMtx);
 	return g_sounds.count(name) != 0;
 }
 
 // Evicts least-recently-played sounds that no voice holds until at most `target` bytes remain.
-// Lock held. False when it cannot get there (everything left is playing).
+// g_sndMtx held. False when it cannot get there (everything left is playing). A voice's sound is held by the control
+// side (ControlVoice::snd, then Retired) as long as the audio thread may read it, and a new holder is only ever made
+// from the map, under g_sndMtx: use_count() == 1 here means nobody reads it nor can start to.
 static bool EvictTo(uint64_t target) {
 	while (g_soundBytes > target) {
 		auto victim = g_sounds.end();
@@ -2049,7 +2983,7 @@ std::string LoadSound(const std::string& name, const void* data, size_t size, do
 	const double loopFrames = WavLoopStart(data, size, &srcRate);
 	const std::string fixed = FixWavFmt(data, size);
 	if (!fixed.empty()) { data = fixed.data(); size = fixed.size(); }
-	const bool hq = g_hqResample.load();
+	const bool hq = g_hqDecode.load();
 	// the file's own channel count (0), so a stereo file keeps its two channels (Sound::side); more
 	// than two are downmixed to stereo by miniaudio. hq: decoded at the file's own rate, the resampling to kRate
 	// is ours (ResampleSinc); otherwise miniaudio resamples to kRate by linear interpolation as it decodes
@@ -2123,7 +3057,7 @@ std::string LoadSound(const std::string& name, const void* data, size_t size, do
 // sounds that no voice holds until it fits. "" on success.
 static std::string Store(const std::string& name, const std::shared_ptr<Sound>& snd) {
 	const uint64_t bytes = snd->Bytes();
-	std::lock_guard<std::mutex> lk(g_mtx);
+	std::lock_guard<std::mutex> lk(g_sndMtx);
 	if (!EvictTo(g_memBudget.load() - bytes)) return "memory budget full (every decoded sound is playing): " + name;
 	snd->lastUse = ++g_useClock;
 	auto old = g_sounds.find(name);
@@ -2162,7 +3096,7 @@ static size_t ZeroBefore(const std::vector<float>& x, size_t i) {
 std::string LoadSentence(const std::string& name, const SentenceWord* words, int n, double* seconds, int* used) {
 	std::vector<std::shared_ptr<Sound>> snds(n);
 	{
-		std::lock_guard<std::mutex> lk(g_mtx);
+		std::lock_guard<std::mutex> lk(g_sndMtx);
 		for (int i = 0; i < n; ++i) {
 			auto it = g_sounds.find(words[i].file);
 			if (it != g_sounds.end()) snds[i] = it->second;
@@ -2186,7 +3120,7 @@ std::string LoadSentence(const std::string& name, const SentenceWord* words, int
 		} else {
 			// a pitched word is read between its samples: the windowed-sinc interpolator (hqResample), else linear as
 			// the engine's own resampling of a pitched sound
-			const bool hq = g_hqResample.load();
+			const bool hq = g_hqDecode.load();
 			const InterpLoop noLoop;
 			for (double c = (double)a; c < (double)b; c += step) {
 				if (hq) {
@@ -2207,231 +3141,181 @@ std::string LoadSentence(const std::string& name, const SentenceWord* words, int
 	return Store(name, out);
 }
 
-// Gives a voice that wants a baked path a path effect from the pool. Lock held. A voice that finds
-// the pool full renders the straight line meanwhile (counted once per episode, g_pathFallback):
-// with 16 path voices playing, a 17th gunshot behind a corner came straight through the wall with
-// nothing to tell why. Retried on every Update, so it moves onto the path once a slot frees up
-// (crossfaded by the renderer).
-static void AcquirePath(Voice& v) {
-	if (!v.hasSH || v.pathSlot >= 0) {
-		v.pathFallback = false;
-		return;
-	}
-	for (int i = 0; i < (int)g_pathPool.size(); ++i)
-		if (!g_pathPool[i].used) {
-			g_pathPool[i].used = true;
-			iplPathEffectReset(g_pathPool[i].fx);
-			v.pathSlot = i;
-			v.pathFallback = false;
-			return;
-		}
-	if (!v.pathFallback) g_pathFallback++;
-	v.pathFallback = true;
-}
-
-static void SetVoice(Voice& v, const VoiceParams& p) {
-	v.pos = p.pos;
-	v.gain = p.gain;
-	v.rate = std::clamp(p.pitch / 100.0f, 0.05f, 4.0f);
-	std::copy(p.eq, p.eq + 3, v.eq);
-	// baked path: new coefficients (acquiring a path effect if the voice had none), or back to the
-	// straight line (the renderer fades the path out, then releases its effect); neither: kept. A
-	// voice followed by Update used to keep its Play-time arrival field forever while its position
-	// was ignored (the path branch renders from sh only).
-	if (p.hasSH) {
-		std::copy(p.sh, p.sh + 4, v.sh);
-		v.hasSH = true;
-	} else if (p.clearSH) {
-		v.hasSH = false;
-	}
-	AcquirePath(v);
-	if (p.diffuse >= 0) v.diffuse = std::clamp(p.diffuse, 0.0f, 1.0f); // < 0: unchanged (Update without it)
-	if (p.send >= 0) v.send = p.send; // < 0: unchanged (Update without it)
-}
-
+// ------------------------------------------------------------------ voices (control side; the audio thread follows)
 int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFallback) {
 	if (pathFallback) *pathFallback = false;
-	std::lock_guard<std::mutex> lk(g_mtx);
-	auto it = g_sounds.find(name);
-	if (it == g_sounds.end() || !g_devOk) return 0;
+	std::shared_ptr<Sound> snd;
+	{
+		std::lock_guard<std::mutex> lk(g_sndMtx);
+		auto it = g_sounds.find(name);
+		if (it == g_sounds.end()) return 0;
+		snd = it->second;
+	}
+	if (!g_running.load()) return 0;
+	CtlCall cc;
 	Reap();
 	const int slot = FindEffect();
 	if (slot < 0) return 0;
-	auto v = std::make_unique<Voice>();
-	g_pool[slot].used = true;
-	v->slot = slot;
-	iplDirectEffectReset(g_pool[slot].direct);
-	iplBinauralEffectReset(g_pool[slot].binaural);
-	iplPanningEffectReset(g_pool[slot].pan);
-	v->id = g_nextId++;
-	v->snd = it->second;
-	it->second->lastUse = ++g_useClock;
-	v->loop = loop;
-	v->protect = p.protect;
-	v->pausable = p.pausable;
-	v->cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
-	v->own = p.own;
-	if (p.own && !v->snd->side.empty()) {
+	ControlVoice v;
+	g_c.fxUsed[slot] = true;
+	v.c.slot = slot;
+	uint8_t flags = kResetSlot;
+	v.hasSide = !snd->side.empty();
+	v.snd = snd;
+	snd->lastUse = ++g_useClock;
+	v.c.loop = loop;
+	v.c.protect = p.protect;
+	v.c.pausable = p.pausable;
+	double cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
+	v.c.own = p.own;
+	if (p.own && v.hasSide) {
 		// a stereo file: the side channel needs an effect pair of its own for the voice's EQ (none free: the
 		// downmix on both ears)
 		const int k = FindEffect();
 		if (k >= 0) {
-			g_pool[k].used = true;
-			iplDirectEffectReset(g_pool[k].direct);
-			iplBinauralEffectReset(g_pool[k].binaural);
-			iplPanningEffectReset(g_pool[k].pan);
-			v->slot2 = k;
+			g_c.fxUsed[k] = true;
+			v.c.slot2 = k;
+			flags |= kResetSlot2;
 		}
 	}
-	SetVoice(*v, p); // takes a path effect if p.hasSH (see AcquirePath)
+	flags |= SetVoiceCtl(v, p); // takes a path effect if p.hasSH (see AcquirePath)
+	double startAt = 0;
+	int fadeIn = 0;
 	if (p.offset > 0) {
 		// offset is playback time: at pitch 150 the sound has advanced 1.5 s of pcm per second.
 		// Past the end of a one-shot the voice simply ends on its first block (the sound is over);
 		// a loop wraps in the mixer.
-		v->startAt = (double)p.offset * kRate * v->rate;
-		v->fadeIn = kBlock;
-		if (v->cursor >= 0) v->cursor = v->startAt;
+		startAt = (double)p.offset * kRate * v.c.rate;
+		fadeIn = kBlock;
+		if (cursor >= 0) cursor = startAt;
 	}
-	if (pathFallback) *pathFallback = v->pathFallback;
-	const int id = v->id;
-	g_voices.push_back(std::move(v));
-	return id;
+	if (pathFallback) *pathFallback = v.pathFallback;
+	return AddVoice(std::move(v), flags, cursor, startAt, fadeIn);
 }
 
 int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	if (!buf || !g_devOk) return 0;
+	if (!buf || !g_running.load()) return 0;
+	CtlCall cc;
 	Reap();
 	const int slot = FindEffect();
 	if (slot < 0) return 0;
-	auto v = std::make_unique<Voice>();
-	g_pool[slot].used = true;
-	v->slot = slot;
-	iplDirectEffectReset(g_pool[slot].direct);
-	iplBinauralEffectReset(g_pool[slot].binaural);
-	iplPanningEffectReset(g_pool[slot].pan);
-	v->id = g_nextId++;
-	v->stream = std::move(buf);
+	ControlVoice v;
+	g_c.fxUsed[slot] = true;
+	v.c.slot = slot;
+	v.stream = std::move(buf);
 	// start from what is buffered now (no backlog)
-	v->stream->r.store(v->stream->w.load());
-	SetVoice(*v, p);
-	const int id = v->id;
-	g_voices.push_back(std::move(v));
-	return id;
+	v.stream->r.store(v.stream->w.load());
+	const uint8_t flags = kResetSlot | SetVoiceCtl(v, p);
+	return AddVoice(std::move(v), flags, 0, 0, 0);
 }
 
 int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay, bool pausable) {
 	if (slot < 0 || slot >= kEchoSlots) return 0;
-	std::lock_guard<std::mutex> lk(g_mtx);
-	auto it = g_sounds.find(name);
-	if (it == g_sounds.end() || !g_devOk || !g_echo[slot].fx) return 0;
+	std::shared_ptr<Sound> snd;
+	{
+		std::lock_guard<std::mutex> lk(g_sndMtx);
+		auto it = g_sounds.find(name);
+		if (it == g_sounds.end()) return 0;
+		snd = it->second;
+	}
+	if (!g_running.load() || !g_echo[slot].fx) return 0;
+	CtlCall cc;
 	Reap();
 	// automatic fire: at most kEchoPerSlot overlapping echo voices per slot (the oldest goes),
 	// so echoes never crowd the direct voices out of the voice budget
 	constexpr int kEchoPerSlot = 6;
 	int n = 0;
-	for (auto& v : g_voices)
-		if (v->echoSlot == slot && v->alive.load() && !v->dying) ++n;
-	for (auto& v : g_voices) {
+	for (auto& v : g_c.voices)
+		if (v.c.echoSlot == slot && v.alive && !v.c.dying) ++n;
+	for (auto& v : g_c.voices) {
 		if (n < kEchoPerSlot) break;
-		if (v->echoSlot == slot && v->alive.load() && !v->dying) {
-			v->dying = true;
-			v->gain = 0;
+		if (v.c.echoSlot == slot && v.alive && !v.c.dying) {
+			v.c.dying = true;
+			v.c.gain = 0;
+			SendVoice(v, 0, true);
 			--n;
 		}
 	}
-	auto v = std::make_unique<Voice>();
-	v->id = g_nextId++;
-	v->snd = it->second;
-	v->echoSlot = slot;
-	v->pausable = pausable;
-	v->needGen = gen;
-	v->gain = gain;
-	v->rate = std::clamp(pitch / 100.0f, 0.05f, 4.0f);
-	v->cursor = -std::clamp(delay, 0.0f, 3.0f) * kRate;
-	const int id = v->id;
-	g_voices.push_back(std::move(v));
-	return id;
+	ControlVoice v;
+	v.hasSide = !snd->side.empty();
+	v.snd = std::move(snd);
+	v.c.echoSlot = slot;
+	v.c.pausable = pausable;
+	v.c.needGen = gen;
+	v.c.gain = SaneGain(gain);
+	v.c.rate = std::clamp(pitch / 100.0f, 0.05f, 4.0f);
+	const double cursor = -std::clamp(delay, 0.0f, 3.0f) * kRate;
+	return AddVoice(std::move(v), 0, cursor, 0, 0);
 }
 
 bool Update(int id, const VoiceParams& p, bool* pathFallback) {
 	if (pathFallback) *pathFallback = false;
-	std::lock_guard<std::mutex> lk(g_mtx);
-	for (auto& v : g_voices) {
-		if (v->id == id && v->alive.load()) {
-			if (v->dying) return false; // stopped or capped: an update must not bring it back
-			SetVoice(*v, p);
-			if (pathFallback) *pathFallback = v->pathFallback;
-			return true;
-		}
-	}
-	return false;
+	CtlCall cc;
+	ControlVoice* v = FindVoice(id);
+	if (!v) return false;
+	if (v->c.dying) return false; // stopped or capped: an update must not bring it back
+	const uint8_t f = SetVoiceCtl(*v, p);
+	SendVoice(*v, f, f != 0);
+	if (pathFallback) *pathFallback = v->pathFallback;
+	return true;
 }
 
 void EchoSlotLive(int live[kEchoSlots]) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	CtlCall cc;
 	for (int k = 0; k < kEchoSlots; ++k) live[k] = 0;
-	for (auto& v : g_voices)
-		if (v->echoSlot >= 0 && v->echoSlot < kEchoSlots && v->alive.load() && !v->dying) live[v->echoSlot]++;
+	for (auto& v : g_c.voices)
+		if (v.c.echoSlot >= 0 && v.c.echoSlot < kEchoSlots && v.alive && !v.c.dying) live[v.c.echoSlot]++;
 }
 
 void Counters(int* echoDropped, int* pathFallback, int* pathUsed) {
 	*echoDropped = g_echoDropped.load();
 	*pathFallback = g_pathFallback.load();
-	std::lock_guard<std::mutex> lk(g_mtx);
+	CtlCall cc;
 	int n = 0;
-	for (auto& p : g_pathPool) n += p.used ? 1 : 0;
+	for (bool u : g_c.pathUsed) n += u ? 1 : 0;
 	*pathUsed = n;
 }
 
 bool SetVoiceStereo(int id, float sel, float width) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	for (auto& v : g_voices)
-		if (v->id == id && v->alive.load() && !v->dying) {
-			v->sel = std::clamp(sel, -1.0f, 1.0f);
-			// width spreads the two channels: only for a file played as stereo (not a variant pick)
-			v->width = v->sel == 0 ? std::clamp(width, 0.0f, 1.0f) : 0.0f;
-			if (v->gainCur < 0) v->selCur = v->sel; // not rendered yet: start there (no ramp from the defaults)
-			if (v->width > 0 && v->slot2 < 0 && v->snd && !v->snd->side.empty() && v->echoSlot < 0) {
-				// a second effect pair from the pool (none free: the downmix at the source, as before)
-				const int k = FindEffect();
-				if (k >= 0) {
-					g_pool[k].used = true;
-					iplDirectEffectReset(g_pool[k].direct);
-					iplBinauralEffectReset(g_pool[k].binaural);
-					iplPanningEffectReset(g_pool[k].pan);
-					v->slot2 = k;
-				}
-			}
-			return true;
+	CtlCall cc;
+	ControlVoice* v = FindVoice(id);
+	if (!v || v->c.dying) return false;
+	v->c.sel = std::clamp(sel, -1.0f, 1.0f);
+	// width spreads the two channels: only for a file played as stereo (not a variant pick)
+	v->c.width = v->c.sel == 0 ? std::clamp(width, 0.0f, 1.0f) : 0.0f;
+	uint8_t f = kSelInit; // not rendered yet: start there (no ramp from the defaults)
+	if (v->c.width > 0 && v->c.slot2 < 0 && v->hasSide && v->c.echoSlot < 0) {
+		// a second effect pair from the pool (none free: the downmix at the source, as before)
+		const int k = FindEffect();
+		if (k >= 0) {
+			g_c.fxUsed[k] = true;
+			v->c.slot2 = k;
+			f |= kResetSlot2;
 		}
-	return false;
+	}
+	SendVoice(*v, f, (f & kResetSlot2) != 0);
+	return true;
 }
 
 void StopVoice(int id) {
-	std::lock_guard<std::mutex> lk(g_mtx);
+	CtlCall cc;
 	// fade out over one block (gain smoothing) instead of a hard cut: no click
-	for (auto& v : g_voices)
-		if (v->id == id) {
-			v->dying = true;
-			v->gain = 0;
-			v->send = 0; // the reverb send fades out with the direct sound
-			v->srcSend = 0; // fades out too; a dying voice no longer holds its slot (SrcSlotLive)
-			if (v->gainCur < 0) v->alive = false; // never rendered yet
-		}
+	for (auto& v : g_c.voices)
+		if (v.id == id && v.alive) StopCtl(v);
 }
 
 int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, double* eL, double* eR) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	g_lisPos = pos;
-	g_lisAhead = ahead;
-	g_lisUp = up;
-	g_master = master;
-	if (eL) *eL = g_energyL;
-	if (eR) *eR = g_energyR;
-	g_energyL = g_energyR = 0;
+	CtlCall cc;
+	g_c.lis.pos = pos;
+	g_c.lis.ahead = ahead;
+	g_c.lis.up = up;
+	g_c.lis.master = master;
+	SendListener();
+	const double l = g_energyL.exchange(0), r = g_energyR.exchange(0);
+	if (eL) *eL = l;
+	if (eR) *eR = r;
 	int n = 0;
-	for (auto& v : g_voices) n += v->alive.load() ? 1 : 0;
+	for (auto& v : g_c.voices) n += v.alive ? 1 : 0;
 	return n;
 }
 
@@ -2441,18 +3325,25 @@ int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, d
 #include "stb_vorbis.c"
 
 namespace render {
+int QueueBacklog() {
+	std::lock_guard<std::mutex> lk(g_ctlMtx);
+	return (int)g_c.overflow.size();
+}
 void SetLimits(int maxVoices, double memMB) {
 	g_maxVoices = std::clamp(maxVoices, 4, kMaxVoices);
 	g_memBudget = (uint64_t)(std::clamp(memMB, 16.0, 16384.0) * 1048576.0);
-	std::lock_guard<std::mutex> lk(g_mtx);
+	std::lock_guard<std::mutex> lk(g_sndMtx);
 	EvictTo(g_memBudget.load()); // a lower budget frees memory now, not at the next load
 }
 void Memory(double* mb, int* sounds, int* voices) {
-	std::lock_guard<std::mutex> lk(g_mtx);
-	*mb = (double)g_soundBytes / 1048576.0;
-	*sounds = (int)g_sounds.size();
+	{
+		std::lock_guard<std::mutex> lk(g_sndMtx);
+		*mb = (double)g_soundBytes / 1048576.0;
+		*sounds = (int)g_sounds.size();
+	}
+	CtlCall cc;
 	int n = 0;
-	for (auto& v : g_voices) n += v->alive.load() ? 1 : 0;
+	for (auto& v : g_c.voices) n += v.alive ? 1 : 0;
 	*voices = n;
 }
 } // namespace render

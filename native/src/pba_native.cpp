@@ -2212,9 +2212,8 @@ LUA_FUNCTION(SourceReflect) {
 		return 1;
 	}
 	const IPLVector3 p = ToSA(LUA->GetVector(2));
-	// voices bound per slot (and this voice's slot), read before taking g_stageMtx (the audio thread
-	// holds the render lock for whole blocks: the reflection thread must not wait on it through
-	// g_stageMtx)
+	// voices bound per slot (and this voice's slot), read before taking g_stageMtx: the renderer's control lock is
+	// never taken under g_stageMtx (it is short and the audio thread never takes it, but the order stays one way)
 	int live[render::kSrcSlotsMax];
 	const int cur = render::SrcSlotLive(live, id);
 	auto d2 = [](IPLVector3 a, IPLVector3 b) {

@@ -576,7 +576,8 @@ end
 --- EQ (low, mid, high) of a loss of `db` dB at diff_freq, relative to that frequency (see above).
 function N.TiltEQ(db, cfg)
 	cfg = cfg or A.cfg
-	if not db or db <= 0 then return 1, 1, 1 end
+	if not db or not (db > 0) then return 1, 1, 1 end -- (not <= 0: a NaN loss is no loss either)
+	db = math.min(db, 200) -- an infinite loss: the 200 dB one (the bands sit at their floor either way)
 	local x0 = kaX(db)
 	if x0 <= 0 then return 1, 1, 1 end
 	local f0 = cfg.diff_freq or 500
@@ -1076,7 +1077,15 @@ local UNIT_M = 0.01905
 -- cut beyond that (the highs of a source 300 m away, -48 dB of air) is not: they stay 30 dB under the strongest band.
 N.EQ_RANGE_DB = 30
 --- The EQ (l, m, h) with every band raised to at most N.EQ_RANGE_DB under the strongest one; inside the range, untouched.
+-- A band the module can take: Steam Audio's path effect divides by its mid band (0/0 = NaN), and a math.max / math.min with a
+-- NaN lets it through. Not a number or infinite: 1 (no filtering, the level is the gain's business); else at least 1e-4
+-- (-80 dB, under every floor of the EQ's makers; the module bounds it again at its boundary).
+local function saneBand(x)
+	if x ~= x or x == math.huge or x == -math.huge then return 1 end
+	return x < 1e-4 and 1e-4 or x
+end
 function N.ClampEQRange(l, m, h)
+	l, m, h = saneBand(l), saneBand(m), saneBand(h)
 	local floor = math.max(l, m, h) * 10 ^ (-N.EQ_RANGE_DB / 20)
 	return math.max(l, floor), math.max(m, floor), math.max(h, floor)
 end
