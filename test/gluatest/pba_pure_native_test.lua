@@ -430,6 +430,38 @@ return {
 				expect(l == e2[1] and m == e2[2] and h == e2[3]).to.beTrue()
 			end)
 		end },
+		{ name = "EQ guards: whatever the inputs (a NaN or infinite loss or distance, a band at 0 or negative), the 3-band EQ asked of the module is finite and within 1e-4 .. 1 per band (Steam Audio's path effect divides by the mid band: 0/0 = NaN)", func = function()
+			local function sane(what, l, m, h)
+				for i, v in ipairs({ l, m, h }) do
+					if type(v) ~= "number" or v ~= v or v == math.huge or v == -math.huge or v < 1e-4 - 1e-12 or v > 1 + 1e-12 then
+						error(string.format("%s: band %d = %s (%s, %s, %s)", what, i, tostring(v), tostring(l), tostring(m), tostring(h)))
+					end
+				end
+			end
+			local nan, inf = 0 / 0, math.huge
+			-- the tilt of a loss that is not a number
+			for _, loss in ipairs({ nan, inf, -inf, 1e308 }) do
+				sane("TiltEQ(" .. tostring(loss) .. ")", N.TiltEQ(loss))
+				sane("LowpassEQ(2, " .. tostring(loss) .. ")", N.LowpassEQ(2, loss))
+			end
+			-- the range clamp: a band at 0 / negative / not a number / infinite, and every band at 0
+			for _, e in ipairs({ { 0, 0, 0 }, { 1, 0, 1 }, { 0.1, 0, 0.05 }, { 1, -1, 1 }, { nan, 1, 1 }, { 1, nan, 1 }, { 1, 1, nan },
+				{ inf, 1, 1 }, { 1, inf, 1 }, { nan, nan, nan }, { -inf, 1, 0 } }) do
+				sane("ClampEQRange(" .. tostring(e[1]) .. ", " .. tostring(e[2]) .. ", " .. tostring(e[3]) .. ")", N.ClampEQRange(e[1], e[2], e[3]))
+			end
+			-- real values are left alone (inside the range), or raised to the range's floor as before
+			local l, m, h = N.ClampEQRange(1, 0.5, 0.2)
+			expect(l == 1 and m == 0.5 and h == 0.2).to.beTrue()
+			l, m, h = N.ClampEQRange(1, 1, 1e-3)
+			expect(l == 1 and m == 1 and near(h, 10 ^ (-30 / 20), 1e-12)).to.beTrue()
+			-- a voice's EQ at a distance that is not a number, infinite, or far beyond the map (air: exp(-0.0182 d) = 0)
+			withCfg({ native_air = 1 }, function()
+				for _, len in ipairs({ nan, inf, 1e12 }) do
+					sane("VoiceEQ(0, " .. tostring(len) .. ")", N.VoiceEQ(0, len))
+					sane("VoiceEQ(3, " .. tostring(len) .. ", NaN)", N.VoiceEQ(3, len, nan))
+				end
+			end)
+		end },
 		{ name = "PhononFixed / Retune: the module's measurement of its phonon.dll decides (true / false); no probe (a module of API 2), an error or a failed measurement is unknown (nil); the retune migration gets exactly that, and runs when the module is initialised", func = function()
 			-- the module that has the probe is API 3 (native/src/pba_native.cpp, PBA_NATIVE_API): the Lua must accept it
 			-- (a real game run found "native module newer than the addon" when the range stopped at 2)
