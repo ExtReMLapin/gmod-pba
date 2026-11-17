@@ -15,6 +15,9 @@ if not (N and N.ready and pba_native and pba_native.DynamicMove and SC and SC.No
 end
 local cv = GetConVar("pba_native_props_calm") -- absent before the option: the test runs, red
 local prev = cv and cv:GetString() or "0"
+-- (a prop shaken in place for 3 s is a spinner for pba_native_spin_s: that rule has its own test, test/perf/ambient_movers.lua)
+local prevSpin = GetConVar("pba_native_spin_s") and GetConVar("pba_native_spin_s"):GetString() or nil
+if prevSpin then RunConsoleCommand("pba_native_spin_s", "0") end
 local prop
 job:wait(function()
 	for _, e in ipairs(ents.FindByClass("prop_physics")) do
@@ -77,6 +80,7 @@ end
 local ok, r0, r1 = pcall(function() return run("0"), run("1") end)
 for k, f in pairs(orig) do pba_native[k] = f end
 setOpt(prev)
+if prevSpin then RunConsoleCommand("pba_native_spin_s", prevSpin) end
 if not ok then return { pass = false, err = tostring(r0) } end
 local pass = inScene and r0.inFight >= 10 and r1.inFight == 0 and r1.out >= 1
 	and (r1.minGap == nil or r1.minGap >= 0.9)

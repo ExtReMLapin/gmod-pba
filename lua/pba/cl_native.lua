@@ -1650,13 +1650,14 @@ end
 
 N.BoxMesh = boxMesh
 local MOVED_NEAR2 = 1024 * 1024 -- units: dynamic objects whose motion re-evaluates the continuous sounds
--- Spinners: an object that has moved at every sync for AMBIENT_SYNCS syncs (3 s) without its centre leaving a
+-- Spinners: an object that has moved at every sync for pba_native_spin_s (3 s) without its centre leaving a
 -- AMBIENT_RADIUS2 (16 u) circle turns in place for ever (a ceiling fan, a radar, a windmill): its place in the
 -- scene is refreshed every AMBIENT_PERIOD s only, and it no longer empties the path cache. Each refresh is a scene
 -- commit, and the invalidation restarted the far slicer's waiting jobs: rp_hunter_cathedral's four fans cost 10
 -- commits and 10 invalidations a second (test/perf/ambient_movers.lua). Anything that travels (a door, a lift, a
 -- vehicle, a rolling prop) leaves the circle and keeps the 0.1 s sync.
-local AMBIENT_SYNCS, AMBIENT_RADIUS2, AMBIENT_PERIOD = 30, 16 * 16, 2
+local AMBIENT_RADIUS2, AMBIENT_PERIOD = 16 * 16, 2
+-- (pba_native_spin_s: the seconds of it, 3 by default; 0 = off)
 
 --- Box facts of a door, mover or prop: bounds, largest and smallest dimension (the smallest is the
 -- thickness sound crosses: saMaterial), mean face area (its acoustic size for the ranking).
@@ -1739,7 +1740,7 @@ function N.SyncDoors()
 	local function near(p) return L and p and p:DistToSqr(L) < MOVED_NEAR2 end
 	local function track(e, id, d)
 		local p, a = e:GetPos(), e:GetAngles()
-		-- sustained spin in place (see AMBIENT_SYNCS): counted over the syncs, whatever was sent
+		-- sustained spin in place (see pba_native_spin_s): counted over the syncs, whatever was sent
 		if d.sp and (d.sp ~= p or d.sa ~= a) then
 			local c = e:WorldSpaceCenter()
 			if (d.run or 0) == 0 or c:DistToSqr(d.c0) > AMBIENT_RADIUS2 then d.run, d.c0 = 1, c else d.run = d.run + 1 end
@@ -1747,7 +1748,8 @@ function N.SyncDoors()
 			d.run = 0
 		end
 		d.sp, d.sa = p, a
-		if d.run >= AMBIENT_SYNCS then
+		local spinS = A.cfg.native_spin_s or 3
+		if spinS > 0 and d.run >= spinS * 10 then
 			if d.tSent and now - d.tSent < AMBIENT_PERIOD then return end
 			if d.prop and hold then return end
 			d.tSent = now
