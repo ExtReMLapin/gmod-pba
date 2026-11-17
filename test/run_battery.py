@@ -1263,6 +1263,8 @@ steps = [
     ("sentence_virtual", lambda: job("client", "sentence_virtual.lua")),
     ("native_sentences_virtual", lambda: job("client", "native_sentences_virtual.lua")),
     ("native_sentences", lambda: seq(lambda: native_on(True), lambda: job("client", "native_sentences.lua", 30))),
+    # the first play of a sentence with undecoded words: its words decoded at once within pba_native_sentence_ms (was: engine, "pending")
+    ("native_sentences_cold", lambda: seq(lambda: native_on(True), lambda: job("client", "native_sentences_cold.lua", 60))),
     # engine traces from the module (pba_native.trace): identical to util.TraceLine / TraceHull / PointContents
     ("native_trace", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_trace.lua", 60))),
     # a loud server sound in sight is relayed to a client rendering native echoes, a quiet one is not

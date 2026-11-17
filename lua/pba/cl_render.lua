@@ -458,6 +458,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 	-- engine, PlayVoice failing below)
 	-- (a sound with its own DSP preset, pba_keep_dsp: the engine's, the module has no presets: A.OwnDSP)
 	local nativeOK = A.Render.NativeOK(data.SoundName, data.DSP)
+	if not nativeOK and A.IsSentence(data.SoundName) then A.Sentences.Note(data.SoundName, false, A.Sentences.WhyNot(data.DSP)) end
 	if nativeOK then
 		-- the full version's distance law (N.PhysPath): real spreading instead of the engine's law
 		-- a weapon's dipole: the aim taken now, at emission (N.Directivity)
@@ -465,7 +466,10 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		local g = (data.Volume or 1) * A.Native.PhysPath(v.gain, v.len, data.SoundLevel or 75, v.rawLossDb) * dirK
 		if floor then g = math.max(g, floor) end
 		if keep then g = math.max(g, 0.001 * KEEP_GAIN) end
-		if g < 0.001 then return false end
+		if g < 0.001 then
+			if A.IsSentence(data.SoundName) then A.Sentences.Note(data.SoundName, false, "inaudible") end
+			return false
+		end
 		local delay = math.max(voiceDelay(v, L) - (waited or 0), 0)
 		local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
 		-- the dominant voice carries the source's air-borne reverb (its slot); a transmission voice feeds
@@ -1229,15 +1233,20 @@ function A.Process(data, relayed)
 	if A.Mix then A.Mix.NoteSound(data, L) end -- heard: the mixer's ducker (cl_mix)
 	-- a sentence with virtual words (V_...): its words picked now for this sound (cl_sentences_virtual)
 	if A.SentenceVirtual and A.IsSentence(data.SoundName) then A.SentenceVirtual.Begin(data, S, L) end
+	if A.IsSentence(data.SoundName) then A.Sentences.stats.emitted = A.Sentences.stats.emitted + 1 end -- (pba_sentences_report)
 	-- a new sound on a replacing channel cuts the earlier copies of that channel, even when this one
 	-- is left to the engine (clear sight, too far): an NPC's new line heard in clear sight played over
 	-- its previous line still coming through the doorway
 	local idx = sourceIndex(data)
 	local copies = beginCopies(data, idx)
 	local lvl = data.SoundLevel or 75
-	if S:Distance(L) > A.cfg.lod_dist then return false end
+	if S:Distance(L) > A.cfg.lod_dist then
+		if A.IsSentence(data.SoundName) then A.Sentences.Note(data.SoundName, false, "far") end
+		return false
+	end
 	if A.TooQuiet(lvl, data.Volume, S:Distance(L)) then
 		A.stats.quiet = (A.stats.quiet or 0) + 1
+		if A.IsSentence(data.SoundName) then A.Sentences.Note(data.SoundName, false, "quiet") end
 		return false
 	end
 	local t0 = SysTime()
@@ -1313,6 +1322,9 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 				end
 				return true
 			end
+		end
+		if A.IsSentence(data.SoundName) and not (A.Native and A.Native.render and (A.cfg.native_all or 0) >= 0.5 and A.Sentences.On() and not A.OwnDSP(data.DSP)) then
+			A.Sentences.Note(data.SoundName, false, A.Sentences.WhyNot(data.DSP, true)) -- (a clear sentence the module was not asked for)
 		end
 		A.stats.vanilla = A.stats.vanilla + 1
 		return false

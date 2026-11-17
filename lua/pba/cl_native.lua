@@ -1405,6 +1405,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
 	opt = opt or {}
 	local ok, n = N.EnsureSound(name, opt.line and (A.cfg.native_line_decode or 1) >= 0.5)
+	if A.IsSentence(name) then A.Sentences.Note(name, ok) end -- (the ledger of pba_sentences_report)
 	if not ok then return false end
 	local l, m, h = N.VoiceEQ(lp, opt.len, opt.lpDb)
 	if opt.eq then l, m, h = l * opt.eq[1], m * opt.eq[2], h * opt.eq[3] end
