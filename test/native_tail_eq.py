@@ -9,6 +9,12 @@ then every run must stay within 1.5 dB of it. History: -11.91 dB with the pba.1 
 re-recorded 2026-11-16 (-13.46 dB, pba.3 DLL, pba_native_bounces 128 = the new default): with 16 bounces the energy
 field is empty after 0.2 s in this room and the tilt reads -12.10 dB, with 128 and 256 it is -13.45 / -13.45 (the
 converged value, measured with a scene rebuild per setting), and air counted twice would be about -10 dB lower.
+Re-recorded 2026-11-17 (-23.72 dB, pba-4 / MagLS DLL): the fork's air corrections (hybrid EQ air as an AMPLITUDE gain, #603; the
+reconstructor's, #614) are in. The old reference, -13.46 dB, was the air taken as an energy: half the dB. Air alone over the
+0.5 s handover (171 m, 0.0182 against 0.0002 per metre) is -27.7 dB between the high and the low band, so about -24 with the
+material's own decay is the right reading and -13.5 was too bright; pba_hybrid_tail_test (tail bands against the convolution
+with air, within 8 dB per band on the same DLL) agrees. The DLL's own hybrid EQ gives it: the module has no compensation
+(kAirTailEq is gone), so "air counted twice" can no longer come from here.
 """
 import json
 import math
