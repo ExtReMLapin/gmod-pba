@@ -126,7 +126,8 @@ A.CONFIG = {
 	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },
 	update_check    = { 1, 0, 1, "cl", "Only with the native module installed: ask api.github.com (nothing else, at most once a day) whether a newer PBA release exists, and say so." },
 	native_render   = { 1, 0, 1, "cl", "With the native module installed: it plays processed sounds itself (Steam Audio HRTF, 3-band EQ, simulated room reverb). 0 = the engine plays them (muffling presets only, no simulated reverb)." },
-	native_reverb   = { 1, 0, 4, "cl", "Room reverb level of natively rendered sounds (Steam Audio reflections simulated at the listener). Each sound feeds the reverb with its level times its distance (the reverb/direct balance of a real room, whatever the game's distance law); 1 is the physical level: with the level-fixed phonon.dll the reverb of a closed room follows Hopkins-Stryker's diffuse field within about 1 dB (before the fix the simulated response was 11 dB too loud and 0.4 was the compromise). 4 is the module's limit. Lower for a drier sound." },
+	native_reverb   = { 1, 0, 4, "cl", "Room reverb level of natively rendered sounds (Steam Audio reflections simulated at the listener). Each sound feeds the reverb with its level times its distance (the reverb/direct balance of a real room, whatever the game's distance law); 1 is the physical level at the ears: with the level-fixed phonon.dll and the diffuse-field-normalised decode, the reverb of a closed room follows Hopkins-Stryker's diffuse field within 3 dB (measured in a 14 x 10 x 5 m concrete room and a 68 x 34 x 17 m steel hall; the former default 0.4 sat about 4 dB under it). 4 is the module's limit.
+ Lower for a drier sound." },
 	native_voice_mix = { 1, 0, 1, "cl", "A loop or a stream rendered as one native voice takes its voices' position and low-pass mixed by energy (0: the loudest voice's, which jumped where two voices of about the same level swapped order)." },
 	native_room_shadow = { 1, 0, 1, "cl", "Natively rendered sounds: the listener's room reverb is fed by what arrives into the listener's space in proportion to how much of the clear-line energy the arrivals lost on the way (through walls, round corners, past doors), in dB up to pba_native_room_shadow_db: none in clear sight or just past a door jamb (the source's own reverb renders that space), all of it behind a wall, continuously in between. 0 = all of it for any arrival that is not the clear line (a step past a door jamb switched the reverb up by 16 dB)." },
 	native_room_shadow_db = { 20, 1, 60, "cl", "Loss (dB) of the arrivals from which the listener's room reverb gets all of what enters the listener's space (pba_native_room_shadow); below, a share growing linearly in dB." },
@@ -138,7 +139,7 @@ A.CONFIG = {
 	native_loud_dry = { 1, 0, 1, "cl", "Very loud sounds (gunfire, explosions) get less reverb, so they stay sharp: from pba_native_loud_dry_from their reverb falls, over pba_native_loud_dry_range dB of level, to pba_native_loud_dry_db dB lower. This is the module's own choice (the engine does not dry its loud sounds: its dsp_db_min / dsp_db_mixdrop lower the room mix of the QUIET ones). Without it, gunfire in the open got as much reverb as direct sound (muddled)." },
 	native_loud_dry_from = { 95, 60, 160, "cl", "Sound level (dB SNDLVL) above which a sound starts to lose reverb (pba_native_loud_dry). Ordinary sounds (doors, impacts, voices, a 95 dB metal bang) keep all of theirs." },
 	native_loud_dry_range = { 15, 0, 60, "cl", "Levels (dB) over which the reverb of a loud sound falls from all to its minimum (pba_native_loud_dry). 0 = a step." },
-	native_loud_dry_db = { 12, 0, 60, "cl", "Reverb reduction (dB) of the loudest sounds (pba_native_loud_dry): 12 = a quarter of the amplitude." },
+	native_loud_dry_db = { 20, 0, 60, "cl", "Reverb reduction (dB) of the loudest sounds (pba_native_loud_dry): 20 = a tenth of the amplitude." },
 	native_law_engine = { 0, 0, 1, "cl", "Distance law of natively rendered sounds: 0 = a real sound, 1/r from 1 m (-6 dB per doubling); 1 = the engine's own law (much gentler for levels 80-110: a level 85 sound at 500 u is -0.7 dB in the engine, -19.6 dB with 1/r); in between, a mix in dB. The reverb follows the same law." },
 	native_quiet_law = { 1, 0, 1, "cl", "Natively rendered loops: judged quiet (pba_quiet_db, no path search) by the distance law they are heard with, and while quiet their level keeps following that law with distance. 0 = judged by the engine's law and frozen at their last values while quiet (a loop heard from the next room kept that level when the listener went far: up to +20 dB at 5000 u)." },
 	native_vol_now = { 1, 0, 1, "cl", "Natively rendered loops and long sounds follow a volume change of their sound (a server fade, an entity's ChangeVolume) at once, as the engine does: the voice is scaled, its route kept until its next re-evaluation. 0: the change waited for that re-evaluation (half an update interval, then a ramp), a fading dropship stayed up to +11 dB too loud meanwhile." },
@@ -342,23 +343,24 @@ end
 
 -- Retune for the level-fixed phonon.dll (Steam Audio fork, branch pba-4): the reflection response is no longer
 -- 11 dB too loud and the reflection fixes change the rest, so the reverb comes out about 10.5 dB quieter at equal
--- settings. The defaults of native_reverb and native_echo went up to compensate (and the loud-dry reduction down,
--- the ground reflection no longer sticks out of the direct sound). This moves what players saved, ONCE, and only
+-- settings. The defaults of native_reverb and native_echo moved with it (measured, see the retune notes: the reverb
+-- is now the physical level at the ears, the echo keeps the loudness of a gunshot's echo). This moves what players saved, ONCE, and only
 -- when the phonon.dll in use is the fixed one (the module measures it: pba_native.PhononLevel, N.PhononFixed): on
 -- the old DLL the old values are right, and the migration waits for the day the DLL is updated.
 --  * a value equal to the new default is left alone (a fresh install, or a choice that equals it);
 --  * a value equal to the OLD default moves to the new default (the player never chose it);
 --  * a custom reverb / echo is multiplied by new default / old default and held to the slider's maximum (a
 --    player who liked it at half the default keeps half the default);
---  * a custom loud-dry reduction is kept; a directivity weight above the new cap of 0.5 is held to it.
+--  * a directivity weight above the new cap of 0.5 is held to it; every other setting is kept (the loud-dry reduction
+--    stays at 20 dB: measured, a gunshot in the open keeps its reverb 10.5 dB under its direct sound only with it).
 -- Run once per install (a player who later sets an old value on purpose keeps it): the flag is a line in the
 -- data file, written and read back BEFORE anything moves.
 A.RETUNE_KEY = "retune_pba4_v1"
 A.RETUNE = {
 	{ name = "native_reverb", old = 0.4, scale = true },
 	{ name = "native_echo", old = 0.25, scale = true },
-	{ name = "native_loud_dry_db", old = 20 },
 	{ name = "native_dir", cap = true },
+
 }
 --- phononFixed: true / false / nil (unknown: a module without PhononLevel, or none). Returns "done" (already
 -- run), "waiting" (not the fixed phonon, or not known), "unsafe" (the flag cannot be written), "applied", "skip" (not the client).

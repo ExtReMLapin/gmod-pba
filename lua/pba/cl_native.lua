@@ -1149,7 +1149,8 @@ function N.LoudWet(lvl)
 	if over <= 0 then return 1 end
 	local range = cfg.native_loud_dry_range or 15
 	local t = range > 0 and math.min(over / range, 1) or 1
-	return 10 ^ (-(cfg.native_loud_dry_db or 12) * t / 20)
+	return 10 ^ (-(cfg.native_loud_dry_db or 20
+) * t / 20)
 end
 --- 1/r from 1 m without a sound level (full scale at 1 m). Not the law of other addons' BASS streams: they keep
 -- the channel's own (cl_streams, bassGain: the addon chose the range; a radio set to Set3DFadeDistance(1e6)
