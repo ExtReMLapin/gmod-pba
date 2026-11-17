@@ -1583,7 +1583,7 @@ end))
 -- delay below 0 or above 0.5 s re-anchors. The same rule here, on RealTime(), for the relayed copies.
 local ST_MAX = 0.5
 --- Delay (s) before relayed sound with stamp `ms` (ms modulo 65536) starts, at client time `now`.
-function A.SoundTimeDelay(ms, now)
+local function stLead(ms, now)
 	local s = A.stSync
 	if s and now - s.now < 30 then
 		local d = (ms - s.ms) % 65536
@@ -1591,9 +1591,17 @@ function A.SoundTimeDelay(ms, now)
 		local delay = d / 1000 - (now - s.now)
 		if delay >= 0 and delay <= ST_MAX then return delay end
 	end
+end
+function A.SoundTimeDelay(ms, now)
+	local delay = stLead(ms, now)
+	if delay then return delay end
 	A.stSync = { ms = ms, now = now }
 	return 0
 end
+
+--- The same delay for a stamp that is only READ (the sound it stamps is the engine's: the anchor stays): 0 when the
+-- stamp is outside the window (the engine starts such a sound at once).
+function A.SoundTimeLead(ms, now) return stLead(ms, now) or 0 end
 
 -- relayed server sounds: always played by us (the server suppressed the original)
 A.dict = A.dict or {}
@@ -1848,8 +1856,20 @@ end
 net.Receive("pba_snd_stop", function()
 	local idx, chan = net.ReadUInt(16), net.ReadInt(10)
 	local n = net.ReadUInt(8)
-	if n == 0 then A.StopSource(idx, "", chan) return end
-	for _ = 1, n do A.StopSource(idx, net.ReadString(), chan) end
+	local names = {}
+	for i = 1, n do names[i] = net.ReadString() end
+	-- (the channel rule's cut carries the start time of the sound that replaces: the old copies play on until then,
+	-- pba_cut_at_start; a server without the field reads false)
+	local stMs = net.ReadBool() and net.ReadUInt(16) or nil
+	if n == 0 then
+		if stMs and chan ~= CHAN_AUTO and (A.cfg.cut_at_start or 1) >= 0.5 then
+			A.CutChannel(idx, chan, nil, A.SoundTimeLead(stMs, RealTime()))
+		else
+			A.StopSource(idx, "", chan)
+		end
+		return
+	end
+	for i = 1, n do A.StopSource(idx, names[i], chan) end
 end)
 
 -- entity removed: its copies play on to their end where they were, as the engine's own sounds do
