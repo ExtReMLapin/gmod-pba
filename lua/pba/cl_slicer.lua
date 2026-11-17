@@ -94,10 +94,16 @@ local function snap(j)
 	j.in1, j.in2, j.in3, j.in4 = PR.current, PR.doorEpoch, PR.fieldEpoch, P.worldGen
 	j.in5, j.in6, j.in7, j.in8 = P.cacheGen, util.TraceLine, util.TraceHull, PR.NativeTraces and PR.NativeTraces() or false
 end
+-- A job restarted this many times by the path cache's generation alone (a prop moving near the listener, a door:
+-- P.InvalidateCache) is no longer restarted by it: a due job only gets pba_far_force_ms a frame, so when the world
+-- changed faster than an evaluation (14 ms) could be finished in those slices the job was restarted for ever (five
+-- jobs stuck for minutes on rp_hunter_cathedral, test/perf/slicer_livelock.lua). It then ends on the inputs of its
+-- last restart, a few tenths of a second old; the owner's next evaluation is a fresh one.
+SL.GEN_RESTARTS = 3
 local function unchanged(j)
 	local P, PR = A.Paths, A.Probes
 	return j.in1 == PR.current and j.in2 == PR.doorEpoch and j.in3 == PR.fieldEpoch and j.in4 == P.worldGen
-		and j.in5 == P.cacheGen and j.in6 == util.TraceLine and j.in7 == util.TraceHull
+		and (j.in5 == P.cacheGen or j.restarts >= SL.GEN_RESTARTS) and j.in6 == util.TraceLine and j.in7 == util.TraceHull
 		and j.in8 == (PR.NativeTraces and PR.NativeTraces() or false)
 end
 
