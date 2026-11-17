@@ -509,20 +509,21 @@ return {
 				withCfg(cfg, function()
 					for _, c in ipairs({ { 95, 10 * REF }, { 100, 5 * REF }, { 110, 30 * REF }, { 140, 5 * REF }, { 140, 100 * REF }, { 140, 1000 * REF }, { 105, 0 } }) do
 						local g = echo(c[1], c[2])
-						if not g or not near(g, want(c[1], c[2]), 1e-9 * math.max(want(c[1], c[2]), 1)) then
+						-- (1e-6: in the game a Vector holds float32, the distance comes back 5 m x (1 + 4.7e-8); the offline mock is double)
+						if not g or not near(g, want(c[1], c[2]), 1e-6 * math.max(want(c[1], c[2]), 1)) then
 							error(string.format("level %d at %.0f m: gain %s, want %.6f", c[1], c[2] / REF, tostring(g), want(c[1], c[2])))
 						end
 					end
 					-- volume and the engine's mix value scale it; native_gain too
-					expect(near(echo(100, 20 * REF, 0.5), want(100, 20 * REF, 0.5), 1e-9)).to.beTrue()
+					expect(near(echo(100, 20 * REF, 0.5), want(100, 20 * REF, 0.5), 1e-6)).to.beTrue()
 					mixV = 0.25
-					expect(near(echo(100, 20 * REF), want(100, 20 * REF) * 0.25, 1e-9)).to.beTrue()
+					expect(near(echo(100, 20 * REF), want(100, 20 * REF) * 0.25, 1e-6)).to.beTrue()
 					mixV = 1
 				end)
 				withCfg({ native_echo = 0.75, native_echo_lvl = 95, fullscale_db = 90, native_loud_dry = 0, native_gain = 0.5, native_all = 0, native_dir = 0, native_law_engine = 0 }, function()
 					-- loud-dry off, native_gain 0.5: a level 140 shot at 5 m
 					local power = AC.EngineGain(REF, 140) * 10 ^ (50 / 20)
-					expect(near(echo(140, 5 * REF), math.min(power, 5) * 0.5, 1e-9)).to.beTrue()
+					expect(near(echo(140, 5 * REF), math.min(power, 5) * 0.5, 1e-6)).to.beTrue()
 				end)
 			end)
 			_G.pba_native, N.render, N.EnsureSound, A.ListenerPos, A.Mix = saved.pba_native, saved.render, saved.ensure, saved.lp, saved.mix

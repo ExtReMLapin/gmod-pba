@@ -518,6 +518,9 @@ local SUITE = {
 				end
 			end
 			local OLD = { native_reverb = 0.4, native_echo = 0.25, native_loud_dry_db = 20, native_dir = 0.3 }
+			-- in a running game the session's own migration has already run (A.retuneRan set): this is a fresh session
+			local ranBefore = A.retuneRan
+			A.retuneRan = nil
 			local ok, err = pcall(function()
 				-- an old phonon, an unknown one (a module without PhononLevel): nothing moves, nothing is recorded: the migration waits for the right DLL
 				setStored(OLD)
@@ -578,7 +581,7 @@ local SUITE = {
 				expect(#cmds).to.equal(0)
 			end)
 			G.file, G.RunConsoleCommand, A.cv, G.cookie = saved.file, saved.rcc, saved.cv, saved.cookie
-			A.retuneRan = nil
+			A.retuneRan = ranBefore
 			if not ok then error(err, 0) end
 		end },
 		{ name = "Default migration chain: a saved pba_native_reverb of 0.15 (the 1.0 default) moves to 0.4 (the 1.1 default), not to today's default: the retune migration scales it later, on the right DLL", func = function()
