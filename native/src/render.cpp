@@ -497,20 +497,23 @@ void DesignDiffuseEq() {
 	for (size_t k = 0; k < gain.size(); ++k) g_dfEq.gainDb[k] = 20 * std::log10(gain[k]);
 }
 
-// filters both ears of the decoded reverb bus in place
+// filters the omni channel W of the ambisonic reverb bus in place, BEFORE the decode. The equaliser is the correction of
+// what the decode makes of W (see above); the decode is a linear, time-invariant filter per ear, so filtering W first
+// gives the same ears for a W-only field (what the reverb is) as filtering the ears after, with half the filtering
+// (one channel, not two). And the directional channels X, Y, Z are left as the decoder gives them: an isotropic field,
+// which the decoder already renders at the diffuse field's level, is corrected only through its W share (a quarter
+// of its power) instead of being pushed 3 dB off at the low end as a post-decode equaliser did.
 void ApplyDfEq(DfState& st, const std::vector<float>& h, IPLAudioBuffer& b) {
-	for (int ch = 0; ch < 2; ++ch) {
-		float* w = st.w[ch];
-		float* x = b.data[ch];
-		std::memcpy(w + kDfTaps - 1, x, kBlock * sizeof(float));
-		std::fill(x, x + kBlock, 0.0f);
-		for (int k = 0; k < kDfTaps; ++k) {
-			const float hk = h[k];
-			const float* src = w + kDfTaps - 1 - k;
-			for (int i = 0; i < kBlock; ++i) x[i] += hk * src[i];
-		}
-		std::memmove(w, w + kBlock, (kDfTaps - 1) * sizeof(float));
+	float* w = st.w[0];
+	float* x = b.data[0];
+	std::memcpy(w + kDfTaps - 1, x, kBlock * sizeof(float));
+	std::fill(x, x + kBlock, 0.0f);
+	for (int k = 0; k < kDfTaps; ++k) {
+		const float hk = h[k];
+		const float* src = w + kDfTaps - 1 - k;
+		for (int i = 0; i < kBlock; ++i) x[i] += hk * src[i];
 	}
+	std::memmove(w, w + kBlock, (kDfTaps - 1) * sizeof(float));
 }
 
 // the reverb bus's decode: the ambisonic bus to the ears, HRTF (then the diffuse-field equaliser) or panning
@@ -520,8 +523,8 @@ void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpa
 	dp.hrtf = g_hrtf;
 	dp.orientation = lis;
 	dp.binaural = g_outMode == 0 ? IPL_TRUE : IPL_FALSE;
+	if (dp.binaural && g_dfOn && !g_dfEq.h.empty()) ApplyDfEq(st, g_dfEq.h, *in);
 	iplAmbisonicsDecodeEffectApply(fx, &dp, in, out);
-	if (dp.binaural && g_dfOn && !g_dfEq.h.empty()) ApplyDfEq(st, g_dfEq.h, *out);
 }
 
 // Applies one reflection effect (if simulated) and adds its ambisonic output to g_amb.

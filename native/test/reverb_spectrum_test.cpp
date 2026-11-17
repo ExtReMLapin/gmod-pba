@@ -380,7 +380,7 @@ int main(int argc, char** argv) {
 	Print("B. isotropic field through the module's decode", tIso);
 	const double devW = MaxAbsDev(tW, df, 1, 7), devIso = MaxAbsDev(tIso, df, 1, 7);
 	Check(devW <= 2.0, "B. binaural decode of the omni field matches the HRTF's diffuse field (125 Hz - 8 kHz, dB re 1 kHz)", devW, 2.0);
-	Check(devIso <= 3.5, "B. binaural decode of an isotropic field matches it (dB re 1 kHz; the equaliser is designed on the omni channel: an isotropic field comes out 3.1 dB low under 500 Hz with the MagLS decode, measured)", devIso, 3.5);
+	Check(devIso <= 3.0, "B. binaural decode of an isotropic field matches it (dB re 1 kHz)", devIso, 3.0);
 
 	// the decoded field has the ABSOLUTE level of the HRTF's diffuse field (the mean of the HRTF's power over the sphere,
 	// what the direct sound averages to): the reverb bus is physical at the ears, whatever the HRTF and the decoder do to
