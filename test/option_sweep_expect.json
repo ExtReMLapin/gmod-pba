@@ -147,6 +147,14 @@
   "pos0": "hook",
   "why": "NPC loops lifecycle at death (OnNPCKilled), outside P.Compute"
  },
+ "loops_npc_state": {
+  "pos0": "hook",
+  "why": "NPC state loops (antlion wings) stopped with the state (server loop timer), outside P.Compute"
+ },
+ "once_change_restart": {
+  "pos0": "hook",
+  "why": "a volume change of an ended followed sound restarts it (server loop stage), outside P.Compute"
+ },
  "loops_native_fail": {
   "pos0": "hook",
   "why": "hands a loop the module cannot play back to the engine (loop lifecycle), outside P.Compute"
