@@ -91,6 +91,14 @@ constexpr int kMaxSources = 64;
 IPLContext g_ctx = nullptr;
 IPLScene g_scene = nullptr;
 IPLStaticMesh g_mesh = nullptr;
+// With Embree the world mesh does not sit in the root scene but in a sub-scene of its own, instanced once into the
+// root scene (identity transform): every iplSceneCommit of the root scene (a door or a prop moved) rebuilds the
+// triangle structure of the static meshes it holds, which on a real map is 20 to 200 ms on the main thread (test
+// native_commit_cost.lua; 134 ms against 0.1 ms on a 240k triangle soup, scene_commit_test.cpp), while a root scene
+// of instances only rebuilds the instances'. g_mesh lives in g_meshScene (the sub-scene, or the root scene).
+IPLScene g_worldSub = nullptr;
+IPLInstancedMesh g_worldInst = nullptr;
+IPLScene g_meshScene = nullptr;
 IPLSimulator g_sim = nullptr;
 IPLProbeBatch g_probes = nullptr;
 std::vector<IPLSource> g_sources;
@@ -1052,10 +1060,16 @@ void ReleaseWorld() {
 	g_dynDead.clear();
 	g_dynDirty = false;
 	g_commitWanted = false;
+	if (g_worldInst) {
+		iplInstancedMeshRemove(g_worldInst, g_scene);
+		iplInstancedMeshRelease(&g_worldInst);
+	}
 	if (g_mesh) {
-		iplStaticMeshRemove(g_mesh, g_scene);
+		iplStaticMeshRemove(g_mesh, g_meshScene);
 		iplStaticMeshRelease(&g_mesh);
 	}
+	g_meshScene = nullptr;
+	if (g_worldSub) iplSceneRelease(&g_worldSub);
 	if (g_scene) iplSceneRelease(&g_scene);
 }
 
@@ -1330,9 +1344,19 @@ LUA_FUNCTION(LoadWorld) {
 	ms.triangles = tris.data();
 	ms.materialIndices = matIdx.data();
 	ms.materials = mats.data();
-	if (iplStaticMeshCreate(g_scene, &ms, &g_mesh) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplStaticMeshCreate failed");
-	iplStaticMeshAdd(g_mesh, g_scene);
-	iplSceneCommit(g_scene);
+	g_meshScene = g_scene;
+	if (g_sceneType == IPL_SCENETYPE_EMBREE && iplSceneCreate(g_ctx, &ss, &g_worldSub) == IPL_STATUS_SUCCESS) g_meshScene = g_worldSub;
+	if (iplStaticMeshCreate(g_meshScene, &ms, &g_mesh) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplStaticMeshCreate failed");
+	iplStaticMeshAdd(g_mesh, g_meshScene);
+	iplSceneCommit(g_meshScene);
+	if (g_worldSub) {
+		IPLInstancedMeshSettings is{};
+		is.subScene = g_worldSub;
+		for (int i = 0; i < 4; ++i) is.transform.elements[i][i] = 1;
+		if (iplInstancedMeshCreate(g_scene, &is, &g_worldInst) != IPL_STATUS_SUCCESS) LUA->ThrowError("iplInstancedMeshCreate failed (world)");
+		iplInstancedMeshAdd(g_worldInst, g_scene);
+		iplSceneCommit(g_scene);
+	}
 	if (!EnsureSimulator()) LUA->ThrowError("simulator creation failed");
 	LUA->PushNumber(nt);
 	return 1;
