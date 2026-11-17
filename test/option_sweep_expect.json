@@ -187,6 +187,10 @@
   "pos0": "hook",
   "why": "native module scene"
  },
+ "native_props_hull": {
+  "pos0": "hook",
+  "why": "native module scene (prop shapes): test source_inside_prop"
+ },
  "native_scene": {
   "pos0": "hook",
   "why": "native module scene tracer"
