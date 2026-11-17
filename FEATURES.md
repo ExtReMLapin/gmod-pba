@@ -27,7 +27,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Doors: open, ajar, closed, followed live | ✅ | ✅ and part of the acoustic scene (reverb and echoes see them) | S `door_closed_db`, C `native_doors` |
 | Glass windows (`func_areaportalwindow`) | ✅ transmission through the glass, sound placed on the pane | ✅ | — |
 | Props: a big object casts a shadow, a closed crate muffles, a can changes nothing | ✅ detours checked with traces, mass law for hollow objects | ✅ and big props reflect sound, with their collision shape | S `trans_props`, C `native_props`, `native_props_hull` |
-| Moving map parts (garage doors, lifts, bridges) | ◐ obstacles for the traces | ✅ moving objects of the acoustic scene | C `native_doors` |
+| Moving map parts (garage doors, lifts, bridges) | ◐ obstacles for the traces | ✅ moving objects of the acoustic scene, with their solid shape | C `native_doors`, `native_movers_brushes` |
 | Water surface between source and listener | ✅ air-water interface, heavily muffled | ✅ plus a low-pass on the mix when the head is under water | S `water`, `water_db` |
 
 ## Sounds handled

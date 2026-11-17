@@ -361,6 +361,8 @@ function N.Start()
 	N.building = coroutine.create(function()
 		local t0 = SysTime()
 		local verts, tris, matIdx, mats, mins, maxs = N.BuildWorld()
+		-- the movers' shapes too, in the same frame budget (up to ~100 ms for a big one, measured)
+		if N.PrecomputeMovers then N.PrecomputeMovers() end
 		N.buildMs = (SysTime() - t0) * 1000
 		return verts, tris, matIdx, mats, mins, maxs
 	end)
@@ -1616,6 +1618,22 @@ local function brushKind(e, cls)
 	return nil
 end
 
+--- Shapes of the movers present (N.MoverHull, cached per map and model), computed while the world is built: in its
+-- coroutine, spread over frames. One found later is computed when the door sync first sees it.
+function N.PrecomputeMovers()
+	if (A.cfg.native_movers_brushes or 1) < 0.5 then return end
+	local t0 = SysTime()
+	for _, e in ipairs(ents.GetAll()) do
+		if N.Yield then N.Yield() end
+		if IsValid(e) then
+			local cls = e:GetClass()
+			local m = e:GetModel()
+			if m and m:sub(1, 1) == "*" and (MOVER_CLASSES[cls] or brushKind(e, cls) == "mover") then N.MoverHull(m) end
+		end
+	end
+	N.moverPrecomputeMs = (SysTime() - t0) * 1000
+end
+
 local PROP_CLASSES = { prop_physics = true, prop_physics_multiplayer = true, prop_dynamic = true, prop_vehicle_jeep = true,
 	prop_vehicle_airboat = true, prop_vehicle_prisoner_pod = false }
 local PROP_MIN_SIZE = 64 -- units (largest box dimension); the count is capped by pba_native_props_max
@@ -1675,7 +1693,10 @@ end
 -- hollow model (a shelf: 4 % of its box) or an animated one (models/props_silo/rocket_hatch.mdl: 290 x 301 x
 -- 1230 u of bounds, a 28 x 44 x 28 u collision) the box sealed the open space inside it, and a source standing
 -- there (Kleiner in ep2_outland_11) had no reverb at all. The collision model is what the game's own traces and
--- players see as solid.
+-- players see as solid. A model with no collision model at all (no .phy) is solid to nothing: it stays out of the
+-- scene (second return value true). ep2_outland_11's lift doors (models/props_silo/silo_elevator_door.mdl, no .phy,
+-- 72 x 146 x 87 u of render bounds holding both leaves open and shut) filled half the cabin each and sealed it;
+-- the doors players bump into are func_door brushes of their own.
 N.hullCache = N.hullCache or {}
 local HULL_TRIS_MAX = 768 -- above: one box per convex part (12 triangles each), still the parts' own volumes
 function N.PropHull(model, scale)
@@ -1683,7 +1704,12 @@ function N.PropHull(model, scale)
 	scale = scale or 1
 	local key = model .. "@" .. scale
 	local c = N.hullCache[key]
+	if c == "none" then return nil, true end
 	if c ~= nil then return c or nil end
+	if string.EndsWith(model, ".mdl") and not file.Exists(model:sub(1, -5) .. ".phy", "GAME") then
+		N.hullCache[key] = "none"
+		return nil, true
+	end
 	local hull = false
 	local ok, cs = pcall(ents.CreateClientProp, model)
 	if ok and IsValid(cs) then
@@ -1730,6 +1756,106 @@ function N.PropHull(model, scale)
 	N.hullCache[key] = hull
 	return hull or nil
 end
+
+-- Shapes of the moving brushes (lifts, shutters, trains), per map and brush model: { v, t, mn, mx, tris,
+-- thick, brushes } in the entity's frame; false = no brush that stops sound (only clips, grates, water);
+-- nil = the BSP could not be read (the caller keeps the box). A mover entered the scene as its bounding box,
+-- a sealed box: ep2_outland_11's lift_2 (playerclip brushes around a prop cabin) shut the player and the lift's
+-- own sound in a 2.3 x 2.4 x 3.8 m box whose reverb jumped from sample to sample as the cabin went down the
+-- shaft. Its solid brushes are what players and traces collide with, and what sound reflects from; a brush
+-- of clip, grate or water contents stops neither sound nor traces, and is left out.
+N.moverCache = N.moverCache or {}
+local MOVER_TRIS_MAX = 4096 -- above: one box per brush (12 triangles each), still the brushes' own volumes
+function N.MoverHull(model)
+	if not model or model:sub(1, 1) ~= "*" or not A.BSP or not A.BSP.ModelBrushes then return nil end
+	local index = tonumber(model:sub(2))
+	if not index then return nil end
+	local key = game.GetMap() .. model
+	local c = N.moverCache[key]
+	if c == "box" then return nil end
+	if c ~= nil then return c or nil, c == false end
+	local brushes = A.BSP.ModelBrushes(game.GetMap(), index)
+	if not brushes then -- unreadable: the caller keeps the box
+		N.moverCache[key] = "box"
+		return nil
+	end
+	local polys, n = {}, 0
+	for _, b in ipairs(brushes) do
+		local ps = A.BSP.BrushPolygons(b.planes)
+		if #ps >= 4 then
+			polys[#polys + 1] = ps
+			for _, p in ipairs(ps) do n = n + #p - 2 end
+		end
+	end
+	if #polys == 0 then
+		N.moverCache[key] = false
+		return nil, true
+	end
+	local v, t, thick = {}, {}, {}
+	local mn = Vector(math.huge, math.huge, math.huge)
+	local mx = -mn
+	for _, ps in ipairs(polys) do
+		local a = Vector(math.huge, math.huge, math.huge)
+		local b = -a
+		for _, p in ipairs(ps) do
+			for _, q in ipairs(p) do
+				a.x, a.y, a.z = math.min(a.x, q.x), math.min(a.y, q.y), math.min(a.z, q.z)
+				b.x, b.y, b.z = math.max(b.x, q.x), math.max(b.y, q.y), math.max(b.z, q.z)
+			end
+		end
+		mn.x, mn.y, mn.z = math.min(mn.x, a.x), math.min(mn.y, a.y), math.min(mn.z, a.z)
+		mx.x, mx.y, mx.z = math.max(mx.x, b.x), math.max(mx.y, b.y), math.max(mx.z, b.z)
+		local sz = b - a
+		thick[#thick + 1] = math.max(math.min(sz.x, sz.y, sz.z), 1)
+		if n <= MOVER_TRIS_MAX then
+			for _, p in ipairs(ps) do
+				local base = #v / 3
+				for _, q in ipairs(p) do v[#v + 1], v[#v + 2], v[#v + 3] = q.x, q.y, q.z end
+				for k = 2, #p - 1 do t[#t + 1], t[#t + 2], t[#t + 3] = base, base + k - 1, base + k end
+			end
+		else
+			local bv, bt = boxMesh(a, b)
+			local base = #v / 3
+			for i = 1, #bv do v[#v + 1] = bv[i] end
+			for i = 1, #bt do t[#t + 1] = bt[i] + base end
+		end
+	end
+	-- the thickness sound crosses (saMaterial): the median brush's smallest dimension (a 2 u wall panel, not
+	-- the whole cabin's 120 u; one thin rail does not make a solid train a sheet)
+	table.sort(thick)
+	local hull = { v = v, t = t, mn = mn, mx = mx, tris = #t / 3, brushes = #polys, thick = thick[math.ceil(#thick / 2)] }
+	N.moverCache[key] = hull
+	return hull
+end
+
+--- N.MoverHull without the wait: hull, empty as it gives them once known; nil, nil, true while it is computed. A
+-- mover first seen after the world build (one spawned or networked later) is queued and computed in the background
+-- (pba_native_movers Think, 2 ms per frame): reading and clipping a big one costs ~60 ms (ep2_outland_11b's strider
+-- sled, 83 brushes), a hitch if done in the door sync. It enters the scene once ready.
+N.moverQueue = N.moverQueue or {}
+function N.MoverHullAsync(model)
+	local c = model and N.moverCache[game.GetMap() .. model]
+	if c ~= nil or not model or model:sub(1, 1) ~= "*" then return N.MoverHull(model) end
+	N.moverQueue[model] = true
+	return nil, nil, true
+end
+
+hook.Add("Think", "pba_native_movers", function()
+	if not N.moverCo then
+		local m = next(N.moverQueue)
+		if not m then return end
+		N.moverQueue[m] = nil
+		N.moverCo = coroutine.create(function() N.MoverHull(m) end)
+	end
+	local deadline = SysTime() + 0.002
+	local function yield() if SysTime() > deadline then coroutine.yield() end end
+	local prevN, prevB = N.Yield, A.BSP.Yield
+	N.Yield, A.BSP.Yield = yield, yield
+	local ok, err = coroutine.resume(N.moverCo)
+	N.Yield, A.BSP.Yield = prevN, prevB
+	if not ok then MsgN("[PBA] mover shape failed: ", tostring(err)) end
+	if not ok or coroutine.status(N.moverCo) == "dead" then N.moverCo = nil end
+end)
 
 --- Surfaceprop of a moving brush (lift, shutter, func_physbox): brush models ("*N") have no model info and
 -- usually no client physics object, so the face on top is traced (only this entity) for the surfaceprop of
@@ -1852,15 +1978,32 @@ function N.SyncDoors()
 			end
 			local info = N.propInfo[e]
 			if not info then
-				-- a prop takes the shape of its collision model (pba_native_props_hull), a door or mover its box
-				local hull = not isDoor and (A.cfg.native_props_hull or 1) >= 0.5 and N.PropHull(e:GetModel(), e:GetModelScale()) or nil
+				-- a prop takes the shape of its collision model (pba_native_props_hull), a mover its solid brushes
+				-- (pba_native_movers_brushes), a door its box (a closed door is a slab: the box is its shape)
+				local hull, empty, pending
+				if isMover and (A.cfg.native_movers_brushes or 1) >= 0.5 then
+					hull, empty, pending = N.MoverHullAsync(e:GetModel())
+				elseif not isDoor and (A.cfg.native_props_hull or 1) >= 0.5 then
+					hull, empty = N.PropHull(e:GetModel(), e:GetModelScale())
+				end
 				info = boxInfo(e, hull)
-				N.propInfo[e] = info
+				if hull and hull.thick then info.thick = hull.thick end
+				-- a mover of clip, grate or water brushes only, a prop with no collision model: nothing sound
+				-- reflects from, out of the scene
+				info.empty = empty
+				-- (a shape still being computed: not remembered, asked again at the next sync)
+				if not pending then N.propInfo[e] = info end
+				info.pending = pending
 			end
-			if isDoor then
+			if info.pending then
+				if d then seen[id] = true end -- (not in the scene yet)
+			elseif info.empty then
+				N.dynSkip[e] = true
+			elseif isDoor then
 				seen[id] = true
 				if not d and info.big > 8 then
-					local v, t = boxMesh(info.mn, info.mx)
+					local v, t
+					if info.hull then v, t = info.hull.v, info.hull.t else v, t = boxMesh(info.mn, info.mx) end
 					if isMover then
 						-- lifts, bridges, shutters: their texture's surfaceprop, at the box's thickness
 						pba_native.DynamicAdd(id, v, t, saMaterial(moverSurface(e, info), A.cfg, nil, info.thick))

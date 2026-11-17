@@ -249,6 +249,149 @@ function BSP.LoadDisplacements(map, swap)
 	return verts, idx, names, ntris
 end
 
+--- Convex polygons bounding a brush given by its side planes ({ nx, ny, nz, d }: inside where n . p <= d):
+-- for each plane, a large square on it clipped by every other plane. Bevel planes (axial planes vbsp adds
+-- for collision) only touch the solid: their polygon comes out empty and is dropped. Returns a list of
+-- polygons, each a list of Vectors.
+local BRUSH_HALF = 65536
+local abs, sqrt = math.abs, math.sqrt
+function BSP.BrushPolygons(planes)
+	local out = {}
+	local np = #planes
+	for i = 1, np do
+		if BSP.Yield then BSP.Yield() end
+		local p = planes[i]
+		local nx, ny, nz, nd = p[1], p[2], p[3], p[4]
+		-- two axes on the plane: u = n x up, v = n x u (plain numbers: no Vector per step, 3x faster)
+		local ux, uy, uz
+		if abs(nz) < 0.9 then ux, uy, uz = ny, -nx, 0 else ux, uy, uz = 0, nz, -ny end
+		local ul = sqrt(ux * ux + uy * uy + uz * uz)
+		ux, uy, uz = ux / ul, uy / ul, uz / ul
+		local vx, vy, vz = ny * uz - nz * uy, nz * ux - nx * uz, nx * uy - ny * ux
+		local cx, cy, cz = nx * nd, ny * nd, nz * nd
+		local H = BRUSH_HALF
+		local px = { cx + (ux + vx) * H, cx + (ux - vx) * H, cx + (-ux - vx) * H, cx + (-ux + vx) * H }
+		local py = { cy + (uy + vy) * H, cy + (uy - vy) * H, cy + (-uy - vy) * H, cy + (-uy + vy) * H }
+		local pz = { cz + (uz + vz) * H, cz + (uz - vz) * H, cz + (-uz - vz) * H, cz + (-uz + vz) * H }
+		local n = 4
+		for j = 1, np do
+			if j ~= i then
+				local q = planes[j]
+				local qx, qy, qz, qd = q[1], q[2], q[3], q[4]
+				local ox, oy, oz, m = {}, {}, {}, 0
+				for k = 1, n do
+					local k2 = k % n + 1
+					local ax, ay, az = px[k], py[k], pz[k]
+					local bx, by, bz = px[k2], py[k2], pz[k2]
+					local da = qx * ax + qy * ay + qz * az - qd
+					local db = qx * bx + qy * by + qz * bz - qd
+					if da <= 0.01 then m = m + 1 ox[m], oy[m], oz[m] = ax, ay, az end
+					if (da > 0.01 and db < -0.01) or (da < -0.01 and db > 0.01) then
+						local t = da / (da - db)
+						m = m + 1
+						ox[m], oy[m], oz[m] = ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t
+					end
+				end
+				px, py, pz, n = ox, oy, oz, m
+				if n < 3 then break end
+			end
+		end
+		if n >= 3 then
+			-- drop slivers (bevels, coplanar duplicates): area below 0.5 square unit
+			local sx, sy, sz = 0, 0, 0
+			for k = 2, n - 1 do
+				local ax, ay, az = px[k] - px[1], py[k] - py[1], pz[k] - pz[1]
+				local bx, by, bz = px[k + 1] - px[1], py[k + 1] - py[1], pz[k + 1] - pz[1]
+				sx, sy, sz = sx + ay * bz - az * by, sy + az * bx - ax * bz, sz + ax * by - ay * bx
+			end
+			if sqrt(sx * sx + sy * sy + sz * sz) * 0.5 > 0.5 then
+				local poly = {}
+				for k = 1, n do poly[k] = Vector(px[k], py[k], pz[k]) end
+				out[#out + 1] = poly
+			end
+		end
+	end
+	return out
+end
+
+-- contents of brushes sound goes through: GRATE (fences, grilles), and non-solid volumes (water, slime,
+-- the clips: PLAYERCLIP 0x10000, MONSTERCLIP 0x20000 are walls only for movement)
+local SOUND_SOLID = bit.bor(0x1, 0x2) -- SOLID, WINDOW
+
+--- Solid brushes of brush model *`index` (a lift, a shutter, a train): what players and traces collide
+-- with, the model's real shape. Its drawn faces are not enough: ep2_outland_11's lift_2 has none at all
+-- (its cabin is a prop parented to it, its walls nodraw brushes). Read from the BSP: 14 MODELS (headnode at
+-- +36) -> 5 NODES (children at +4, +8; a negative child is leaf -(c + 1)) -> 10 LEAFS (firstleafbrush,
+-- numleafbrushes at +24) -> 17 LEAFBRUSHES (ushort) -> 18 BRUSHES (12 bytes: firstside, numsides, contents)
+-- -> 19 BRUSHSIDES (8 bytes: planenum ushort) -> 1 PLANES (20 bytes). Planes are in the model's own frame
+-- (the entity's). Returns a list of { planes = { {nx, ny, nz, d}, ... }, contents }, or nil, why. Only
+-- brushes with SOLID or WINDOW contents (a grate, a clip, water: sound goes through).
+function BSP.ModelBrushes(map, index)
+	local f = file.Open("maps/" .. map .. ".bsp", "rb", "GAME")
+	if not f then return nil, "cannot open" end
+	if f:Read(4) ~= "VBSP" then f:Close() return nil, "not VBSP" end
+	f:ReadLong()
+	local L = lumpInfo(f)
+	for _, i in ipairs({ 1, 5, 10, 14, 17, 18, 19 }) do
+		if L[i].unc ~= 0 and L[i].len > 0 then f:Close() return nil, "compressed lump " .. i end
+	end
+	if index < 0 or (index + 1) * 48 > L[14].len then f:Close() return nil, "no model " .. index end
+	-- the model's bounds first: a BSP of another layout (ep1_citadel_00_demo) reads as garbage, and a garbage read
+	-- must not look like a model with no solid brush (it would leave the scene): nil, the caller keeps its box
+	f:Seek(L[14].ofs + index * 48)
+	for _ = 1, 6 do
+		local x = f:ReadFloat()
+		if not x or x ~= x or math.abs(x) > 65536 then f:Close() return nil, "bad model bounds" end
+	end
+	f:Skip(12)
+	local head = f:ReadLong()
+	if not head or head < 0 or (head + 1) * 32 > L[5].len then f:Close() return nil, "bad head node" end
+	local leafSize = (L[10].ver == 0) and 56 or 32
+	local brushes, seen = {}, {}
+	local stack = { head }
+	local guard = 0
+	while #stack > 0 do
+		guard = guard + 1
+		if guard > 1e6 then break end
+		local node = table.remove(stack)
+		if BSP.Yield then BSP.Yield() end
+		if node >= 0 then
+			if (node + 1) * 32 <= L[5].len then
+				f:Seek(L[5].ofs + node * 32 + 4)
+				stack[#stack + 1] = f:ReadLong()
+				stack[#stack + 1] = f:ReadLong()
+			end
+		else
+			local leaf = -(node + 1)
+			if (leaf + 1) * leafSize <= L[10].len then
+				f:Seek(L[10].ofs + leaf * leafSize + 24)
+				local first, num = f:ReadUShort(), f:ReadUShort()
+				for k = first, first + num - 1 do
+					f:Seek(L[17].ofs + k * 2)
+					local bi = f:ReadUShort()
+					if not seen[bi] and (bi + 1) * 12 <= L[18].len then
+						seen[bi] = true
+						f:Seek(L[18].ofs + bi * 12)
+						local fs, ns, contents = f:ReadLong(), f:ReadLong(), f:ReadLong()
+						if bit.band(contents, SOUND_SOLID) ~= 0 and bit.band(contents, 0x8) == 0 then
+							local planes = {}
+							for s = fs, fs + ns - 1 do
+								f:Seek(L[19].ofs + s * 8)
+								local pn = f:ReadUShort()
+								f:Seek(L[1].ofs + pn * 20)
+								planes[#planes + 1] = { f:ReadFloat(), f:ReadFloat(), f:ReadFloat(), f:ReadFloat() }
+							end
+							brushes[#brushes + 1] = { planes = planes, contents = contents }
+						end
+					end
+				end
+			end
+		end
+	end
+	f:Close()
+	return brushes
+end
+
 --- Material name of texinfo `ti` (nil when out of range or unreadable). `f` is any reader with
 -- Seek / ReadLong / Read (a GMod File, or a string reader in the pure tests); `L` = lumpInfo.
 function BSP.TexInfoName(f, L, ti)
