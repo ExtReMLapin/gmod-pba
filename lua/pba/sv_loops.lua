@@ -494,7 +494,13 @@ end
 function LP.Take(data, snd)
 	local e, idx, key, l, once = data.Entity, snd.idx, snd.key, snd.l, snd.once
 	local flags = data.Flags or 0
-	local update = l ~= nil and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
+	-- a volume / pitch change alters a voice that still PLAYS; the engine starts a new sound when it has ended
+	-- (an antlion guard's near footsteps: SND_CHANGE_VOL on a file of 0.4-0.5 s, each step's emission found the
+	-- previous one's entry, kept END_GRACE past the file's end, and was sent as an update: no sound). The entry
+	-- of a short sound is over at its file's end (endT is that end plus END_GRACE), pba_once_change_restart.
+	local ended = l ~= nil and l.once and l.endT ~= nil and (A.cfg.once_change_restart or 1) >= 0.5
+		and RealTime() >= l.endT - A.END_GRACE
+	local update = l ~= nil and not ended and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	local fresh = l == nil
 	if fresh then
 		l = { kind = "mirror", key = key, id = newId(), ent = e, idx = idx, chan = data.Channel or 0, name = data.SoundName, subs = {},

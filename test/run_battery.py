@@ -1121,6 +1121,8 @@ steps = [
     ("npc_loop_death", lambda: npc_loop_death()),
     # an antlion's wing loop ends in C++ at the landing (no StopSound seen): the mirror stops with it
     ("antlion_wings", lambda: antlion_wings()),
+    # a volume change of a followed short sound whose file has ended is a new start (antlion guard near footsteps)
+    ("once_change_restart", lambda: seq(lambda: load(TW), lambda: job("server", "once_change_restart.lua"))),
     # test tool: the watchdog does not take an alive rollermine (no health at all) for a dead NPC
     ("watch_dead_npc", watch_dead_npc),
     # a long speech line (sv_loops) keeps its subtitle and ducks the other sounds like the short lines
