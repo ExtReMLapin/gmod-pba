@@ -805,6 +805,10 @@ function N.PrewarmList(yield)
 	yield = yield or function() end
 	local scripts, seen, out = {}, {}, {}
 	for _, s in ipairs(PREWARM_SCRIPTS) do scripts[#scripts + 1] = s end
+	-- the bullet whizzes (pba_native_whiz): their first play would be left to the engine while the file decodes
+	if (A.cfg.native_whiz or 0) >= 0.5 and A.Whiz then
+		for _, s in pairs(A.Whiz.SCRIPTS) do scripts[#scripts + 1] = s end
+	end
 	for _, s in ipairs(sound.GetTable() or {}) do
 		if string.StartWith(string.lower(s), "breakable.") then scripts[#scripts + 1] = s end
 		yield()
