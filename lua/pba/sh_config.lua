@@ -178,7 +178,8 @@ A.CONFIG = {
 	streams_stop_now = { 1, 0, 1, "cl", "Radios of other addons rendered by the module go silent at once when their owner pauses or stops the channel (Pause mutes the voice until Play, Stop ends it). 0: the voice played on what was already captured, 0.2-0.3 s after the cut." },
 	streams_filter  = { 1, 0, 1, "cl", "With the native module: really muffle those streams behind walls (3-band EQ on their BASS channel)." },
 	native_air      = { 1, 0, 1, "cl", "Air absorption (high frequencies fade with distance) on natively rendered sounds." },
-	native_dir      = { 0.3, 0, 1, "cl", "Directivity of weapon sounds (dipole weight): quieter behind the shooter. 0 = omnidirectional." },
+	native_dir      = { 0.3, 0, 0.5, "cl", "Directivity of weapon sounds (dipole weight): quieter behind the shooter. 0 = omnidirectional, 0.5 = a cardioid (silent straight behind); Steam Audio's dipole has a rear lobe above 0.5, so the slider stops there." },
+
 	native_path_fx  = { 1, 0, 1, "cl", "Render Steam Audio baked paths as a spatial sound field (several arrival directions) instead of one point." },
 	native_cache    = { 1, 0, 1, "cl", "Keep the Steam Audio path bake on disk (data/pba) to skip it next time." },
 	delay           = { 0, 0, 1, "cl", "Propagation delay (speed of sound, 343 m/s) on the sounds pba renders." },

@@ -979,13 +979,25 @@ end
 local AIR = { 0.0002, 0.0017, 0.0182 }
 local UNIT_M = 0.01905
 
+-- Widest spread between the strongest and the weakest band of an EQ asked of the module (dB). Steam Audio's 3-band EQ is a
+-- cascade (low shelf, peak, high shelf): the DirectEffect floors every band at 1/16 of the strongest (-24 dB) and the
+-- path effect, which does not, bleeds across bands once the gains are deep (measured: asking 40-60 dB between bands
+-- gave 10-25 dB errors in bands nobody asked about). So PBA never asks for more than 30 dB between bands. What is
+-- cut beyond that (the highs of a source 300 m away, -48 dB of air) is not: they stay 30 dB under the strongest band.
+N.EQ_RANGE_DB = 30
+--- The EQ (l, m, h) with every band raised to at most N.EQ_RANGE_DB under the strongest one; inside the range, untouched.
+function N.ClampEQRange(l, m, h)
+	local floor = math.max(l, m, h) * 10 ^ (-N.EQ_RANGE_DB / 20)
+	return math.max(l, floor), math.max(m, floor), math.max(h, floor)
+end
+
 --- EQ of a voice: its low-pass (level lp, continuous loss lpDb when the caller has it: N.LowpassEQ), times
 -- air absorption over `len` units of path.
 function N.VoiceEQ(lp, len, lpDb)
 	local l, m, h = N.LowpassEQ(lp, lpDb)
-	if (A.cfg.native_air or 0) < 0.5 or not len then return l, m, h end
+	if (A.cfg.native_air or 0) < 0.5 or not len then return N.ClampEQRange(l, m, h) end
 	local d = len * UNIT_M
-	return l * math.exp(-AIR[1] * d), m * math.exp(-AIR[2] * d), h * math.exp(-AIR[3] * d)
+	return N.ClampEQRange(l * math.exp(-AIR[1] * d), m * math.exp(-AIR[2] * d), h * math.exp(-AIR[3] * d))
 end
 
 --- Shooter of a weapon emission and its aim now, or nil when the sound is not one. A weapon emission: the
@@ -1005,11 +1017,16 @@ function N.WeaponAim(ent, chan)
 	return owner, owner:IsPlayer() and owner:GetAimVector() or owner:GetForward()
 end
 
+-- Largest dipole weight: Steam Audio's dipole is |(1 - w) + w cos(theta)|^p, which turns negative (a rear lobe, a figure of
+-- eight at w = 1) above 0.5; 0.5 is a cardioid, silent straight behind. The slider stops there (pba_native_dir), and a
+-- value saved before the cap is held to it here.
+N.DIR_MAX = 0.5
+
 --- Dipole directivity of a weapon emission towards L (1 in front, 1 - 2w behind, floor 0.05); 1 for any
 -- other sound. chan: the sound's channel; aim: the aim taken when the sound was emitted (a shot does not
 -- swing round when the shooter turns while its tail plays); without it, the aim now.
 function N.Directivity(ent, L, chan, aim)
-	local w = A.cfg.native_dir or 0
+	local w = math.min(A.cfg.native_dir or 0, N.DIR_MAX)
 	if w <= 0 or not L then return 1 end
 	local owner, now = N.WeaponAim(ent, chan)
 	if not owner then return 1 end
@@ -1445,7 +1462,15 @@ function A.NativeOwn()
 	return N.render and (A.cfg.native_all or 0) >= 0.5 and (A.cfg.native_own or 1) >= 0.5 and A.Enabled() or false
 end
 
+--- Source strength of the echoes of a sound (before the engine's mix value, native_gain and pba_native_echo): its volume
+-- times the source slot's send at the source-listener distance.
+function N.EchoGain(data, pos)
+	local L = A.ListenerPos()
+	return (data.Volume or 1) * N.PhysSrcSend(data.SoundLevel or 75, (pos and L) and pos:Distance(L) or 0)
+end
+
 function N.Echo(data, pos, enginePlays, own)
+
 	if not N.render or (A.cfg.native_echo or 0) <= 0 or not pba_native.Echo then return skip("off") end
 	if own then return skip("own") end
 	if N.DryMix(data.SoundName) then return skip("dry") end
@@ -1457,16 +1482,20 @@ function N.Echo(data, pos, enginePlays, own)
 	if lvl < A.cfg.native_echo_lvl then return skip("level") end
 	local ok, n = N.EnsureSound(data.SoundName)
 	if not ok then return skip("sound") end
-	-- source strength = what the engine would play at 1 m (52.5 units); the impulse response
-	-- carries the distance and the room
-	local gain = (data.Volume or 1) * A.AC.EngineGain(52.5, lvl)
+	-- source strength = the source's power, as its reverb slot has it (N.PhysSrcSend at the source-listener distance:
+	-- its level at 1 m with the headroom of a loud level above full scale, never more than the clipped direct x d / 1 m,
+	-- the loud-dry share): the echo and the slot reverb come from the same law, so their scales (pba_native_echo,
+	-- pba_native_reverb) are comparable. It was the engine's gain at 1 m alone: no headroom, no loud-dry share, so a
+	-- loud shot's echo did not follow its reverb with distance (100 m: +20 dB over a slot's). The impulse response carries
+	-- the distance and the room.
+	local gain = N.EchoGain(data, pos)
 	local e = data.Entity
 	-- the engine's mix value of this sound (cl_mix): its reverb is the sound's, scaled as the sound is
 	if A.Mix then gain = gain * A.Mix.Value(A.Mix.GroupsOf(data.SoundName, IsValid(e) and e or data.EntIndex, data.Channel, lvl)) end
 	local key = IsValid(e) and e:EntIndex() or (data.EntIndex or 0)
 	-- a weapon emission: the echoes are louder where the shooter aims (same rule as N.Directivity: an NPC's
 	-- shout or a player's footstep is not aimed)
-	local w = A.cfg.native_dir or 0
+	local w = math.min(A.cfg.native_dir or 0, N.DIR_MAX)
 	local aim = nil
 	if w > 0 then local _, a = N.WeaponAim(e, data.Channel) aim = a end
 	-- (a relayed sound's own start time, A.SoundTimeDelay: its echoes start with it)

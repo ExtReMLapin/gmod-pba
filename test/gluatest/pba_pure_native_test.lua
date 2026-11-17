@@ -399,8 +399,12 @@ return {
 					expect(near(l, row[1], 1e-12) and near(m, row[2], 1e-12) and near(h, row[3], 1e-12)).to.beTrue()
 					for _, metres in ipairs({ 1, 10, 100, 500 }) do
 						local got = { N.VoiceEQ(lp, metres * REF) }
+						-- (the bands never sit more than 30 dB under the strongest: 500 m of air is -79 dB in the highs, held at -30; own case below)
+						local top = 0
+						for b = 1, 3 do top = math.max(top, row[b] * math.exp(-AIR[b] * metres * REF * 0.01905)) end
 						for b = 1, 3 do
-							local want = row[b] * math.exp(-AIR[b] * metres * REF * 0.01905) -- REF u = 52.49 u = 0.99993 m
+							local want = math.max(row[b] * math.exp(-AIR[b] * metres * REF * 0.01905), top * 10 ^ (-30 / 20)) -- REF u = 52.49 u = 0.99993 m
+
 							if not near(got[b], want, 1e-6 * math.max(want, 1e-9)) then
 								error(string.format("lp %d %d m band %d: %.6g, want %.6g", lp, metres, b, got[b], want))
 							end
@@ -424,6 +428,104 @@ return {
 				local l, m, h = N.VoiceEQ(2, 500 * REF)
 				local e2 = { N.LowpassEQ(2) }
 				expect(l == e2[1] and m == e2[2] and h == e2[3]).to.beTrue()
+			end)
+		end },
+		{ name = "Directivity: the dipole weight is capped at 0.5 (beyond it Steam Audio's dipole has a rear lobe: 0.5 is a cardioid, 1 a figure of eight)", func = function()
+			local eye = Vector(0, 0, 64)
+			local ply = fakeEnt("player", Vector(1, 0, 0), eye)
+			local back, side = Vector(-500, 0, 64), Vector(0, 500, 64)
+			-- w = 1 (a slider value saved before the cap, or an old config) behaves as 0.5: a cardioid, silent (floor) straight behind, half to the side
+			withCfg({ native_dir = 1 }, function()
+				expect(near(N.Directivity(ply, side, CHAN_WEAPON), 0.5, 1e-9)).to.beTrue()
+				expect(near(N.Directivity(ply, back, CHAN_WEAPON), 0.05, 1e-9)).to.beTrue()
+				-- never louder behind-left than straight behind: no rear lobe
+				local prev = 2
+				for deg = 0, 180, 5 do
+					local r = math.rad(deg)
+					local g = N.Directivity(ply, eye + Vector(math.cos(r), math.sin(r), 0) * 500, CHAN_WEAPON)
+					if g > prev + 1e-12 then error("louder towards the back at " .. deg .. " degrees") end
+					prev = g
+				end
+			end)
+			withCfg({ native_dir = 0.5 }, function() expect(near(N.Directivity(ply, side, CHAN_WEAPON), 0.5, 1e-9)).to.beTrue() end)
+			expect(A.CONFIG.native_dir[3]).to.equal(0.5) -- the slider's maximum
+		end },
+		{ name = "Echo: the source strength is the source slot's (PhysSrcSend at the source-listener distance: headroom of a loud level, loud-dry share, d / 1 m cap) times volume and mix", func = function()
+			local REF = N.REF_UNITS
+			local saved = { pba_native = _G.pba_native, render = N.render, ensure = N.EnsureSound, lp = A.ListenerPos, mix = A.Mix }
+			local got
+			_G.pba_native = { Echo = function(n, pos, gain, key, pitch, delay, aim, w, pf) got = gain return 0 end }
+			N.render = true
+			N.EnsureSound = function() return true, 1 end
+			local L = Vector(0, 0, 0)
+			A.ListenerPos = function() return L end
+			local mixV = 1
+			A.Mix = { Value = function() return mixV end, GroupsOf = function() return {} end }
+			local cfg = { native_echo = 0.75, native_echo_lvl = 95, fullscale_db = 90, native_loud_dry = 1, native_loud_dry_from = 95,
+				native_loud_dry_range = 15, native_loud_dry_db = 20, native_gain = 1, native_all = 0, native_dir = 0, native_law_engine = 0 }
+			-- the expectation, written from the physics (1/r law, the source's 1 m power, a loud level's headroom above full scale):
+			-- the send is the 1 m power while the direct is not clipped, d / 1 m while the direct is clipped at full scale
+			local function want(lvl, d, vol)
+				local power = AC.EngineGain(REF, lvl) * 10 ^ (math.max(lvl - 90, 0) / 20)
+				local wet = lvl <= 95 and 1 or 10 ^ (-20 * math.min((lvl - 95) / 15, 1) / 20)
+				return math.min(power, math.max(d, REF) / REF) * wet * (vol or 1)
+			end
+			local function echo(lvl, d, vol)
+				got = nil
+				N.Echo({ SoundName = "weapons/ar2/ar2_fire1.wav", SoundLevel = lvl, Volume = vol or 1 }, Vector(d, 0, 0), true, false)
+				return got
+			end
+			local ok, err = pcall(function()
+				withCfg(cfg, function()
+					for _, c in ipairs({ { 95, 10 * REF }, { 100, 5 * REF }, { 110, 30 * REF }, { 140, 5 * REF }, { 140, 100 * REF }, { 140, 1000 * REF }, { 105, 0 } }) do
+						local g = echo(c[1], c[2])
+						if not g or not near(g, want(c[1], c[2]), 1e-9 * math.max(want(c[1], c[2]), 1)) then
+							error(string.format("level %d at %.0f m: gain %s, want %.6f", c[1], c[2] / REF, tostring(g), want(c[1], c[2])))
+						end
+					end
+					-- volume and the engine's mix value scale it; native_gain too
+					expect(near(echo(100, 20 * REF, 0.5), want(100, 20 * REF, 0.5), 1e-9)).to.beTrue()
+					mixV = 0.25
+					expect(near(echo(100, 20 * REF), want(100, 20 * REF) * 0.25, 1e-9)).to.beTrue()
+					mixV = 1
+				end)
+				withCfg({ native_echo = 0.75, native_echo_lvl = 95, fullscale_db = 90, native_loud_dry = 0, native_gain = 0.5, native_all = 0, native_dir = 0, native_law_engine = 0 }, function()
+					-- loud-dry off, native_gain 0.5: a level 140 shot at 5 m
+					local power = AC.EngineGain(REF, 140) * 10 ^ (50 / 20)
+					expect(near(echo(140, 5 * REF), math.min(power, 5) * 0.5, 1e-9)).to.beTrue()
+				end)
+			end)
+			_G.pba_native, N.render, N.EnsureSound, A.ListenerPos, A.Mix = saved.pba_native, saved.render, saved.ensure, saved.lp, saved.mix
+			if not ok then error(err, 0) end
+		end },
+		{ name = "VoiceEQ: never more than 30 dB between the strongest and the weakest band (what Steam Audio's cascaded EQ can realise); inside the range the bands are exactly the low-pass row times the air", func = function()
+			-- Steam Audio's 3-band EQ is a cascade (low shelf, peak, high shelf): asked for more than ~30 dB between bands
+			-- the DirectEffect floors at -24 dB (1/16) and the path effect's cascade bleeds into the neighbours (10-25 dB
+			-- errors in bands nobody asked for), so PBA never asks for more. Far sources: 500 m of air is -79 dB in the highs.
+			local AIR = { 0.0002, 0.0017, 0.0182 }
+			withCfg({ native_air = 1 }, function()
+				for lp = 0, 4 do
+					for _, metres in ipairs({ 0, 10, 100, 150, 300, 500, 2000 }) do
+						local got = { N.VoiceEQ(lp, metres * REF) }
+						local hi, lo = math.max(got[1], got[2], got[3]), math.min(got[1], got[2], got[3])
+						if db(hi) - db(lo) > 30.0001 then error(string.format("lp %d at %d m: %.2f dB between bands", lp, metres, db(hi) - db(lo))) end
+						-- the strongest band is the unclamped strongest (the clamp only raises the weakest)
+						local row = { N.LowpassEQ(lp) }
+						local want = {}
+						for b = 1, 3 do want[b] = row[b] * math.exp(-AIR[b] * metres * REF * 0.01905) end
+						local wmax = math.max(want[1], want[2], want[3])
+						if not near(hi, wmax, 1e-9 * math.max(wmax, 1e-9)) then error(string.format("lp %d at %d m: strongest band moved", lp, metres)) end
+						-- a range already inside 30 dB is untouched
+						local wmin = math.min(want[1], want[2], want[3])
+						if db(wmax) - db(wmin) <= 30 then
+							for b = 1, 3 do
+								if not near(got[b], want[b], 1e-9 * math.max(want[b], 1e-9)) then error(string.format("lp %d at %d m band %d changed inside the range", lp, metres, b)) end
+							end
+						end
+					end
+				end
+				local l, m, h = N.VoiceEQ(0, 500 * REF) -- highs -79 dB: held 30 dB under the lows
+				expect(near(db(l) - db(h), 30, 1e-6)).to.beTrue()
 			end)
 		end },
 		{ name = "ParseWeaponSounds: the player's sound scripts of a real weapon script (SoundData block; NPC variants, comments and other blocks left out)", func = function()
