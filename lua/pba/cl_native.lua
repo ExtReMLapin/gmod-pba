@@ -1523,8 +1523,14 @@ function N.Echo(data, pos, enginePlays, own)
 	if w > 0 then local _, a = N.WeaponAim(e, data.Channel) aim = a end
 	-- (a relayed sound's own start time, A.SoundTimeDelay: its echoes start with it)
 	local id = pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, math.max(data.Delay or 0, 0), aim, aim and w or 0, N.PauseFlag(data.Flags))
-	-- reflections arrive from afar: the far variant of a "^" sound
-	if id and id > 0 then N.ApplyStereo(id, data.SoundName, DV_MAX, e, pos, A.ListenerPos()) end
+	-- the channel mix of the sound as heard from here, the one its source slot would get (one input for the reflections of a
+	-- sound): the far channel of a "^" sound only from 1320 u. It was the far channel at any distance ("reflections arrive
+	-- from afar"), but the far channel is a recording of the shot far away, already weaker (npc_smg1_fire1: -11 dB), and the
+	-- simulated response adds the distance again: an echo 11 dB under the slot reverb of the same sound at the same setting.
+	if id and id > 0 then
+		local L = A.ListenerPos()
+		N.ApplyStereo(id, data.SoundName, (pos and L) and pos:Distance(L) or 0, e, pos, L)
+	end
 	N.echoes = (N.echoes or 0) + 1
 end
 

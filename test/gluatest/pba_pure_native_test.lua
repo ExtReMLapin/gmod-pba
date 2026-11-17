@@ -528,6 +528,37 @@ return {
 			_G.pba_native, N.render, N.EnsureSound, A.ListenerPos, A.Mix = saved.pba_native, saved.render, saved.ensure, saved.lp, saved.mix
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Echo: a \"^\" sound's channel mix is the one its source slot gets at the source-listener distance (near channel near, far channel far), not always the far channel (npc_smg1_fire1: its far channel is 11 dB under the near one, and the echo sat 11 dB under the slot reverb at the same setting)", func = function()
+			local saved = { pba_native = _G.pba_native, render = N.render, ensure = N.EnsureSound, lp = A.ListenerPos, mix = A.Mix }
+			local sel
+			_G.pba_native = {
+				Echo = function() return 7, 0 end,
+				SetVoiceStereo = function(id, s) if id == 7 then sel = s end end,
+			}
+			N.render = true
+			N.EnsureSound = function() return true, 1 end
+			local L = Vector(0, 0, 0)
+			A.ListenerPos = function() return L end
+			A.Mix = nil
+			local NAME = "^weapons/smg1/npc_smg1_fire1.wav"
+			-- Source's distance variant: left (near) up to 240 u, right (far) from 1320 u, crossfaded in between (sel 1 .. -1)
+			local function want(d) return 1 - 2 * math.min(math.max((d - 240) / (1320 - 240), 0), 1) end
+			local ok, err = pcall(function()
+				withCfg({ native_echo = 0.75, native_echo_lvl = 95, fullscale_db = 90, native_loud_dry = 1, native_gain = 1, native_all = 0,
+					native_dir = 0, native_law_engine = 0, native_stereo = 1 }, function()
+					for _, d in ipairs({ 300, 780, 2000 }) do
+						sel = nil
+						N.Echo({ SoundName = NAME, SoundLevel = 140, Volume = 1 }, Vector(d, 0, 0), true, false)
+						sel = sel or 0 -- (nothing sent: the module's default, both channels)
+						if not near(sel, want(d), 1e-6) then error(string.format("at %d u: sel %s, want %.4f", d, tostring(sel), want(d))) end
+						-- the same mix as a voice of that sound heard from there (its source slot is fed with it)
+						expect(near(sel, (N.StereoMix(NAME, d)), 1e-9)).to.beTrue()
+					end
+				end)
+			end)
+			_G.pba_native, N.render, N.EnsureSound, A.ListenerPos, A.Mix = saved.pba_native, saved.render, saved.ensure, saved.lp, saved.mix
+			if not ok then error(err, 0) end
+		end },
 		{ name = "VoiceEQ: never more than 30 dB between the strongest and the weakest band (what Steam Audio's cascaded EQ can realise); inside the range the bands are exactly the low-pass row times the air", func = function()
 			-- Steam Audio's 3-band EQ is a cascade (low shelf, peak, high shelf): asked for more than ~30 dB between bands
 			-- the DirectEffect floors at -24 dB (1/16) and the path effect's cascade bleeds into the neighbours (10-25 dB

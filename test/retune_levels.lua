@@ -4,6 +4,9 @@
 -- `dist` units ahead along a clear line, after a warm-up shot (the source slot's simulation):
 --   direct = energy with pba_native_reverb 0 and pba_native_echo 0 (the direct voice alone);
 --   reverb dB = 10 log10((energy - direct) / direct) at each pba_native_reverb with echo 0;
+--     (energy - direct also holds the cross term 2 <direct, reverb> of the early reflections that are coherent with the
+--     direct sound: on pba_pipe a level 140 shot at 300 u reads -9.4 dB at reverb 1 where the reverb alone is -15.2 dB (fitted
+--     from reverb 1 and 0.25: energy ~ r^2, cross term ~ r). Compare an echo, measured alone, with the reverb alone, not with this;)
 --   echo dB   = the same with pba_native_all 0 (the engine-played mode: N.Echo is the only reflection) at each pba_native_echo, reverb 0.
 -- Also the room reverb time of the listener's room (pba_native.RoomReverb), the module's own estimate.
 -- Every setting changed is put back at the end.
