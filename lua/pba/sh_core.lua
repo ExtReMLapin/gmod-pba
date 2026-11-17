@@ -855,6 +855,12 @@ A.ModelHasIK = modelHasIK
 -- an NPC with IK; the entity's origin otherwise (a prop_dynamic door's hinge, a vehicle's base, a
 -- player's feet). The origin of a creature on the floor lies in the floor's plane: P.Walls from there counts no
 -- wall for the floor (measured on pba_tworooms, 0 to 2 u above it and 0.5 u below, test/sound_origin.lua).
+-- A prop standing exactly on a surface (pba_demo's court: the radio's origin on its pedestal's top face, z 40.0)
+-- has its origin IN the world's solid for the engine's traces (StartSolid at 40.00, clear at 40.01): a trace
+-- from there returns fraction 1 whatever lies in the way, so P.Walls saw no wall (the container between the
+-- radio and the listener included) and the line was played clear. The origin is lifted by ORIGIN_LIFT, well
+-- under what any ear can place (a tenth of a unit) and over the engine's trace epsilon (1/32 u).
+local ORIGIN_LIFT = 0.1
 local function engineOrigin(e)
 	local p = e:GetPos()
 	local m = e:GetModel()
@@ -865,6 +871,7 @@ local function engineOrigin(e)
 		local mn, mx = e:GetModelBounds()
 		if mn and mx then return p + (mn + mx) * 0.5 end
 	end
+	p.z = p.z + ORIGIN_LIFT
 	return p
 end
 

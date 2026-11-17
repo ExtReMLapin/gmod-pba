@@ -16,6 +16,10 @@ local S = Vector(args.S[1], args.S[2], args.S[3])
 local L1 = Vector(args.L1[1], args.L1[2], args.L1[3])
 local SRC = args.srcIdx and Entity(args.srcIdx) or nil -- the radio never obstructs its own sound
 if not IsValid(SRC) then SRC = nil end
+-- S is where pba takes the radio's sound (the engine's rule: the entity's origin, A.SoundPos), not the bounds
+-- centre the python side sends: the origin of the radio lies on its pedestal's top face, where a world trace
+-- starts inside solid and used to see no wall at all (the container included): the line was then "clear".
+if SRC and A.SoundPos then S = A.SoundPos({ Entity = SRC, Channel = CHAN_AUTO }) or S end
 local STEP = args.step or 0.8
 -- MAX_LAG: up to one update_interval before the re-evaluation, one more for the ramp, plus frames
 local NEAR_U, MAX_LAG, MAX_DB, MIN_AWAY = 24, 0.6, 2, 48
@@ -37,7 +41,12 @@ for x = box[1] + 32, box[4] - 32, 32 do
 end
 if not L2 then return { pass = false, why = "no point in clear sight of the radio found (inconclusive)" } end
 local walls1 = A.Paths.Walls(S, L1, 4, SRC)
-if #walls1 == 0 then return { pass = false, why = "L1 sees the radio: no container? (inconclusive)" } end
+if #walls1 == 0 then
+	-- (a source whose origin is on a surface of the world: its trace starts in solid and sees nothing)
+	local tr = util.TraceLine({ start = S, endpos = L1, mask = MASK_SOLID_BRUSHONLY })
+	return { pass = false, why = "L1 sees the radio from its sound origin: no container, or a trace blind from the origin (StartSolid "
+		.. tostring(tr.StartSolid) .. ", fraction " .. tostring(tr.Fraction) .. ")", S = { S.x, S.y, S.z } }
+end
 
 -- what is heard (sample-and-hold, as the mixer sees it)
 local heard = { pos = nil, g = nil, ent = nil, late = 0 }
