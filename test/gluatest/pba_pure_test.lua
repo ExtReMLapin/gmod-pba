@@ -3232,6 +3232,51 @@ local SUITE = {
 			_G.rRadio, A.ListenerPos = oldR, oldL
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Bullet whizz (pba.Whiz, sh_whiz.lua): a bullet whose path (muzzle to where it stopped) passes within the engine's own reach of the ears whizzes at the closest point of its path, ends included: the default tracer within 24 u of a column from the eye to 24 u below it, gunship and strider ones within 72 u of the eye (the engine plays Bullets.DefaultNearmiss itself, through no hook; reach read in client.dll and measured with tracer effects: 22 u whizzes, 25 u does not, 46 u under the eye whizzes, 50 u does not)", func = function()
+			local W = A.Whiz
+			expect(W ~= nil and W.Near ~= nil).to.beTrue()
+			local a, b = Vector(0, 0, 0), Vector(1000, 0, 0)
+			local R, D = W.Reach(0)
+			expect(R == 24 and D == 24).to.beTrue()
+			local function at(p, r, d) return W.Near(a, b, p, r or R, d or D) end
+			local p, d = at(Vector(500, 20, 24))
+			expect(p ~= nil and near(p.x, 500, 1e-3) and near(p.y, 0, 1e-3) and near(d, 20, 1e-3)).to.beTrue()
+			-- the column: the bullet at the chest, 24 u under the eye, passes through it; 22 u from the column's foot whizzes, 26 u does not
+			expect(at(Vector(500, 0, 24)) ~= nil).to.beTrue()
+			expect(at(Vector(500, 0, 46)) ~= nil).to.beTrue() -- eye 46 u over the bullet: the column's foot is 22 u over it
+			expect(at(Vector(500, 0, 50))).to.beNil() -- the foot 26 u over it
+			-- sideways, with the bullet level with the foot of the column: 22 whizzes (measured), 25 does not
+			expect(at(Vector(500, 22, 0)) ~= nil).to.beTrue()
+			expect(at(Vector(500, 25, 0))).to.beNil()
+			-- diagonal below the foot: the 3-D distance to the foot (16, 16 -> 22.6 whizzes; 17, 17 -> 24.04 does not)
+			expect(at(Vector(300, 16, 40)) ~= nil).to.beTrue()
+			expect(at(Vector(300, 17, 41))).to.beNil()
+			-- without a column (a gunship's or strider's tracer: the eye itself, 72 u)
+			local R2, D2 = W.Reach(1)
+			expect(R2 == 72 and D2 == 0).to.beTrue()
+			expect(W.Near(a, b, Vector(500, 70, 0), R2, D2) ~= nil and W.Near(a, b, Vector(500, 73, 0), R2, D2) == nil).to.beTrue()
+			-- a degenerate path (a bullet stopped at its muzzle) is a point
+			expect(W.Near(a, a, Vector(10, 0, 0), 24, 0) ~= nil and W.Near(a, a, Vector(30, 0, 0), 24, 0) == nil).to.beTrue()
+			-- the segment's ends count (measured: a tracer ending 22 u before the ear whizzes, 30 u does not; starting 15 u past it whizzes, 30 u does not)
+			local pe, de = at(Vector(1022, 0, 0), 24, 0)
+			expect(pe ~= nil and near(pe.x, 1000) and near(de, 22)).to.beTrue()
+			expect(at(Vector(1030, 0, 0), 24, 0)).to.beNil()
+			expect(at(Vector(-15, 0, 0), 24, 0) ~= nil).to.beTrue()
+			expect(at(Vector(-30, 0, 0), 24, 0)).to.beNil()
+			-- far behind the muzzle, far past where it stopped (the wall)
+			expect(at(Vector(-100, 5, 0))).to.beNil()
+			expect(at(Vector(1500, 5, 0))).to.beNil()
+			-- the sound script of a tracer (SDK: default, gunship, strider)
+			expect(W.Script("Tracer")).to.equal("Bullets.DefaultNearmiss")
+			expect(W.Script(nil)).to.equal("Bullets.DefaultNearmiss")
+			expect(W.Script("AR2Tracer")).to.equal("Bullets.DefaultNearmiss")
+			expect(W.Script("StriderTracer")).to.equal("Bullets.StriderNearmiss")
+			expect(W.Script("GunshipTracer")).to.equal("Bullets.GunshipNearmiss")
+			-- a tracer is drawn every `freq` shots (0 = never): the engine whizzes only for a drawn tracer
+			expect(W.TracerDrawn(0, 1) == false and W.TracerDrawn(nil, 1) == false).to.beTrue()
+			expect(W.TracerDrawn(1, 1) == true and W.TracerDrawn(1, 2) == true).to.beTrue()
+			expect(W.TracerDrawn(3, 1) == true and W.TracerDrawn(3, 2) == false and W.TracerDrawn(3, 3) == false and W.TracerDrawn(3, 4) == true).to.beTrue()
+		end },
 	},
 }
 return SUITE

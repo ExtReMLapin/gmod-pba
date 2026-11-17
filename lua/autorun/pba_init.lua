@@ -17,9 +17,11 @@ local files = {
 	{ "pba/sh_doors.lua", "sh" },
 	{ "pba/sh_core.lua", "sh" },
 	{ "pba/sh_pipe.lua", "sh" }, -- metal pipe meme prop: impact rules (lua/entities/pba_metal_pipe.lua)
+	{ "pba/sh_whiz.lua", "sh" }, -- bullet whizz: the near-miss rule (the engine plays it through no hook)
 	{ "pba/sv_relay.lua", "sv" },
 	{ "pba/sv_loops.lua", "sv" },
 	{ "pba/sv_sound.lua", "sv" }, -- the server's sound object: classify, audience, dispatch (after sv_relay, sv_loops)
+	{ "pba/sv_whiz.lua", "sv" }, -- bullet whizz: the bullets fired near a player's ears
 	{ "pba/cl_sched.lua", "cl" }, -- one scheduler for every followed sound
 	{ "pba/cl_renders.lua", "cl" }, -- the rules every rendering shares (far muffle, water, module, tail)
 	{ "pba/cl_loops.lua", "cl" },
@@ -33,6 +35,7 @@ local files = {
 	{ "pba/cl_sentences_virtual.lua", "cl" }, -- their virtual words (V_...) picked in Lua
 	{ "pba/cl_update.lua", "cl" }, -- native module update check (api.github.com, module installed only)
 	{ "pba/cl_render.lua", "cl" },
+	{ "pba/cl_whiz.lua", "cl" }, -- bullet whizz: played by the module (after cl_render: A.Process)
 	{ "pba/cl_debug.lua", "cl" },
 	{ "pba/cl_menu.lua", "cl" },
 	{ "pba/sh_compat.lua", "sh" },
