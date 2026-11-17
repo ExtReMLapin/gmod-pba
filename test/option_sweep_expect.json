@@ -187,6 +187,10 @@
   "pos0": "hook",
   "why": "native module mix groups"
  },
+ "native_hrtf_blend": {
+  "pos0": "hook",
+  "why": "native module HRTF share"
+ },
  "native_out": {
   "pos0": "hook",
   "why": "native module output mode"
