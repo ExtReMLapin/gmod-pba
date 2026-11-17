@@ -1330,7 +1330,16 @@ void Reap() {
 
 } // namespace
 
-std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
+static bool g_offline = false; // StartOffline: no device, RenderOutput pulls the blocks
+
+static std::string StartImpl(IPLContext ctx, const void* sofa, size_t sofaSize, bool device);
+std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) { return StartImpl(ctx, sofa, sofaSize, true); }
+std::string StartOffline(IPLContext ctx, const void* sofa, size_t sofaSize) { return StartImpl(ctx, sofa, sofaSize, false); }
+void RenderOutput(float* out, unsigned frames) {
+	if (g_offline) Callback(nullptr, out, nullptr, frames);
+}
+
+static std::string StartImpl(IPLContext ctx, const void* sofa, size_t sofaSize, bool device) {
 	if (g_devOk) return "";
 	InterpT(); // the interpolation table, built here and not on the audio thread
 	g_ctx = ctx;
@@ -1405,6 +1414,11 @@ std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize) {
 		ps.hrtf = g_hrtf;
 		if (iplPathEffectCreate(g_ctx, &as, &ps, &p.fx) != IPL_STATUS_SUCCESS) return "path effect pool creation failed";
 	}
+	if (!device) {
+		g_offline = true;
+		g_devOk = true;
+		return "";
+	}
 	ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
 	cfg.playback.format = ma_format_f32;
 	cfg.playback.channels = 2;
@@ -1438,8 +1452,9 @@ int LoaderThreads() {
 void Stop() {
 	JoinLoaders();
 	if (g_devOk) {
-		ma_device_uninit(&g_dev); // joins the audio thread
+		if (!g_offline) ma_device_uninit(&g_dev); // joins the audio thread
 		g_devOk = false;
+		g_offline = false;
 	}
 	std::lock_guard<std::mutex> lk(g_mtx);
 	for (auto& v : g_voices) ReleaseVoice(*v);

@@ -69,6 +69,10 @@ struct VoiceParams {
 
 // sofa / sofaSize: optional SOFA HRTF file contents (nullptr = Steam Audio's default HRTF)
 std::string Start(IPLContext ctx, const void* sofa, size_t sofaSize); // "" on success
+// Offline rendering (tests): Start without an audio device. The caller is the audio thread: RenderOutput renders
+// `frames` interleaved stereo frames exactly as the device callback does (blocks of 512, the rest kept for the next call).
+std::string StartOffline(IPLContext ctx, const void* sofa = nullptr, size_t sofaSize = 0);
+void RenderOutput(float* out, unsigned frames);
 void Stop();
 bool Running();
 std::string HrtfInfo();
