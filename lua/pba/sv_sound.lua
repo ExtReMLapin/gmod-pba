@@ -30,7 +30,18 @@ local function loopStage(data, snd)
 	local e = data.Entity
 	-- players' own loops (underwater ambience...) are started and stopped by the engine's C++
 	-- code: that StopSound never reaches Lua, a mirror would play forever. Left to the engine.
-	if IsValid(e) and e:IsPlayer() then return end
+	-- Exception: a long ONE-SHOT of a player who does not hear from himself (a camera, see A.HearsFromSelf): the
+	-- engine spatialises his sounds from the camera like anybody's, and a one-shot ends by itself (the mirror is
+	-- bounded by the file's length), so it is followed and muffled like any long sound (pba_long_player_camera).
+	-- A sound already followed stays followed (its updates and its stop), whatever he hears from by then.
+	if IsValid(e) and e:IsPlayer() then
+		-- (only the control events of a sound — stop, change — look up the key: a player's plain sounds are hot)
+		local ctl = band(data.Flags or 0, SND_STOP + STOP_LOOPING + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
+		local followed = ctl and LP.active[e:EntIndex() .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName]
+		if not followed and (ctl or (A.cfg.long_player_camera or 0) < 0.5 or A.HearsFromSelf(e) or A.IsLooping(data.SoundName)) then
+			return
+		end
+	end
 	-- same for the loops of a weapon a player holds: the gravity gun's hold loop is a CSoundPatch on the
 	-- weapon, faded and destroyed by its C++ (weapon_physcannon); a mirror rendered it to its holder as
 	-- a foreign source and could outlive the destroy

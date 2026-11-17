@@ -774,10 +774,31 @@ function A.HearsFromSelf(ply)
 	return not (IsValid(ve) and ve ~= ply)
 end
 
---- Server side: where a player hears from (his view entity when he looks through a camera).
+-- The observer modes' cameras (ply:Spectate + SpectateEntity), measured against the rendered view (the engine's ear;
+-- the view entity stays the player himself in all of them, so his own sounds stay his and A.HearsFromSelf holds):
+--   IN_EYE / FIXED   the target's eyes (a prop: its origin); FIXED keeps the spectator's own origin elsewhere
+--   CHASE            the target's eyes, OBS_CHASE_BACK u back along the spectator's view angles (a prop: 14 u higher)
+--   ROAMING / other  the spectator's own eyes
+local OBS_CHASE_BACK, OBS_CHASE_PROP_UP = 96, 14
+local function observerEar(ply)
+	local mode = ply:GetObserverMode()
+	if mode ~= OBS_MODE_IN_EYE and mode ~= OBS_MODE_CHASE and mode ~= OBS_MODE_FIXED then return nil end
+	local t = ply:GetObserverTarget()
+	if not IsValid(t) then return nil end
+	local eye = t:EyePos()
+	if mode ~= OBS_MODE_CHASE then return eye end
+	if not (t:IsPlayer() or t:IsNPC()) then eye = eye + Vector(0, 0, OBS_CHASE_PROP_UP) end
+	local back = eye - ply:EyeAngles():Forward() * OBS_CHASE_BACK
+	-- (the engine pulls the camera in front of the walls behind the target)
+	local tr = util.TraceLine({ start = eye, endpos = back, mask = MASK_SOLID_BRUSHONLY })
+	return tr.Hit and (tr.HitPos + tr.HitNormal * 4) or back
+end
+
+--- Server side: where a player hears from: his view entity when he looks through a camera, the camera of his
+-- observer mode when he spectates, his own eyes otherwise.
 function A.PlayerEar(ply)
 	if not A.HearsFromSelf(ply) then return ply:GetViewEntity():EyePos() end
-	return ply:EyePos()
+	return observerEar(ply) or ply:EyePos()
 end
 
 --- The demo map (pba_demo*): debug overlay and HUD indicator switch on by themselves there.
