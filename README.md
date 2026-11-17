@@ -91,12 +91,9 @@ into `garrysmod/lua/bin`. Without it, PBA runs in pure Lua as described above.
 The module is 64-bit only: start the 64-bit game (`gmod_win64.exe`, Steam's 64-bit launch option),
 not the 32-bit `gmod.exe`. A 32-bit game says so in the Steam Audio tab instead of loading the module.
 
-The `phonon.dll` we use comes from [our Steam Audio fork](https://github.com/ExtReMLapin/steam-audio/releases/tag/v4.8.1-pba.3):
-4.8.1 (current `master`) plus eight fixes, all sent upstream
-([#595](https://github.com/ValveSoftware/steam-audio/pull/595), [#596](https://github.com/ValveSoftware/steam-audio/pull/596),
-[#597](https://github.com/ValveSoftware/steam-audio/pull/597), [#599](https://github.com/ValveSoftware/steam-audio/pull/599),
-[#601](https://github.com/ValveSoftware/steam-audio/pull/601), [#603](https://github.com/ValveSoftware/steam-audio/pull/603),
-[#609](https://github.com/ValveSoftware/steam-audio/pull/609), [#611](https://github.com/ValveSoftware/steam-audio/pull/611)). `native/fetch_deps.py` downloads it
+The `phonon.dll` we use comes from [our Steam Audio fork](https://github.com/ExtReMLapin/steam-audio/releases/tag/v4.8.1-pba.4):
+4.8.1 (current `master`) plus about forty fixes, nearly all sent upstream as pull requests
+(the list is in the [release notes](https://github.com/ExtReMLapin/steam-audio/releases/tag/v4.8.1-pba.4)). `native/fetch_deps.py` downloads it
 (`--official-phonon` keeps Valve's), and we will go back to the official one once Valve releases
 a fixed version. The fork has no Linux build, so on Linux `libphonon.so` is still the official 4.8.1.
 
