@@ -1107,6 +1107,32 @@ local doorTrR = { mask = MASK_SOLID, filter = doorsOnlyNew, output = doorOut, ig
 -- is found by its box (kept from its last update) and its state replicated by the server (sh_doors
 -- D.byEnt), within the same hull (pba_door_dormant). A door never received at all (its areaportal shut since the
 -- map loaded: Entity(idx) NULL) is found by the box the server sends with its shut state (sh_doors D.Ghost).
+-- The dormant doors and their boxes, listed once per frame (and per replicated door list): every call of
+-- P.SegmentDoors (a path evaluation makes about 60) went through all the replicated doors, Entity() + IsValid +
+-- IsDormant + class each, 215-240 us a call on a map with 55 doors (test/perf/segment_doors_cost.lua). A dormant
+-- door's box is the one its last update left: it does not move within a frame.
+local dormList = { frame = -1, idxs = false, n = 0, ents = {}, mins = {}, maxs = {} }
+local function dormantList(D, idxs)
+	local fr = FrameNumber()
+	local dl = dormList
+	if dl.frame == fr and dl.idxs == idxs then return dl end
+	dl.frame, dl.idxs = fr, idxs
+	local n, ents, mins, maxs = 0, dl.ents, dl.mins, dl.maxs
+	for i = 1, #idxs do
+		local e = Entity(idxs[i])
+		local st = D.byEnt[idxs[i]]
+		-- never received at all (its areaportal shut since the map loaded): its stand-in from the server's box
+		if st and not IsValid(e) and (st.frac or 0) <= CLOSURE_FRAC0 and D.Ghost then e = D.Ghost(idxs[i]) or e end
+		if st and IsValid(e) and e:IsDormant() and DOORS_ONLY[e:GetClass()] then
+			n = n + 1
+			ents[n] = e
+			mins[n], maxs[n] = e:WorldSpaceAABB()
+		end
+	end
+	for i = n + 1, dl.n do ents[i], mins[i], maxs[i] = nil, nil, nil end
+	dl.n = n
+	return dl
+end
 local function dormantDoors(a, b, reach, list)
 	local D = A.Doors
 	local idxs = D and D.entIdx
@@ -1114,26 +1140,22 @@ local function dormantDoors(a, b, reach, list)
 	local K = A.ProbeKernels
 	if not (K and K.SegBoxHit) then return list end
 	local pad = reach and LEAF_REACH or DOOR_HULL
-	for i = 1, #idxs do
-		local e = Entity(idxs[i])
-		local st = D.byEnt[idxs[i]]
-		-- never received at all (its areaportal shut since the map loaded): its stand-in from the server's box
-		if st and not IsValid(e) and (st.frac or 0) <= CLOSURE_FRAC0 and D.Ghost then e = D.Ghost(idxs[i]) or e end
-		if st and IsValid(e) and e:IsDormant() and DOORS_ONLY[e:GetClass()] then
-			local mn, mx = e:WorldSpaceAABB()
-			if K.SegBoxHit(a.x, a.y, a.z, b.x, b.y, b.z, mn.x, mn.y, mn.z, mx.x, mx.y, mx.z, pad) then
-				-- where the segment passes the leaf: its point nearest the box's centre
-				local ab = b - a
-				local l2 = ab:LengthSqr()
-				local c = (mn + mx) * 0.5
-				local t = l2 > 0 and math.Clamp((c - a):Dot(ab) / l2, 0, 1) or 0
-				local hit = a + ab * t
-				list = list or {}
-				local at = #list + 1
-				local d = hit:DistToSqr(a)
-				for j = 1, #list do if list[j][2]:DistToSqr(a) > d then at = j break end end
-				table.insert(list, at, { e, hit, false })
-			end
+	local dl = dormantList(D, idxs)
+	local ents, mins, maxs = dl.ents, dl.mins, dl.maxs
+	for i = 1, dl.n do
+		local mn, mx = mins[i], maxs[i]
+		if K.SegBoxHit(a.x, a.y, a.z, b.x, b.y, b.z, mn.x, mn.y, mn.z, mx.x, mx.y, mx.z, pad) then
+			-- where the segment passes the leaf: its point nearest the box's centre
+			local ab = b - a
+			local l2 = ab:LengthSqr()
+			local c = (mn + mx) * 0.5
+			local t = l2 > 0 and math.Clamp((c - a):Dot(ab) / l2, 0, 1) or 0
+			local hit = a + ab * t
+			list = list or {}
+			local at = #list + 1
+			local d = hit:DistToSqr(a)
+			for j = 1, #list do if list[j][2]:DistToSqr(a) > d then at = j break end end
+			table.insert(list, at, { ents[i], hit, false })
 		end
 	end
 	return list
