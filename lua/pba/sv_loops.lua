@@ -514,6 +514,8 @@ function LP.Take(data, snd)
 		l.vehicle = IsValid(e) and e:IsVehicle() and LP.IsVehicleSound(e, data.SoundName, l.orig) or nil
 		-- a constraint's travel sound: ends in C++ when the objects stop moving relative to each other
 		l.constraint = IsValid(e) and e:GetMoveType() == MOVETYPE_VPHYSICS and LP.ConstraintOf(e, data.SoundName, l.orig) or nil
+		-- an NPC's state loop (an antlion's wings): ends in C++ with that state
+		l.npcState = IsValid(e) and e:IsNPC() and LP.NpcStateRule(e, data.SoundName, l.orig) or nil
 	end
 	l.t = CurTime()
 	local prevVol = l.vol
@@ -647,6 +649,29 @@ function LP.MoverStill(e)
 	return e:GetVelocity():LengthSqr() < 1 and e:GetLocalAngularVelocity():IsZero()
 end
 
+-- NPC loops the game ends when a state of the NPC changes, in C++ (pba_loops_npc_state): the antlion's wing loop
+-- (CNPC_Antlion::OpenWings emits NPC_Antlion.WingsOpen, npc/antlion/fly1.wav, a loop on CHAN_STATIC; CloseWings
+-- stops it at the landing: a StopSound that never reaches EntityEmitSound, so the mirror played on, for good).
+-- Class -> { sounds, on(e) }: the loop lasts while on(e) is true (a datadesc field of the NPC). A class without the
+-- field (on(e) nil) is left as it was.
+local ANTLION_WINGS = { sounds = { "NPC_Antlion.WingsOpen" }, on = function(e) return e:GetInternalVariable("m_bWingsOpen") end }
+LP.NPC_STATE_LOOPS = { npc_antlion = ANTLION_WINGS, npc_antlion_worker = ANTLION_WINGS }
+
+--- The state rule { sounds, on } of NPC e's loop `name`, or nil.
+function LP.NpcStateRule(e, name, orig)
+	if (A.cfg.loops_npc_state or 1) < 0.5 then return nil end
+	local rule = LP.NPC_STATE_LOOPS[e:GetClass()]
+	if not rule or rule.on(e) == nil then return nil end
+	local ck = "npcs:" .. e:GetClass()
+	local set = LP.soundSets[ck]
+	if not set then
+		set = {}
+		for _, n in ipairs(rule.sounds) do addSound(set, n) end
+		LP.soundSets[ck] = set
+	end
+	return inSet(set, name, orig) and rule or nil
+end
+
 -- An NPC's loops end at its death (pba_loops_npc_death): the game stops them in its death code (its
 -- StopLoopingSounds: a fast zombie's gurgle / breathe, an antlion's wings, a rollermine's motor), with a stop
 -- that never reaches EntityEmitSound, so the mirrors played on until the entity was removed, ~1.9 s later
@@ -704,10 +729,21 @@ local function endedInCpp(l)
 	if l.mover then return age > 0.4 and LP.MoverStill(e) end
 	if l.charger and age > 0.5 and e:GetInternalVariable("m_iOn") == 0 then return true end
 	if l.vehicle and age > 1 and e.IsEngineStarted and not e:IsEngineStarted() then return true end
+	-- (a short grace: the sound can be emitted a tick before the NPC's field is set)
+	local ns = l.npcState
+	if ns and age > 0.25 and ns.on(e) == false then return true end
 	local ct = l.constraint
 	if ct and (not IsValid(ct.c) or (age > 0.4 and relSpeed(e, ct.other) < math.max(ct.min, 1))) then return true end
 	return false
 end
+
+-- NPC state loops (l.npcState) are checked every 0.1 s, not at the 0.5 s of the timer below: the sound must end
+-- with the landing, not half a second after it. LP.Stop sends the stop to the clients.
+timer.Create("pba_npc_state_loops", 0.1, 0, function()
+	for _, l in pairs(LP.active) do
+		if l.npcState and endedInCpp(l) then LP.Stop(l.idx, l.name) end
+	end
+end)
 
 -- (un)subscribe players moving in / out of range, drop loops of removed entities, take capped
 -- loops over once slots free up

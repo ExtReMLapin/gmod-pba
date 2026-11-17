@@ -694,6 +694,17 @@ def npc_loop_death():
     ok = isinstance(taken, dict) and taken.get("pass") is True and isinstance(dead, dict) and dead.get("pass") is True
     return {"pass": ok, "setup": setup, "taken": taken, "kill": kill, "dead": dead}
 
+def antlion_wings():
+    """An antlion's wing loop (fly1.wav, ended in C++ at the landing) stops with the landing, server and client mirror
+    (pba_loops_npc_state). gm_construct: a ledge above the player, the antlion leaps down."""
+    load("gm_construct")
+    setup = job("server", "antlion_wings_setup.lua")
+    taken = job("client", "antlion_wings.lua")
+    land = job("server", "antlion_wings_land.lua")
+    end = job("client", "antlion_wings_end.lua")
+    ok = all(isinstance(v, dict) and v.get("pass") is True for v in (setup, taken, land, end))
+    return {"pass": ok, "setup": setup, "taken": taken, "land": land, "end": end}
+
 def burst_keep():
     """A burst-degraded sound (cheap model, too quiet to emit) is never dropped: played, and at its full level
     0.3 s later (burst_keep.lua), native render and engine copies."""
@@ -1108,6 +1119,8 @@ steps = [
     # a shot manhack's loops stop at its death (vanilla: engine off), not at its removal ~2 s later
     ("manhack_loop_death", lambda: manhack_loop_death()),
     ("npc_loop_death", lambda: npc_loop_death()),
+    # an antlion's wing loop ends in C++ at the landing (no StopSound seen): the mirror stops with it
+    ("antlion_wings", lambda: antlion_wings()),
     # test tool: the watchdog does not take an alive rollermine (no health at all) for a dead NPC
     ("watch_dead_npc", watch_dead_npc),
     # a long speech line (sv_loops) keeps its subtitle and ducks the other sounds like the short lines
