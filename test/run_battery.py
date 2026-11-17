@@ -1365,6 +1365,8 @@ steps = [
     # a one-shot followed while it plays: the voice reaches the source once the listener steps into sight
     # (pba_demo court, native then engine rendering)
     ("oneshot_follow pba_demo", lambda: py("oneshot_follow.py")),
+    # pba_impact_cap / pba_impact_group: a chopper's bullet impacts (360 a second) cost pba at most a few ms a frame (alone on the instance: a cost step)
+    ("impact_cap gm_construct", lambda: py("impact_cap.py")),
     # props on the probe routes through openings, not only on the straight line
     ("path_obstruction", lambda: py("path_obstruction.py")),
     # special sounds: grates and fences (CONTENTS_GRATE) cost no wall loss, do not cut probe links and
