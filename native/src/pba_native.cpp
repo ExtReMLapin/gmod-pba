@@ -24,7 +24,7 @@
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send]]),
-//     SetListener(pos, fwd, up, master), SetOutputMode(0|1),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k),
@@ -2509,6 +2509,12 @@ LUA_FUNCTION(SetUnderwater) {
 	return 0;
 }
 
+// SetHrtfBlend(0..1): share of the HRTF in the binaural direct path (1 = HRTF alone, the default)
+LUA_FUNCTION(SetHrtfBlend) {
+	render::SetHrtfBlend((float)LUA->CheckNumber(1));
+	return 0;
+}
+
 // SetOutputMode(0 headphones | 1 speakers)
 LUA_FUNCTION(SetOutputMode) {
 	render::SetOutputMode((int)LUA->CheckNumber(1));
@@ -3067,6 +3073,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "CaptureState");
 	LUA->PushCFunction(SetOutputMode);
 	LUA->SetField(-2, "SetOutputMode");
+	LUA->PushCFunction(SetHrtfBlend);
+	LUA->SetField(-2, "SetHrtfBlend");
 	LUA->PushCFunction(SetReflections);
 	LUA->SetField(-2, "SetReflections");
 	LUA->PushCFunction(SetLimits);

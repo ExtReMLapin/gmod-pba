@@ -278,6 +278,11 @@ int g_nextId = 1;
 IPLVector3 g_lisPos{}, g_lisAhead{0, 0, -1}, g_lisUp{0, 1, 0};
 float g_master = 1;
 int g_outMode = 0; // 0 binaural, 1 panning
+// Share of the HRTF in the binaural output (Steam Audio's spatialBlend of the direct path: 1 = the HRTF alone, the
+// default and the former behaviour; 0 = the mono sound on both ears). The default HRTF colours a source in the median
+// plane (6-16 kHz 4 to 7 dB under the file's own spectrum in front and behind, +2 dB at 2-6 kHz), where the engine's
+// panning leaves the spectrum alone; the blend gives some of that timbre back for less precise localisation.
+std::atomic<float> g_hrtfBlend{1.0f};
 double g_energyL = 0, g_energyR = 0; // since the last SetListener (validation / meters)
 IPLVector3 g_lastDir{};                // last binaural direction computed (debug)
 double g_dbgIn = 0, g_dbgL = 0, g_dbgR = 0; int g_dbgVoices = 0;
@@ -1035,7 +1040,7 @@ void RenderBlock() {
 					IPLBinauralEffectParams bp{};
 					bp.direction = d;
 					bp.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
-					bp.spatialBlend = 1.0f - 0.8f * dif; // diffuse: the direction blurs towards the centre
+					bp.spatialBlend = (1.0f - 0.8f * dif) * g_hrtfBlend.load(std::memory_order_relaxed); // diffuse: the direction blurs towards the centre
 					bp.hrtf = g_hrtf;
 					iplBinauralEffectApply(g_pool[slot].binaural, &bp, in, out);
 				} else {
@@ -1476,6 +1481,8 @@ void SetOutputMode(int mode) {
 	std::lock_guard<std::mutex> lk(g_mtx);
 	g_outMode = mode == 1 ? 1 : 0;
 }
+
+void SetHrtfBlend(float blend) { g_hrtfBlend = std::clamp(blend, 0.0f, 1.0f); }
 
 void SetPaused(bool paused) {
 	std::lock_guard<std::mutex> lk(g_mtx);

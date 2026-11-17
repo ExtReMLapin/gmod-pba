@@ -631,6 +631,7 @@ end
 function N.ApplySettings()
 	if not N.render or not pba_native.SetReflections then return end
 	pba_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
+	if pba_native.SetHrtfBlend then pba_native.SetHrtfBlend(A.cfg.native_hrtf_blend or 1) end -- (modules before this option: HRTF alone)
 	local k = N.wetScale or 1
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,
