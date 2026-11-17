@@ -1481,6 +1481,8 @@ steps = [
     ("long_sound_boundary", lambda: long_sound_boundary()),
     # T14: glass loses what the table says, lightest class, voice on the pane; the open window gives a loud portal voice inside the opening
     ("glass_window", lambda: glass_window()),
+    # source parity: the engine as oracle (pba off) against pba, same scripted scenarios (flight loop, near steps, scrapes, auto fire with a frame hitch, camera view, whizzes); lifecycle, time and listening position only
+    ("source_parity", lambda: py("source_parity.py")),
 ]
 # special-sound scenarios (test/special/steps.py), grouped by map; --special: only these
 sys.path.insert(0, os.path.join(TEST, "special"))
