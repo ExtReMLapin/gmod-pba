@@ -3057,13 +3057,39 @@ local function pathProps(p, S, L, cfg, srcEnt)
 end
 
 -- A source inside the world's solid (an ambient_generic, a speaker or a soundscape position left in
--- a wall by the mapper): traces starting in the solid give arbitrary losses. The sound is moved to
--- the nearest free space along the 6 axes (within 64 u); if there is none it stays where it is.
+-- a wall by the mapper, a camera mounted in its ceiling, a muzzle in the wall an NPC leans on): traces
+-- starting in the solid give arbitrary losses. The sound is moved to the nearest free space along the 6
+-- axes (within 64 u); if there is none it stays where it is.
+-- A point exactly ON a face of the world (a mapper's sound at a grid height on the floor, an explicit
+-- position, an attachment) is not inside it for util.PointContents, yet every trace from it starts in the
+-- solid: StartSolid, fraction 1 (no wall whatever lies in the way) or a wall of the face itself (the floor
+-- muffling a sound in the open). Measured at integer planes of d1_trainstation_02: 76 of 196 source / ear
+-- pairs wrong. It is nudged a quarter of a unit (FACE_NUDGES) out of the solid, up first: a tenth left a face 1/32 u
+-- above it, hit at once as a wall of zero thickness (d1_trainstation_02, a platform's edge at z 64.03).
+-- pba_source_free 0: traced from where the source is (the old, raw behaviour: the test's teeth).
 local freeOut = {}
 local freeTr = { mask = MASK_SOLID_BRUSHONLY, filter = function() return false end, output = freeOut }
+local faceOut = {}
+local faceTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = faceOut }
 local AXES = { Vector(1, 0, 0), Vector(-1, 0, 0), Vector(0, 1, 0), Vector(0, -1, 0), Vector(0, 0, 1), Vector(0, 0, -1) }
-function P.FreeSource(S)
-	if bit.band(util.PointContents(S), CONTENTS_SOLID) == 0 then return S end
+local FACE_DIRS = { AXES[5], AXES[1], AXES[2], AXES[3], AXES[4], AXES[6] }
+local FACE_NUDGES = { 0.25, 1, 4 }
+local function startsSolid(p)
+	faceTr.start, faceTr.endpos = p, p
+	util.TraceLine(faceTr)
+	return faceOut.StartSolid
+end
+local function freeSourceRaw(S)
+	if bit.band(util.PointContents(S), CONTENTS_SOLID) == 0 then
+		if not startsSolid(S) then return S end
+		for _, d in ipairs(FACE_NUDGES) do
+			for _, ax in ipairs(FACE_DIRS) do
+				local p = S + ax * d
+				if bit.band(util.PointContents(p), CONTENTS_SOLID) == 0 and not startsSolid(p) then return p end
+			end
+		end
+		return S
+	end
 	local best, bestD
 	for _, d in ipairs(AXES) do
 		freeTr.start, freeTr.endpos = S, S + d * 64
@@ -3075,6 +3101,20 @@ function P.FreeSource(S)
 		end
 	end
 	return best or S
+end
+-- The answer for a position is the world's alone (traces ignore every entity): kept for the positions asked again
+-- (a followed sound's every update, the audience of one sound), by their exact coordinates, in a direct-mapped
+-- table of numbers (no allocation). One trace and a contents test cost about 10 us per call, on every call.
+local MEMO_N = 512
+local memoX, memoY, memoZ, memoV = {}, {}, {}, {}
+function P.FreeSource(S)
+	if (A.cfg.source_free or 1) < 0.5 then return S end
+	local x, y, z = S.x, S.y, S.z
+	local k = (floor(x * 8) * 73856093 + floor(y * 8) * 19349663 + floor(z * 8) * 83492791) % MEMO_N + 1
+	if memoX[k] == x and memoY[k] == y and memoZ[k] == z then local v = memoV[k] return v and v * 1 or S end -- (a copy: the callers' vector is theirs)
+	local r = freeSourceRaw(S)
+	memoX[k], memoY[k], memoZ[k], memoV[k] = x, y, z, r ~= S and r or false
+	return r
 end
 
 --- pba_trans_route: the way through the first walls of the straight line, then round the others. The sound that

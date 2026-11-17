@@ -26,7 +26,7 @@ end
 function R.Far(S, L, ent)
 	if (A.cfg.far_muffle or 1) < 0.5 or not R.Beyond(S, L) then return nil end
 	local P = A.Paths
-	local walls = P.Walls(S, L, 1, P.SourceObject(S, IsValid(ent) and ent or nil))
+	local walls = P.Walls(P.FreeSource(S), L, 1, P.SourceObject(S, IsValid(ent) and ent or nil))
 	if #walls == 0 then return nil end
 	return P.MuffleFor(walls)
 end

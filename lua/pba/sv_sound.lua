@@ -325,6 +325,14 @@ local function prepare(snd)
 	return true
 end
 
+-- where the walls of a sound are traced from: the nearest point outside the solid (P.FreeSource: a camera in its
+-- ceiling, a muzzle in the wall an NPC leans on, a position exactly on a face), found once per sound
+local function wallsFrom(snd)
+	local p = snd.wpos
+	if not p then p = A.Paths.FreeSource(snd.pos) snd.wpos = p end
+	return p
+end
+
 --- What player ply gets of sound snd: "relay" | "clear" | "muffled", dsp, gain | "far" | "mirror" | nil (see
 -- the header). Audience by distance, not PAS: a sealed room is outside the PAS (the engine would not send the
 -- sound at all) but its sound still transmits through the walls. A brief sound's relay takes a token of the
@@ -342,7 +350,7 @@ function S.Audience(snd, ply, scale)
 		local d2 = eye:DistToSqr(pos)
 		if d2 > snd.r2 then return nil end
 		if A.ClientOff and A.ClientOff(ply) then return "clear" end -- (pba off on his side: untouched)
-		local walls = d2 <= snd.lod2 and A.Paths.Walls(pos, eye, 1, snd.srcObj) or nil
+		local walls = d2 <= snd.lod2 and A.Paths.Walls(wallsFrom(snd), eye, 1, snd.srcObj) or nil
 		if walls and #walls > 0 then
 			local dsp, gain = muffleFor(walls)
 			return "muffled", dsp, gain
@@ -370,7 +378,7 @@ function S.Audience(snd, ply, scale)
 	if d2 > snd.lod2 or not clientReady(ply) then
 		-- too far for a path search (or his pba client not running): the cheap muffle of an over-budget
 		-- player when the line is blocked (pba_far_muffle; it was heard through the wall as in plain sight)
-		local walls = (A.cfg.far_muffle or 0) >= 0.5 and A.Paths.Walls(pos, eye, 1, snd.srcObj) or nil
+		local walls = (A.cfg.far_muffle or 0) >= 0.5 and A.Paths.Walls(wallsFrom(snd), eye, 1, snd.srcObj) or nil
 		if walls and #walls > 0 then
 			local dsp, gain = muffleFor(walls)
 			A.stats.farMuffled = (A.stats.farMuffled or 0) + 1
@@ -392,21 +400,21 @@ function S.Audience(snd, ply, scale)
 				A.stats.relayNameReused = (A.stats.relayNameReused or 0) + 1
 				return "muffled", dsp, gain
 			end
-			local w = A.Paths.Walls(pos, eye, 1, snd.srcObj)
+			local w = A.Paths.Walls(wallsFrom(snd), eye, 1, snd.srcObj)
 			if #w == 0 then return "clear" end
 			noteVerdict(ns, pos, eye, w)
 			dsp, gain = muffleFor(w)
 			return "muffled", dsp, gain
 		end
 	end
-	local walls = not all and A.Paths.Walls(pos, eye, 1, snd.srcObj) or nil
+	local walls = not all and A.Paths.Walls(wallsFrom(snd), eye, 1, snd.srcObj) or nil
 	if (all or #walls > 0) and relayToken(ply) then
 		if ns and walls then noteVerdict(ns, pos, eye, walls) end
 		return "relay"
 	end
 	-- over budget (or a clear line): the wall test decides, a native-all player over budget included (his
 	-- relay was not conditioned on a wall)
-	walls = walls or A.Paths.Walls(pos, eye, 1, snd.srcObj)
+	walls = walls or A.Paths.Walls(wallsFrom(snd), eye, 1, snd.srcObj)
 	if #walls > 0 then
 		if ns then noteVerdict(ns, pos, eye, walls) end
 		local dsp, gain = muffleFor(walls)
