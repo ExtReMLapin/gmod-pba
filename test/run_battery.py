@@ -1051,6 +1051,8 @@ steps = [
     ("native_own_mp", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_own_mp.lua"))),
     # the player's own sounds through a camera (SetViewEntity) are spatialised from it like anybody's, not centered on the listener
     ("native_own_camera", lambda: py("native_own_camera.py")),
+    # the same for his client-side long sounds (a CreateSound loop on him, a long one-shot): followed by a mirror through a camera only
+    ("native_own_camera_long", lambda: py("native_own_camera_long.py")),
     # step isolation self-test: a step leaks three settings, the next one must start from the session's (full battery only)
     ("isolation_leak_dummy", isolation_leak_dummy),
     ("isolation_check", isolation_check),

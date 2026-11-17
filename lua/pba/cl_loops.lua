@@ -692,7 +692,9 @@ end
 -- as the engine would.
 function LP.HandleClient(data)
 	local e = data.Entity
-	if not IsValid(e) or e:IsWorld() or e == LocalPlayer() then return false end
+	-- (the local player's own sounds are the engine's, which plays them unspatialised on him; through a camera it
+	-- spatialises them from there like anybody's, so they are taken like any other: A.HearsFromSelf)
+	if not IsValid(e) or e:IsWorld() or (e == LocalPlayer() and A.HearsFromSelf(e)) then return false end
 	local idx, chan, name = e:EntIndex(), data.Channel or CHAN_AUTO, data.SoundName
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_STOP) ~= 0 then LP.StopClient(idx, nil, name) return false end
