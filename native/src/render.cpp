@@ -2028,12 +2028,25 @@ uint8_t AcquirePath(ControlVoice& v) {
 	return 0;
 }
 
+// One band of a voice's 3-band EQ, as Steam Audio's effects can take it. The direct effect floors every band at 1/16 of the
+// strongest, but IPLPathEffect (normalizeEQ off) applies the bands as given and its band filters divide by the gain: a mid
+// band of exactly 0 is 0/0 (NaN in the voice's output, then in the energies, the room send and the limiter), a negative one
+// the square root of a negative, an infinite or NaN one NaN as well. A wall that transmits nothing in a band, an absorbing
+// material or an extreme setting reaches here as such a value. Not a number or infinite: no filtering (1: the level is the
+// gain's business); otherwise kMinEq (-80 dB, far under anything the Lua asks for: its own floors are 1e-3 and 1e-4) to
+// kMaxEq (+24 dB: Steam Audio's own EQ range, 16x).
+constexpr float kMinEq = 1e-4f, kMaxEq = 16.0f;
+float SaneEq(float x) {
+	if (!std::isfinite(x)) return 1.0f;
+	return std::clamp(x, kMinEq, kMaxEq);
+}
+
 // Play / Update parameters into a voice's control fields; returns the reset flag of a path effect just taken
 uint8_t SetVoiceCtl(ControlVoice& v, const VoiceParams& p) {
 	v.c.pos = p.pos;
 	v.c.gain = p.gain;
 	v.c.rate = std::clamp(p.pitch / 100.0f, 0.05f, 4.0f);
-	std::copy(p.eq, p.eq + 3, v.c.eq);
+	for (int b = 0; b < 3; ++b) v.c.eq[b] = SaneEq(p.eq[b]);
 	// baked path: new coefficients (acquiring a path effect if the voice had none), or back to the
 	// straight line (the renderer fades the path out, then the effect is released); neither: kept. A
 	// voice followed by Update used to keep its Play-time arrival field forever while its position
