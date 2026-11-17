@@ -126,19 +126,19 @@ A.CONFIG = {
 	native_paths    = { 0, 0, 1, "cl", "Experimental: Steam Audio baked pathing instead of the probe graph." },
 	update_check    = { 1, 0, 1, "cl", "Only with the native module installed: ask api.github.com (nothing else, at most once a day) whether a newer PBA release exists, and say so." },
 	native_render   = { 1, 0, 1, "cl", "With the native module installed: it plays processed sounds itself (Steam Audio HRTF, 3-band EQ, simulated room reverb). 0 = the engine plays them (muffling presets only, no simulated reverb)." },
-	native_reverb   = { 0.4, 0, 2, "cl", "Room reverb level of natively rendered sounds (Steam Audio reflections simulated at the listener). Each sound feeds the reverb with its level times its distance (the reverb/direct balance of a real room, whatever the game's distance law); 0.4 matches an empty room's physics (rp_downtown, measured: reverb = direct + 3 dB at 1 m, +18 dB at 5.5 m). Lower for a drier sound." },
+	native_reverb   = { 1, 0, 4, "cl", "Room reverb level of natively rendered sounds (Steam Audio reflections simulated at the listener). Each sound feeds the reverb with its level times its distance (the reverb/direct balance of a real room, whatever the game's distance law); 1 is the physical level: with the level-fixed phonon.dll the reverb of a closed room follows Hopkins-Stryker's diffuse field within about 1 dB (before the fix the simulated response was 11 dB too loud and 0.4 was the compromise). 4 is the module's limit. Lower for a drier sound." },
 	native_voice_mix = { 1, 0, 1, "cl", "A loop or a stream rendered as one native voice takes its voices' position and low-pass mixed by energy (0: the loudest voice's, which jumped where two voices of about the same level swapped order)." },
 	native_room_shadow = { 1, 0, 1, "cl", "Natively rendered sounds: the listener's room reverb is fed by what arrives into the listener's space in proportion to how much of the clear-line energy the arrivals lost on the way (through walls, round corners, past doors), in dB up to pba_native_room_shadow_db: none in clear sight or just past a door jamb (the source's own reverb renders that space), all of it behind a wall, continuously in between. 0 = all of it for any arrival that is not the clear line (a step past a door jamb switched the reverb up by 16 dB)." },
 	native_room_shadow_db = { 20, 1, 60, "cl", "Loss (dB) of the arrivals from which the listener's room reverb gets all of what enters the listener's space (pba_native_room_shadow); below, a share growing linearly in dB." },
 	native_room_open_area = { 4608, 0, 100000, "cl", "Area (square units) of the opening an arrival enters the listener's space by (a door: 48 x 96 = 4608): the listener's room reverb gets the power through it (the flux at the opening times its area), not the full flux. 0 = the full flux (16-20 dB more room reverb behind a doorway)." },
-	native_echo     = { 0.25, 0, 4, "cl", "Echo level: reflections simulated for each loud sound (gunfire, explosions), heard in addition to the engine's sound. 0 = off." },
+	native_echo     = { 0.75, 0, 4, "cl", "Echo level: reflections simulated for each loud sound (gunfire, explosions), heard in addition to the engine's sound. The echo is fed like a source reverb slot (the source's power at 1 m), so this and the reverb level are on the same scale: 1 is the physical level. 0 = off." },
 	native_echo_lvl = { 95, 60, 160, "cl", "Minimum sound level (dB SNDLVL) for a sound to get simulated echoes." },
 	native_src_near = { 0.1, 0, 0.5, "cl", "Source reverb of a moving far source: its response is kept while the source stays within this fraction of its distance (and 1.5 m near). 0 = 1.5 m at any distance: a gunship 90 m away was re-simulated every 0.25 s from one noisy pass, its echo jumping +-4 dB." },
 	native_source_long_rt = { 1, 0, 1, "cl", "Natively rendered sounds: each source reverb slot (and echo) rings with the reverb time of its OWN room, measured over the long window (pba_native_reverb_window) at its position. 0 = the main simulation's 0.5 s window, whose estimate saturates near 1.2 s, so a sound in a big steel hangar had a 1 s tail where the room rings 5 s." },
 	native_loud_dry = { 1, 0, 1, "cl", "Very loud sounds (gunfire, explosions) get less reverb, so they stay sharp: from pba_native_loud_dry_from their reverb falls, over pba_native_loud_dry_range dB of level, to pba_native_loud_dry_db dB lower. This is the module's own choice (the engine does not dry its loud sounds: its dsp_db_min / dsp_db_mixdrop lower the room mix of the QUIET ones). Without it, gunfire in the open got as much reverb as direct sound (muddled)." },
 	native_loud_dry_from = { 95, 60, 160, "cl", "Sound level (dB SNDLVL) above which a sound starts to lose reverb (pba_native_loud_dry). Ordinary sounds (doors, impacts, voices, a 95 dB metal bang) keep all of theirs." },
 	native_loud_dry_range = { 15, 0, 60, "cl", "Levels (dB) over which the reverb of a loud sound falls from all to its minimum (pba_native_loud_dry). 0 = a step." },
-	native_loud_dry_db = { 20, 0, 60, "cl", "Reverb reduction (dB) of the loudest sounds (pba_native_loud_dry): 20 = a tenth of the amplitude." },
+	native_loud_dry_db = { 12, 0, 60, "cl", "Reverb reduction (dB) of the loudest sounds (pba_native_loud_dry): 12 = a quarter of the amplitude." },
 	native_law_engine = { 0, 0, 1, "cl", "Distance law of natively rendered sounds: 0 = a real sound, 1/r from 1 m (-6 dB per doubling); 1 = the engine's own law (much gentler for levels 80-110: a level 85 sound at 500 u is -0.7 dB in the engine, -19.6 dB with 1/r); in between, a mix in dB. The reverb follows the same law." },
 	native_quiet_law = { 1, 0, 1, "cl", "Natively rendered loops: judged quiet (pba_quiet_db, no path search) by the distance law they are heard with, and while quiet their level keeps following that law with distance. 0 = judged by the engine's law and frozen at their last values while quiet (a loop heard from the next room kept that level when the listener went far: up to +20 dB at 5000 u)." },
 	native_vol_now = { 1, 0, 1, "cl", "Natively rendered loops and long sounds follow a volume change of their sound (a server fade, an entity's ChangeVolume) at once, as the engine does: the voice is scaled, its route kept until its next re-evaluation. 0: the change waited for that re-evaluation (half an update interval, then a ramp), a fading dropship stayed up to +11 dB too loud meanwhile." },
@@ -317,14 +317,87 @@ for name, c in pairs(A.CONFIG) do
 	end
 end
 
+-- Migration flags kept in a DATA file (data/pba/migrations.txt, one key per line), for the migrations that
+-- depend on something besides the Lua (A.MigrateRetune): unlike a cookie it is a plain file next to the other
+-- data of the addon, visible and removable by the player, and it survives a reset of the game's databases.
+A.MIGRATION_FILE = "pba/migrations.txt"
+function A.MigrationDone(key)
+	local s = file.Read(A.MIGRATION_FILE, "DATA")
+	if not s then return false end
+	for line in string.gmatch(s, "[^\r\n]+") do
+		if string.match(line, "^%s*(.-)%s*$") == key then return true end
+	end
+	return false
+end
+--- Records key, keeping the other flags. true when the flag can be read back (nothing else tells a file that
+-- cannot be written: a migration that scales a value must not run when it could not be remembered).
+function A.MigrationMark(key)
+	if A.MigrationDone(key) then return true end
+	local s = file.Read(A.MIGRATION_FILE, "DATA") or ""
+	if s ~= "" and string.sub(s, -1) ~= "\n" then s = s .. "\n" end
+	file.CreateDir("pba")
+	file.Write(A.MIGRATION_FILE, s .. key .. "\n")
+	return A.MigrationDone(key)
+end
+
+-- Retune for the level-fixed phonon.dll (Steam Audio fork, branch pba-4): the reflection response is no longer
+-- 11 dB too loud and the reflection fixes change the rest, so the reverb comes out about 10.5 dB quieter at equal
+-- settings. The defaults of native_reverb and native_echo went up to compensate (and the loud-dry reduction down,
+-- the ground reflection no longer sticks out of the direct sound). This moves what players saved, ONCE, and only
+-- when the phonon.dll in use is the fixed one (the module measures it: pba_native.PhononLevel, N.PhononFixed): on
+-- the old DLL the old values are right, and the migration waits for the day the DLL is updated.
+--  * a value equal to the new default is left alone (a fresh install, or a choice that equals it);
+--  * a value equal to the OLD default moves to the new default (the player never chose it);
+--  * a custom reverb / echo is multiplied by new default / old default and held to the slider's maximum (a
+--    player who liked it at half the default keeps half the default);
+--  * a custom loud-dry reduction is kept; a directivity weight above the new cap of 0.5 is held to it.
+-- Run once per install (a player who later sets an old value on purpose keeps it): the flag is a line in the
+-- data file, written and read back BEFORE anything moves.
+A.RETUNE_KEY = "retune_pba4_v1"
+A.RETUNE = {
+	{ name = "native_reverb", old = 0.4, scale = true },
+	{ name = "native_echo", old = 0.25, scale = true },
+	{ name = "native_loud_dry_db", old = 20 },
+	{ name = "native_dir", cap = true },
+}
+--- phononFixed: true / false / nil (unknown: a module without PhononLevel, or none). Returns "done" (already
+-- run), "waiting" (not the fixed phonon, or not known), "unsafe" (the flag cannot be written), "applied", "skip" (not the client).
+function A.MigrateRetune(phononFixed)
+	if not (CLIENT and file) then return "skip" end
+	if A.retuneRan then return "done" end
+	if A.MigrationDone(A.RETUNE_KEY) then A.retuneRan = true return "done" end
+	if phononFixed ~= true then return "waiting" end
+	if not A.MigrationMark(A.RETUNE_KEY) then return "unsafe" end
+	A.retuneRan = true
+	for _, m in ipairs(A.RETUNE) do
+		local cv, c = A.cv[m.name], A.CONFIG[m.name]
+		if cv and c then
+			local v, nd, mx = cv:GetFloat(), c[1], c[3]
+			local to
+			if m.cap then
+				if v > mx + 1e-6 then to = mx end
+			elseif math.abs(v - nd) < 1e-4 then
+				-- (already the new default)
+			elseif math.abs(v - m.old) < 1e-4 then
+				to = nd
+			elseif m.scale then
+				to = math.min(v * nd / m.old, mx)
+			end
+			if to then RunConsoleCommand(cv:GetName(), tostring(math.Round(to, 3))) end
+		end
+	end
+	return "applied"
+end
+
 -- Defaults that changed after a release: a saved value equal to the OLD default is the old default kept
 -- by the config file, not the player's choice: moved to the new one, once (a cookie remembers it, so a
--- player who sets the old value again later keeps it).
+-- player who sets the old value again later keeps it). `to`: the default of THAT release when it was not the
+-- last one (the chain goes on: native_reverb 0.15 -> 0.4, then A.MigrateRetune 0.4 -> today's default).
 function A.MigrateDefaults()
 	if not (CLIENT and cookie) then return end
 	local MIGRATE = {
 		-- 1.0.x: 0.15 with the send following the direct gain; the send now follows the distance (1.1)
-		{ name = "native_reverb", old = 0.15, key = "pba_mig_native_reverb_v2" },
+		{ name = "native_reverb", old = 0.15, to = 0.4, key = "pba_mig_native_reverb_v2" },
 		-- 1.1 dev builds: far grouping shipped with 2 deg and no reuse in time before the bench
 		{ name = "group_angle", old = 2, key = "pba_mig_group_angle_v1" },
 		{ name = "group_time", old = 0, key = "pba_mig_group_time_v1" },
@@ -358,7 +431,8 @@ function A.MigrateDefaults()
 		local cv = A.cv[m.name]
 		if cv and cookie.GetNumber(m.key, 0) == 0 then
 			cookie.Set(m.key, "1")
-			if math.abs(cv:GetFloat() - m.old) < 1e-4 then RunConsoleCommand(cv:GetName(), tostring(A.CONFIG[m.name][1])) end
+			if math.abs(cv:GetFloat() - m.old) < 1e-4 then RunConsoleCommand(cv:GetName(), tostring(m.to or A.CONFIG[m.name][1])) end
+
 		end
 	end
 end

@@ -430,6 +430,32 @@ return {
 				expect(l == e2[1] and m == e2[2] and h == e2[3]).to.beTrue()
 			end)
 		end },
+		{ name = "PhononFixed / Retune: the module's measurement of its phonon.dll decides (true / false); no probe (a module of API 2), an error or a failed measurement is unknown (nil); the retune migration gets exactly that, and runs when the module is initialised", func = function()
+			local saved = { pba_native = _G.pba_native, mig = A.MigrateRetune }
+			local seen
+			A.MigrateRetune = function(v) seen = { v } return "x" end
+			local ok, err = pcall(function()
+				_G.pba_native = { PhononLevel = function() return true, -1.03 end }
+				expect(N.PhononFixed()).to.equal(true)
+				expect(near(N.phononLevelDb, -1.03, 1e-9)).to.beTrue()
+				expect(N.Retune()).to.equal("x")
+				expect(seen[1]).to.equal(true)
+				_G.pba_native = { PhononLevel = function() return false, 9.97 end }
+				expect(N.PhononFixed()).to.equal(false)
+				N.Retune()
+				expect(seen[1]).to.equal(false)
+				_G.pba_native = { PhononLevel = function() return nil, "the level probe failed" end }
+				expect(N.PhononFixed()).to.beNil()
+				_G.pba_native = { PhononLevel = function() error("boom") end }
+				expect(N.PhononFixed()).to.beNil()
+				_G.pba_native = {} -- a module of API 2: no probe
+				expect(N.PhononFixed()).to.beNil()
+				N.Retune()
+				expect(seen[1]).to.beNil()
+			end)
+			_G.pba_native, A.MigrateRetune = saved.pba_native, saved.mig
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Directivity: the dipole weight is capped at 0.5 (beyond it Steam Audio's dipole has a rear lobe: 0.5 is a cardioid, 1 a figure of eight)", func = function()
 			local eye = Vector(0, 0, 64)
 			local ply = fakeEnt("player", Vector(1, 0, 0), eye)

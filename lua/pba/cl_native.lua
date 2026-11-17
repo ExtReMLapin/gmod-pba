@@ -254,6 +254,26 @@ function N.InstallProblem(arch, exists)
 	return nil
 end
 
+--- Is the phonon.dll in use the one with the reflection level fix (Steam Audio fork, pba-4: the reconstructed response
+-- in the units of the direct sound; the DLLs before it are 8-11 dB too loud)? Measured by the module on the DLL itself
+-- (pba_native.PhononLevel, after Init). true / false, or nil when unknown: no module, a module of API 2 without the
+-- probe, a failed measurement. The reverb defaults (pba_native_reverb, pba_native_echo) and A.MigrateRetune depend on it.
+function N.PhononFixed()
+	if not (pba_native and pba_native.PhononLevel) then return nil end
+	local ok, fixed, level = pcall(pba_native.PhononLevel)
+	if not ok or type(fixed) ~= "boolean" then return nil end
+	N.phononFixed, N.phononLevelDb = fixed, tonumber(level)
+	return fixed
+end
+
+--- The one-time retune of the saved reverb settings (A.MigrateRetune), when the phonon.dll is the fixed one.
+function N.Retune()
+	if not A.MigrateRetune then return nil end
+	local r = A.MigrateRetune(N.PhononFixed())
+	N.retune = r
+	return r
+end
+
 function N.Start()
 	N.ready, N.pathsReady, N.err, N.outdated = false, false, nil, nil
 	if (A.cfg.native or 1) < 0.5 then return end
@@ -275,6 +295,8 @@ function N.Start()
 	end
 	local ok, err = pba_native.Init()
 	if not ok then N.err = err return end
+	N.Retune()
+
 	-- the world is gathered in a coroutine, 4 ms per frame (large maps: seconds of Lua work),
 	-- then handed to the module in one call
 	N.gathered = nil -- (a world held for calm: replaced by this build)
@@ -1126,7 +1148,7 @@ function N.LoudWet(lvl)
 	if over <= 0 then return 1 end
 	local range = cfg.native_loud_dry_range or 15
 	local t = range > 0 and math.min(over / range, 1) or 1
-	return 10 ^ (-(cfg.native_loud_dry_db or 20) * t / 20)
+	return 10 ^ (-(cfg.native_loud_dry_db or 12) * t / 20)
 end
 --- 1/r from 1 m without a sound level (full scale at 1 m). Not the law of other addons' BASS streams: they keep
 -- the channel's own (cl_streams, bassGain: the addon chose the range; a radio set to Set3DFadeDistance(1e6)
