@@ -1660,12 +1660,75 @@ local AMBIENT_RADIUS2, AMBIENT_PERIOD = 16 * 16, 2
 -- (pba_native_spin_s: the seconds of it, 3 by default; 0 = off)
 
 --- Box facts of a door, mover or prop: bounds, largest and smallest dimension (the smallest is the
--- thickness sound crosses: saMaterial), mean face area (its acoustic size for the ranking).
-local function boxInfo(e)
+-- thickness sound crosses: saMaterial), mean face area (its acoustic size for the ranking). hull: a prop's
+-- collision model (N.PropHull), whose bounds then replace the entity's.
+local function boxInfo(e, hull)
 	local mn, mx = e:OBBMins(), e:OBBMaxs()
+	if hull then mn, mx = hull.mn, hull.mx end
 	local sz = mx - mn
 	return { mn = mn, mx = mx, big = math.max(sz.x, sz.y, sz.z), thick = math.max(math.min(sz.x, sz.y, sz.z), 1),
-		area = (sz.x * sz.y + sz.y * sz.z + sz.x * sz.z) / 3 }
+		area = (sz.x * sz.y + sz.y * sz.z + sz.x * sz.z) / 3, hull = hull }
+end
+
+-- Collision models of the props, per model and scale: { v, t, mn, mx, tris } in the entity's frame, false = none.
+-- A prop entered the scene as its bounding box (OBBMins / OBBMaxs), which for a model is its render bounds: for a
+-- hollow model (a shelf: 4 % of its box) or an animated one (models/props_silo/rocket_hatch.mdl: 290 x 301 x
+-- 1230 u of bounds, a 28 x 44 x 28 u collision) the box sealed the open space inside it, and a source standing
+-- there (Kleiner in ep2_outland_11) had no reverb at all. The collision model is what the game's own traces and
+-- players see as solid.
+N.hullCache = N.hullCache or {}
+local HULL_TRIS_MAX = 768 -- above: one box per convex part (12 triangles each), still the parts' own volumes
+function N.PropHull(model, scale)
+	if not model or model == "" or model:sub(1, 1) == "*" then return nil end
+	scale = scale or 1
+	local key = model .. "@" .. scale
+	local c = N.hullCache[key]
+	if c ~= nil then return c or nil end
+	local hull = false
+	local ok, cs = pcall(ents.CreateClientProp, model)
+	if ok and IsValid(cs) then
+		cs:PhysicsInit(SOLID_VPHYSICS)
+		local po = cs:GetPhysicsObject()
+		local convexes = IsValid(po) and po:GetMeshConvexes() or nil
+		cs:Remove()
+		if convexes and #convexes > 0 then
+			local n = 0
+			for _, cv in ipairs(convexes) do n = n + math.floor(#cv / 3) end
+			local v, t = {}, {}
+			local mn = Vector(math.huge, math.huge, math.huge)
+			local mx = -mn
+			local function grow(p)
+				mn.x, mn.y, mn.z = math.min(mn.x, p.x), math.min(mn.y, p.y), math.min(mn.z, p.z)
+				mx.x, mx.y, mx.z = math.max(mx.x, p.x), math.max(mx.y, p.y), math.max(mx.z, p.z)
+			end
+			for _, cv in ipairs(convexes) do
+				if n <= HULL_TRIS_MAX then
+					for i = 1, #cv - #cv % 3 do
+						local p = cv[i].pos * scale
+						grow(p)
+						v[#v + 1], v[#v + 2], v[#v + 3] = p.x, p.y, p.z
+						t[#t + 1] = #v / 3 - 1
+					end
+				elseif #cv > 0 then
+					local a = Vector(math.huge, math.huge, math.huge)
+					local b = -a
+					for i = 1, #cv do
+						local p = cv[i].pos * scale
+						grow(p)
+						a.x, a.y, a.z = math.min(a.x, p.x), math.min(a.y, p.y), math.min(a.z, p.z)
+						b.x, b.y, b.z = math.max(b.x, p.x), math.max(b.y, p.y), math.max(b.z, p.z)
+					end
+					local bv, bt = boxMesh(a, b)
+					local base = #v / 3
+					for i = 1, #bv do v[#v + 1] = bv[i] end
+					for i = 1, #bt do t[#t + 1] = bt[i] + base end
+				end
+			end
+			if #t >= 3 then hull = { v = v, t = t, mn = mn, mx = mx, tris = #t / 3 } end
+		end
+	end
+	N.hullCache[key] = hull
+	return hull or nil
 end
 
 --- Surfaceprop of a moving brush (lift, shutter, func_physbox): brush models ("*N") have no model info and
@@ -1698,7 +1761,8 @@ local function addProp(e, id, info)
 	-- material from the physics surface: pba's wall table at the object's smallest dimension
 	-- (hollow objects behave like thin walls)
 	local m = saMaterial(N.SurfaceOf(e), A.cfg, e:GetModel(), info.thick)
-	local v, t = boxMesh(info.mn, info.mx)
+	local v, t
+	if info.hull then v, t = info.hull.v, info.hull.t else v, t = boxMesh(info.mn, info.mx) end
 	pba_native.DynamicAdd(id, v, t, m)
 	local d = { prop = true, ent = e }
 	N.doors[id] = d
@@ -1787,7 +1851,12 @@ function N.SyncDoors()
 				d = nil
 			end
 			local info = N.propInfo[e]
-			if not info then info = boxInfo(e) N.propInfo[e] = info end
+			if not info then
+				-- a prop takes the shape of its collision model (pba_native_props_hull), a door or mover its box
+				local hull = not isDoor and (A.cfg.native_props_hull or 1) >= 0.5 and N.PropHull(e:GetModel(), e:GetModelScale()) or nil
+				info = boxInfo(e, hull)
+				N.propInfo[e] = info
+			end
 			if isDoor then
 				seen[id] = true
 				if not d and info.big > 8 then

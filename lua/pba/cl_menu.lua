@@ -195,6 +195,7 @@ function Build.native(panel)
 	dep(chk(panel, "Doors reflect sound", "native_doors"), "ready")
 	dep(chk(panel, "Big props reflect sound", "native_props"), "ready")
 	dep(sld(panel, "Max props in the scene", "native_props_max"), "ready")
+	dep(chk(panel, "Props take their collision shape (not their box)", "native_props_hull"), "ready")
 	dep(chk(panel, "Update props only out of fights", "native_props_calm"), "ready")
 	dep(sld(panel, "Spinning objects: seconds before they are updated rarely (0 = never)", "native_spin_s", 1), "ready")
 
