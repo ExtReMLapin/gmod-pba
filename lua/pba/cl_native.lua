@@ -19,7 +19,8 @@ local MODULE = "lua/bin/gmcl_pba_win64.dll" -- (64-bit only: N.InstallProblem)
 -- from), API number (raised in native/src/pba_native.cpp, PBA_NATIVE_API, when a function changes). This Lua
 -- accepts the API range N.API_MIN..N.API_MAX; any other module, or one without ModuleVersion (older than this
 -- check), is left unused as if it were not installed. No automatic update.
-N.API_MIN, N.API_MAX = 1, 2 -- (2: pausable voices, N.PauseFlag; a module of API 1 is used without the pause)
+N.API_MIN, N.API_MAX = 1, 3 -- (2: pausable voices, N.PauseFlag; a module of API 1 is used without the pause. 3: PhononLevel; a module of API 2 is used, its phonon.dll of unknown level: N.PhononFixed() = nil)
+
 local UPDATE_HINT = "update gmcl_pba_win64.dll and phonon.dll in garrysmod/lua/bin with the ones of the PBA release matching the addon"
 
 -- -> true, nil, version, api | false, message, version, api (mod: the module's table, pba_native)

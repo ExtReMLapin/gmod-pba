@@ -431,8 +431,12 @@ return {
 			end)
 		end },
 		{ name = "PhononFixed / Retune: the module's measurement of its phonon.dll decides (true / false); no probe (a module of API 2), an error or a failed measurement is unknown (nil); the retune migration gets exactly that, and runs when the module is initialised", func = function()
+			-- the module that has the probe is API 3 (native/src/pba_native.cpp, PBA_NATIVE_API): the Lua must accept it
+			-- (a real game run found "native module newer than the addon" when the range stopped at 2)
+			expect(N.API_MAX >= 3).to.beTrue()
 			local saved = { pba_native = _G.pba_native, mig = A.MigrateRetune }
 			local seen
+
 			A.MigrateRetune = function(v) seen = { v } return "x" end
 			local ok, err = pcall(function()
 				_G.pba_native = { PhononLevel = function() return true, -1.03 end }
