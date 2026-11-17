@@ -115,6 +115,10 @@
   "pos0": "hook",
   "why": "captions of long sounds"
  },
+ "long_player_camera": {
+  "pos0": "hook",
+  "why": "server relay: a player's long one-shot followed through a camera (test native_own_camera_long_sv)"
+ },
  "loops_once_end": {
   "pos0": "hook",
   "why": "end of long one-shot mirrors, engine and native (render time)"
