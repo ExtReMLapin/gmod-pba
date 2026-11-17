@@ -81,6 +81,8 @@ SCENES = {
     "S1": ("s1_barrels.lua", {"vue": "gm_construct", "mur": "gm_construct"}, "vue,mur", None),
     "S2": ("s2_breaks.lua", {"vue": "gm_construct", "mur": "gm_construct"}, "vue", None),
     "S3": ("s3_grenades.lua", {"a": "gm_construct", "b": "gm_construct"}, "a,b", None),
+    "S13": ("s13_impacts.lua", {"vue": "gm_construct", "mur": "gm_construct", "vue_hi": "gm_construct",
+                                "mur_hi": "gm_construct"}, "vue,mur", None),
     "S11": ("s11_hl2_barrels.lua", {"canals": "d1_canals_01"}, "canals", None),
     "S12": ("s12_echoes.lua", {"tworooms": "pba_tworooms", "construct": "gm_construct"}, "tworooms,construct",
             "native,native_echo"),

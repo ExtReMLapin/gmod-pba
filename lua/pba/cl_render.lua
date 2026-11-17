@@ -1150,11 +1150,26 @@ local function holdJob(data, S, L, lvl, src, cfg)
 	return A.Slicer.Defer(S, L, lvl, src, cfg, hold)
 end
 
+-- the ring of recent full results (pba_burst_fair, pba_impact_group): r evaluated for a source at S heard from L
+local function noteNear(r, S, L, lvl, dry, now)
+	local B = A.burst
+	B.nearI = B.nearI % BURST_NEAR_N + 1
+	local m = B.near[B.nearI] or {}
+	m.r, m.t, m.gen, m.lvl, m.dry = r, now, A.Paths.cacheGen, lvl, dry
+	if m.S then m.S:Set(S) m.L:Set(L) else m.S, m.L = Vector(S), Vector(L) end
+	B.near[B.nearI] = m
+end
+
 local function burstEvaluate(data, S, L, lvl, src)
 	local P, B, st = A.Paths, A.burst, A.burstStats
 	local dry = A.Render.WaterDry(nil, data.SoundName)
 	local cfg = dry and P.DRY_SOURCE_CFG or nil
 	local now = RealTime()
+	-- (pba_impact_group) a dense family of world sounds (a chopper's impacts): a nearby full result serves, whatever the budget
+	if data.pbaDense then
+		local n = nearResult(S, L, lvl, now, dry)
+		if n then st.grouped = (st.grouped or 0) + 1 return n end
+	end
 	local maskDb = A.cfg.burst_mask_db or 25
 	local fair = (A.cfg.burst_fair or 1) >= 0.5
 	-- its level at the ear, in plain sight: SNDLVL at 36 u (about 1 m), spherical spreading beyond (the
@@ -1210,15 +1225,10 @@ local function burstEvaluate(data, S, L, lvl, src)
 		m.r, m.t, m.gen, m.lvl, m.S, m.L = r, now, P.cacheGen, lvl, Vector(S), Vector(L)
 		B.byEmitter[src] = m
 	end
-	if r and fair and not r.cheap then
-		B.nearI = B.nearI % BURST_NEAR_N + 1
-		local m = B.near[B.nearI] or {}
-		m.r, m.t, m.gen, m.lvl, m.dry = r, now, P.cacheGen, lvl, dry
-		if m.S then m.S:Set(S) m.L:Set(L) else m.S, m.L = Vector(S), Vector(L) end
-		B.near[B.nearI] = m
-	end
+	if r and (fair or data.pbaWorld) and not r.cheap then noteNear(r, S, L, lvl, dry, now) end
 	return r, job
 end
+A.BurstNote = noteNear -- (a held sound's evaluation finished in the slicer: Process)
 A.BurstEvaluate = burstEvaluate -- (tests: test/burst_fair.lua)
 
 function A.Process(data, relayed)
@@ -1248,7 +1258,7 @@ function A.Process(data, relayed)
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
 	-- the listener's own sound (pba_native_own, centered on him): nothing to save on, never degraded or held
 	local ownSound = IsValid(src) and src == LocalPlayer() and A.NativeOwn and A.NativeOwn()
-	if not ownSound and ((A.cfg.burst_budget_ms or 2) > 0 or (A.cfg.burst_mask_db or 25) > 0) then
+	if not ownSound and ((A.cfg.burst_budget_ms or 2) > 0 or (A.cfg.burst_mask_db or 25) > 0 or data.pbaDense) then
 		r, job = burstEvaluate(data, S, L, lvl, IsValid(src) and src or nil)
 	else
 		r, job = A.Paths.Evaluate(nil, S, L, lvl, IsValid(src) and src or nil, A.Render.WaterDry(nil, data.SoundName))
@@ -1265,10 +1275,13 @@ function A.Process(data, relayed)
 		register(idx, h)
 		data.heldUntil = job.deadline -- (pba_silent_handback waits for it)
 		A.stats.held = (A.stats.held or 0) + 1
+		local feeds = data.pbaWorld
 		job.onDone = function(res)
 			unregister(idx, h)
 			if h.cancelled then return end
 			h.cancelled = true -- (the placeholder's part is over)
+			-- (a world sound of a family counted by pba_impact_group: its full result serves the next ones near it, burstEvaluate)
+			if feeds and res and not res.cheap then A.BurstNote(res, S, L, lvl, A.Render.WaterDry(nil, d.SoundName), RealTime()) end
 			if not res or not finish(d, relayed, idx, copies, S, L, ang, src, res, RealTime() - tReq - (d.Delay or 0), SysTime()) then vanilla(d)
 			else mouthCopy(d, src) end
 		end
@@ -1428,6 +1441,52 @@ function A.IsSoundscapeRandom(data, pos)
 	return L ~= nil and pos:DistToSqr(L) <= SCAPE_RADIUS * SCAPE_RADIUS and soundscapeWave(data.SoundName)
 end
 
+-- pba_impact_cap: a burst of one family of short world sounds (a chopper's gun: bullet impacts at 120 a second,
+-- "physics/concrete/concrete_impact_bullet1..4.wav", each 1-2 s long) costs a path search, a native voice, a decode check
+-- and a wait on the audio thread's lock EACH (7-25 ms frames, PERF bench S13). Past the cap the rest of the burst is
+-- dropped (the hook returns false: the engine does not play it either): the ear hears one texture at that density.
+-- Only sounds played on the world (impacts, ricochets: no entity, so no voice, no loop, no line is ever caught).
+local CAP_WINDOW = 0.25
+local capFamily = {}   -- sound name -> family key (the name without its number: a finite set, computed once)
+local capCount = {}    -- family key -> { t0 = window start, n = taken in it }
+local capKeys = 0
+local function worldEmitter(data)
+	local e = data.Entity
+	if e == nil then return true end
+	if not IsValid(e) then return (data.EntIndex or 0) <= 0 end
+	return e:IsWorld()
+end
+--- True when this sound is past its family's cap for the current quarter second (and counts it as dropped).
+-- Past pba_impact_group of them in the window it is marked dense (data.pbaDense): burstEvaluate gives it a nearby result.
+function A.ImpactCapped(data)
+	local cap, group = A.cfg.impact_cap or 0, A.cfg.impact_group or 0
+	if (cap <= 0 and group <= 0) or not worldEmitter(data) then return false end
+	local name = data.SoundName
+	local fam = capFamily[name]
+	if not fam then
+		fam = string.gsub(string.lower(name), "%d+(%.%w+)$", "%1")
+		capFamily[name] = fam
+	end
+	local now = RealTime()
+	local c = capCount[fam]
+	if not c then
+		if capKeys > 512 then capCount, capKeys = {}, 0 end
+		c = { t0 = now, n = 0 }
+		capCount[fam] = c
+		capKeys = capKeys + 1
+	elseif now - c.t0 >= CAP_WINDOW then
+		c.t0, c.n = now, 0
+	end
+	c.n = c.n + 1
+	if group > 0 then
+		data.pbaWorld = true -- (its full result feeds the ring of nearby results, burstEvaluate / Process)
+		if c.n > group then data.pbaDense = true end
+	end
+	if cap <= 0 or c.n <= cap then return false end
+	A.stats.capped = (A.stats.capped or 0) + 1
+	return true
+end
+
 -- (fallback: a partial autorefresh may reload this file before sh_core)
 A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(function(data)
 	if A.reemitting then
@@ -1446,6 +1505,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	-- long client-side sounds (music of client-side radios): followed like a loop
 	if A.Loops and A.Loops.HandleClient and A.Loops.HandleClient(data) then return false end
 	if not A.Eligible(data) then return end
+	if A.ImpactCapped(data) then return false end -- (pba_impact_cap: past the burst cap of its family)
 	-- (a sound stamped away from now waits for its stamp, as the engine would make it: A.ClientSoundDelay)
 	local stDelay = A.ClientSoundDelay(data)
 	if stDelay > 0 then data.Delay = stDelay end
