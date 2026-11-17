@@ -1,6 +1,6 @@
 """Lifecycle checks (pba_tworooms; engine rendering, then native rendering):
 1. a looping sound on an entity that is removed stops everywhere (RPG rocket bug);
-2. physics scrape / friction loops are left to the engine (never taken over);
+2. physics scrape / friction loops are recognised by their surfaceprop (followed since pba_phys_loops_mirror);
 3. StopSound on a relayed one-shot stops the client's copies;
 4. a new sound on the same entity channel (CHAN_VOICE) replaces the previous copy;
 5. removing the entity leaves its one-shot copies playing to their end (the engine does);
@@ -66,7 +66,7 @@ for render in ("0", "1"):
 
     # 2. physics scrape loops are not taken over
     phys = lua("server", "return { pba.Loops.IsPhysicsLoop('physics/metal/metal_box_scrape_rough_loop1.wav'), pba.Loops.IsPhysicsLoop('weapons/rpg/rocket1.wav') }")
-    check(f"[{tag}] physics scrape left to the engine", phys == [True, False], phys)
+    check(f"[{tag}] physics scrape loops recognised", phys == [True, False], phys)
 
     # 3-5. one-shots of an NPC-like source on CHAN_VOICE behind the wall
     lua("server", """local e = ents.Create('prop_physics') e:SetModel('models/props_junk/PopCan01a.mdl') e:SetPos(Vector(784,256,40)) e:Spawn()

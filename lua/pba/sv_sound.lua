@@ -50,9 +50,13 @@ local function loopStage(data, snd)
 	local once, dur = false, 0
 	if not l then
 		if A.IsLooping(data.SoundName) then
-			-- engine-driven physics loops (scraping / rolling friction): their envelope lives in the
-			-- physics engine; leave them to it
-			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then return end
+			-- engine-driven physics loops (scraping / rolling friction): their envelope lives in the physics
+			-- engine and its end never reaches Lua. Followed as a mirror that ends with the prop's scraping
+			-- (pba_phys_loops_mirror, LP.PhysEnded), else left to the engine (muffled behind a wall)
+			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then
+				if (A.cfg.phys_loops_mirror or 0) < 0.5 or not IsValid(e) or e:IsWorld() then return end
+				snd.phys = true
+			end
 		else
 			once, dur = LP.IsLong(data)
 			-- a change of a brief sound still playing: not a new patch (audit B-8). Taken over by pba:

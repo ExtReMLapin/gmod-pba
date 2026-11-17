@@ -9,6 +9,8 @@ local A = pba
 local ply = player.GetHumans()[1]
 if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return { pass = false, err = "needs pba_tworooms with a human" } end
 ply:SetPos(Vector(256, 256, 0))
+-- the engine-side muffling this test is about: pba_phys_loops_mirror (the loop followed as a mirror) off
+A.SetOverride("phys_loops_mirror", 0)
 job:sleep(0.5)
 local seen, emitted = {}, {}
 local lastV -- volume of the last original scrape event (the one pba is handling when it re-emits)
@@ -38,6 +40,7 @@ for _ = 1, 20 do
 end
 job:sleep(1)
 A.Emit = origEmit
+A.SetOverride("phys_loops_mirror", nil)
 hook.Remove("EntityEmitSound", "!pba_test_scrape")
 e:Remove()
 local res = { checks = {}, seen = #seen, emitted = emitted[1] }

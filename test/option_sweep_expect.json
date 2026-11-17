@@ -371,6 +371,10 @@
   "pos0": "hook",
   "why": "stop of a moving brush's brief move sound relayed at its arrival (server), outside P.Compute"
  },
+ "phys_loops_mirror": {
+  "pos0": "hook",
+  "why": "a physics scrape loop followed as a mirror (server loop stage), outside P.Compute"
+ },
  "patch_channel_cut": {
   "pos0": "hook",
   "why": "channel cut of the old mirror at a patch start (server), outside P.Compute"
