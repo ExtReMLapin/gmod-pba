@@ -362,7 +362,7 @@ function A.WithChannelRule(fn)
 		-- the client's copies and mirrors on that channel stop before the new sound plays (cl_render
 		-- A.CutChannel; a relayed sound, which never reaches this hook, cuts them in A.Process)
 		-- (pba_channel_one_rule 0: none, the sound left to the engine cut nothing of pba's)
-		if CLIENT and A.CutChannel and (A.cfg.channel_one_rule or 1) >= 0.5 then A.CutChannel(idx, chan) end
+		if CLIENT and A.CutChannel and (A.cfg.channel_one_rule or 1) >= 0.5 then A.CutChannel(idx, chan, nil, A.ClientSoundDelay(data)) end
 		-- what the engine played before this sound; the handler's re-emissions record themselves anew
 		local per = A.vanillaOn[idx]
 		local prev = per and per[chan]

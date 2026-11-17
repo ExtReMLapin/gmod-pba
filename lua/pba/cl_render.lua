@@ -179,12 +179,36 @@ end
 -- cap, mouth copies) and every client-side long sound mirror (whichever started it: a long line cut the
 -- brief copies of its channel, a brief one the long mirror).
 -- only: "copies" or "mirrors" restricts the cut to one kind (pba_channel_one_rule 0: each path cut its own).
-function A.CutChannel(idx, chan, only)
+-- `delay` (s, pba_cut_at_start): when the new sound STARTS after that long (the start time its stamp carries, its
+-- propagation delay), the copies it replaces play on until then, as the engine's delayed channel does (the stop of the old
+-- sound is scheduled at the new one's start). Cut on arrival, a burst of shots reaching the client together (each
+-- delayed by its own stamp) stopped every shot but the last before it had begun.
+function A.CutChannel(idx, chan, only, delay)
 	if A.WatchCut then A.WatchCut(idx, chan) end -- (a watched line there is over: pba_handback_channel)
 	local list = only ~= "mirrors" and A.emitted[idx]
 	if list then
+		local later = delay and delay >= 0.005 and (A.cfg.cut_at_start or 1) >= 0.5
+		local held
 		for i = #list, 1, -1 do
-			if list[i].srcChan == chan then stopCopy(list[i]) table.remove(list, i) end
+			local h = list[i]
+			if h.srcChan == chan then
+				if later then
+					-- (it stays registered: StopSound, a removal, a later cut still reach it)
+					local at = RealTime() + delay
+					if not h.cutAt or at < h.cutAt then
+						h.cutAt = at
+						held = held or {}
+						held[#held + 1] = h
+					end
+				else
+					stopCopy(list[i]) table.remove(list, i)
+				end
+			end
+		end
+		if held then
+			timer.Simple(A.RealDelay(delay), function()
+				for _, h in ipairs(held) do stopCopy(h) end
+			end)
 		end
 		if #list == 0 then A.emitted[idx] = nil end
 	end
@@ -202,7 +226,15 @@ end
 local function beginCopies(data, idx)
 	local chan = data.Channel or CHAN_AUTO
 	if not idx or not replaces(chan) then return nil end
-	if A.CutsChannel(chan, data.Flags) then A.CutChannel(idx, chan, A.ChannelCutOnly("copies")) end
+	if A.CutsChannel(chan, data.Flags) then
+		-- (the new sound's start: its stamp's delay, and the propagation delay when pba_delay is on)
+		local d = data.Delay or 0
+		if (A.cfg.delay or 0) >= 0.5 and data.Pos then
+			local L = A.ListenerPos()
+			if L then d = d + data.Pos:Distance(L) / SPEED end
+		end
+		A.CutChannel(idx, chan, A.ChannelCutOnly("copies"), d)
+	end
 	local key = idx .. ":" .. chan
 	local c = A.copies[key]
 	if not c then
