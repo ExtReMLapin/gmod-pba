@@ -4,6 +4,10 @@ The SDK's Windows x64 phonon.dll is then replaced by the one of our fork (4.8.1 
 submitted upstream or about to be, same API), checked against a fixed SHA-256. Headers, phonon.lib and the
 Linux libraries stay the official ones.
 Usage: python -I native/fetch_deps.py [--official-phonon]   (or PBA_OFFICIAL_PHONON=1)
+Local override, for building and testing against a phonon.dll of your own (a build of a fork branch not yet
+released): PBA_PHONON_DLL=<path to phonon.dll> (optionally PBA_PHONON_PDB=<path to phonon.pdb>) copies it over the
+SDK's in native/deps/steamaudio, without any hash check. Nothing is published from such a tree: the release build
+uses the pinned, hash-checked DLL below.
 """
 import hashlib
 import io
@@ -70,7 +74,20 @@ def sha256(path):
 
 official = "--official-phonon" in sys.argv[1:] or os.environ.get("PBA_OFFICIAL_PHONON") == "1"
 current = sha256(TARGETS["phonon.dll"])
-if official:
+local_dll = os.environ.get("PBA_PHONON_DLL")
+if local_dll:
+    for name, env in (("phonon.dll", "PBA_PHONON_DLL"), ("phonon.pdb", "PBA_PHONON_PDB")):
+        src = os.environ.get(env)
+        if not src:
+            continue
+        if not os.path.isfile(src):
+            sys.exit("%s=%s: no such file" % (env, src))
+        os.makedirs(os.path.dirname(TARGETS[name]), exist_ok=True)
+        with open(src, "rb") as f_in, open(TARGETS[name] + ".tmp", "wb") as f_out:
+            f_out.write(f_in.read())
+        os.replace(TARGETS[name] + ".tmp", TARGETS[name])
+        print("replaced %s with %s (sha256 %s): LOCAL build, not the pinned fork DLL" % (name, src, sha256(TARGETS[name])))
+elif official:
     if current == FORK_SHA256["phonon.dll"]:
         sys.exit("phonon.dll is the fork's: delete native/deps/steamaudio and run again with --official-phonon")
     if current != OFFICIAL_DLL_SHA256:
