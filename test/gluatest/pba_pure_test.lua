@@ -719,6 +719,26 @@ local SUITE = {
 			L[43].unc = 99 -- compressed lump: no name rather than garbage
 			expect(A.BSP.TexInfoName(r, L, 0)).to.beNil()
 		end },
+		{ name = "BSP.BrushPolygons: a box brush gives its 6 faces, bevels drop out", func = function()
+			-- the brush -10..10 x -20..20 x 0..4 (a 4 u floor slab), plus a bevel plane touching one edge
+			local s2 = math.sqrt(0.5)
+			local planes = { { 1, 0, 0, 10 }, { -1, 0, 0, 10 }, { 0, 1, 0, 20 }, { 0, -1, 0, 20 }, { 0, 0, 1, 4 }, { 0, 0, -1, 0 },
+				{ s2, 0, s2, (10 + 4) * s2 } }
+			local polys = A.BSP.BrushPolygons(planes)
+			expect(#polys).to.equal(6)
+			local area, mn, mx = 0, Vector(1e9, 1e9, 1e9), Vector(-1e9, -1e9, -1e9)
+			for _, p in ipairs(polys) do
+				local s = Vector()
+				for k = 2, #p - 1 do s:Add((p[k] - p[1]):Cross(p[k + 1] - p[1])) end
+				area = area + s:Length() * 0.5
+				for _, v in ipairs(p) do
+					mn.x, mn.y, mn.z = math.min(mn.x, v.x), math.min(mn.y, v.y), math.min(mn.z, v.z)
+					mx.x, mx.y, mx.z = math.max(mx.x, v.x), math.max(mx.y, v.y), math.max(mx.z, v.z)
+				end
+			end
+			expect(math.abs(area - 2 * (20 * 40 + 40 * 4 + 20 * 4)) < 0.05).to.beTrue()
+			expect(mn:Distance(Vector(-10, -20, 0)) < 0.01 and mx:Distance(Vector(10, 20, 4)) < 0.01).to.beTrue()
+		end },
 		{ name = "Graph.Build: portals deduplicated, links from the entity lump", func = function()
 			local g = G.Build(synthBsp())
 			expect(#g.portals).to.equal(2)
