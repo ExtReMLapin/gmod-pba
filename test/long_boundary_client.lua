@@ -5,14 +5,19 @@
 -- anything of it is left. Returns { caps, mouth, vol, nv (EntityEmitSound calls, not copies: a CSoundPatch start
 -- reaches the hook twice, its start then its envelope's SND_CHANGE_VOL | SND_CHANGE_PITCH update; the driver counts
 -- the copies in snd_dumpclientsounds), endRel, left, mirror, copies }.
--- Run with pba_native_render 0: the audible copy is then an engine emission whose volume the hook sees.
+-- Run with pba_native_render 0: the audible copy is then an engine emission whose volume the probe sees.
 local A = pba
 local LP = A.Loops
 local caps, vols = 0, {}
 A.t15AddCaption = A.t15AddCaption or gui.AddCaption
 gui.AddCaption = function(txt, ...) caps = caps + 1 return A.t15AddCaption(txt, ...) end
-hook.Add("EntityEmitSound", "aaa_t15", function(t)
+-- The probe wraps pba's own entry of the hook table, not a foreign hook: with pba_cl_hook_last (4da1c7d) pba's
+-- re-emissions (the copy this test measures) reach pba's handler alone, so a foreign hook never sees them.
+local pbaHook = hook.GetTable().EntityEmitSound and rawget(hook.GetTable().EntityEmitSound, "pba")
+if not pbaHook then return { started = false, err = "pba's EntityEmitSound hook is missing" } end
+hook.Add("EntityEmitSound", "pba", function(t)
 	if (t.Volume or 0) > 0.01 and tostring(t.SoundName):find("Trainyard_ba_getoutfast", 1, true) then vols[#vols + 1] = t.Volume end
+	return pbaHook(t)
 end)
 local function emitted()
 	local n, tEnd = 0, nil
@@ -59,7 +64,7 @@ if t0 then
 	end
 	res.left = nm2 + ne2
 end
-hook.Remove("EntityEmitSound", "aaa_t15")
+hook.Add("EntityEmitSound", "pba", pbaHook)
 gui.AddCaption = A.t15AddCaption
 A.t15AddCaption = nil
 if not ok then res.err = tostring(err) end

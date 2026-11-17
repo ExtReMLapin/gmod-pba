@@ -38,10 +38,14 @@ local ok, res = pcall(function()
 		PBA_T = { copies = {}, native = GetConVar("pba_native_render"):GetString() }
 		RunConsoleCommand("pba_native_render", "0")
 		function PBA_T.reply(t) net.Start("pba_test_rep") net.WriteString(util.TableToJSON(t)) net.SendToServer() end
-		hook.Add("EntityEmitSound", "!pba_test_probe", function(t)
+		-- the probe wraps pba's own entry of the hook table, not a foreign hook: with pba_cl_hook_last (4da1c7d)
+		-- pba's re-emissions (the copies counted here) reach pba's handler alone
+		PBA_T.hook = rawget(hook.GetTable().EntityEmitSound, "pba")
+		hook.Add("EntityEmitSound", "pba", function(t)
 			if pba.reemitting and string.find(t.SoundName, "klaxon1", 1, true) then
 				table.insert(PBA_T.copies, { chan = t.Channel, dsp = t.DSP })
 			end
+			return PBA_T.hook(t)
 		end)
 	]==])
 	job:sleep(1.5)
@@ -59,7 +63,7 @@ local ok, res = pcall(function()
 end)
 if orig then hook.Add("EntityEmitSound", "pba", orig) end
 client([==[
-	hook.Remove("EntityEmitSound", "!pba_test_probe")
+	if PBA_T and PBA_T.hook then hook.Add("EntityEmitSound", "pba", PBA_T.hook) end
 	if PBA_T then RunConsoleCommand("pba_native_render", PBA_T.native) end
 	PBA_T = nil
 	net.Receivers["pba_test_cl"] = nil
