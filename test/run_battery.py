@@ -513,6 +513,20 @@ def volume_sfx_step():
     finally:
         call("console_exec", {"realm": "menu", "cmd": f"volume_sfx {was}"})
 
+def server_cut_batch():
+    """A burst of SMG shots relayed to the host (pba_tworooms, listen server, a bot behind the wall) whose packets reach the
+    client in bursts (the server's relays and cuts held 0.30 s then 0.03 s, replayed in one frame: a hitch, a late packet): the
+    channel rule's cut (pba_snd_stop, sent when a shot past the per-name quota is left to the engine) must wait for the NEW
+    shot's start (its stamp) as the engine does. Judged on the module's voices: none stopped before it began, none under 50 ms."""
+    load(TW)
+    native_on(True)
+    try:
+        job("client", "server_cut_batch_probe.lua", pre="local PHASE = 'start'")
+        job("server", "server_cut_batch_fire.lua", timeout_s=90, pre="local HITCH = true")
+    finally:
+        r = job("client", "server_cut_batch_probe.lua", pre="local PHASE = 'end'")
+    return r
+
 def soundtime(reemit=False):
     """SoundTime kept (audit A-P2-1). The host runs at fps_max 8, so the listen server runs ~8 ticks per frame
     and a bot's SMG (75 ms cadence) sends 2 shots in one packet. Relayed (reemit False): the client's
@@ -1199,6 +1213,7 @@ steps = [
     # a new sound the engine plays on a line's channel (player now in plain sight) cuts its relayed copy
     ("channel_cut", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("server", "channel_cut_setup.lua"), lambda: job("client", "channel_cut_mid.lua"), lambda: job("server", "channel_cut_next.lua"), lambda: job("client", "channel_cut.lua"))),
     ("shot_batch_cut", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "shot_batch_cut_setup.lua"), lambda: job("client", "shot_batch_cut.lua"))),
+    ("server_cut_batch", server_cut_batch),
     ("player_state_restart", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "player_state_restart.lua"))),
     # a campaign level transition / a savegame load restarts both Lua states but keeps the player's entity table: the relay must still reach the client (real engine transition, ~85 s: not in QUICK)
     ("relay_after_transition", lambda: py("relay_transition.py")),

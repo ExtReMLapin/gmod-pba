@@ -223,6 +223,7 @@ function A.RelayStop(e, name, chan, except)
 		net.WriteUInt(n, 8)
 		for i = 1, n do net.WriteString(waves[i]) end
 	end
+	net.WriteBool(false) -- (no replacing sound: an explicit stop, at once)
 	net.Send(plys)
 end
 
@@ -249,6 +250,9 @@ end
 -- relayed to (audit A-P1-1, D7: left untouched, re-emitted clear or muffled, taken by sv_loops or refused,
 -- the new sound never reaches their client, and an NPC's line through a wall played on over its death
 -- cry). The players it is relayed to cut theirs themselves (cl_render A.CutChannel), in order with the new copy.
+-- The cut carries the new sound's own start time (SoundTime, as a relay's body does): the engine stops the old sound
+-- when the new one STARTS, and the packets of a burst (a hitch, a late packet) reach the client with several shots
+-- still waiting for their own stamp, which a stop on arrival cut before they began (pba_cut_at_start, cl_render).
 function A.CutChannel(data, idx, chan)
 	if A.Loops and A.Loops.CutChannel then A.Loops.CutChannel(idx, chan, data.SoundName) end
 	local rc = A.recentChan[idx]
@@ -270,6 +274,9 @@ function A.CutChannel(data, idx, chan)
 	net.WriteUInt(idx, 16)
 	net.WriteInt(chan, 10)
 	net.WriteUInt(0, 8) -- every name
+	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
+	net.WriteBool(st ~= 0)
+	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
 	net.Send(plys)
 	A.stats.chanCuts = (A.stats.chanCuts or 0) + 1
 end
