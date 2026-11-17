@@ -331,6 +331,10 @@
   "pos0": "hook",
   "why": "mouth copy stopped with the line"
  },
+ "cut_at_start": {
+  "pos0": "hook",
+  "why": "a shot reaching the client with a later start cuts the previous copy on arrival (render time, test shot_batch_cut)"
+ },
  "channel_one_rule": {
   "pos0": "hook",
   "why": "channel cut across short copies and long mirrors (render time)"
