@@ -4,6 +4,10 @@ The SDK's Windows x64 phonon.dll is then replaced by the one of our fork (4.8.1 
 submitted upstream or about to be, same API), checked against a fixed SHA-256. Headers, phonon.lib and the
 Linux libraries stay the official ones.
 Usage: python -I native/fetch_deps.py [--official-phonon]   (or PBA_OFFICIAL_PHONON=1)
+Local override, for building and testing against a phonon.dll of your own (a build of a fork branch not yet
+released): PBA_PHONON_DLL=<path to phonon.dll> (optionally PBA_PHONON_PDB=<path to phonon.pdb>) copies it over the
+SDK's in native/deps/steamaudio, without any hash check. Nothing is published from such a tree: the release build
+uses the pinned, hash-checked DLL below.
 """
 import hashlib
 import io
@@ -47,12 +51,12 @@ for name, url in ITEMS:
     src = os.path.join(tmp, inner[0]) if len(inner) == 1 else tmp
     os.replace(src, out)
     print("extracted", name)
-# Steam Audio fork (ExtReMLapin/steam-audio, tag v4.8.1-pba.3): Windows x64 phonon.dll + .pdb.
+# Steam Audio fork (ExtReMLapin/steam-audio, tag v4.8.1-pba.4): Windows x64 phonon.dll + .pdb.
 # Back to the official DLL once Valve releases these fixes.
-FORK_ZIP = "https://github.com/ExtReMLapin/steam-audio/releases/download/v4.8.1-pba.3/steamaudio_4.8.1-pba.3_windows-x64.zip"
+FORK_ZIP = "https://github.com/ExtReMLapin/steam-audio/releases/download/v4.8.1-pba.4/steamaudio_4.8.1-pba.4_windows-x64.zip"
 FORK_SHA256 = {
-    "phonon.dll": "7930f20da752bc59c93f704d86ab1817f8a59acf2937ea44bd47accf9f5c6edf",
-    "phonon.pdb": "d06570f4fe6cc7659b0dd377fe4a1c5b2a330f6a284e0eac081a03c5e4a90463",
+    "phonon.dll": "3339d4dd106a2f454b23809c06ff969bfcd8699168bcc87312e5e812766ad941",
+    "phonon.pdb": "21f65804816222c4285bc5040d7f951a339fee2aeec83ee7ac6fd81ee60490cc",
 }
 OFFICIAL_DLL_SHA256 = "ca3dbc01dbc24492717011e80f6a51404ca143ae344ca660971d2c983f1e058d"
 SA = os.path.join(DEPS, "steamaudio")
@@ -70,14 +74,27 @@ def sha256(path):
 
 official = "--official-phonon" in sys.argv[1:] or os.environ.get("PBA_OFFICIAL_PHONON") == "1"
 current = sha256(TARGETS["phonon.dll"])
-if official:
+local_dll = os.environ.get("PBA_PHONON_DLL")
+if local_dll:
+    for name, env in (("phonon.dll", "PBA_PHONON_DLL"), ("phonon.pdb", "PBA_PHONON_PDB")):
+        src = os.environ.get(env)
+        if not src:
+            continue
+        if not os.path.isfile(src):
+            sys.exit("%s=%s: no such file" % (env, src))
+        os.makedirs(os.path.dirname(TARGETS[name]), exist_ok=True)
+        with open(src, "rb") as f_in, open(TARGETS[name] + ".tmp", "wb") as f_out:
+            f_out.write(f_in.read())
+        os.replace(TARGETS[name] + ".tmp", TARGETS[name])
+        print("replaced %s with %s (sha256 %s): LOCAL build, not the pinned fork DLL" % (name, src, sha256(TARGETS[name])))
+elif official:
     if current == FORK_SHA256["phonon.dll"]:
         sys.exit("phonon.dll is the fork's: delete native/deps/steamaudio and run again with --official-phonon")
     if current != OFFICIAL_DLL_SHA256:
         sys.exit("phonon.dll is neither the official 4.8.1 nor the fork's: delete native/deps/steamaudio and run again")
     print("ok phonon.dll (official, as requested)")
 elif current == FORK_SHA256["phonon.dll"]:
-    print("ok phonon.dll (fork v4.8.1-pba.3)")
+    print("ok phonon.dll (fork v4.8.1-pba.4)")
 else:
     print("downloading", FORK_ZIP, flush=True)
     data = urllib.request.urlopen(FORK_ZIP, timeout=600).read()
@@ -94,4 +111,4 @@ else:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         open(dst + ".tmp", "wb").write(blob)
         os.replace(dst + ".tmp", dst)
-    print("replaced phonon.dll and phonon.pdb with the fork's (v4.8.1-pba.3)")
+    print("replaced phonon.dll and phonon.pdb with the fork's (v4.8.1-pba.4)")

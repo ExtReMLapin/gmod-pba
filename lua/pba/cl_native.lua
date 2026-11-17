@@ -19,7 +19,8 @@ local MODULE = "lua/bin/gmcl_pba_win64.dll" -- (64-bit only: N.InstallProblem)
 -- from), API number (raised in native/src/pba_native.cpp, PBA_NATIVE_API, when a function changes). This Lua
 -- accepts the API range N.API_MIN..N.API_MAX; any other module, or one without ModuleVersion (older than this
 -- check), is left unused as if it were not installed. No automatic update.
-N.API_MIN, N.API_MAX = 1, 2 -- (2: pausable voices, N.PauseFlag; a module of API 1 is used without the pause)
+N.API_MIN, N.API_MAX = 1, 3 -- (2: pausable voices, N.PauseFlag; a module of API 1 is used without the pause. 3: PhononLevel; a module of API 2 is used, its phonon.dll of unknown level: N.PhononFixed() = nil)
+
 local UPDATE_HINT = "update gmcl_pba_win64.dll and phonon.dll in garrysmod/lua/bin with the ones of the PBA release matching the addon"
 
 -- -> true, nil, version, api | false, message, version, api (mod: the module's table, pba_native)
@@ -254,6 +255,83 @@ function N.InstallProblem(arch, exists)
 	return nil
 end
 
+--- Is the phonon.dll in use the one with the reflection level fix (Steam Audio fork, pba-4: the reconstructed response
+-- in the units of the direct sound; the DLLs before it are 8-11 dB too loud)? Measured by the module on the DLL itself
+-- (pba_native.PhononLevel, after Init). true / false, or nil when unknown: no module, a module of API 2 without the
+-- probe, a failed measurement. Kept in N.phononFixed / N.phononLevelDb: the reverb and echo levels sent to the module
+-- depend on it (N.WetComp).
+function N.PhononFixed()
+	N.phononFixed, N.phononLevelDb = nil, nil
+	if not (pba_native and pba_native.PhononLevel) then return nil end
+	local ok, fixed, level = pcall(pba_native.PhononLevel)
+	if not ok or type(fixed) ~= "boolean" then return nil end
+	N.phononFixed, N.phononLevelDb = fixed, tonumber(level)
+	return fixed
+end
+
+-- Probe level (pba_native.PhononLevel) of a DLL whose reflections come out at the level of the fixed one: an old DLL's
+-- excess is its probe level minus this. Calibrated at the module's output, not taken from the fixed DLL's own probe
+-- (-1.4 dB, pba-5): on pba_pipe the fork's pba.3 build (probe +10.0 dB) gave reflections 10.0 - 10.2 dB above pba-5
+-- (echo of a mono shot at 95 and 140, slot reverb of a 140 shot; the slot reverb of quieter sounds 9.9 - 11.1 dB),
+-- where the probe difference is 11.4 dB: -1.4 left that DLL about 1.2 dB under the fixed one, -0.2 within 1 dB.
+N.PHONON_FIXED_DB = -0.2
+
+--- Compensation of the phonon.dll in use, on the reverb and echo levels sent to the module (linear, <= 1): reverb, echo.
+-- pba_native_reverb and pba_native_echo mean the same level on every DLL (1 = the physical level, measured on the fixed
+-- one), so a player who has the new addon but an old phonon.dll (Steam Audio 4.8.1 as released, the fork's builds before
+-- the level fix: reflections 8.5 - 10 dB over the physical level) does not get a reverb 11 dB too loud, and nothing
+-- the player saved is rewritten for it (the next DLL update just switches the compensation off):
+--  * fixed DLL: 1 (nothing to take off);
+--  * old DLL, its level measured: its excess over the fixed DLL comes off both buses (the same response feeds both);
+--  * unknown (a module of API 2 has no probe, or the probe failed): the previous release's levels, bus by bus (its default
+--    over today's: the levels that module and its DLL were tuned for; the retune scaled saved values by the inverse).
+function N.WetComp(fixed, levelDb)
+	if fixed == true then return 1, 1 end
+	if fixed == false and levelDb then
+		local k = math.min(10 ^ (-(levelDb - N.PHONON_FIXED_DB) / 20), 1)
+		return k, k
+	end
+	local r, e = 1, 1
+	for _, m in ipairs(A.RETUNE or {}) do
+		local c = A.CONFIG[m.name]
+		if m.old and c and c[1] > 0 then
+			if m.name == "native_reverb" then r = m.old / c[1] elseif m.name == "native_echo" then e = m.old / c[1] end
+		end
+	end
+	return r, e
+end
+
+--- The reverb and echo levels for the module: the settings times the DLL compensation (N.WetComp).
+function N.WetLevels()
+	local kr, ke = N.WetComp(N.phononFixed, N.phononLevelDb)
+	return (A.cfg.native_reverb or 1) * kr, (A.cfg.native_echo or 1) * ke
+end
+
+--- The warning about the phonon.dll in use (menu status line, console), or nil: an old DLL (measured), a module too old to
+-- measure it. Nothing without a module.
+function N.PhononWarning()
+	if not pba_native then return nil end
+	if N.phononFixed == true then return nil end
+	if N.phononFixed == false and N.phononLevelDb then
+		return string.format("Your phonon.dll is an old build: its reflections are %.0f dB too loud. PBA turns the reverb and echoes down to compensate, but update phonon.dll (with the module, from the PBA release).",
+			N.phononLevelDb - N.PHONON_FIXED_DB)
+	end
+	if not pba_native.PhononLevel then
+		return "Your Steam Audio module is older than this addon and cannot check its phonon.dll: reverb and echoes are kept at the previous release's levels. Update the module and phonon.dll."
+	end
+	return "The level of your phonon.dll could not be measured: reverb and echoes are kept at the previous release's levels."
+end
+
+--- The one-time retune of the saved reverb settings (A.MigrateRetune), and the warning about an old phonon.dll.
+function N.Retune()
+	if not A.MigrateRetune then return nil end
+	local r = A.MigrateRetune(N.PhononFixed())
+	N.retune = r
+	local w = N.PhononWarning()
+	if w then print("[PBA] " .. w) end
+	return r
+end
+
 function N.Start()
 	N.ready, N.pathsReady, N.err, N.outdated = false, false, nil, nil
 	if (A.cfg.native or 1) < 0.5 then return end
@@ -275,6 +353,8 @@ function N.Start()
 	end
 	local ok, err = pba_native.Init()
 	if not ok then N.err = err return end
+	N.Retune()
+
 	-- the world is gathered in a coroutine, 4 ms per frame (large maps: seconds of Lua work),
 	-- then handed to the module in one call
 	N.gathered = nil -- (a world held for calm: replaced by this build)
@@ -327,7 +407,8 @@ end)
 function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	local t0 = SysTime()
 	-- the simulator is created with the current ray count (it fixes the ray directions)
-	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays, A.cfg.native_bounces or 128)
+	local wr, we = N.WetLevels()
+	pba_native.SetReflections(wr, we, A.cfg.native_rays, A.cfg.native_bounces or 128)
 	if pba_native.SetSimOptions then
 		pba_native.SetSimOptions(A.cfg.native_scene or 1, A.cfg.native_threads or 0, A.cfg.native_reverb_window or 2.5, 512)
 	end
@@ -543,12 +624,14 @@ local function wetLevel(v, k)
 end
 
 --- Pushes the client options to the module (output mode, reflection levels and quality). The room reverb and
--- echo levels are scaled by N.wetScale (0 with the head under water, see the Think below).
+-- echo levels are compensated for the phonon.dll (N.WetLevels) and scaled by N.wetScale (0 with the head under water,
+-- see the Think below).
 function N.ApplySettings()
 	if not N.render or not pba_native.SetReflections then return end
 	pba_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
 	local k = N.wetScale or 1
-	pba_native.SetReflections(wetLevel(A.cfg.native_reverb, k), wetLevel(A.cfg.native_echo, k), A.cfg.native_rays,
+	local wr, we = N.WetLevels()
+	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,
 		A.cfg.native_bounces or 128, A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
 	-- a far moving source keeps its source reverb response over a fraction of its distance (module 1.2.0+)
 	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.cfg.native_src_near or 0.1) end
@@ -979,13 +1062,25 @@ end
 local AIR = { 0.0002, 0.0017, 0.0182 }
 local UNIT_M = 0.01905
 
+-- Widest spread between the strongest and the weakest band of an EQ asked of the module (dB). Steam Audio's 3-band EQ is a
+-- cascade (low shelf, peak, high shelf): the DirectEffect floors every band at 1/16 of the strongest (-24 dB) and the
+-- path effect, which does not, bleeds across bands once the gains are deep (measured: asking 40-60 dB between bands
+-- gave 10-25 dB errors in bands nobody asked about). So PBA never asks for more than 30 dB between bands. What is
+-- cut beyond that (the highs of a source 300 m away, -48 dB of air) is not: they stay 30 dB under the strongest band.
+N.EQ_RANGE_DB = 30
+--- The EQ (l, m, h) with every band raised to at most N.EQ_RANGE_DB under the strongest one; inside the range, untouched.
+function N.ClampEQRange(l, m, h)
+	local floor = math.max(l, m, h) * 10 ^ (-N.EQ_RANGE_DB / 20)
+	return math.max(l, floor), math.max(m, floor), math.max(h, floor)
+end
+
 --- EQ of a voice: its low-pass (level lp, continuous loss lpDb when the caller has it: N.LowpassEQ), times
 -- air absorption over `len` units of path.
 function N.VoiceEQ(lp, len, lpDb)
 	local l, m, h = N.LowpassEQ(lp, lpDb)
-	if (A.cfg.native_air or 0) < 0.5 or not len then return l, m, h end
+	if (A.cfg.native_air or 0) < 0.5 or not len then return N.ClampEQRange(l, m, h) end
 	local d = len * UNIT_M
-	return l * math.exp(-AIR[1] * d), m * math.exp(-AIR[2] * d), h * math.exp(-AIR[3] * d)
+	return N.ClampEQRange(l * math.exp(-AIR[1] * d), m * math.exp(-AIR[2] * d), h * math.exp(-AIR[3] * d))
 end
 
 --- Shooter of a weapon emission and its aim now, or nil when the sound is not one. A weapon emission: the
@@ -1005,11 +1100,16 @@ function N.WeaponAim(ent, chan)
 	return owner, owner:IsPlayer() and owner:GetAimVector() or owner:GetForward()
 end
 
+-- Largest dipole weight: Steam Audio's dipole is |(1 - w) + w cos(theta)|^p, which turns negative (a rear lobe, a figure of
+-- eight at w = 1) above 0.5; 0.5 is a cardioid, silent straight behind. The slider stops there (pba_native_dir), and a
+-- value saved before the cap is held to it here.
+N.DIR_MAX = 0.5
+
 --- Dipole directivity of a weapon emission towards L (1 in front, 1 - 2w behind, floor 0.05); 1 for any
 -- other sound. chan: the sound's channel; aim: the aim taken when the sound was emitted (a shot does not
 -- swing round when the shooter turns while its tail plays); without it, the aim now.
 function N.Directivity(ent, L, chan, aim)
-	local w = A.cfg.native_dir or 0
+	local w = math.min(A.cfg.native_dir or 0, N.DIR_MAX)
 	if w <= 0 or not L then return 1 end
 	local owner, now = N.WeaponAim(ent, chan)
 	if not owner then return 1 end
@@ -1445,7 +1545,15 @@ function A.NativeOwn()
 	return N.render and (A.cfg.native_all or 0) >= 0.5 and (A.cfg.native_own or 1) >= 0.5 and A.Enabled() or false
 end
 
+--- Source strength of the echoes of a sound (before the engine's mix value, native_gain and pba_native_echo): its volume
+-- times the source slot's send at the source-listener distance.
+function N.EchoGain(data, pos)
+	local L = A.ListenerPos()
+	return (data.Volume or 1) * N.PhysSrcSend(data.SoundLevel or 75, (pos and L) and pos:Distance(L) or 0)
+end
+
 function N.Echo(data, pos, enginePlays, own)
+
 	if not N.render or (A.cfg.native_echo or 0) <= 0 or not pba_native.Echo then return skip("off") end
 	if own then return skip("own") end
 	if N.DryMix(data.SoundName) then return skip("dry") end
@@ -1457,22 +1565,32 @@ function N.Echo(data, pos, enginePlays, own)
 	if lvl < A.cfg.native_echo_lvl then return skip("level") end
 	local ok, n = N.EnsureSound(data.SoundName)
 	if not ok then return skip("sound") end
-	-- source strength = what the engine would play at 1 m (52.5 units); the impulse response
-	-- carries the distance and the room
-	local gain = (data.Volume or 1) * A.AC.EngineGain(52.5, lvl)
+	-- source strength = the source's power, as its reverb slot has it (N.PhysSrcSend at the source-listener distance:
+	-- its level at 1 m with the headroom of a loud level above full scale, never more than the clipped direct x d / 1 m,
+	-- the loud-dry share): the echo and the slot reverb come from the same law, so their scales (pba_native_echo,
+	-- pba_native_reverb) are comparable. It was the engine's gain at 1 m alone: no headroom, no loud-dry share, so a
+	-- loud shot's echo did not follow its reverb with distance (100 m: +20 dB over a slot's). The impulse response carries
+	-- the distance and the room.
+	local gain = N.EchoGain(data, pos)
 	local e = data.Entity
 	-- the engine's mix value of this sound (cl_mix): its reverb is the sound's, scaled as the sound is
 	if A.Mix then gain = gain * A.Mix.Value(A.Mix.GroupsOf(data.SoundName, IsValid(e) and e or data.EntIndex, data.Channel, lvl)) end
 	local key = IsValid(e) and e:EntIndex() or (data.EntIndex or 0)
 	-- a weapon emission: the echoes are louder where the shooter aims (same rule as N.Directivity: an NPC's
 	-- shout or a player's footstep is not aimed)
-	local w = A.cfg.native_dir or 0
+	local w = math.min(A.cfg.native_dir or 0, N.DIR_MAX)
 	local aim = nil
 	if w > 0 then local _, a = N.WeaponAim(e, data.Channel) aim = a end
 	-- (a relayed sound's own start time, A.SoundTimeDelay: its echoes start with it)
 	local id = pba_native.Echo(n, pos, gain * A.cfg.native_gain, key, data.Pitch or 100, math.max(data.Delay or 0, 0), aim, aim and w or 0, N.PauseFlag(data.Flags))
-	-- reflections arrive from afar: the far variant of a "^" sound
-	if id and id > 0 then N.ApplyStereo(id, data.SoundName, DV_MAX, e, pos, A.ListenerPos()) end
+	-- the channel mix of the sound as heard from here, the one its source slot would get (one input for the reflections of a
+	-- sound): the far channel of a "^" sound only from 1320 u. It was the far channel at any distance ("reflections arrive
+	-- from afar"), but the far channel is a recording of the shot far away, already weaker (npc_smg1_fire1: -11 dB), and the
+	-- simulated response adds the distance again: an echo 11 dB under the slot reverb of the same sound at the same setting.
+	if id and id > 0 then
+		local L = A.ListenerPos()
+		N.ApplyStereo(id, data.SoundName, (pos and L) and pos:Distance(L) or 0, e, pos, L)
+	end
 	N.echoes = (N.echoes or 0) + 1
 end
 

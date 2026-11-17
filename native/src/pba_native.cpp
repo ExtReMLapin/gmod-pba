@@ -4,6 +4,7 @@
 // The module only computes; pba's Lua side keeps playing the sounds. Lua API, in the
 // global table `pba_native` after require("pba"):
 //   Version() -> number (Steam Audio version, MMmmpp)
+//   PhononLevel() -> fixed, levelDb | nil, err (is the phonon.dll in use the one with the reflection level fix? measured, once)
 //   ModuleVersion() -> text, number (version of this module, written at build time from the addon's
 //       pba.VERSION; API compatibility number, PBA_NATIVE_API: the Lua accepts a range of it)
 //   Init() -> true | false, err
@@ -73,6 +74,7 @@
 
 #include "GarrysMod/Lua/Interface.h"
 #include <phonon.h>
+#include "phonon_probe.h"
 
 #include "render.h"
 #include "streams.h"
@@ -202,6 +204,11 @@ void WaitSceneCommit() {
 std::atomic<int> g_optScene{1};           // 0 built-in ray tracer, 1 Embree (falls back)
 std::atomic<int> g_optThreads{0};         // 0 = auto
 std::atomic<float> g_optRevWindow{2.5f};  // long-window room reverb estimate (s); <= 0.5 = off
+// Bounce cap of the long-window simulations (g_revSim, g_slotRevSim, the baked reverb time): the window (duration x c) is what
+// must end a ray, not this cap. A small very reverberant room (a glazed 3 x 2.5 x 2.5 m cubicle: 1.8 m mean free path) was cut at 256
+// bounces after 1.3 s of travel and its reverb time came out 29 % short (3.1 s against 4.4 s; test/long_window_bounces_test.cpp:
+// 512 and above agree, 1024 keeps a margin for smaller rooms). Costs nothing in a big room: the window already ends its rays.
+constexpr int kLongWindowBounces = 1024;
 std::atomic<int> g_optRevRays{512};
 IPLEmbreeDevice g_embree = nullptr;
 IPLSceneType g_sceneType = IPL_SCENETYPE_DEFAULT;
@@ -376,7 +383,7 @@ bool EstimateRtAt(IPLVector3 p, float out[3]) {
 		sh.listener.ahead = {0, 0, -1};
 		sh.listener.origin = p;
 		sh.numRays = g_optRevRays.load();
-		sh.numBounces = 256; // the window bounds the tracing (duration * c), not the bounces
+		sh.numBounces = kLongWindowBounces; // the window bounds the tracing (duration * c), not the bounces
 		sh.duration = g_optRevWindow.load();
 		sh.order = 0;
 		sh.irradianceMinDistance = 0.25f;
@@ -798,7 +805,7 @@ void ReflectionLoop() {
 				IPLSimulationSharedInputs sh{};
 				sh.listener = lis;
 				sh.numRays = g_optRevRays.load();
-				sh.numBounces = 256; // the window bounds the tracing (duration * c), not the bounces
+				sh.numBounces = kLongWindowBounces; // the window bounds the tracing (duration * c), not the bounces
 				sh.duration = win;
 				sh.order = 0;
 				sh.irradianceMinDistance = 0.25f;
@@ -1203,7 +1210,8 @@ bool EnsureSimulator() {
 // API compatibility number of the module: raised when a function the Lua calls changes its arguments, its
 // results or its behaviour. lua/pba/cl_native.lua accepts a range (N.API_MIN..N.API_MAX) and leaves an
 // out-of-range module unused.
-static const int PBA_NATIVE_API = 2; // 2: SetPaused freezes the voices played with the pausable flag only (Play's argument 15, Echo's 9)
+static const int PBA_NATIVE_API = 3; // 2: SetPaused freezes the voices played with the pausable flag only (Play's argument 15, Echo's 9)
+                                     // 3: PhononLevel() (a module of API 2 still works: the Lua treats its phonon.dll as of unknown level)
 #ifndef PBA_MODULE_VERSION
 #define PBA_MODULE_VERSION "unknown"
 #endif
@@ -1211,6 +1219,31 @@ static const int PBA_NATIVE_API = 2; // 2: SetPaused freezes the voices played w
 LUA_FUNCTION(ModuleVersion) {
 	LUA->PushString(PBA_MODULE_VERSION);
 	LUA->PushNumber(PBA_NATIVE_API);
+	return 2;
+}
+
+// PhononLevel() -> fixed (bool), levelDb (number) | nil, message. Does the phonon.dll in use give the reflection response
+// in the units of the direct sound (the builds with the reconstructor level fix) or 8-11 dB too loud (Steam Audio 4.8.1
+// as released, the fork before pba-4)? Measured on the DLL (phonon_probe.cpp), once per session. After Init().
+LUA_FUNCTION(PhononLevel) {
+	static int state = 0; // 0 = not measured, 1 = measured, 2 = failed
+	static probe::Result res;
+	if (!g_ctx) {
+		LUA->PushNil();
+		LUA->PushString("pba_native.Init() first (phonon.dll is not loaded yet)");
+		return 2;
+	}
+	if (state == 0) {
+		res = probe::MeasureReflectionLevel();
+		state = res.ok ? 1 : 2;
+	}
+	if (state != 1) {
+		LUA->PushNil();
+		LUA->PushString("the level probe failed");
+		return 2;
+	}
+	LUA->PushBool(res.fixed());
+	LUA->PushNumber(res.levelDb);
 	return 2;
 }
 
@@ -1657,7 +1690,7 @@ LUA_FUNCTION(BakeReverb) {
 			bp.bakeFlags = IPL_REFLECTIONSBAKEFLAGS_BAKEPARAMETRIC;
 			bp.numRays = rays * 4; // offline: more rays than at run time
 			bp.numDiffuseSamples = 1024;
-			bp.numBounces = 256;
+			bp.numBounces = kLongWindowBounces;
 			bp.simulatedDuration = win;
 			bp.savedDuration = win;
 			bp.order = 0;
@@ -2931,6 +2964,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "Version");
 	LUA->PushCFunction(ModuleVersion);
 	LUA->SetField(-2, "ModuleVersion");
+	LUA->PushCFunction(PhononLevel);
+	LUA->SetField(-2, "PhononLevel");
 	LUA->PushCFunction(Init);
 	LUA->SetField(-2, "Init");
 	LUA->PushCFunction(LoadWorld);

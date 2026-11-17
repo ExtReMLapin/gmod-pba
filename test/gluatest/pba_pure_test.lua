@@ -493,7 +493,124 @@ local SUITE = {
 			G.cookie, G.RunConsoleCommand, A.cv.native_bounces = saved.cookie, saved.rcc, saved.cv
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Retune migration (pba-4 phonon): on any phonon.dll (an old one is compensated in the send, N.WetComp); old defaults -> new defaults, custom reverb / echo scaled by the default's ratio and capped, once, recorded in a data file", func = function()
+			local KEY = A.RETUNE_KEY
+			expect(type(A.MigrateRetune)).to.equal("function")
+			local nd = { native_reverb = A.CONFIG.native_reverb[1], native_echo = A.CONFIG.native_echo[1], native_loud_dry_db = A.CONFIG.native_loud_dry_db[1] }
+			local mx = { native_reverb = A.CONFIG.native_reverb[3], native_echo = A.CONFIG.native_echo[3] }
+			local G = _G
+			local saved = { file = G.file, rcc = G.RunConsoleCommand, cv = A.cv, cookie = G.cookie }
+			local files, cmds, stored, writable = {}, {}, {}, true
+			G.file = {
+				Read = function(p) return files[p] end,
+				Exists = function(p) return files[p] ~= nil end,
+				CreateDir = function() end,
+				Write = function(p, s) if writable then files[p] = s end end,
+			}
+			G.cookie = { GetNumber = function(_, d) return d end, Set = function() end }
+			G.RunConsoleCommand = function(name, val) cmds[#cmds + 1] = name .. " " .. val stored[name] = tonumber(val) end
+			local function setStored(t)
+				stored, cmds = {}, {}
+				A.cv = setmetatable({}, { __index = saved.cv })
+				for name, v in pairs(t) do
+					stored["pba_" .. name] = v
+					A.cv[name] = { GetFloat = function() return stored["pba_" .. name] end, GetName = function() return "pba_" .. name end }
+				end
+			end
+			local OLD = { native_reverb = 0.4, native_echo = 0.25, native_loud_dry_db = 20, native_dir = 0.3 }
+			-- in a running game the session's own migration has already run (A.retuneRan set): this is a fresh session
+			local ranBefore = A.retuneRan
+			A.retuneRan = nil
+			local ok, err = pcall(function()
+				-- an old phonon, an unknown one (a module without PhononLevel): the settings mean the same level on every DLL (N.WetComp
+				-- takes an old DLL's excess off in the send), so the migration runs there too, once
+				setStored(OLD)
+				expect(A.MigrateRetune(false)).to.equal("applied")
+				expect(stored.pba_native_reverb).to.equal(nd.native_reverb)
+				expect(stored.pba_native_echo).to.equal(nd.native_echo)
+				expect(A.MigrateRetune(false)).to.equal("done")
+				files, A.retuneRan = {}, nil
+				setStored(OLD)
+				expect(A.MigrateRetune(nil)).to.equal("applied")
+				expect(stored.pba_native_reverb).to.equal(nd.native_reverb)
+				files, A.retuneRan = {}, nil
+				setStored(OLD)
+				-- the fixed phonon: the old defaults move to the new ones, once
+				expect(A.MigrateRetune(true)).to.equal("applied")
+				expect(stored.pba_native_reverb).to.equal(nd.native_reverb)
+				expect(stored.pba_native_echo).to.equal(nd.native_echo)
+				expect(stored.pba_native_loud_dry_db).to.equal(nd.native_loud_dry_db)
+				expect(stored.pba_native_dir).to.equal(0.3) -- (below the cap: untouched)
+				expect(string.find(files["pba/migrations.txt"], KEY, 1, true) ~= nil).to.beTrue()
+				-- the player sets the old values again on purpose: the later launches keep them (next session: A.retuneRan is fresh)
+				A.retuneRan = nil
+				setStored(OLD)
+				expect(A.MigrateRetune(true)).to.equal("done")
+				expect(#cmds).to.equal(0)
+				-- custom values: reverb and echo scaled by new default / old default, capped at the new maximum; others kept
+				files, A.retuneRan = {}, nil
+				setStored({ native_reverb = 0.2, native_echo = 0.5, native_loud_dry_db = 30, native_dir = 0.3 })
+				expect(A.MigrateRetune(true)).to.equal("applied")
+				expect(near(stored.pba_native_reverb, 0.2 * nd.native_reverb / 0.4, 1e-3)).to.beTrue()
+				expect(near(stored.pba_native_echo, math.min(0.5 * nd.native_echo / 0.25, mx.native_echo), 1e-3)).to.beTrue()
+				expect(stored.pba_native_loud_dry_db).to.equal(30)
+				files, A.retuneRan = {}, nil
+				setStored({ native_reverb = 1.6, native_echo = 3.5, native_loud_dry_db = 20, native_dir = 0.3 })
+				A.MigrateRetune(true)
+				expect(stored.pba_native_reverb).to.equal(mx.native_reverb) -- 1.6 x 2.5 = 4.0 (the module's limit)
+				expect(stored.pba_native_echo).to.equal(mx.native_echo)
+				files, A.retuneRan = {}, nil
+				setStored({ native_reverb = 1.9, native_echo = 0.25, native_loud_dry_db = 20, native_dir = 0.3 })
+				A.MigrateRetune(true)
+				expect(stored.pba_native_reverb).to.equal(mx.native_reverb) -- capped, never beyond the slider
+				-- a value already at the new default (a fresh install, or a choice that equals it) is not scaled again
+				files, A.retuneRan = {}, nil
+				setStored({ native_reverb = nd.native_reverb, native_echo = nd.native_echo, native_loud_dry_db = nd.native_loud_dry_db, native_dir = 0.3 })
+				A.MigrateRetune(true)
+				expect(#cmds).to.equal(0)
+				expect(string.find(files["pba/migrations.txt"], KEY, 1, true) ~= nil).to.beTrue() -- (recorded all the same)
+				-- the directivity weight saved above the new cap of 0.5 is held to it
+				files, A.retuneRan = {}, nil
+				setStored({ native_reverb = nd.native_reverb, native_echo = nd.native_echo, native_loud_dry_db = nd.native_loud_dry_db, native_dir = 0.9 })
+				A.MigrateRetune(true)
+				expect(stored.pba_native_dir).to.equal(0.5)
+				-- other flags of the file are kept, the key is added once
+				files, A.retuneRan = { ["pba/migrations.txt"] = "some_other_flag\n" }, nil
+				setStored(OLD)
+				A.MigrateRetune(true)
+				expect(string.find(files["pba/migrations.txt"], "some_other_flag", 1, true) ~= nil).to.beTrue()
+				local _, n = string.gsub(files["pba/migrations.txt"], KEY, "")
+				expect(n).to.equal(1)
+				-- a file that cannot be written: the migration cannot be remembered, so it would repeat (and scale again) at every launch: it does not run
+				files, A.retuneRan, writable = {}, nil, false
+				setStored({ native_reverb = 0.2, native_echo = 0.5, native_loud_dry_db = 30, native_dir = 0.3 })
+				expect(A.MigrateRetune(true)).to.equal("unsafe")
+				expect(#cmds).to.equal(0)
+			end)
+			G.file, G.RunConsoleCommand, A.cv, G.cookie = saved.file, saved.rcc, saved.cv, saved.cookie
+			A.retuneRan = ranBefore
+			if not ok then error(err, 0) end
+		end },
+		{ name = "Default migration chain: a saved pba_native_reverb of 0.15 (the 1.0 default) moves to 0.4 (the 1.1 default), not to today's default: the retune migration scales it later, on the right DLL", func = function()
+			local G = _G
+			local saved = { cookie = G.cookie, rcc = G.RunConsoleCommand, cv = A.cv.native_reverb }
+			local store, cmds, stored = {}, {}, 0.15
+			G.cookie = {
+				GetNumber = function(k, d) local v = store[k] if v == nil then return d end return tonumber(v) end,
+				GetString = function(k, d) local v = store[k] if v == nil then return d end return v end,
+				Set = function(k, v) store[k] = tostring(v) end,
+			}
+			G.RunConsoleCommand = function(name, val) cmds[#cmds + 1] = name .. " " .. val if name == "pba_native_reverb" then stored = tonumber(val) end end
+			A.cv.native_reverb = { GetFloat = function() return stored end, GetName = function() return "pba_native_reverb" end }
+			local ok, err = pcall(function()
+				A.MigrateDefaults()
+				expect(stored).to.equal(0.4)
+			end)
+			G.cookie, G.RunConsoleCommand, A.cv.native_reverb = saved.cookie, saved.rcc, saved.cv
+			if not ok then error(err, 0) end
+		end },
 		{ name = "EngineGain: 1 near the source, decreasing, level 0 = no attenuation", func = function()
+
 			expect(AC.EngineGain(0, 75) <= 1).to.beTrue()
 			expect(AC.EngineGain(100, 75) > AC.EngineGain(1000, 75)).to.beTrue()
 			expect(AC.EngineGain(5000, 0)).to.equal(1)

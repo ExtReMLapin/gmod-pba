@@ -134,7 +134,7 @@ int main() {
 	IPLSimulationSharedInputs sh{};
 	sh.listener = {{1, 0, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 0}};
 	sh.numRays = 2048;
-	sh.numBounces = 16;
+	sh.numBounces = 128; // the module's default (pba_native.cpp, g_reflBounces): 16 left no energy at the transition time here
 	sh.duration = render::kIRSeconds;
 	sh.order = 1;
 	sh.irradianceMinDistance = 0.25f;
@@ -142,6 +142,16 @@ int main() {
 	inputs(room, {0, 0.1f, 0});
 	inputs(slot, kSrc);
 	iplSimulatorRunReflections(simr); // once: every later sound reuses these responses
+	// The responses only have a tail if the simulation left energy at the transition time (0.5 s): the hybrid EQ is that
+	// energy. With too few bounces (16: the rays of a room of a few metres of mean free path run out at ~0.2 s) the EQ is
+	// 0 / 0 / 0, the bus has no tail whatever it is fed, and "reverb of a shot" below passed on the numerical residue of the
+	// filters. 128 is the module's default (pba_native.cpp, g_reflBounces).
+	for (IPLSource s : {room, slot}) {
+		IPLSimulationOutputs o{};
+		iplSourceGetOutputs(s, IPL_SIMULATIONFLAGS_REFLECTIONS, &o);
+		const double eq = o.reflections.eq[0] + o.reflections.eq[1] + o.reflections.eq[2];
+		Check(eq > 0.01, s == room ? "room: the simulation has energy at the transition time (hybrid EQ > 0)" : "slot: the simulation has energy at the transition time (hybrid EQ > 0)", eq, o.reflections.eq[1]);
+	}
 
 	IPLSource srcs[1] = {slot};
 	render::SetReflectionSources(room, nullptr, 0, srcs, 1);

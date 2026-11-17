@@ -118,6 +118,15 @@ local function open(f, opts)
 	return ch
 end
 local function close(ch) hook.Remove("Think", "rate14_owner") if IsValid(ch) then ch:Stop() end job:sleep(0.8) end
+-- Voice only, not the room: the energy read is the module's whole output. (1) After a cut the room reverb and the
+-- echoes ring out (with 128 bounces the tail stays above 10 % of the steady level for 0.13-0.18 s, the direct voice is
+-- silent in 0.034 s, two frames, whatever the bounce count: measured 16 to 256 bounces, and 0.034 s at 16 and 128 with the
+-- reverb at 0). (2) The 4 Hz pulses of the rate file are smeared by the same tail: at the retuned default pba_native_reverb 1
+-- (the physical level, a hall of RT 4 s) the bursts read 7 / 2 / 6 / 1 instead of 10 / 20 / 5 / 20 (energy per 100 ms
+-- without a gap), with the reverb and the echo at 0 they count. So both levels are 0 for the whole test (restored by finish()).
+RunConsoleCommand("pba_native_reverb", "0")
+RunConsoleCommand("pba_native_echo", "0")
+job:sleep(1.5) -- the 0.5 s poll applies them
 -- ---------- 1 playback rate: bursts per second ------------------------------------------------------
 local WIN = 5
 local function burstsOnce(ch, ref, k)
@@ -171,14 +180,6 @@ if not ok1 then out.err1 = tostring(err1) end
 out.rateFollowed = ok1 and rateOK
 -- ---------- 2 Pause / Play / Stop latency ------------------------------------------------------------
 local LIM = 0.12
--- The latency of the voice, not of the room: the energy read is the module's whole output, and the room reverb
--- (pba_native_reverb) and the echoes ring out after a cut like in any room: with the new default of 128 bounces the
--- tail holds enough energy to stay above 10 % of the steady level for 0.13-0.18 s (the direct voice is silent in
--- 0.034 s, two frames, whatever the bounce count: measured 16 to 256 on a quiet machine, and 0.034 s at 16 and 128 with the
--- reverb at 0). So the reverb levels are 0 for the cuts; the burst counts above are read with the defaults.
-RunConsoleCommand("pba_native_reverb", "0")
-RunConsoleCommand("pba_native_echo", "0")
-job:sleep(1.5) -- the 0.5 s poll applies them
 -- a cut's latency depends on where BASS's buffers stood at the call (and is read in 40 ms bins): the median of four
 local ok2, err2 = pcall(function()
 	local ch, err = open(fTone, {})

@@ -3,8 +3,10 @@
 // 1.2 s. Built with -DPBA_TESTS=ON (target pba_slot_long_rt_test, and the red build pba_slot_long_rt_red_test, which never gives the
 // times); runs the real audio thread at master volume 0.
 // A shot is fed into slot 0 (response simulated once, 0.5 s window, hybrid); the slot's wet energy is read between 1.5 s and 2.5 s after
-// the shot, in the parametric tail. Pass: with 8 s given the energy there is at least 10 x the one with the main simulation's own
-// times; SlotReverbTimes reports the given times as used and flags them long; cleared, the slot is back to its first energy (+- 3 dB).
+// the shot, in the parametric tail. Pass: the simulation left energy at the transition time (hybrid EQ > 0) and the slot rings with the
+// main simulation's own times (energy far above the filters' numerical residue; the red build pba_slot_long_rt_nosend_red_test never feeds
+// the slot); with 8 s given the energy there is at least 10 x the one with the main simulation's own times; SlotReverbTimes reports the
+// given times as used and flags them long; cleared, the slot is back to its first energy (+- 3 dB).
 #include <phonon.h>
 
 #include <chrono>
@@ -72,7 +74,11 @@ static double TailEnergy() {
 	p.pos = kSrc;
 	p.send = 1;
 	const int id = render::Play("shot.wav", p, false);
+#ifdef PBA_LONGRT_NOSEND
+	render::SetVoiceSrcSlot(id, 0, 1, 0.0f); // red build: the slot never gets the shot
+#else
 	render::SetVoiceSrcSlot(id, 0, 1, 1.0f);
+#endif
 	Sleep(1500);
 	render::SrcSlotStates(st, &sec); // energy so far dropped
 	Sleep(1000);
@@ -153,7 +159,7 @@ int main() {
 	IPLSimulationSharedInputs sh{};
 	sh.listener = {{1, 0, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 0}};
 	sh.numRays = 2048;
-	sh.numBounces = 16;
+	sh.numBounces = 128; // pba_native.cpp's default (g_reflBounces): 16 left no energy at the transition time here
 	sh.duration = render::kIRSeconds;
 	sh.order = 1;
 	sh.irradianceMinDistance = 0.25f;
@@ -161,6 +167,15 @@ int main() {
 	inputs(room, {0, 0.1f, 0});
 	inputs(slot, kSrc);
 	iplSimulatorRunReflections(simr);
+	// The tail only exists if the simulation left energy at the transition time (0.5 s): the hybrid EQ of the slot is
+	// that energy. With too few bounces (16 in this room, 3.7 m mean free path) the rays run out at ~0.2 s, the EQ is
+	// 0 / 0 / 0 and the slot has no tail at all, whatever it is fed.
+	{
+		IPLSimulationOutputs o{};
+		iplSourceGetOutputs(slot, IPL_SIMULATIONFLAGS_REFLECTIONS, &o);
+		const double eq = o.reflections.eq[0] + o.reflections.eq[1] + o.reflections.eq[2];
+		Check(eq > 0.01, "the slot's simulation has energy at the transition time (hybrid EQ > 0)", eq, o.reflections.eq[1]);
+	}
 
 	IPLSource srcs[1] = {slot};
 	render::SetReflectionSources(room, nullptr, 0, srcs, 1);
@@ -186,7 +201,9 @@ int main() {
 	Check(got1 && lg && std::fabs(used[1] - 8) < 1e-3, "given times are the ones used", used[1], lg);
 	Check(std::fabs(mainRt[1] - 8) > 0.5, "the main simulation's own estimate is still reported", mainRt[1]);
 #endif
-	Check(eMain > 0, "slot: reverb of a shot", eMain);
+	// Real reverb, not the numerical residue of the filters (~3e-14 per second of silence: the 1e-9 offset of the IIR
+	// filters, squared, over 48000 samples): 1.5-2.5 s after the shot the tail measures ~1e-8 with the room's own times.
+	Check(eMain > 1e-10, "slot: reverb of a shot (well above the filter residue)", eMain);
 	Check(eLong >= 10 * eMain, "slot tail 1.5-2.5 s after a shot: 8 s given vs the main simulation's times (x10)", eLong, eMain);
 	render::ClearSlotReverbTimes();
 	const double eBack = TailEnergy();

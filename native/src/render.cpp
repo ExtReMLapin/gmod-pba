@@ -317,9 +317,8 @@ void ReleaseVoice(Voice& v) {
 // DiffuseFieldEq below, on the default HRTF): the reverb came out bass-heavy and the echo of a bright sound
 // (a metal clang) far too weak. The speakers decode (panning) is flat and is left alone.
 // The filter is measured, not tuned: at start-up, from the loaded HRTF, the gain at each frequency that brings the
-// decoded W-channel field to the direct HRTF's mean over 240 directions, smoothed to a third of an octave, scaled
-// so that the 707 - 1414 Hz octave keeps its level (the wet level was set by ear on it), as a
-// minimum-phase FIR of kDfTaps taps applied to both ears of the decoded reverb bus.
+// decoded W-channel field to the direct HRTF's mean over 240 directions (the absolute level of a diffuse field at the
+// ears), smoothed to a third of an octave, as a minimum-phase FIR of kDfTaps taps applied to both ears of the decoded reverb bus.
 constexpr int kDfTaps = 256;
 constexpr int kDfFft = 4096;
 struct DfEq {
@@ -450,18 +449,13 @@ std::vector<double> DiffuseFieldGain(IPLContext ctx, IPLHRTF hrtf) {
 		if (f > 16000) gain[k] = gain[(int)(16000 / binHz)];
 		if (f < 40) gain[k] = gain[(int)(40 / binHz) + 1];
 	}
-	// the mid band keeps its level: over 707 - 1414 Hz the decoded field gets as much power with the equaliser as without
-	double before = 0, after = 0;
-	for (int k = 0; k < nb; ++k) {
-		const double f = k * binHz;
-		if (f >= 707.1 && f < 1414.2) {
-			before += decoded[k];
-			after += decoded[k] * gain[k] * gain[k];
-		}
-	}
-	if (before <= 0 || after <= 0) return {};
-	const double norm = std::sqrt(before / after);
-	for (auto& g : gain) g = std::clamp(g * norm, 0.05, 20.0);
+	// Absolute: the decoded field is brought to the HRTF's diffuse field itself (0 dB), not to the level the decode
+	// happened to have in the 707 - 1414 Hz octave. That level was -7.6 dB under the diffuse field with Steam Audio's
+	// original decode and is -3.4 dB with the MagLS + diffuse-field-covariance one: keeping it tied the reverb's
+	// loudness to whichever decoder was loaded (the wet level had been set by ear on the old one). The reverb bus is now
+	// physical at the ears, and the wet defaults (pba_native_reverb / pba_native_echo) account for what a real room
+	// gives, once.
+	for (auto& g : gain) g = std::clamp(g, 0.05, 20.0);
 	return gain;
 }
 
@@ -503,20 +497,23 @@ void DesignDiffuseEq() {
 	for (size_t k = 0; k < gain.size(); ++k) g_dfEq.gainDb[k] = 20 * std::log10(gain[k]);
 }
 
-// filters both ears of the decoded reverb bus in place
+// filters the omni channel W of the ambisonic reverb bus in place, BEFORE the decode. The equaliser is the correction of
+// what the decode makes of W (see above); the decode is a linear, time-invariant filter per ear, so filtering W first
+// gives the same ears for a W-only field (what the reverb is) as filtering the ears after, with half the filtering
+// (one channel, not two). And the directional channels X, Y, Z are left as the decoder gives them: an isotropic field,
+// which the decoder already renders at the diffuse field's level, is corrected only through its W share (a quarter
+// of its power) instead of being pushed 3 dB off at the low end as a post-decode equaliser did.
 void ApplyDfEq(DfState& st, const std::vector<float>& h, IPLAudioBuffer& b) {
-	for (int ch = 0; ch < 2; ++ch) {
-		float* w = st.w[ch];
-		float* x = b.data[ch];
-		std::memcpy(w + kDfTaps - 1, x, kBlock * sizeof(float));
-		std::fill(x, x + kBlock, 0.0f);
-		for (int k = 0; k < kDfTaps; ++k) {
-			const float hk = h[k];
-			const float* src = w + kDfTaps - 1 - k;
-			for (int i = 0; i < kBlock; ++i) x[i] += hk * src[i];
-		}
-		std::memmove(w, w + kBlock, (kDfTaps - 1) * sizeof(float));
+	float* w = st.w[0];
+	float* x = b.data[0];
+	std::memcpy(w + kDfTaps - 1, x, kBlock * sizeof(float));
+	std::fill(x, x + kBlock, 0.0f);
+	for (int k = 0; k < kDfTaps; ++k) {
+		const float hk = h[k];
+		const float* src = w + kDfTaps - 1 - k;
+		for (int i = 0; i < kBlock; ++i) x[i] += hk * src[i];
 	}
+	std::memmove(w, w + kBlock, (kDfTaps - 1) * sizeof(float));
 }
 
 // the reverb bus's decode: the ambisonic bus to the ears, HRTF (then the diffuse-field equaliser) or panning
@@ -526,8 +523,8 @@ void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpa
 	dp.hrtf = g_hrtf;
 	dp.orientation = lis;
 	dp.binaural = g_outMode == 0 ? IPL_TRUE : IPL_FALSE;
+	if (dp.binaural && g_dfOn && !g_dfEq.h.empty()) ApplyDfEq(st, g_dfEq.h, *in);
 	iplAmbisonicsDecodeEffectApply(fx, &dp, in, out);
-	if (dp.binaural && g_dfOn && !g_dfEq.h.empty()) ApplyDfEq(st, g_dfEq.h, *out);
 }
 
 // Applies one reflection effect (if simulated) and adds its ambisonic output to g_amb.
