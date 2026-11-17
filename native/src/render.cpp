@@ -317,9 +317,8 @@ void ReleaseVoice(Voice& v) {
 // DiffuseFieldEq below, on the default HRTF): the reverb came out bass-heavy and the echo of a bright sound
 // (a metal clang) far too weak. The speakers decode (panning) is flat and is left alone.
 // The filter is measured, not tuned: at start-up, from the loaded HRTF, the gain at each frequency that brings the
-// decoded W-channel field to the direct HRTF's mean over 240 directions, smoothed to a third of an octave, scaled
-// so that the 707 - 1414 Hz octave keeps its level (the wet level was set by ear on it), as a
-// minimum-phase FIR of kDfTaps taps applied to both ears of the decoded reverb bus.
+// decoded W-channel field to the direct HRTF's mean over 240 directions (the absolute level of a diffuse field at the
+// ears), smoothed to a third of an octave, as a minimum-phase FIR of kDfTaps taps applied to both ears of the decoded reverb bus.
 constexpr int kDfTaps = 256;
 constexpr int kDfFft = 4096;
 struct DfEq {
@@ -450,18 +449,13 @@ std::vector<double> DiffuseFieldGain(IPLContext ctx, IPLHRTF hrtf) {
 		if (f > 16000) gain[k] = gain[(int)(16000 / binHz)];
 		if (f < 40) gain[k] = gain[(int)(40 / binHz) + 1];
 	}
-	// the mid band keeps its level: over 707 - 1414 Hz the decoded field gets as much power with the equaliser as without
-	double before = 0, after = 0;
-	for (int k = 0; k < nb; ++k) {
-		const double f = k * binHz;
-		if (f >= 707.1 && f < 1414.2) {
-			before += decoded[k];
-			after += decoded[k] * gain[k] * gain[k];
-		}
-	}
-	if (before <= 0 || after <= 0) return {};
-	const double norm = std::sqrt(before / after);
-	for (auto& g : gain) g = std::clamp(g * norm, 0.05, 20.0);
+	// Absolute: the decoded field is brought to the HRTF's diffuse field itself (0 dB), not to the level the decode
+	// happened to have in the 707 - 1414 Hz octave. That level was -7.6 dB under the diffuse field with Steam Audio's
+	// original decode and is -3.4 dB with the MagLS + diffuse-field-covariance one: keeping it tied the reverb's
+	// loudness to whichever decoder was loaded (the wet level had been set by ear on the old one). The reverb bus is now
+	// physical at the ears, and the wet defaults (pba_native_reverb / pba_native_echo) account for what a real room
+	// gives, once.
+	for (auto& g : gain) g = std::clamp(g, 0.05, 20.0);
 	return gain;
 }
 
