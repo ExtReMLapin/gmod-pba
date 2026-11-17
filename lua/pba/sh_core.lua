@@ -764,10 +764,19 @@ if SERVER then
 	end
 end
 
+--- True when `ply` hears from himself: his view is his own (first or third person, a vehicle...), not another
+-- entity's (the Camera tool's camera: SetViewEntity). The engine plays what the entity he views from emits
+-- unspatialised and spatialises every other sound, his own included, from where he views (measured with pba
+-- off: his sound 255 / 255 on his ears, 51 / 51 through a camera 528 u away). Shared: the server reads the
+-- view entity it set, the client the one it was told.
+function A.HearsFromSelf(ply)
+	local ve = ply.GetViewEntity and ply:GetViewEntity()
+	return not (IsValid(ve) and ve ~= ply)
+end
+
 --- Server side: where a player hears from (his view entity when he looks through a camera).
 function A.PlayerEar(ply)
-	local ve = ply.GetViewEntity and ply:GetViewEntity()
-	if IsValid(ve) and ve ~= ply then return ve:EyePos() end
+	if not A.HearsFromSelf(ply) then return ply:GetViewEntity():EyePos() end
 	return ply:EyePos()
 end
 
@@ -887,7 +896,7 @@ function A.SoundPos(data)
 		if CLIENT and A.NativeOwn and A.NativeOwn() then
 			local lp = LocalPlayer()
 			local w, owner = A.ShotWeapon(e, data.Channel)
-			if e == lp or owner == lp then
+			if (e == lp or owner == lp) and A.HearsFromSelf(lp) then
 				local L, ang = A.ListenerPos()
 				if L then return L + ang:Forward() end
 			end

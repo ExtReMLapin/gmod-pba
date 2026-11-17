@@ -1049,6 +1049,8 @@ steps = [
     # the same in multiplayer: his client predicts the gunfire, it reaches the echo path through his own hook (no relay)
     ("native_own", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job("client", "native_own.lua"))),
     ("native_own_mp", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_own_mp.lua"))),
+    # the player's own sounds through a camera (SetViewEntity) are spatialised from it like anybody's, not centered on the listener
+    ("native_own_camera", lambda: py("native_own_camera.py")),
     # step isolation self-test: a step leaks three settings, the next one must start from the session's (full battery only)
     ("isolation_leak_dummy", isolation_leak_dummy),
     ("isolation_check", isolation_check),
