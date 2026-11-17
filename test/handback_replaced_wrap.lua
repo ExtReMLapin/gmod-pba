@@ -8,9 +8,16 @@ pba.Process = function(data, relayed, ...)
 end
 pba.handedBack = {}
 pba.testEngine = {}
-hook.Add("EntityEmitSound", "pba_test_silent_relay", function(d)
+-- the probe wraps pba's own entry of the hook table: with pba_cl_hook_last (4da1c7d) pba's re-emissions (a handback
+-- is one) reach pba's handler alone, a foreign hook never sees them
+local H = hook.GetTable().EntityEmitSound
+pba.testOrigHook = pba.testOrigHook or (H and rawget(H, "pba"))
+if not pba.testOrigHook then return { pass = false, err = "pba's EntityEmitSound hook is missing" } end
+local origHook = pba.testOrigHook
+hook.Add("EntityEmitSound", "pba", function(d)
 	if string.find(string.lower(d.SoundName or ""), "ba_ohshit03", 1, true) and (d.Volume or 1) > 0.01 then
 		pba.testEngine[#pba.testEngine + 1] = RealTime()
 	end
+	return origHook(d)
 end)
 return { pass = true }

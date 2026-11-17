@@ -3,7 +3,7 @@
 -- engine emission of it, and the replacing line is not handed back either (rendered normally).
 job:sleep(1)
 if pba.testOrigProcess then pba.Process = pba.testOrigProcess pba.testOrigProcess = nil end
-hook.Remove("EntityEmitSound", "pba_test_silent_relay")
+if pba.testOrigHook then hook.Add("EntityEmitSound", "pba", pba.testOrigHook) pba.testOrigHook = nil end
 local back = {}
 for _, h in ipairs(pba.handedBack or {}) do back[#back + 1] = h.why .. " " .. h.name end
 local replaced = false
