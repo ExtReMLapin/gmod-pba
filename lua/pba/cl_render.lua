@@ -1247,7 +1247,7 @@ function A.Process(data, relayed)
 	local r, job
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
 	-- the listener's own sound (pba_native_own, centered on him): nothing to save on, never degraded or held
-	local ownSound = IsValid(src) and src == LocalPlayer() and A.NativeOwn and A.NativeOwn()
+	local ownSound = IsValid(src) and src == LocalPlayer() and A.NativeOwn and A.NativeOwn() and A.HearsFromSelf(src)
 	if not ownSound and ((A.cfg.burst_budget_ms or 2) > 0 or (A.cfg.burst_mask_db or 25) > 0) then
 		r, job = burstEvaluate(data, S, L, lvl, IsValid(src) and src or nil)
 	else
@@ -1455,7 +1455,8 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	if A.IsSoundscapeRandom(data, pos) then return end
 	-- echoes (native reflections) for loud sounds, whoever plays the direct sound
 	local ply = LocalPlayer()
-	local own = IsValid(ply) and data.Entity == ply
+	-- (his own as the engine hears it: not through a camera, where his sounds are spatialised like anybody's)
+	local own = IsValid(ply) and data.Entity == ply and A.HearsFromSelf(ply)
 	-- (pba_native_own: the module plays it like any other sound, its source slot reflects it)
 	local engineOwn = own and not (A.NativeOwn and A.NativeOwn())
 	-- (a predicted sound carries the engine's position, his origin: centered on him instead, A.SoundPos)
@@ -1537,7 +1538,7 @@ net.Receive(NET, function()
 	if A.LineKey then A.lineSeen[A.LineKey(name)] = RealTime() end -- (its caption's safety net, pba_caption_net)
 	if A.Native and A.Native.render and A.Enabled() then
 		local lp = LocalPlayer()
-		A.Native.Echo(data, data.Pos, echoOnly, IsValid(lp) and data.EntIndex == lp:EntIndex())
+		A.Native.Echo(data, data.Pos, echoOnly, IsValid(lp) and data.EntIndex == lp:EntIndex() and A.HearsFromSelf(lp))
 	end
 	-- the engine already plays this one for us (clear line of sight): only the echoes were wanted
 	if echoOnly then return end
@@ -1545,13 +1546,13 @@ net.Receive(NET, function()
 	-- filter, every listener gets the relay when one is blocked) is played by the engine on me, attached
 	if (A.cfg.mp_own or 1) >= 0.5 then
 		local lp = LocalPlayer()
-		if IsValid(lp) and data.EntIndex == lp:EntIndex() and not (A.NativeOwn and A.NativeOwn()) then vanilla(data) return end
+		if IsValid(lp) and data.EntIndex == lp:EntIndex() and A.HearsFromSelf(lp) and not (A.NativeOwn and A.NativeOwn()) then vanilla(data) return end
 	end
 	-- my own sound the server relayed for my module (pba_native_own): centered on me, not where my eyes were
 	-- on the server (A.SoundPos)
 	do
 		local lp = LocalPlayer()
-		if IsValid(lp) and data.EntIndex == lp:EntIndex() and A.NativeOwn and A.NativeOwn() then
+		if IsValid(lp) and data.EntIndex == lp:EntIndex() and A.HearsFromSelf(lp) and A.NativeOwn and A.NativeOwn() then
 			data.Entity = lp
 			data.Pos = A.SoundPos({ Entity = lp })
 		end
