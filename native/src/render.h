@@ -99,6 +99,9 @@ struct SrcSlotState {
 	float w[2] = {0, 0};      // current weights of the two banks
 	float target[2] = {0, 0}; // targets (SetSrcBlend)
 	double energy = 0;        // energy of the slot's wet output (ambisonic W channel) since the previous call
+	double inEnergy = 0;      // energy of the slot's mono input (the voices' sends) since the previous call
+	float eq[2][3] = {};      // per bank: the response's EQ its last convolved block used
+	int delay[2] = {0, 0};    // per bank: the response's delay (samples) its last convolved block used
 };
 // per-slot render state (kSrcSlotsMax entries); seconds: time rendered since the previous call. Resets energy.
 void SrcSlotStates(SrcSlotState* out, double* seconds);

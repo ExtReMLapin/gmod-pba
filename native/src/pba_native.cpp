@@ -2720,7 +2720,25 @@ LUA_FUNCTION(SrcSlotStats) {
 		num("target", st[k].target[c]);
 		num("targetOld", st[k].target[o]);
 		num("energy", st[k].energy);
+		num("inEnergy", st[k].inEnergy);
 		num("seconds", sec);
+		// the response each bank convolved last (current bank, other bank): hybrid EQ per band, delay (samples)
+		for (int b = 0; b < 2; ++b) {
+			const int bb = b == 0 ? c : o;
+			LUA->CreateTable();
+			for (int q = 0; q < 3; ++q) {
+				LUA->PushNumber(q + 1);
+				LUA->PushNumber(st[k].eq[bb][q]);
+				LUA->SetTable(-3);
+			}
+			LUA->SetField(-2, b == 0 ? "eq" : "eqOld");
+			num(b == 0 ? "delay" : "delayOld", st[k].delay[bb]);
+		}
+		{
+			std::lock_guard<std::mutex> lk(g_stageMtx);
+			const IPLVector3 gp = g_srcSlot[k].genPos;
+			num("gx", gp.x), num("gy", gp.y), num("gz", gp.z);
+		}
 		LUA->SetTable(-3);
 	}
 	return 1;

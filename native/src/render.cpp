@@ -182,6 +182,9 @@ struct Reflection {
 	std::atomic<bool> rtLongOn{false};
 	std::atomic<float> rtUsed[3] = {0, 0, 0};
 	std::atomic<float> rtMain[3] = {0, 0, 0}; // what the main simulation estimated (0.5 s window), for comparison
+	// what its last convolved block used: the response's EQ (hybrid tail level per band) and delay (debug, SrcSlotStats)
+	std::atomic<float> eqUsed[3] = {0, 0, 0};
+	std::atomic<int> delayUsed{0};
 };
 
 IPLContext g_ctx = nullptr;
@@ -236,6 +239,7 @@ Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same 
 float g_srcW[kSrcSlotsMax][2], g_srcT[kSrcSlotsMax][2];
 constexpr float kSrcBlendStep = (float)kBlock / (0.2f * kRate); // full swing in 0.2 s
 double g_srcE[kSrcSlotsMax] = {}; // W-channel energy of each slot's wet output (SrcSlotStates)
+double g_srcInE[kSrcSlotsMax] = {}; // energy of each slot's mono input (SrcSlotStates)
 double g_srcESec = 0;
 std::vector<float> g_slotW(kBlock); // one slot's W-channel output this block (both banks summed)
 void ResetSrcBlend() {
@@ -243,6 +247,7 @@ void ResetSrcBlend() {
 		g_srcW[k][0] = g_srcT[k][0] = 1; // one bank, as before the banks existed
 		g_srcW[k][1] = g_srcT[k][1] = 0;
 		g_srcE[k] = 0;
+		g_srcInE[k] = 0;
 	}
 	g_srcESec = 0;
 }
@@ -593,6 +598,8 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 		if (rtOut) g_roomTailEq[b] = rp.eq[b];
 	}
 	rp.delay = out.reflections.delay;
+	for (int b = 0; b < 3; ++b) r.eqUsed[b] = rp.eq[b];
+	r.delayUsed = rp.delay;
 	rp.numChannels = kAmbi;
 	rp.irSize = kIR;
 	iplReflectionEffectApply(r.fx, &rp, &r.in, &g_ambTmp, nullptr);
@@ -1067,6 +1074,11 @@ void RenderBlock() {
 				std::memcpy(g_srcB[k].in.data[0], g_src[k].in.data[0], kBlock * sizeof(float));
 				g_srcB[k].fed = g_src[k].fed; // before ApplyReflection clears it
 			}
+			{
+				double ei = 0;
+				for (int i = 0; i < kBlock; ++i) ei += (double)g_src[k].in.data[0][i] * g_src[k].in.data[0][i];
+				g_srcInE[k] += ei;
+			}
 			std::fill(g_slotW.begin(), g_slotW.end(), 0.0f);
 			ApplyReflection(g_src[k], wet, nullptr, g_room.tailBlocks, p0, w[0], g_slotW.data());
 			if (k < kSrcBankB) ApplyReflection(g_srcB[k], wet, nullptr, g_room.tailBlocks, p1, w[1], g_slotW.data());
@@ -1452,6 +1464,13 @@ void SrcSlotStates(SrcSlotState* out, double* seconds) {
 		}
 		out[k].energy = g_srcE[k];
 		g_srcE[k] = 0;
+		out[k].inEnergy = g_srcInE[k];
+		g_srcInE[k] = 0;
+		for (int b = 0; b < 2; ++b) {
+			const Reflection* r = b == 0 ? &g_src[k] : (k < kSrcBankB ? &g_srcB[k] : nullptr);
+			for (int q = 0; q < 3; ++q) out[k].eq[b][q] = r ? r->eqUsed[q].load() : 0.0f;
+			out[k].delay[b] = r ? r->delayUsed.load() : 0;
+		}
 	}
 	if (seconds) *seconds = g_srcESec;
 	g_srcESec = 0;
