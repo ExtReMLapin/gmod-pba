@@ -408,9 +408,13 @@ local function nativeState()
 	local N = A.Native or {}
 	if (A.cfg.allow_native or 1) < 0.5 then return "forbidden", RED, "Native backend forbidden by this server (pba_allow_native 0)." end
 	if N.ready then
-		return "ready", GREEN, string.format("Steam Audio module loaded: %d triangles%s%s.", N.tris or 0,
+		local text = string.format("Steam Audio module loaded: %d triangles%s%s.", N.tris or 0,
 			N.render and ", native rendering on" or "",
 			N.pathsReady and string.format(", %d path probes%s", N.probes or 0, N.fromCache and " (from cache)" or "") or "")
+		-- an old phonon.dll (or a module too old to measure it): compensated, but said
+		local warn = N.PhononWarning and N.PhononWarning()
+		if warn then return "ready", ORANGE, text .. "  " .. warn end
+		return "ready", GREEN, text
 	end
 	if N.building then return "module", ORANGE, "Steam Audio module: loading the map geometry..." end
 	if (A.cfg.native or 1) < 0.5 then return "module", ORANGE, "Native backend switched off (pba_native 0)." end

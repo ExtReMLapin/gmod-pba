@@ -258,8 +258,10 @@ end
 --- Is the phonon.dll in use the one with the reflection level fix (Steam Audio fork, pba-4: the reconstructed response
 -- in the units of the direct sound; the DLLs before it are 8-11 dB too loud)? Measured by the module on the DLL itself
 -- (pba_native.PhononLevel, after Init). true / false, or nil when unknown: no module, a module of API 2 without the
--- probe, a failed measurement. The reverb defaults (pba_native_reverb, pba_native_echo) and A.MigrateRetune depend on it.
+-- probe, a failed measurement. Kept in N.phononFixed / N.phononLevelDb: the reverb and echo levels sent to the module
+-- depend on it (N.WetComp).
 function N.PhononFixed()
+	N.phononFixed, N.phononLevelDb = nil, nil
 	if not (pba_native and pba_native.PhononLevel) then return nil end
 	local ok, fixed, level = pcall(pba_native.PhononLevel)
 	if not ok or type(fixed) ~= "boolean" then return nil end
@@ -267,11 +269,66 @@ function N.PhononFixed()
 	return fixed
 end
 
---- The one-time retune of the saved reverb settings (A.MigrateRetune), when the phonon.dll is the fixed one.
+-- Probe level (pba_native.PhononLevel) of a DLL whose reflections come out at the level of the fixed one: an old DLL's
+-- excess is its probe level minus this. Calibrated at the module's output, not taken from the fixed DLL's own probe
+-- (-1.4 dB, pba-5): on pba_pipe the fork's pba.3 build (probe +10.0 dB) gave reflections 10.0 - 10.2 dB above pba-5
+-- (echo of a mono shot at 95 and 140, slot reverb of a 140 shot; the slot reverb of quieter sounds 9.9 - 11.1 dB),
+-- where the probe difference is 11.4 dB: -1.4 left that DLL about 1.2 dB under the fixed one, -0.2 within 1 dB.
+N.PHONON_FIXED_DB = -0.2
+
+--- Compensation of the phonon.dll in use, on the reverb and echo levels sent to the module (linear, <= 1): reverb, echo.
+-- pba_native_reverb and pba_native_echo mean the same level on every DLL (1 = the physical level, measured on the fixed
+-- one), so a player who has the new addon but an old phonon.dll (Steam Audio 4.8.1 as released, the fork's builds before
+-- the level fix: reflections 8.5 - 10 dB over the physical level) does not get a reverb 11 dB too loud, and nothing
+-- the player saved is rewritten for it (the next DLL update just switches the compensation off):
+--  * fixed DLL: 1 (nothing to take off);
+--  * old DLL, its level measured: its excess over the fixed DLL comes off both buses (the same response feeds both);
+--  * unknown (a module of API 2 has no probe, or the probe failed): the previous release's levels, bus by bus (its default
+--    over today's: the levels that module and its DLL were tuned for; the retune scaled saved values by the inverse).
+function N.WetComp(fixed, levelDb)
+	if fixed == true then return 1, 1 end
+	if fixed == false and levelDb then
+		local k = math.min(10 ^ (-(levelDb - N.PHONON_FIXED_DB) / 20), 1)
+		return k, k
+	end
+	local r, e = 1, 1
+	for _, m in ipairs(A.RETUNE or {}) do
+		local c = A.CONFIG[m.name]
+		if m.old and c and c[1] > 0 then
+			if m.name == "native_reverb" then r = m.old / c[1] elseif m.name == "native_echo" then e = m.old / c[1] end
+		end
+	end
+	return r, e
+end
+
+--- The reverb and echo levels for the module: the settings times the DLL compensation (N.WetComp).
+function N.WetLevels()
+	local kr, ke = N.WetComp(N.phononFixed, N.phononLevelDb)
+	return (A.cfg.native_reverb or 1) * kr, (A.cfg.native_echo or 1) * ke
+end
+
+--- The warning about the phonon.dll in use (menu status line, console), or nil: an old DLL (measured), a module too old to
+-- measure it. Nothing without a module.
+function N.PhononWarning()
+	if not pba_native then return nil end
+	if N.phononFixed == true then return nil end
+	if N.phononFixed == false and N.phononLevelDb then
+		return string.format("Your phonon.dll is an old build: its reflections are %.0f dB too loud. PBA turns the reverb and echoes down to compensate, but update phonon.dll (with the module, from the PBA release).",
+			N.phononLevelDb - N.PHONON_FIXED_DB)
+	end
+	if not pba_native.PhononLevel then
+		return "Your Steam Audio module is older than this addon and cannot check its phonon.dll: reverb and echoes are kept at the previous release's levels. Update the module and phonon.dll."
+	end
+	return "The level of your phonon.dll could not be measured: reverb and echoes are kept at the previous release's levels."
+end
+
+--- The one-time retune of the saved reverb settings (A.MigrateRetune), and the warning about an old phonon.dll.
 function N.Retune()
 	if not A.MigrateRetune then return nil end
 	local r = A.MigrateRetune(N.PhononFixed())
 	N.retune = r
+	local w = N.PhononWarning()
+	if w then print("[PBA] " .. w) end
 	return r
 end
 
@@ -350,7 +407,8 @@ end)
 function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	local t0 = SysTime()
 	-- the simulator is created with the current ray count (it fixes the ray directions)
-	pba_native.SetReflections(A.cfg.native_reverb, A.cfg.native_echo, A.cfg.native_rays, A.cfg.native_bounces or 128)
+	local wr, we = N.WetLevels()
+	pba_native.SetReflections(wr, we, A.cfg.native_rays, A.cfg.native_bounces or 128)
 	if pba_native.SetSimOptions then
 		pba_native.SetSimOptions(A.cfg.native_scene or 1, A.cfg.native_threads or 0, A.cfg.native_reverb_window or 2.5, 512)
 	end
@@ -566,12 +624,14 @@ local function wetLevel(v, k)
 end
 
 --- Pushes the client options to the module (output mode, reflection levels and quality). The room reverb and
--- echo levels are scaled by N.wetScale (0 with the head under water, see the Think below).
+-- echo levels are compensated for the phonon.dll (N.WetLevels) and scaled by N.wetScale (0 with the head under water,
+-- see the Think below).
 function N.ApplySettings()
 	if not N.render or not pba_native.SetReflections then return end
 	pba_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
 	local k = N.wetScale or 1
-	pba_native.SetReflections(wetLevel(A.cfg.native_reverb, k), wetLevel(A.cfg.native_echo, k), A.cfg.native_rays,
+	local wr, we = N.WetLevels()
+	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,
 		A.cfg.native_bounces or 128, A.cfg.native_diffuse_send or 1.5, A.cfg.native_diffuse_rt_ref or 1)
 	-- a far moving source keeps its source reverb response over a fraction of its distance (module 1.2.0+)
 	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.cfg.native_src_near or 0.1) end

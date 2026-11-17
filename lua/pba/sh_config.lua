@@ -343,9 +343,9 @@ end
 -- Retune for the level-fixed phonon.dll (Steam Audio fork, branch pba-4): the reflection response is no longer
 -- 11 dB too loud and the reflection fixes change the rest, so the reverb comes out about 10.5 dB quieter at equal
 -- settings. The defaults of native_reverb and native_echo moved with it (measured, see the retune notes: the reverb
--- is now the physical level at the ears, and so is the echo: an echo as loud as the slot reverb of the same sound). This moves what players saved, ONCE, and only
--- when the phonon.dll in use is the fixed one (the module measures it: pba_native.PhononLevel, N.PhononFixed): on
--- the old DLL the old values are right, and the migration waits for the day the DLL is updated.
+-- is now the physical level at the ears, and so is the echo: an echo as loud as the slot reverb of the same sound). This moves what players saved, ONCE, on
+-- any phonon.dll: the settings mean the same level on every DLL, as the module's send takes an old DLL's measured excess
+-- off (N.WetComp, from pba_native.PhononLevel; a module too old to measure keeps the previous release's levels).
 --  * a value equal to the new default is left alone (a fresh install, or a choice that equals it);
 --  * a value equal to the OLD default moves to the new default (the player never chose it);
 --  * a custom reverb / echo is multiplied by new default / old default and held to the slider's maximum (a
@@ -361,13 +361,12 @@ A.RETUNE = {
 	{ name = "native_dir", cap = true },
 
 }
---- phononFixed: true / false / nil (unknown: a module without PhononLevel, or none). Returns "done" (already
--- run), "waiting" (not the fixed phonon, or not known), "unsafe" (the flag cannot be written), "applied", "skip" (not the client).
-function A.MigrateRetune(phononFixed)
+--- Returns "done" (already run), "unsafe" (the flag cannot be written), "applied", "skip" (not the client). (Its argument,
+-- the DLL's verdict, no longer matters: N.WetComp makes the settings DLL-independent.)
+function A.MigrateRetune()
 	if not (CLIENT and file) then return "skip" end
 	if A.retuneRan then return "done" end
 	if A.MigrationDone(A.RETUNE_KEY) then A.retuneRan = true return "done" end
-	if phononFixed ~= true then return "waiting" end
 	if not A.MigrationMark(A.RETUNE_KEY) then return "unsafe" end
 	A.retuneRan = true
 	for _, m in ipairs(A.RETUNE) do

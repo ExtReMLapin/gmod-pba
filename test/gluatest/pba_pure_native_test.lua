@@ -559,6 +559,79 @@ return {
 			_G.pba_native, N.render, N.EnsureSound, A.ListenerPos, A.Mix = saved.pba_native, saved.render, saved.ensure, saved.lp, saved.mix
 			if not ok then error(err, 0) end
 		end },
+		{ name = "WetComp: on an old phonon.dll (reflections measured too loud) the reverb and echo levels sent to the module come down by its measured excess over the fixed DLL, so a setting means the same level on every DLL; fixed DLL: 1; unknown (a module of API 2, a failed probe): the previous release's levels (old default / new default)", func = function()
+			local ref = N.PHONON_FIXED_DB
+			expect(type(ref)).to.equal("number")
+			expect(ref <= 0 and ref > -3).to.beTrue() -- (the fork's own probe: -1.0 .. -1.4 dB; calibrated at the output: -0.2)
+			local r, e = N.WetComp(true, -1.38)
+			expect(r == 1 and e == 1).to.beTrue()
+			r, e = N.WetComp(true, nil) -- (fixed without a level: still fixed)
+			expect(r == 1 and e == 1).to.beTrue()
+			-- the fork's pba.3 build (+10.0 dB), the official 4.8.1 (+8.5 dB): their excess over the fixed DLL comes off both buses
+			for _, lv in ipairs({ 9.97, 8.5, 5.5 }) do
+				r, e = N.WetComp(false, lv)
+				local k = 10 ^ (-(lv - ref) / 20)
+				if not (near(r, k, 1e-9) and near(e, k, 1e-9)) then error(string.format("level %.2f: %s %s, want %.4f", lv, tostring(r), tostring(e), k)) end
+			end
+			-- never louder than asked (an "old" verdict with a level under the reference cannot raise the level)
+			r, e = N.WetComp(false, ref - 3)
+			expect(r == 1 and e == 1).to.beTrue()
+			-- unknown: the previous release's levels, bus by bus (the retune scaled the saved values by new / old default)
+			local want = {}
+			for _, m in ipairs(A.RETUNE) do if m.old then want[m.name] = m.old / A.CONFIG[m.name][1] end end
+			for _, args in ipairs({ { nil, nil }, { false, nil }, { nil, 9.97 } }) do
+				r, e = N.WetComp(args[1], args[2])
+				expect(near(r, want.native_reverb, 1e-9)).to.beTrue()
+				expect(near(e, want.native_echo, 1e-9)).to.beTrue()
+			end
+		end },
+		{ name = "ApplySettings / WetLevels: the module gets pba_native_reverb and pba_native_echo times the DLL compensation (N.WetComp of the measured level); the convars stay as the player set them", func = function()
+			local saved = { pba_native = _G.pba_native, render = N.render, fixed = N.phononFixed, lv = N.phononLevelDb, ws = N.wetScale }
+			local got
+			_G.pba_native = { SetReflections = function(rv, ec) got = { rv, ec } end, SetOutputMode = function() end }
+			N.render, N.wetScale = true, 1
+			local ok, err = pcall(function()
+				withCfg({ native_reverb = 1, native_echo = 0.75, native_out = 0, native_rays = 4096, native_bounces = 128 }, function()
+					N.phononFixed, N.phononLevelDb = false, 9.97
+					N.ApplySettings()
+					local k = N.WetComp(false, 9.97)
+					expect(near(got[1], 1 * k, 1e-9) and near(got[2], 0.75 * k, 1e-9)).to.beTrue()
+					N.phononFixed, N.phononLevelDb = true, -1.38
+					N.ApplySettings()
+					expect(near(got[1], 1, 1e-9) and near(got[2], 0.75, 1e-9)).to.beTrue()
+					N.phononFixed, N.phononLevelDb = nil, nil
+					N.ApplySettings()
+					local kr, ke = N.WetComp(nil, nil)
+					expect(near(got[1], kr, 1e-9) and near(got[2], 0.75 * ke, 1e-9)).to.beTrue()
+					-- the levels handed over before the world loads (N.Finish) are the same
+					local a, b = N.WetLevels()
+					expect(near(a, kr, 1e-9) and near(b, 0.75 * ke, 1e-9)).to.beTrue()
+					expect(A.cfg.native_reverb == 1 and A.cfg.native_echo == 0.75).to.beTrue()
+				end)
+			end)
+			_G.pba_native, N.render, N.phononFixed, N.phononLevelDb, N.wetScale = saved.pba_native, saved.render, saved.fixed, saved.lv, saved.ws
+			if not ok then error(err, 0) end
+		end },
+		{ name = "PhononWarning: an old phonon.dll is reported (menu status, console) with its measured excess; a module too old to measure it too; the fixed DLL and no module say nothing", func = function()
+			local saved = { pba_native = _G.pba_native, fixed = N.phononFixed, lv = N.phononLevelDb }
+			local ok, err = pcall(function()
+				_G.pba_native = { PhononLevel = function() return false, 9.97 end }
+				N.phononFixed, N.phononLevelDb = false, 9.97
+				local w = N.PhononWarning()
+				expect(type(w)).to.equal("string")
+				expect(string.find(w, "phonon.dll", 1, true) ~= nil).to.beTrue()
+				expect(string.find(w, string.format("%.0f dB", 9.97 - N.PHONON_FIXED_DB), 1, true) ~= nil).to.beTrue()
+				N.phononFixed, N.phononLevelDb = true, -1.38
+				expect(N.PhononWarning()).to.beNil()
+				_G.pba_native = {} -- a module of API 2: cannot measure
+				N.phononFixed, N.phononLevelDb = nil, nil
+				expect(type(N.PhononWarning())).to.equal("string")
+				_G.pba_native = nil
+				expect(N.PhononWarning()).to.beNil()
+			end)
+			_G.pba_native, N.phononFixed, N.phononLevelDb = saved.pba_native, saved.fixed, saved.lv
+			if not ok then error(err, 0) end
+		end },
 		{ name = "VoiceEQ: never more than 30 dB between the strongest and the weakest band (what Steam Audio's cascaded EQ can realise); inside the range the bands are exactly the low-pass row times the air", func = function()
 			-- Steam Audio's 3-band EQ is a cascade (low shelf, peak, high shelf): asked for more than ~30 dB between bands
 			-- the DirectEffect floors at -24 dB (1/16) and the path effect's cascade bleeds into the neighbours (10-25 dB

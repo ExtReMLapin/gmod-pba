@@ -493,7 +493,7 @@ local SUITE = {
 			G.cookie, G.RunConsoleCommand, A.cv.native_bounces = saved.cookie, saved.rcc, saved.cv
 			if not ok then error(err, 0) end
 		end },
-		{ name = "Retune migration (pba-4 phonon): only with the level-fixed phonon; old defaults -> new defaults, custom reverb / echo scaled by the default's ratio and capped, once, recorded in a data file", func = function()
+		{ name = "Retune migration (pba-4 phonon): on any phonon.dll (an old one is compensated in the send, N.WetComp); old defaults -> new defaults, custom reverb / echo scaled by the default's ratio and capped, once, recorded in a data file", func = function()
 			local KEY = A.RETUNE_KEY
 			expect(type(A.MigrateRetune)).to.equal("function")
 			local nd = { native_reverb = A.CONFIG.native_reverb[1], native_echo = A.CONFIG.native_echo[1], native_loud_dry_db = A.CONFIG.native_loud_dry_db[1] }
@@ -519,12 +519,19 @@ local SUITE = {
 			end
 			local OLD = { native_reverb = 0.4, native_echo = 0.25, native_loud_dry_db = 20, native_dir = 0.3 }
 			local ok, err = pcall(function()
-				-- an old phonon, an unknown one (a module without PhononLevel): nothing moves, nothing is recorded: the migration waits for the right DLL
+				-- an old phonon, an unknown one (a module without PhononLevel): the settings mean the same level on every DLL (N.WetComp
+				-- takes an old DLL's excess off in the send), so the migration runs there too, once
 				setStored(OLD)
-				expect(A.MigrateRetune(false)).to.equal("waiting")
-				expect(A.MigrateRetune(nil)).to.equal("waiting")
-				expect(#cmds).to.equal(0)
-				expect(files["pba/migrations.txt"]).to.beNil()
+				expect(A.MigrateRetune(false)).to.equal("applied")
+				expect(stored.pba_native_reverb).to.equal(nd.native_reverb)
+				expect(stored.pba_native_echo).to.equal(nd.native_echo)
+				expect(A.MigrateRetune(false)).to.equal("done")
+				files, A.retuneRan = {}, nil
+				setStored(OLD)
+				expect(A.MigrateRetune(nil)).to.equal("applied")
+				expect(stored.pba_native_reverb).to.equal(nd.native_reverb)
+				files, A.retuneRan = {}, nil
+				setStored(OLD)
 				-- the fixed phonon: the old defaults move to the new ones, once
 				expect(A.MigrateRetune(true)).to.equal("applied")
 				expect(stored.pba_native_reverb).to.equal(nd.native_reverb)
