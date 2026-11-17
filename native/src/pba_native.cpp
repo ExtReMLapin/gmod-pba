@@ -77,6 +77,7 @@
 #include "phonon_probe.h"
 
 #include "render.h"
+#include "slot_rt.h"
 #include "streams.h"
 
 using namespace GarrysMod::Lua;
@@ -245,11 +246,7 @@ IPLSimulator g_slotRevSim = nullptr;
 IPLSource g_slotRevSrc = nullptr;
 std::atomic<float> g_slotRevMs{0};
 std::atomic<int> g_slotRevRuns{0};
-struct SlotRt {
-	IPLVector3 pos{};
-	int scene = -1, epoch = -1, n = 0;
-	float rt[3] = {0, 0, 0};
-};
+using SlotRt = slotrt::State; // estimate state and restart / refresh rule: slot_rt.h (tested by test/slot_rt_test.cpp)
 SlotRt g_rtEcho[render::kEchoSlots], g_rtSrc[render::kSrcSlotsMax];
 // pauses: listener still, scene unchanged, no echo -> the simulation converges; run it less often
 std::atomic<int> g_stillPasses{0};
@@ -425,32 +422,16 @@ bool EstimateRtAt(IPLVector3 p, float out[3]) {
 }
 
 // Brings the long-window estimate of an echo or source slot (renderSlot as render::SetSlotReverbTimes) up to date for
-// its place: up to `passes` more passes while fewer than g_optRtPasses were averaged for this place and scene version,
-// publishing the running mean to the renderer after each. Nothing runs for a settled slot, nor with the option off.
-// true when a pass ran.
+// its place: up to `passes` more passes while fewer than g_optRtPasses were averaged, publishing the running mean to the
+// renderer after each. A new place starts over; a scene change at the same place does NOT (a moving dynamic object commits
+// the scene every ~0.1 s, and every restart published a single noisy pass): the estimate is refreshed once the scene has
+// been quiet for a while, or is stale for too long, and published in one piece (slot_rt.h). Nothing runs for a settled
+// slot, nor with the option off. true when a pass ran.
 bool UpdateSlotRt(SlotRt& st, IPLVector3 pos, int scene, int renderSlot, int passes) {
 	if (!g_optSrcLongRt.load() || !g_slotRevSim) return false;
-	const int ep = g_rtEpoch.load();
-	if (st.epoch != ep || st.scene != scene || Dist2(st.pos, pos) > 1e-6f) {
-		st.n = 0; // a new place (or scene): its estimate starts over, the previous one stays rendered until then
-		st.pos = pos;
-		st.scene = scene;
-		st.epoch = ep;
-	}
-	const int want = std::max(1, g_optRtPasses.load());
-	bool ran = false;
-	for (int i = 0; i < passes && st.n < want; ++i) {
-		float v[3];
-		if (!EstimateRtAt(pos, v)) {
-			st.n = want; // failed: the main simulator's estimate for this place (not the previous place's), no retry every pass
-			render::SetSlotReverbTimes(renderSlot, nullptr);
-			break;
-		}
-		for (int b = 0; b < 3; ++b) st.rt[b] = st.n == 0 ? v[b] : (st.rt[b] * st.n + v[b]) / (st.n + 1);
-		st.n++;
-		render::SetSlotReverbTimes(renderSlot, st.rt);
-		ran = true;
-	}
+	const bool ran = slotrt::Update(
+	    st, {pos.x, pos.y, pos.z}, scene, g_rtEpoch.load(), Now(), g_optRtPasses.load(), passes,
+	    [&](float v[3]) { return EstimateRtAt(pos, v); }, [&](const float* rt) { render::SetSlotReverbTimes(renderSlot, rt); });
 	// the option went off meanwhile (SetSourceLongRt clears, then we must not publish after it)
 	if (ran && !g_optSrcLongRt.load()) render::ClearSlotReverbTimes();
 	return ran;
