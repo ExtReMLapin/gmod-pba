@@ -1766,12 +1766,16 @@ function N.SyncDoors()
 		end
 	end
 	for id in pairs(N.doors) do if N.doors[id].prop then nProps = nProps + 1 end end
+	local skip = N.dynSkip
 	for _, e in ipairs(ents.GetAll()) do
-		local cls = e:GetClass()
-		local bk = brushKind(e, cls)
-		local isMover = MOVER_CLASSES[cls] or bk == "mover"
-		local isDoor, isProp = DOOR_CLASSES[cls] or bk == "door" or isMover, wantProps and PROP_CLASSES[cls]
-		local id = e:EntIndex()
+		-- (an entity that is neither a door, a mover nor a prop class stays one: seen once, then skipped. Every
+		-- entity of the map went through GetClass and the brush test at each sync: 1.5 ms of 764 entities, ten times a second)
+		local cls = skip[e] ~= true and e:GetClass() or nil
+		local bk = cls and brushKind(e, cls)
+		local isMover = cls and (MOVER_CLASSES[cls] or bk == "mover")
+		local isDoor, isProp = cls and (DOOR_CLASSES[cls] or bk == "door" or isMover), cls and wantProps and PROP_CLASSES[cls]
+		if cls and not isDoor and not PROP_CLASSES[cls] then skip[e] = true end
+		local id = cls and e:EntIndex()
 		if (isDoor or isProp) and id > 0 and not N.dynSkip[e] and not (hold and not isDoor and N.doors[id]
 			and N.doors[id].ent ~= e) then -- held: an index reused by a new prop waits for the end of the hold
 			local d = N.doors[id]
