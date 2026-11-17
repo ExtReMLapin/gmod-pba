@@ -514,6 +514,8 @@ function LP.Take(data, snd)
 		l.vehicle = IsValid(e) and e:IsVehicle() and LP.IsVehicleSound(e, data.SoundName, l.orig) or nil
 		-- a constraint's travel sound: ends in C++ when the objects stop moving relative to each other
 		l.constraint = IsValid(e) and e:GetMoveType() == MOVETYPE_VPHYSICS and LP.ConstraintOf(e, data.SoundName, l.orig) or nil
+		-- a physics scrape / rolling loop: the physics engine ends it with a StopSound Lua never sees
+		l.phys = snd.phys or nil
 	end
 	l.t = CurTime()
 	local prevVol = l.vol
@@ -695,6 +697,38 @@ timer.Create("pba_brief_movers", 0.1, 0, function()
 	end
 end)
 
+-- A physics scrape / rolling loop is a CSoundPatch of the physics engine (PhysFrictionSound): its volume and pitch
+-- follow the friction, it is shut down (an invisible StopSound) some time after the friction stops, and a steady
+-- scrape sends no event at all (the volume and pitch do not change). Lua cannot ask whether it still plays, so its
+-- mirror ends when the prop stops scraping: no event for PHYS_QUIET s and the prop no longer moving over the floor
+-- (or, blind, PHYS_MAX s without any event). Over-stopping is harmless: the next volume / pitch change of a patch
+-- that still plays starts the mirror again (a loop restarted from its top).
+local PHYS_QUIET, PHYS_MAX = 0.5, 8
+local PHYS_LIN, PHYS_ANG = 25, 60 -- u/s, deg/s: under both the prop is at rest for the friction
+local PHYS_CONTACT = 6 -- u: the prop's hull reaches a surface this close under it
+
+--- True when prop e is moving enough, in touch with something, to scrape (any of its bones).
+local function scraping(e)
+	local moving = false
+	for i = 0, e:GetPhysicsObjectCount() - 1 do
+		local po = e:GetPhysicsObjectNum(i)
+		if IsValid(po) and not po:IsAsleep() and (po:GetVelocity():Length() > PHYS_LIN or po:GetAngleVelocity():Length() > PHYS_ANG) then
+			moving = true
+			break
+		end
+	end
+	if not moving then return false end
+	local p = e:GetPos()
+	return util.TraceEntity({ start = p, endpos = p - Vector(0, 0, PHYS_CONTACT), filter = e }, e).Hit
+end
+
+--- True when the physics scrape loop l (age s since its last event) is over.
+function LP.PhysEnded(l, age)
+	if age < PHYS_QUIET then return false end
+	if age > PHYS_MAX then return true end
+	return not scraping(l.ent)
+end
+
 --- True when the entity's C++ ended loop l with a StopSound Lua never sees: a mover at rest, a
 -- charger no longer in use, a vehicle whose engine is off (its own sounds only, see l.charger / l.vehicle).
 local function endedInCpp(l)
@@ -706,6 +740,7 @@ local function endedInCpp(l)
 	if l.vehicle and age > 1 and e.IsEngineStarted and not e:IsEngineStarted() then return true end
 	local ct = l.constraint
 	if ct and (not IsValid(ct.c) or (age > 0.4 and relSpeed(e, ct.other) < math.max(ct.min, 1))) then return true end
+	if l.phys then return LP.PhysEnded(l, age) end
 	return false
 end
 
