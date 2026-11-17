@@ -242,7 +242,8 @@ function M.Tick(now)
 	-- a module voice of a ducked group playing (a loop mirror: not a noted sound) lets the ducks move too
 	if not anyDucked then
 		for _, v in pairs(M.voice) do
-			for _, name in ipairs(v.g.names) do
+			-- (a voice tracked without groups, the listener's own sound played with none: nothing to duck)
+			for _, name in ipairs(v.g and v.g.names or {}) do
 				local r = data.info[name]
 				if r and r.ducked then anyDucked = true break end
 			end
