@@ -27,6 +27,7 @@ A.Sentences = S
 local MAX_TOKENS = 32
 S.len = S.len or {}       -- NAME (upper) -> seconds of the rendered sentence
 S.failed = S.failed or {} -- NAME -> RealTime() of a failed rendering (retried after 30 s)
+S.failWhy = S.failWhy or {} -- NAME -> why it failed (S.Note)
 
 --- Parameters in a "(...)" block (the part between the brackets) into p (a copy of the defaults).
 local function readParams(block, p)
@@ -170,17 +171,75 @@ function S.Get(name)
 	return d or nil
 end
 
+--- True when NAME (upper) is a group: some line is called NAME followed by a number ("HG_ALERT" for
+-- HG_ALERT0, HG_ALERT1...).
+function S.Group(name)
+	S.Get("")
+	if not S.groups then
+		S.groups = {}
+		for n in pairs(S.lines) do
+			local base = string.match(n, "^(.-)%d+$")
+			if base and base ~= "" then S.groups[base] = true end
+		end
+	end
+	return S.groups[string.upper(name)] or false
+end
+
 --- True when sentences may be rendered by the module (option on, a module that has LoadSentence).
 function S.On()
 	local N = A.Native
 	return (A.cfg.native_sentences or 1) >= 0.5 and N and N.render and pba_native and pba_native.LoadSentence and true or false
 end
 
+-- What was left to the engine, and why (S.Note, one count per voice asked of the module): the ledger behind
+-- pba_sentences_report. Reasons: off (option off), unknown (no such line), group (the name is a group
+-- of lines, not a line), empty (no word), virtual (a "V_" word and none picked for this sound), cut (a
+-- virtual word that ended the line), pending (a word still decoding: the engine's that once), word (a word the
+-- module cannot decode), nofile (none of the words exists: the engine plays nothing either), load (the module
+-- refused the assembled sentence); an earlier failure keeps its reason for 30 s. Before the module is asked:
+-- norender (no native rendering), owndsp (a preset of its own), notall (clear sight without pba_native_all),
+-- far (past lod_dist), quiet (too quiet to matter), inaudible (a voice under the emission threshold).
+S.stats = S.stats or { emitted = 0, native = 0, engine = 0, why = {}, names = {} }
+
+--- Notes the verdict of a voice asked for sentence `name` ("!NAME"): ok = rendered by the module, else why.
+function S.Note(name, ok, why)
+	local st = S.stats
+	local sub = string.upper(string.sub(name, 2))
+	local n = st.names[sub]
+	if not n then n = { native = 0, engine = 0, why = {} } st.names[sub] = n end
+	if ok then
+		st.native, n.native = st.native + 1, n.native + 1
+	else
+		why = why or S.lastWhy or "other"
+		st.engine, n.engine = st.engine + 1, n.engine + 1
+		st.why[why], n.why[why] = (st.why[why] or 0) + 1, (n.why[why] or 0) + 1
+	end
+end
+
+--- Why the module does not take a sentence of DSP preset dsp before asking it (see S.Note); clear: a sentence in
+-- clear sight (needs pba_native_all too).
+function S.WhyNot(dsp, clear)
+	local N = A.Native
+	if not (N and N.render) then return "norender" end
+	if not S.On() then return "off" end
+	if A.OwnDSP(dsp) then return "owndsp" end
+	if clear and (A.cfg.native_all or 1) < 0.5 then return "notall" end
+	return "other"
+end
+
+--- Forgets the ledger (a test, a new measurement).
+function S.ResetStats() S.stats = { emitted = 0, native = 0, engine = 0, why = {}, names = {} } end
+
 --- Makes sure the module has rendered sentence `name` ("!NAME"). Returns true, key when playable natively;
 -- false, nil, "pending" while a word decodes; false when it is the engine's (virtual words, a word the
--- module cannot decode, unknown sentence).
+-- module cannot decode, unknown sentence). S.lastWhy says why (see S.Note).
 function S.Ensure(name)
-	if not S.On() then return false end
+	local function no(why, fkey, at)
+		S.lastWhy = why
+		if fkey then S.failed[fkey], S.failWhy[fkey] = at, why end
+		return false
+	end
+	if not S.On() then return no("off") end
 	local sub = string.upper(string.sub(name, 2))
 	local key = "!" .. string.lower(sub)
 	local words, fkey = nil, sub
@@ -190,42 +249,53 @@ function S.Ensure(name)
 	if cur then key, words, fkey = cur.key, cur.words, cur.key end
 	if pba_native.HasSound(key) then
 		if cur then S.len[sub] = S.len[cur.key] end
+		S.lastWhy = nil
 		return true, key
 	end
 	local f = S.failed[fkey]
-	if f and RealTime() - f < 30 then return false end
+	if f and RealTime() - f < 30 then S.lastWhy = S.failWhy[fkey] or "failed" return false end
 	local def = S.Get(sub)
-	if not def or #def.words == 0 or (def.virtual and not cur) then S.failed[sub] = math.huge return false end
+	if not def then return no(S.Group(sub) and "group" or "unknown", sub, math.huge) end
+	if #def.words == 0 then return no("empty", sub, math.huge) end
+	if def.virtual and not cur then return no("virtual", sub, math.huge) end
 	words = words or def.words
-	if #words == 0 then S.failed[fkey] = math.huge return false end
+	if #words == 0 then return no("cut", fkey, math.huge) end
 	local flat, want = {}, 0
+	-- the words not decoded yet are decoded here, on the main thread, within pba_native_sentence_ms a frame (a word is
+	-- small: a sentence waiting for its words went to the engine the first time, 18 of 26 on a Combine chatter);
+	-- what is past the budget decodes on the worker, and the sentence is the engine's that once
+	local fr = FrameNumber()
+	if S.frame ~= fr then S.frame, S.spentMs = fr, 0 end
+	local budget = A.cfg.native_sentence_ms or 12
 	for _, w in ipairs(words) do
 		-- a word without a file is skipped, as the engine does; one the module cannot decode: engine
 		if file.Exists("sound/" .. w.file, "GAME") then
-			local ok, _, why = A.Native.EnsureSound(w.file)
+			local now = S.spentMs < budget
+			local t = SysTime()
+			local ok, _, why = A.Native.EnsureSound(w.file, now)
+			S.spentMs = S.spentMs + (SysTime() - t) * 1000
 			if not ok then
-				if why == "pending" then return false, nil, "pending" end
-				S.failed[fkey] = RealTime()
-				return false
+				if why == "pending" then S.lastWhy = "pending" return false, nil, "pending" end
+				return no("word", fkey, RealTime())
 			end
 			want = want + 1
 		end
 		local k = #flat
 		flat[k + 1], flat[k + 2], flat[k + 3], flat[k + 4], flat[k + 5] = w.file, w.vol, w.pitch, w.start, w.finish
 	end
-	if want == 0 then S.failed[fkey] = RealTime() return false end
+	if want == 0 then return no("nofile", fkey, RealTime()) end
+	local t1 = SysTime()
 	local ok, secs, used = pcall(pba_native.LoadSentence, key, flat)
+	S.spentMs = S.spentMs + (SysTime() - t1) * 1000
 	-- (a word evicted meanwhile: retried later rather than played without it)
-	if not ok or not secs or (used or 0) < want then
-		S.failed[fkey] = RealTime()
-		return false
-	end
+	if not ok or not secs or (used or 0) < want then return no("load", fkey, RealTime()) end
 	S.len[sub] = secs
 	if cur then
 		S.len[cur.key] = secs
 		A.stats.sentencesVirtual = (A.stats.sentencesVirtual or 0) + 1
 	end
 	A.stats.sentencesNative = (A.stats.sentencesNative or 0) + 1
+	S.lastWhy = nil
 	return true, key
 end
 
@@ -237,3 +307,25 @@ function S.Length(name)
 	if S.Ensure(name) then return S.len[sub] end
 	return nil
 end
+
+--- The ledger as text: sentences emitted, rendered by the module, left to the engine with the reasons, and the
+-- names left to the engine most often.
+function S.Report()
+	local st = S.stats
+	local out = { string.format("sentences: %d emitted, %d voices rendered by the module, %d left to the engine", st.emitted, st.native, st.engine) }
+	local whys = {}
+	for why, n in pairs(st.why) do whys[#whys + 1] = { why, n } end
+	table.sort(whys, function(a, b) return a[2] > b[2] end)
+	for _, w in ipairs(whys) do out[#out + 1] = string.format("  engine, %s: %d", w[1], w[2]) end
+	local names = {}
+	for name, n in pairs(st.names) do if n.engine > 0 then names[#names + 1] = { name, n } end end
+	table.sort(names, function(a, b) return a[2].engine > b[2].engine end)
+	for i = 1, math.min(#names, 15) do
+		local why = {}
+		for k, c in pairs(names[i][2].why) do why[#why + 1] = k .. " x" .. c end
+		out[#out + 1] = string.format("  %s: %d engine (%s), %d native", names[i][1], names[i][2].engine, table.concat(why, ", "), names[i][2].native)
+	end
+	return table.concat(out, "\n")
+end
+
+concommand.Add("pba_sentences_report", function() MsgN(S.Report()) end)

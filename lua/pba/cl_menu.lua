@@ -137,6 +137,7 @@ function Build.native(panel)
 	dep(chk(panel, "No reverb on \"#\" sounds (as Source)", "native_dry_prefix"), R)
 	dep(sld(panel, "Stereo width near the source", "native_stereo_width", 2), R)
 	dep(chk(panel, "NPC sentences (radio chatter) rendered natively", "native_sentences"), R)
+	dep(sld(panel, "Sentence words decoded at once (ms per frame)", "native_sentence_ms", 0), R)
 	dep(sld(panel, "Weapon directivity", "native_dir", 2), R)
 
 	panel:Help("Reflections:")
