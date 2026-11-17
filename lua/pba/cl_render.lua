@@ -1503,7 +1503,7 @@ end
 --- True when this sound is past its family's cap for the current quarter second (and counts it as dropped).
 -- Past pba_impact_group of them in the window it is marked dense (data.pbaDense): burstEvaluate gives it a nearby result.
 function A.ImpactCapped(data)
-	local cap, group = A.cfg.impact_cap or 0, A.cfg.impact_group or 0
+	local cap, group = A.cfg.impact_cap or 16, A.cfg.impact_group or 4
 	if (cap <= 0 and group <= 0) or not worldEmitter(data) then return false end
 	local name = data.SoundName
 	local fam = capFamily[name]
