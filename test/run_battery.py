@@ -589,6 +589,18 @@ def physics_scrape_native():
     ok = isinstance(sv, dict) and isinstance(cl, dict) and sv.get("pass") is True and cl.get("pass") is True
     return {"pass": ok, "server": sv, "client": cl}
 
+def gravgun_hold():
+    """The gravity gun's hold loop from real pick-ups (release, punt, prop removed, weapon stripped, death): the server
+    half (gravgun_hold.lua) acts and watches pba's loop tables, the client half (gravgun_hold_cl.lua) watches the
+    mirrors and native voices. Both must pass."""
+    load(TW, 1)
+    native_on(True)
+    job_bg("client", "gravgun_hold_cl.lua", 150)
+    sv = job("server", "gravgun_hold.lua", 120)
+    cl = job_wait()
+    ok = isinstance(sv, dict) and isinstance(cl, dict) and sv.get("pass") is True and cl.get("pass") is True
+    return {"pass": ok, "server": sv, "client": cl}
+
 def seq(*fns):
     """Runs the setters then the test (last), returns the test's result."""
     out = None
@@ -1159,6 +1171,8 @@ steps = [
     ("speech_floor native", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "speech_floor.lua"))),
     ("looping_sound_stop", lambda: seq(lambda: load(TW), lambda: job("server", "looping_sound_stop.lua"))),
     ("weapon_loop_owner", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
+    # the same from real pick-ups: no mirror, no native voice for the weapon's hold loop (Workshop: loops never stop)
+    ("gravgun_hold", gravgun_hold),
     # the player in room A (a step before may leave him in room B: manhack_loop_kill puts him at x 600, the loop
     # then in clear sight)
     ("native_loop_fade_hidden", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "native_loop_fade_hidden.lua"))),
