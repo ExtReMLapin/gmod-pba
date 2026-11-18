@@ -43,7 +43,7 @@ for _, id in ipairs(S.order) do
 	local p, s = S.plays[id], S.stops[id]
 	n = n + 1
 	local life = s and (s - p.t - p.delay) or nil
-	if not (life and math.abs(life - 0.075) <= 0.08) -- one frame at the test clients' 20 fps (lives are frame-quantised: 0.1 / 0.125 s); the bug gave 1.4 s or never then bad = bad + 1 end
+	if not (life and math.abs(life - 0.075) <= 0.08) then bad = bad + 1 end -- one frame at the test clients' 20 fps (lives are frame-quantised: 0.1 / 0.125 s); the bug gave 1.4 s or never
 	rows[#rows + 1] = { n = n, delay = math.Round(p.delay, 3), life = life and math.Round(life, 3) or "plays on" }
 end
 local order = {}
