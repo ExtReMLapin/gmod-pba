@@ -40,6 +40,10 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Looping sounds (engines, alarms, fire) muffled continuously | ✅ | ✅ played by the module | S `loops` |
 | Long sounds (music, speeches over 8 s) followed for their whole length | ✅ | ✅ decoded in the background | S `long_sounds`, `max_duration` |
 | Other addons' radios and players (`sound.PlayURL` / `PlayFile` in 3D: 3D Stream Radio, Vehicle Radio, Media Player...) | ◐ heard through the opening and quieter behind a wall, **no filter** | ✅ really muffled (EQ on their BASS channel) | C `streams`, `streams_filter` |
+| Sentences (Combine and metrocop radio, HL2 NPC lines from `sentences.txt`) | ✅ relayed and muffled by the engine | ✅ words assembled and played by the module (HRTF, reverb) | C `native_sentences` |
+| Physics scrapes and rolling (props sliding or rolling) | ✅ followed like loops | ✅ played by the module | S `phys_loops_mirror` |
+| Bullet fly-bys (a miss passing your ears, NPCs' too) | ✅ the engine's whizz | ✅ or played by the module (off by default) | S `whiz`, C `native_whiz` |
+| Several speakers playing one line (the Breencast screens) start together: no comb filter behind a door | ✅ the engine's copies | ✅ | C `loops_start_sync` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering
@@ -47,7 +51,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Feature | Light | Full | Option |
 |---|---|---|---|
 | Muffling | ◐ the engine's DSP presets: 2 filters (3 kHz, 1 kHz) on 4 levels | ✅ continuous 3-band EQ | S `dsp_lp*`, `lp*_db` |
-| Spatialisation | Source engine (stereo panning) | ✅ binaural HRTF on headphones, or speaker panning; custom HRTF (SOFA) | C `native_out`, `native_hrtf` |
+| Spatialisation | Source engine (stereo panning) | ✅ binaural HRTF on headphones, or speaker panning; custom HRTF (SOFA) | C `native_out`, `native_hrtf`, `native_hrtf_blend` |
 | Sounds in clear sight | vanilla (engine) | ✅ "all native": HRTF and reverb on every sound | C `native_all`, S `native_relay` |
 | Room reverb simulated from the geometry | — (the engine's automatic reverb only) | ✅ convolution plus parametric tail, ambisonic, at the listener's position | C `native_reverb` |
 | **Echoes of loud sounds** (gunfire, explosions) simulated on the walls around the source | — | ✅ even when the engine plays the direct sound | C `native_echo`, `native_echo_lvl`, S `echo_relay` |
@@ -55,13 +59,14 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Air absorption (highs fade with distance) | — | ✅ | C `native_air` |
 | Weapon directivity (quieter behind the shooter) | — | ✅ | C `native_dir` |
 | Continuous sounds (loops, radios) glide between re-evaluations (every 0.25 s) | ◐ loops: the engine's volume fade (0.2 s), DSP preset switches at once but does not flicker near a threshold (hysteresis); radios: level and position glide every frame | ✅ gain, 3-band EQ, apparent position and pitch glide every frame; EQ steps with hysteresis | C `continuous_ramp`, `lp_hyst_db` |
-| Moving source followed every frame, **Doppler** | ◐ the engine follows loops; a short sound replayed behind a wall stays where it started | ✅ followed every frame, Doppler (source, welded parent, listener's vehicle) | C `native_doppler` |
+| Moving source followed every frame, **Doppler** | ◐ the engine follows loops; a short sound replayed behind a wall stays where it started | ✅ followed every frame, Doppler (source, welded parent, listener's vehicle); the pitch glides between game frames, no steps at a low frame rate | C `native_doppler`, `native_pitch_glide` |
 
 ## Running it
 
 | Feature | Light | Full | Option |
 |---|---|---|---|
 | Map traces of the probe graph and path tightening done in the engine (about 2.5x faster than `util.TraceHull` from Lua; checked against it on every map, off at the first difference) | — | ◐ experimental | C `native_traces` |
+| Third-person and death views: the server hears from where the player's view really is | ✅ | ✅ | S `ear_report` |
 | `pba_enable 0` = exact vanilla (A/B) | ✅ | ✅ | S `enable` |
 | Menus (player, admin, Steam Audio) | ✅ | ✅ | — |
 | The server can forbid the native module (fairness in competitive play) | — | ✅ | S `allow_native` |

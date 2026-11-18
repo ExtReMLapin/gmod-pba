@@ -213,8 +213,9 @@ same job as PBA and is switched off automatically (`pba_compat_auto`).
 ## Known limits
 
 - Sounds with a scheduled start time are left vanilla. Sentences (Combine radio chatter, NPC lines
-  from `sentences.txt`) are relayed and muffled (`pba_sentences`), but without lip sync on the muffled
-  copy, and are not followed while they play.
+  from `sentences.txt`) are relayed and muffled (`pba_sentences`); with the module they are assembled
+  and played by it (`pba_native_sentences`). Without it, the muffled copy has no lip sync and is not
+  followed while it plays.
 - 2D sounds (`surface.PlaySound`, UI) are not spatial and are not touched.
 - Short sounds are followed while they play only up to `pba_oneshot_follow_max` at once; beyond that
   a copy stays where it started.
@@ -245,8 +246,9 @@ same job as PBA and is switched off automatically (`pba_compat_auto`).
 - `test/` holds the test suite. Most tests drive a running game through the
   [gmod-mcp](https://github.com/ExtReMLapin/gmod-mcp) server (`test/mcp.py`, its small
   command-line client, reads the server address from Claude Code's `~/.claude.json` or the file
-  named by `CLAUDE_JSON`); `python -u test/run_battery.py test/mcp.py --quick` runs the fast checks,
-  without `--quick` the full battery (about 15 minutes, needs ffmpeg). The pure unit suite also
+  named by `CLAUDE_JSON`); `python -u test/run_battery.py test/mcp.py --smoke` runs the core checks (under 2 minutes),
+  `--quick` the checks to run before a merge, no option the full battery (long, needs ffmpeg; split it
+  across several games with `--only=` and the `MCP_INSTANCE` variable). The pure unit suite also
   runs without the game: `pip install lupa`, then `python test/offline/run_pure.py`.
 - `maps/src/gen_maps.py`, `gen_demo.py` and `gen_pipe.py` generate the test maps, the demo map and the pipe hall;
   `sh maps/src/build_maps.sh [maps]` compiles them with the game's vbsp / vvis / vrad
