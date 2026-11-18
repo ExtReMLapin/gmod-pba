@@ -1110,32 +1110,74 @@ void RenderBlock() {
 		float* m = g_mono.data[0];
 		if (v.stream) {
 			// captured stream: resample to kRate; the reading speed is nudged (+-0.5 %) to hold
-			// ~120 ms in the buffer, which absorbs the drift between BASS's and our clocks
+			// ~120 ms in the buffer, which absorbs the drift between BASS's and our clocks. Read between the
+			// stream's own samples by the windowed-sinc interpolator of the voices (SetMixQuality hqResample; its
+			// cutoff is relative to the stream's own rate, so a 22 kHz stream has no image above its Nyquist and a
+			// 44.1 kHz one none folded back above its band), else linearly. The interpolator reads kIntHalf - 1
+			// samples behind the read position and kIntHalf ahead: the ring keeps the former (the overrun guard
+			// leaves >= 0.25 s behind the writer), the latter must be written (below) or, once the stream is
+			// closed (nothing more will come), repeat the last sample as a sound's edge does.
 			StreamBuf& b = *v.stream;
 			const double srcRate = b.rate.load();
 			const double target = srcRate * 0.12;
+			// closed first, then the write count: a closed buffer's count is final
+			const bool closed = b.closed.load();
 			double avail = (double)b.Available();
 			if (avail > (double)b.data.size() - srcRate * 0.25) { // overrun: jump close to the writer
 				b.r.store(b.w.load() - (uint64_t)target);
 				avail = target;
 			}
-			if (!v.primed && avail >= target) v.primed = true;
+			if (!v.primed && (avail >= target || closed)) v.primed = true; // (closed: drain what is left)
 			if (!v.primed) {
 				std::fill(m, m + kBlock, 0.0f);
-				if (b.closed.load() && avail < 2) v.alive = false;
 			} else {
 				const double adj = std::clamp((avail - target) / target * 0.01, -0.005, 0.005);
 				const double step = srcRate / kRate * (1.0 + adj) * v.rate;
+				const bool hqStream = g_hqResample;
 				uint64_t r = b.r.load(std::memory_order_relaxed);
 				const uint64_t w = b.w.load(std::memory_order_acquire);
+				const size_t ringSize = b.data.size();
 				for (int i = 0; i < kBlock; ++i) {
-					if (r + 1 >= w) { // underrun: silence, and wait for the buffer to refill
-						std::fill(m + i, m + kBlock, 0.0f);
-						v.primed = false;
-						break;
+					if (!hqStream) {
+						if (r + 1 >= w) { // underrun: silence, and wait for the buffer to refill
+							std::fill(m + i, m + kBlock, 0.0f);
+							v.primed = false;
+							break;
+						}
+						const float s0 = b.data[r & b.mask], s1 = b.data[(r + 1) & b.mask];
+						m[i] = s0 + (s1 - s0) * (float)v.sfrac;
+					} else {
+						// the phase row nearest to the fractional position (a position rounding up to the next
+						// sample reads from it)
+						int ph = (int)(v.sfrac * kIntPhases + 0.5);
+						uint64_t rr = r;
+						if (ph >= kIntPhases) {
+							ph = 0;
+							++rr;
+						}
+						// underrun: the taps ahead are not written yet (open stream), or the end is reached (closed)
+						if (closed ? rr + 1 >= w : rr + kIntHalf >= w) {
+							std::fill(m + i, m + kBlock, 0.0f);
+							v.primed = false;
+							if (closed) v.alive = false; // everything was played
+							break;
+						}
+						const float* row = InterpT().k[ph];
+						const uint64_t base = rr - (kIntHalf - 1); // (wraps below the first sample: the ring's zeros)
+						const size_t i0 = (size_t)(base & b.mask);
+						float acc = 0;
+						if (!closed && i0 + kIntTaps <= ringSize) { // the taps do not cross the ring's end
+							const float* d = &b.data[i0];
+							for (int t = 0; t < kIntTaps; ++t) acc += row[t] * d[t];
+						} else {
+							for (int t = 0; t < kIntTaps; ++t) {
+								uint64_t j = base + (uint64_t)t;
+								if (closed && (int64_t)(j - w) >= 0) j = w - 1; // past the end: the last sample
+								acc += row[t] * b.data[j & b.mask];
+							}
+						}
+						m[i] = acc;
 					}
-					const float s0 = b.data[r & b.mask], s1 = b.data[(r + 1) & b.mask];
-					m[i] = s0 + (s1 - s0) * (float)v.sfrac;
 					v.sfrac += step;
 					while (v.sfrac >= 1.0) {
 						v.sfrac -= 1.0;
@@ -1143,7 +1185,7 @@ void RenderBlock() {
 					}
 				}
 				b.r.store(r, std::memory_order_release);
-				if (b.closed.load() && b.Available() < 2) v.alive = false;
+				if (closed && b.Available() < 2) v.alive = false;
 			}
 		} else {
 		const auto& pcm = v.snd->pcm;
