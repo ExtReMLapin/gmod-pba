@@ -122,8 +122,15 @@ local function unregister(idx, h)
 end
 
 --- Records a copy of entity idx (nothing for a source without an entity: no StopSound can name it).
-local function register(idx, h)
+-- data: the sound it plays; its `cutAfter` (beginCopies: a channel-rule cut of the server that was read before this relayed copy)
+-- stops the copy that long after its own start.
+local function register(idx, h, data)
 	if not idx then return end
+	if data and data.cutAfter and h.t0 then
+		local at = h.t0 + data.cutAfter
+		h.cutAt = at
+		timer.Simple(A.RealDelay(math.max(at - RealTime(), 0)), function() stopCopy(h) end)
+	end
 	local list = A.emitted[idx]
 	if not list then list = {} A.emitted[idx] = list end
 	local now = RealTime()
@@ -215,6 +222,44 @@ function A.CutChannel(idx, chan, only, delay)
 	if only ~= "copies" and A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
 end
 
+-- Channel-rule cuts of the server read in this frame or just before (pba_snd_stop with the stamp of the sound that replaces):
+-- key idx:chan -> { { ms = stamp of the replacing sound, t = RealTime() read } }. The reliable pba_snd_stop is read BEFORE the
+-- unreliable relays of the same packet (measured 6/6), so a copy relayed in the packet of the cut that replaces it reaches the client
+-- AFTER it: nothing to cut yet, it played on to its end (0.225 s more than the engine's, which stops it at the new sound's start).
+local CUT_KEEP = 0.5 -- (s: the stamp window, ST_MAX of the relayed sounds)
+A.cutPending = A.cutPending or {}
+
+--- Notes a stamped cut of entity idx's channel chan (cl_render's pba_snd_stop receiver), for the copies still to come.
+function A.NoteCut(idx, chan, ms)
+	local key = idx .. ":" .. chan
+	local now = RealTime()
+	local list = A.cutPending[key]
+	if not list then list = {} A.cutPending[key] = list end
+	for i = #list, 1, -1 do if now - list[i].t > CUT_KEEP then table.remove(list, i) end end
+	list[#list + 1] = { ms = ms, t = now }
+	if #list > 16 then table.remove(list, 1) end
+end
+
+--- Seconds after its own start that a relayed copy stamped `stampMs` on entity idx's channel chan must stop, because a cut read
+-- before it replaces it (the first cut stamped later than the copy within CUT_KEEP of it); nil: none.
+local function cutAfter(idx, chan, stampMs)
+	local list = stampMs and A.cutPending[idx .. ":" .. chan]
+	if not list then return nil end
+	local now, best = RealTime(), nil
+	for i = #list, 1, -1 do
+		local c = list[i]
+		if now - c.t > CUT_KEEP then
+			table.remove(list, i)
+		else
+			local d = (c.ms - stampMs) % 65536
+			if d >= 32768 then d = d - 65536 end
+			d = d / 1000
+			if d >= 0.005 and d <= CUT_KEEP and (not best or d < best) then best = d end
+		end
+	end
+	return best
+end
+
 --- The kind a path cuts under pba_channel_one_rule 0 (nil: everything, the one rule).
 function A.ChannelCutOnly(kind)
 	if (A.cfg.channel_one_rule or 1) >= 0.5 then return nil end
@@ -235,6 +280,8 @@ local function beginCopies(data, idx)
 		end
 		A.CutChannel(idx, chan, A.ChannelCutOnly("copies"), d)
 	end
+	-- (a relayed copy the server's cut already read replaces: it stops at that sound's start, pba_cut_at_start)
+	if (A.cfg.cut_at_start or 1) >= 0.5 then data.cutAfter = cutAfter(idx, chan, data.stampMs) end
 	local key = idx .. ":" .. chan
 	local c = A.copies[key]
 	if not c then
@@ -524,7 +571,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 			v.vol, v.dsp, v.native = g, -1, true
 			local t0 = RealTime() + delay
 			local h = { id = id, t0 = t0, tEnd = t0 + life, ukey = ukey, pitch = pitch, name = data.SoundName, orig = orig, srcChan = srcChan }
-			register(idx, h)
+			register(idx, h, data)
 			return h
 		end
 	end
@@ -584,7 +631,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		end
 		h.started = true
 	end
-	register(idx, h)
+	register(idx, h, data)
 	if delay >= 0.02 then timer.Simple(delay, emit) else emit() end
 	v.vol, v.dsp = vol, dsp
 	return h
@@ -1360,7 +1407,7 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 				local t0 = RealTime() + delay
 				local h = { id = id, t0 = t0, tEnd = t0 + play, ukey = ukey, pitch = data.Pitch or 100, name = data.SoundName,
 					orig = data.SoundName, srcChan = data.Channel or CHAN_AUTO }
-				register(idx, h)
+				register(idx, h, data)
 				-- followed while it plays: walking behind a wall must muffle it too
 				if OS.Wanted(play) then
 					OS.Add(data, src, S, L, r, { { h = h, v = { pos = S, vol = g, lp = 0, len = d } } }, play, ukey)
@@ -1644,6 +1691,7 @@ net.Receive(NET, function()
 	if data.stMs then
 		local d = A.SoundTimeDelay(data.stMs, RealTime())
 		if d > 0 then data.Delay = d end
+		data.stampMs = data.stMs -- (kept: a cut stamped later stops it at that start, A.NoteCut)
 		data.stMs = nil
 	end
 	if not name then return end -- id never received (lost first packets): drop
@@ -1864,6 +1912,7 @@ net.Receive("pba_snd_stop", function()
 	if n == 0 then
 		if stMs and chan ~= CHAN_AUTO and (A.cfg.cut_at_start or 1) >= 0.5 then
 			A.CutChannel(idx, chan, nil, A.SoundTimeLead(stMs, RealTime()))
+			A.NoteCut(idx, chan, stMs) -- (the relayed copies read after it in the same packet)
 		else
 			A.StopSource(idx, "", chan)
 		end
