@@ -80,6 +80,10 @@ void SetOutputMode(int mode); // 0 headphones (binaural), 1 speakers (panning)
 // Share of the HRTF in the binaural direct path, 0..1 (1: the HRTF alone, the default). Less than 1 mixes the mono sound
 // back in: the timbre of a source in front or behind comes closer to the file's, the direction gets blurrier.
 void SetHrtfBlend(float blend);
+// Time constant (ms) with which a voice's reading speed approaches the pitch last given to Update (Doppler of a fly-by:
+// one value per game frame was a staircase of pitch steps, 16 cents at 30 updates a second). 0 = off, the default: the
+// reading speed is the last pitch from the start of the next block, as before.
+void SetPitchGlide(float ms);
 void SetWet(float room, float echo);
 // extra room-reverb send of diffuse voices (see VoiceParams::diffuse)
 void SetDiffuseSend(float k);
