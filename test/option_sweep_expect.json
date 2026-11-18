@@ -119,6 +119,10 @@
   "pos0": "hook",
   "why": "captions of long sounds"
  },
+ "ear_report": {
+  "pos0": "hook",
+  "why": "server ear: the view a client reports (third person, death views); 0 = his eyes (test server_ear_views)"
+ },
  "long_player_camera": {
   "pos0": "hook",
   "why": "server relay: a player's long one-shot followed through a camera (test native_own_camera_long_sv)"
