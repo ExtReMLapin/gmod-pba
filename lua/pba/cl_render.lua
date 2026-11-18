@@ -529,6 +529,24 @@ local function lateWanted(name)
 	return (A.cfg.native_late_handover or 1) >= 0.5 and playOffsetOK() and N ~= nil and N.DecodePending ~= nil and N.DecodePending(name)
 end
 
+-- (pba_loops_start_sync) The copies of one emission of a line (a speaker line: the Breencast's two jumbotrons, one
+-- emission) start together. A.Process names the emission (data.pbaEmKey: file + start stamp, or the frame a stampless
+-- one arrived in); each copy is evaluated on its own, and the one the frame's budget did not leave time for is held in
+-- the slicer (pba_burst_hold_ms) or just comes later in the frame: 5-95 ms behind its twin, the same level behind a
+-- door = a comb filter (output autocorrelation 0.43-0.48 at the lag, warbly speech; 0.1 in step). A copy that starts
+-- after another one of its emission plays from where that one is (A.CopySync, as the long-line mirrors). The moment
+-- its file's second 0 falls is its start less its propagation delay (physical, kept) and its stamp delay.
+-- (a copy of the same emission later than COPY_MAX_S is not made to catch up: the frames of a machine at 10 fps are 0.1 s)
+local COPY_MAX_S = 1
+local function copyStart(data, delay, prop)
+	local key = data.pbaEmKey
+	if not key or not playOffsetOK() then return nil, nil end
+	-- (the file decoded first, as PlayVoice does: a cold decode is 10-20 ms that belong to the voice, not to its start)
+	A.Native.EnsureSound(data.SoundName, isLine(data) and (A.cfg.native_line_decode or 1) >= 0.5)
+	local z = SysTime() + delay - prop - (data.Delay or 0)
+	return A.CopySync.Offset(key, z, data.SoundName, data.Pitch, COPY_MAX_S), z
+end
+
 local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx, waited, keep)
 	local floor = slot == 1 and speechFloor(data, src, L) or nil
 	local srcChan, orig, pitch = data.Channel or CHAN_AUTO, data.SoundName, data.Pitch or 100
@@ -563,13 +581,15 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		local lvl0 = data.SoundLevel or 75
 		local wet = A.Native.LoudWet(lvl0)
 		local roomSend = (data.Volume or 1) * dirK * A.Native.EntrySend(A.Native.Law(lvl0), v, L, A.Native.LossLin(v, lvl0)) * wet
-		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, eq = spk, lpDb = v.lpDb,
+		local offset, z = copyStart(data, delay, voiceDelay(v, L))
+		local id = A.Native.PlayVoice(data.SoundName, v.pos, g, v.lp, data.Pitch, { len = v.len, sh = v.sh, delay = delay, offset = offset, eq = spk, lpDb = v.lpDb,
 			diffuse = v.diffuse, srcPos = dominant or nil, srcSend = srcSend, roomSend = roomSend, noRoom = true, wet = wet, line = isLine(data), protect = A.Native.ProtectLine(data.Channel), pausable = A.Native.PauseFlag(data.Flags),
 			own = A.Native.OwnDirect(src, data.Channel),
 			mix = A.Mix and A.Mix.GroupsOf(data.SoundName, src or data.EntIndex, data.Channel, lvl0) })
 		if id then
 			v.vol, v.dsp, v.native = g, -1, true
-			local t0 = RealTime() + delay
+			if z then A.CopySync.Note(data.pbaEmKey, z, offset) end
+			local t0 = RealTime() + delay - (offset or 0) -- (where its file's second 0 falls)
 			local h = { id = id, t0 = t0, tEnd = t0 + life, ukey = ukey, pitch = pitch, name = data.SoundName, orig = orig, srcChan = srcChan }
 			register(idx, h, data)
 			return h
@@ -1346,6 +1366,10 @@ function A.Process(data, relayed)
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
 	-- the listener's own sound (pba_native_own, centered on him): nothing to save on, never degraded or held
 	local ownSound = IsValid(src) and src == LocalPlayer() and A.NativeOwn and A.NativeOwn() and A.HearsFromSelf(src)
+	-- (pba_loops_start_sync) the emission this copy belongs to: its file and start stamp (a stampless one: the frame it arrived in)
+	if (A.cfg.loops_start_sync or 1) >= 0.5 and isLine(data) then
+		data.pbaEmKey = "s|" .. data.SoundName .. "|" .. (data.stampMs and ("t" .. data.stampMs) or ("f" .. FrameNumber()))
+	end
 	if not ownSound and ((A.cfg.burst_budget_ms or 2) > 0 or (A.cfg.burst_mask_db or 25) > 0 or data.pbaDense) then
 		r, job = burstEvaluate(data, S, L, lvl, IsValid(src) and src or nil)
 	else
@@ -1395,16 +1419,19 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 			local g = (data.Volume or 1) * A.Native.PhysClear(lvl, d) * dir
 			-- PlayVoice only (no engine fallback here: the caller plays the original if this fails)
 			local follow = IsValid(src) and not src:IsWorld() and { ent = src, vol = data.Volume or 1, lvl = lvl, chan = data.Channel } or nil
-			local delay = math.max(voiceDelay({ len = d, pos = S }, L) - waited, 0)
+			local prop = voiceDelay({ len = d, pos = S }, L)
+			local delay = math.max(prop - waited, 0)
 			local spk = bit.band(data.Flags or 0, SND_SPEAKER or 64) ~= 0 and A.Native.SPEAKER_EQ or nil
-			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, follow = follow, eq = spk, srcPos = S,
+			local offset, z = copyStart(data, delay, prop)
+			local id = A.Native.PlayVoice(data.SoundName, S, g, 0, data.Pitch, { len = d, delay = delay, offset = offset, follow = follow, eq = spk, srcPos = S,
 				srcSend = (data.Volume or 1) * A.Native.PhysSrcSend(lvl, d) * dir, wet = A.Native.LoudWet(lvl), line = isLine(data), protect = A.Native.ProtectLine(data.Channel), pausable = A.Native.PauseFlag(data.Flags),
 				own = A.Native.OwnDirect(src, data.Channel),
 				mix = A.Mix and A.Mix.GroupsOf(data.SoundName, IsValid(src) and src or data.EntIndex, data.Channel, lvl) })
 			if id then
 				A.stats.nativeDirect = (A.stats.nativeDirect or 0) + 1
+				if z then A.CopySync.Note(data.pbaEmKey, z, offset) end
 				local play, ukey = playLength(data.SoundName, data.Pitch)
-				local t0 = RealTime() + delay
+				local t0 = RealTime() + delay - (offset or 0) -- (where its file's second 0 falls)
 				local h = { id = id, t0 = t0, tEnd = t0 + play, ukey = ukey, pitch = data.Pitch or 100, name = data.SoundName,
 					orig = data.SoundName, srcChan = data.Channel or CHAN_AUTO }
 				register(idx, h, data)

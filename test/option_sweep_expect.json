@@ -355,6 +355,10 @@
   "pos0": "hook",
   "why": "long speaker lines rendered by the module vs an engine patch (native rendering), outside P.Compute"
  },
+ "loops_start_sync": {
+  "pos0": "hook",
+  "why": "copies of one emission (long-line mirrors, short speaker lines and sentences) started together or a late copy played from where the first is (native rendering), outside P.Compute: tests loops_copy_sync, loops_copy_sync_short"
+ },
  "loops_slot_birth": {
   "pos0": "hook",
   "why": "room reverb send of a long line at its start (native rendering), outside P.Compute"

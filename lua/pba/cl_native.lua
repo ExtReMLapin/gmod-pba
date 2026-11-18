@@ -1543,8 +1543,8 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	local srcPos = opt.srcPos
 	if N.DryMix(name) then roomSend, srcPos = 0, nil end
 	local id
-	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect, opt.pausable, opt.own)
-	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, nil, opt.protect, opt.pausable, opt.own) end
+	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, opt.offset, opt.protect, opt.pausable, opt.own)
+	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, opt.offset, opt.protect, opt.pausable, opt.own) end
 	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
 	if id and id > 0 and srcPos and L then
 		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then

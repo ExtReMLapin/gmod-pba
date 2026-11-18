@@ -491,21 +491,39 @@ end
 -- that starts after another one of its emission plays from where that one is, so the copies stay in step whatever
 -- made it late (its evaluation, its decode, the wait for its entity). Equal copies a few tens of ms apart are a
 -- comb filter. Seconds into the file, nil for the first copy (pba_loops_start_sync).
+-- A.CopySync is the one clock of every kind of copy (long-line mirrors here, short lines in cl_render: emitVoice):
+-- a copy is { t = the moment its file's second 0 falls (the copy's start less its offset), off = its offset }, in
+-- the caller's own clock (RealTime for the mirrors, SysTime for the short lines: a frame is 33 ms, the skew 5-95 ms);
+-- an emission is named by its file and start stamp, or by the frame it arrived in when it has none (a Lua EmitSound);
+-- a key belongs to one clock. Offset(key, z, name, pitch [, max]): where a copy that would start at z plays from
+-- (nil: from the start; max: a copy later than that many seconds is another sound, not a late copy).
 LP.emissions = LP.emissions or {}
-local function syncOffset(m, now)
-	if not (m.once and m.stKey) or (A.cfg.loops_start_sync or 1) < 0.5 then return nil end
-	local g = LP.emissions[m.stKey]
+A.CopySync = A.CopySync or {}
+function A.CopySync.Offset(key, z, name, pitch, max)
+	if not key or (A.cfg.loops_start_sync or 1) < 0.5 then return nil end
+	local g = LP.emissions[key]
 	if not g then return nil end
-	local off = now - g.t + g.off
-	local dur = A.PlaySeconds(m.name, m.pitch)
-	if off < 0.004 or (dur and off > dur - 0.1) then return nil end
+	local off = z - g.t + g.off
+	local dur = A.PlaySeconds(name, pitch)
+	if off < 0.004 or (dur and off > dur - 0.1) or (max and off > max) then return nil end
 	return off
+end
+--- The first copy of an emission started at z with offset (nil: 0): its clock, kept for the next copies (emissions
+-- older than a minute, in SysTime whatever the clock of z, are dropped).
+function A.CopySync.Note(key, z, offset)
+	if not key or LP.emissions[key] then return end
+	local sys = SysTime()
+	for k, g in pairs(LP.emissions) do if g.at and sys - g.at > 60 then LP.emissions[k] = nil end end
+	LP.emissions[key] = { t = z, off = offset or 0, at = sys }
+end
+local function syncOffset(m, now)
+	if not (m.once and m.stKey) then return nil end
+	return A.CopySync.Offset(m.stKey, now, m.name, m.pitch)
 end
 LP.SyncOffset = syncOffset -- (tests)
 local function noteEmission(m, now, offset)
-	if not (m.once and m.stKey) or LP.emissions[m.stKey] then return end
-	for k, g in pairs(LP.emissions) do if now - g.t > 60 then LP.emissions[k] = nil end end
-	LP.emissions[m.stKey] = { t = now, off = offset or 0 }
+	if not (m.once and m.stKey) then return end
+	A.CopySync.Note(m.stKey, now, offset)
 end
 
 function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
@@ -872,7 +890,7 @@ net.Receive("pba_loop", function()
 	local new = not m
 	if not m then
 		m = { key = key, name = name, idx = idx, chan = chan, flags = d.Flags, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil,
-			born = RealTime(), stKey = d.stMs and (name .. "|" .. d.stMs) or nil }
+			born = RealTime(), stKey = name .. "|" .. (d.stMs or ("f" .. FrameNumber())) }
 		-- a speaker line: its DSP is the speaker preset sv_loops wrote for the flag (none on a server without
 		-- dsp_speaker: this client's own then, for its engine patch)
 		if speaker then
