@@ -10,6 +10,15 @@
 // 512 and above agree; a tiled 4 x 4 x 3 m bathroom (absorption 0.02, 2.4 m) loses only 3 % at 256, a hall nothing.
 // The check: the reverb time of the mid band of the cubicle measured with the cap PBA_BOUNCES (the value of
 // pba_native.cpp, passed by the build) must be within 5 % of the one measured with a cap far above any bound (4096).
+//
+// The rays are drawn at random on every run (Steam Audio has no seed), so each value is the mean of kPasses passes. With
+// the pinned phonon.dll (fork v4.8.1-pba.4, python -I native/fetch_deps.py) one pass has a standard deviation of 0.3 %
+// (30 runs: 4.374 s +- 0.014, cap and reference differ by 0.1 % on average, 0.5 % at worst): 5 % is more than 10 sigma.
+// With an older fork (pba.3, the one a stale native/deps still holds) or Valve's DLL the fit of the reverb time is
+// another one: 1.4 to 2.3 s, sd 7 to 14 % (cap and reference differ by 5 to 10 % on average, 20 to 36 % at worst), and the
+// cap 256 changes nothing, so the test cannot see the cap at all and failed 12 to 16 runs in 30 for no reason of the
+// module. Two preconditions say so at once instead: the reference must be stable, and the old cap of 256 must be seen
+// (off by more than 15 %, 28 % measured).
 #include <phonon.h>
 
 #include <algorithm>
@@ -114,10 +123,24 @@ int main(int argc, char** argv) {
 	const double V = 4 * 4 * 3, S = 2 * (4 * 4 + 4 * 3 + 4 * 3);
 	const double eyring = 0.161 * V / (-S * std::log(1.0 - a));
 	std::printf("tiled bathroom 4x4x3 m, absorption %.2f: Eyring %.2f s, mean free path %.2f m, window %.1f s\n", a, eyring, 4 * V / S, window);
-	const double rtRef = ReverbTime(ctx, 3, 2.5f, 2.5f, 0.01f, window, 4096, rays);
-	const double rtCap = ReverbTime(ctx, 3, 2.5f, 2.5f, 0.01f, window, PBA_BOUNCES, rays);
-	const double rt256 = ReverbTime(ctx, 3, 2.5f, 2.5f, 0.01f, window, 256, rays);
-	std::printf("glazed cubicle 3x2.5x2.5 m, absorption 0.01: reverb time (mid) with cap 4096: %.3f s, with cap %d: %.3f s, with cap 256: %.3f s\n", rtRef, PBA_BOUNCES, rtCap, rt256);
+	// mean of kPasses passes; the spread (max - min) / mean of the passes is kept to tell a stable measurement from a noisy one
+	const int kPasses = 3;
+	auto measure = [&](int bounces, double* spread) {
+		double sum = 0, lo = 1e9, hi = 0;
+		for (int i = 0; i < kPasses; ++i) {
+			const double rt = ReverbTime(ctx, 3, 2.5f, 2.5f, 0.01f, window, bounces, rays);
+			sum += rt;
+			lo = std::min(lo, rt);
+			hi = std::max(hi, rt);
+		}
+		if (spread) *spread = (hi - lo) / (sum / kPasses);
+		return sum / kPasses;
+	};
+	double spreadRef = 0;
+	const double rtRef = measure(4096, &spreadRef);
+	const double rtCap = measure(PBA_BOUNCES, nullptr);
+	const double rt256 = measure(256, nullptr);
+	std::printf("glazed cubicle 3x2.5x2.5 m, absorption 0.01: reverb time (mid) with cap 4096: %.3f s, with cap %d: %.3f s, with cap 256: %.3f s (mean of %d passes, spread of the reference %.1f %%)\n", rtRef, PBA_BOUNCES, rtCap, rt256, kPasses, 100 * spreadRef);
 	if (explore) {
 		for (int b : {64, 128, 256, 512, 1024, 2048, 4096}) std::printf("  cap %4d: %.3f s\n", b, ReverbTime(ctx, 4, 4, 3, a, window, b, rays));
 		struct R { float x, y, z, a; };
@@ -131,6 +154,8 @@ int main(int argc, char** argv) {
 			0.161 * V / (-S * std::log(1.0 - aa)), ReverbTime(ctx, 4, 4, 3, aa, window, 256, rays), ReverbTime(ctx, 4, 4, 3, aa, window, 1024, rays), ReverbTime(ctx, 4, 4, 3, aa, window, 4096, rays));
 	}
 	Check(rtRef > 1.0, "the reference measurement gives a long reverb time", rtRef, 1.0);
+	Check(spreadRef < 0.03, "the reference is stable (spread of 3 passes < 3 %; if not, phonon.dll is not the pinned fork: python -I native/fetch_deps.py)", spreadRef, 0.03);
+	Check(std::fabs(rt256 - rtRef) > 0.15 * rtRef, "the test sees a cap: the old cap of 256 is off by more than 15 % (if not, phonon.dll is not the pinned fork)", rt256, rtRef);
 	Check(std::fabs(rtCap - rtRef) <= 0.05 * rtRef, "the cap of the module (PBA_BOUNCES) is within 5 % of the reference", rtCap, rtRef);
 	std::printf("%s\n", fails ? "FAILED" : "ALL PASSED");
 	std::printf("(for the record: the 256 cap is %.0f %% off)\n", 100.0 * std::fabs(rt256 - rtRef) / rtRef);
