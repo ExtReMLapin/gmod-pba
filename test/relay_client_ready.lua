@@ -17,18 +17,33 @@ e:Spawn()
 local phys = e:GetPhysicsObject()
 if IsValid(phys) then phys:EnableMotion(false) end
 job:sleep(0.5)
+-- Counted on THIS prop only (spies on A.RelaySend and on the engine re-emission A.Emit), not through the
+-- global A.stats.relayed / relayMuffled: a stray NPC in the map (the fast headcrab a killed fast zombie of
+-- npc_loop_death leaves) is relayed and muffled too, and was counted into the 0.3 s windows.
+local relayed, muffled = 0, 0
+local sendOrig, emitOrig = A.RelaySend, A.Emit
+A.RelaySend = function(data, pos, plys, echoOnly, ...)
+	if not echoOnly and data.Entity == e then relayed = relayed + 1 end
+	return sendOrig(data, pos, plys, echoOnly, ...)
+end
+A.Emit = function(fn, ...)
+	if fn == A.orig.EntEmitSound and (...) == e then muffled = muffled + 1 end
+	return emitOrig(fn, ...)
+end
 local function once(ready)
 	A.PState(ply).ready = ready
-	local r0, m0 = A.stats.relayed or 0, A.stats.relayMuffled or 0
+	relayed, muffled = 0, 0
 	e:EmitSound("vo/npc/male01/question06.wav", 75, 100, 1, CHAN_VOICE)
 	job:sleep(0.3)
 	e:StopSound("vo/npc/male01/question06.wav")
 	job:sleep(0.2)
-	return { relayed = (A.stats.relayed or 0) - r0, muffled = (A.stats.relayMuffled or 0) - m0 }
+	return { relayed = relayed, muffled = muffled }
 end
 local was = A.PState(ply).ready
-local res = { ready = once(true), notReady = once(false) }
+local ok, res = pcall(function() return { ready = once(true), notReady = once(false) } end)
+A.RelaySend, A.Emit = sendOrig, emitOrig
 A.PState(ply).ready = was == nil and true or was
+if not ok then e:Remove() return { pass = false, err = tostring(res) } end
 e:Remove()
 res.pass = res.ready.relayed == 1 and res.notReady.relayed == 0 and res.notReady.muffled == 1
 return res
