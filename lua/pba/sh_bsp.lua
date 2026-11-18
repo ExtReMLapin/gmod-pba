@@ -30,6 +30,30 @@ function BSP.HasDisplacements(map)
 	return info[26] ~= nil and info[26].len > 0
 end
 
+--- The distinct values of the keyvalue `key` over the entities of maps/<map>.bsp (the entity lump only: a header
+-- and one text read, no geometry). Returns a list, or nil, reason (no file, compressed lump).
+function BSP.EntityValues(map, key)
+	local f = file.Open("maps/" .. map .. ".bsp", "rb", "GAME")
+	if not f then return nil, "cannot open maps/" .. map .. ".bsp" end
+	if f:Read(4) ~= "VBSP" then f:Close() return nil, "not a VBSP file" end
+	local L = lumpInfo(f)[0]
+	if L.unc ~= 0 then f:Close() return nil, "compressed entity lump" end
+	f:Seek(L.ofs)
+	local text = f:Read(L.len) or ""
+	f:Close()
+	local out, seen = {}, {}
+	local needle = '"' .. string.lower(key) .. '"'
+	for block in string.gmatch(text, "%b{}") do
+		-- (a cheap plain search first: only the few blocks that carry the key are parsed)
+		if string.find(string.lower(block), needle, 1, true) then
+			for k, v in string.gmatch(block, '"([^"]*)"%s*"([^"]*)"') do
+				if string.lower(k) == string.lower(key) and v ~= "" and not seen[v] then seen[v] = true out[#out + 1] = v end
+			end
+		end
+	end
+	return out
+end
+
 --- Parses the entity lump text into a list of keyvalue tables, keeping only `keep` classes.
 function BSP.ParseEntities(text, keep)
 	local out = {}

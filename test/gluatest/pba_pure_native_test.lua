@@ -754,6 +754,67 @@ return {
 			if not ok then error(err, 0) end
 		end },
 
+		{ name = "NPC weapon sounds: ParseWeaponSounds(npc) keeps only the *_npc entries, WeaponSoundFiles(npc) resolves them (a SWEP's own sounds too)", func = function()
+			local sg = "WeaponData\n{\n\tSoundData\n\t{\n\t\t\"empty\" \"Weapon_Shotgun.Empty\"\n\t\t\"single_shot\" \"Weapon_Shotgun.Single\"\n"
+				.. "\t\t// NPC WEAPON SOUNDS\n\t\t\"reload_npc\" \"Weapon_Shotgun.NPC_Reload\"\n\t\t\"single_shot_npc\" \"Weapon_Shotgun.NPC_Single\"\n\t\t\"double_shot_npc\" \"Weapon_Shotgun.NPC_Single\"\n\t}\n}"
+			expect(table.concat(N.ParseWeaponSounds(sg, true), ",")).to.equal("Weapon_Shotgun.NPC_Reload,Weapon_Shotgun.NPC_Single")
+			expect(table.concat(N.ParseWeaponSounds(sg), ",")).to.equal("Weapon_Shotgun.Empty,Weapon_Shotgun.Single") -- (the player's list is unchanged)
+			expect(#N.ParseWeaponSounds(nil, true)).to.equal(0)
+			local G = _G
+			local savedFile, savedSound, savedWeapons = G.file, G.sound, G.weapons
+			local scripts = {
+				["Weapon_Shotgun.NPC_Reload"] = { sound = "weapons/shotgun/npc_reload.wav" },
+				["Weapon_Shotgun.NPC_Single"] = { sound = { "^weapons/shotgun/npc_fire1.wav", "weapons/shotgun/npc_fire2.wav" } },
+				["Custom.Shot"] = { sound = ")mymod/shot.wav" },
+			}
+			local ok, err = pcall(function()
+				G.file = { Read = function(path) if path == "scripts/weapon_shotgun.txt" then return sg end end }
+				G.sound = { GetProperties = function(name) return scripts[name] end }
+				G.weapons = { GetStored = function(class)
+					if class == "swep_custom" then return { Primary = { Sound = "Custom.Shot" } } end
+				end }
+				expect(table.concat(N.WeaponSoundFiles("weapon_shotgun", nil, true), ",")).to.equal("weapons/shotgun/npc_reload.wav,weapons/shotgun/npc_fire1.wav,weapons/shotgun/npc_fire2.wav")
+				expect(table.concat(N.WeaponSoundFiles("swep_custom", nil, true), ",")).to.equal("mymod/shot.wav")
+				expect(#N.WeaponSoundFiles("weapon_unknown", nil, true)).to.equal(0)
+			end)
+			G.file, G.sound, G.weapons = savedFile, savedSound, savedWeapons
+			if not ok then error(err, 0) end
+		end },
+		{ name = "BSP.EntityValues: the distinct additionalequipment values of the entity lump (a fake BSP: header, one lump)", func = function()
+			expect(A.BSP and A.BSP.EntityValues ~= nil).to.beTrue()
+			local text = "{\n\"classname\" \"worldspawn\"\n}\n{\n\"classname\" \"npc_combine_s\"\n\"additionalequipment\" \"weapon_smg1\"\n}\n"
+				.. "{\n\"classname\" \"npc_metropolice\"\n\"AdditionalEquipment\" \"weapon_pistol\"\n}\n"
+				.. "{\n\"classname\" \"npc_combine_s\"\n\"additionalequipment\" \"weapon_smg1\"\n}\n{\n\"classname\" \"npc_citizen\"\n\"additionalequipment\" \"\"\n}\n"
+				.. "{\n\"classname\" \"prop_physics\"\n\"targetname\" \"additionalequipment\"\n}\n"
+			local function long(n) return string.char(n % 256, math.floor(n / 256) % 256, 0, 0) end
+			local hdrLen = 8 + 64 * 16
+			local header = "VBSP" .. long(20)
+			for i = 0, 63 do
+				header = header .. (i == 0 and (long(hdrLen) .. long(#text) .. long(0) .. long(0)) or (long(0) .. long(0) .. long(0) .. long(0)))
+			end
+			local data = header .. text
+			local G = _G
+			local savedFile = G.file
+			local ok, err = pcall(function()
+				G.file = { Open = function(path)
+					if path ~= "maps/fake.bsp" then return nil end
+					local pos = 0
+					local f = {}
+					function f:Read(n) local out = string.sub(data, pos + 1, pos + n) pos = pos + #out return out end
+					function f:Seek(p) pos = p end
+					function f:ReadLong() local b1, b2, b3, b4 = string.byte(data, pos + 1, pos + 4) pos = pos + 4 return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216 end
+					function f:Close() end
+					return f
+				end }
+				local list = A.BSP.EntityValues("fake", "additionalequipment")
+				expect(table.concat(list, ",")).to.equal("weapon_smg1,weapon_pistol")
+				local none, why = A.BSP.EntityValues("missing", "additionalequipment")
+				expect(none == nil and why ~= nil).to.beTrue()
+			end)
+			G.file = savedFile
+			if not ok then error(err, 0) end
+		end },
+
 		-- ---------------------------------------------------------------- late handover (pba_native_late_handover)
 		-- An engine copy of a followed short sound started while the module still decoded its file: N.LateVerdict
 		-- decides each frame what becomes of it. A 3 s sound that started at t0 = 10, ending at 13, margin 0.75 s.
