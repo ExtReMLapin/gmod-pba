@@ -214,6 +214,7 @@ A.CONFIG = {
 	gc_idle_step    = { 0, 0, 2000, "cl", "Garbage collector work (KB) done in each frame without a new sound, so that the collector catches up between bursts instead of during them. Touches the whole client Lua state. 0 = off." },
 	min_level       = { 50, 0, 140, "sv", "Sounds with a lower SNDLVL are left untouched." },
 	cache_ttl       = { 0.25, 0, 5, "sv", "Seconds a (source cell, listener cell) result stays cached." },
+	cache_barrier   = { 1, 0, 1, "cl", "A cached result (the 32 u cell cache, and the repeated-sound reuse of pba_group_time) serves a new sound only when nothing solid stands between its source and the cached one's, nor between the two listener positions: two sources of one cell either side of a floor or a wall (a balcony over a closed room) get their own paths. Two short traces per cache hit. 0 = the former cell-only key." },
 	max_duration    = { 8, 0.5, 60, "sv", "Sounds longer than this (s) are left untouched." },
 	sentences       = { 1, 0, 1, "sv", "Sentences (Combine and metrocop radio, HL2 NPC lines from sentences.txt): relayed and muffled like other sounds instead of crossing every wall." },
 	phys_loops_muffle = { 1, 0, 1, "sv", "Physics scrape / rolling loops behind a wall: muffled by the engine (DSP preset, lower volume) instead of crossing it unchanged. Applies when pba_phys_loops_mirror is not used, and to a loop over the pba_loops_max cap." },

@@ -403,6 +403,10 @@
   "pos0": "same",
   "why": "the same cache key built as one string, a record skipped: no result changes"
  },
+ "cache_barrier": {
+  "pos0": "same",
+  "why": "the result cache across a floor or a wall: cold positions have nothing cached and the sweep scenes put no two sources of one cell either side of a solid (test cell_barrier)"
+ },
  "gc_idle_step": {
   "pos0": "hook",
   "why": "garbage collector steps in idle frames (cl_sched), outside P.Compute"
