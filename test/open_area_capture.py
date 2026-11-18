@@ -43,6 +43,12 @@ SOUNDS = {
     "shotgun": (")weapons/shotgun/shotgun_fire6.wav", 105, 0.95),
     "ar2pl": (")weapons/ar2/fire1.wav", 105, 0.8),
     "explosion": ("^weapons/explode3.wav", 140, 1.0),
+    "horn130": ("ambient/alarms/razortrain_horn1.wav", 130, 0.75),
+    "horn120": ("ambient/alarms/train_horn2.wav", 120, 1.0),
+    "brake": ("plats/ttrain_brake1.wav", 100, 1.0),
+    "physdrop": (")weapons/physcannon/physcannon_drop.wav", 105, 0.42),
+    "idle80": ("ambient/machines/train_idle.wav", 80, 0.75),
+    "hum60": ("ambient/machines/lab_loop1.wav", 60, 1.0),
 }
 BANDS = [(0, 500), (500, 2000), (2000, 6000), (6000, 16000)]
 BAND_NAMES = ["0-0.5k", "0.5-2k", "2-6k", "6-16k"]
