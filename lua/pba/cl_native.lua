@@ -662,6 +662,7 @@ function N.StopRender()
 	-- (refused for 30 s, left to the engine: native_predecode red after a render restart). StartRender prewarms again.
 	N.loading, N.prewarm = nil, nil
 	N.wpnDone, N.wpnQueue = nil, nil -- (the weapons' sounds went with them: asked again)
+	N.npcWpnDone, N.npcMapDone = nil, nil -- (the NPC weapons' too)
 end
 
 local function cleanName(name)
@@ -910,8 +911,9 @@ local WEAPON_POLL, WEAPON_PER_FRAME, WEAPON_INFLIGHT = 0.5, 2, 4
 
 --- The sound script names of the player's use of a weapon, read from the text of its script (SoundData block of
 -- scripts/weapon_<class>.txt: reload, empty, single_shot, double_shot, burst, special1, special2). The NPC
--- variants ("..._npc") are left out: the player never plays them. Each name once, in file order.
-function N.ParseWeaponSounds(text)
+-- variants ("..._npc") are left out: the player never plays them (npc true: only those, what an NPC holding the
+-- weapon plays). Each name once, in file order.
+function N.ParseWeaponSounds(text, npc)
 	local out, seen = {}, {}
 	if type(text) ~= "string" then return out end
 	text = string.gsub(text, "//[^\r\n]*", "")
@@ -919,7 +921,7 @@ function N.ParseWeaponSounds(text)
 	if not e then return out end
 	local close = string.find(text, "}", e + 1, true) or #text + 1
 	for k, v in string.gmatch(string.sub(text, e + 1, close - 1), "\"([^\"]*)\"%s*\"([^\"]*)\"") do
-		if v ~= "" and string.lower(string.sub(k, -4)) ~= "_npc" and not seen[v] then seen[v] = true out[#out + 1] = v end
+		if v ~= "" and (string.lower(string.sub(k, -4)) == "_npc") == (npc == true) and not seen[v] then seen[v] = true out[#out + 1] = v end
 	end
 	return out
 end
@@ -927,9 +929,10 @@ end
 --- The wave files (clean names) of a weapon class: its script's sounds (C++ weapons and any class with a
 -- scripts/<class>.txt) and a SWEP's Primary.Sound / Secondary.Sound (strings, or a list of them; `wep`, the held
 -- weapon, carries the values the SWEP set up at its creation, else the registered table).
-function N.WeaponSoundFiles(class, wep)
+-- npc true: the sounds of an NPC holding it (the script's *_npc entries; a SWEP's own sounds too, the NPC plays them).
+function N.WeaponSoundFiles(class, wep, npc)
 	local names = {}
-	for _, s in ipairs(N.ParseWeaponSounds(file.Read("scripts/" .. class .. ".txt", "GAME"))) do names[#names + 1] = s end
+	for _, s in ipairs(N.ParseWeaponSounds(file.Read("scripts/" .. class .. ".txt", "GAME"), npc)) do names[#names + 1] = s end
 	local stored = weapons and weapons.GetStored and weapons.GetStored(class)
 	for _, src in ipairs({ wep or false, stored or false }) do
 		if src then
@@ -983,7 +986,7 @@ hook.Add("Think", "pba_native_prewarm_weapons", function()
 		end
 	end
 	local q = N.wpnQueue
-	if not q or #q == 0 or not N.WeaponPrewarmOn() then return end
+	if not q or #q == 0 or not (N.WeaponPrewarmOn() or N.NpcWeaponPrewarmOn()) then return end
 	N.wpnInflight = N.wpnInflight or {}
 	local busy = 0
 	for m in pairs(N.wpnInflight) do
@@ -1002,6 +1005,87 @@ end)
 
 -- a weapon picked up: decoded ahead at once, not at the next poll
 hook.Add("HUDWeaponPickedUp", "pba_native_prewarm_weapons", function(wep) N.PrewarmWeapon(wep) end)
+
+-- ------------------------------------------------------------------ the NPCs' weapons (pba_native_prewarm_npc_weapons)
+-- The shots of a Combine soldier, a Metropolice or a rebel are other sources' sounds, played by the module like
+-- every sound, but the first play of a file not decoded yet goes to the engine (pba_native_predecode): the first
+-- shot of each NPC weapon was sharper than the next ones (no HRTF, no reverb). The player's prewarm leaves the
+-- NPC variants out ("..._npc" entries of a weapon script), so these files were never decoded ahead. They are
+-- queued (with the player's weapons': at most WEAPON_PER_FRAME decodes started a frame, WEAPON_INFLIGHT at once)
+-- for the weapons listed by the map's NPCs (additionalequipment, read from the BSP entity lump: NPCs out of
+-- view do not exist on the client yet) and for the weapons NPCs hold as they come into view (spawn menu,
+-- npc_maker, a NPC entering the PVS): found by a short scan after an NPC or a weapon is created.
+local NPC_POLL, NPC_SCAN_S = 0.2, 3
+
+--- True when the NPC weapons' sounds are decoded ahead: the module, background decoding and the option on.
+function N.NpcWeaponPrewarmOn()
+	return N.ready and pba_native and pba_native.LoadSoundAsync
+		and (A.cfg.native_predecode or 1) >= 0.5 and (A.cfg.native_prewarm_npc_weapons or 1) >= 0.5 or false
+end
+
+--- Queues the NPC sound files of a weapon class (`wep`, a held SWEP entity, gives its own sounds), once per class
+-- (until the module drops its sounds). Returns the number of files queued.
+function N.PrewarmNpcWeapon(class, wep)
+	if not N.NpcWeaponPrewarmOn() or type(class) ~= "string" or class == "" then return 0 end
+	N.npcWpnDone = N.npcWpnDone or {}
+	if N.npcWpnDone[class] then return 0 end
+	N.npcWpnDone[class] = true
+	local files = N.WeaponSoundFiles(class, wep, true)
+	N.wpnQueue = N.wpnQueue or {}
+	for _, n in ipairs(files) do N.wpnQueue[#N.wpnQueue + 1] = n end
+	N.npcWpnStats = N.npcWpnStats or { weapons = 0, files = 0, mapWeapons = 0, mapMs = 0 }
+	N.npcWpnStats.weapons = N.npcWpnStats.weapons + 1
+	N.npcWpnStats.files = N.npcWpnStats.files + #files
+	return #files
+end
+
+--- The weapon classes the map's NPCs are given (additionalequipment of the entity lump), queued once per map
+-- load / render start. Returns the number of classes found (nil when the lump cannot be read).
+function N.PrewarmMapNpcWeapons()
+	local t0 = SysTime()
+	local list = A.BSP.EntityValues(game.GetMap(), "additionalequipment")
+	if not list then return nil end
+	for _, c in ipairs(list) do N.PrewarmNpcWeapon(string.lower(c)) end
+	N.npcWpnStats = N.npcWpnStats or { weapons = 0, files = 0, mapWeapons = 0, mapMs = 0 }
+	N.npcWpnStats.mapWeapons = #list
+	N.npcWpnStats.mapMs = (SysTime() - t0) * 1000
+	return #list
+end
+
+--- The weapons held by the NPCs that exist now on the client: queued.
+function N.ScanNpcWeapons()
+	for _, w in ipairs(ents.GetAll()) do
+		if IsValid(w) and w:IsWeapon() then
+			local o = w:GetOwner()
+			if IsValid(o) and o:IsNPC() then N.PrewarmNpcWeapon(w:GetClass(), w) end
+		end
+	end
+end
+
+local nextNpcPoll = 0
+hook.Add("Think", "pba_native_prewarm_npc_weapons", function()
+	if not N.ready then return end
+	local now = RealTime()
+	if now < nextNpcPoll or not N.NpcWeaponPrewarmOn() then return end
+	nextNpcPoll = now + NPC_POLL
+	if not N.npcMapDone then
+		N.npcMapDone = true
+		N.PrewarmMapNpcWeapons()
+		N.ScanNpcWeapons()
+	elseif N.npcScanUntil and now < N.npcScanUntil then
+		N.ScanNpcWeapons()
+	end
+end)
+
+-- an NPC or a weapon created (a spawn, a NPC coming into view): its owner is known a few frames later, so the
+-- scan runs for a few seconds
+hook.Add("OnEntityCreated", "pba_native_prewarm_npc_weapons", function(e)
+	if not N.ready or not IsValid(e) then return end
+	local c = e:GetClass()
+	if string.sub(c, 1, 4) == "npc_" or string.sub(c, 1, 7) == "weapon_" or e:IsNPC() or e:IsWeapon() then
+		N.npcScanUntil = RealTime() + NPC_SCAN_S
+	end
+end)
 
 cvars.AddChangeCallback("pba_native_predecode", function(_, _, new)
 	if tonumber(new) == 1 then N.Prewarm() else N.prewarm = nil end

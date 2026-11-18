@@ -463,6 +463,10 @@
   "pos0": "hook",
   "why": "the held weapons' sound files decoded ahead (Think hook of cl_native), outside P.Compute; covered by prewarm_weapons"
  },
+ "native_prewarm_npc_weapons": {
+  "pos0": "hook",
+  "why": "the NPC weapons' sound files decoded ahead (Think hook of cl_native), outside P.Compute; covered by prewarm_npc_weapons"
+ },
  "burst_fair": {
   "pos0": "hook",
   "why": "burst policy (cl_render burstEvaluate), outside P.Compute"
