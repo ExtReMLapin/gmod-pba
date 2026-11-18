@@ -16,6 +16,7 @@ local files = {
 	{ "pba/sh_paths.lua", "sh" },
 	{ "pba/sh_doors.lua", "sh" },
 	{ "pba/sh_core.lua", "sh" },
+	{ "pba/sh_ear.lua", "sh" }, -- where a player hears from: his client reports a view the server cannot compute (pba_ear_report)
 	{ "pba/sh_pipe.lua", "sh" }, -- metal pipe meme prop: impact rules (lua/entities/pba_metal_pipe.lua)
 	{ "pba/sh_whiz.lua", "sh" }, -- bullet whizz: the near-miss rule (the engine plays it through no hook)
 	{ "pba/sv_relay.lua", "sv" },

@@ -794,11 +794,19 @@ local function observerEar(ply)
 	return tr.Hit and (tr.HitPos + tr.HitNormal * 4) or back
 end
 
---- Server side: where a player hears from: his view entity when he looks through a camera, the camera of his
--- observer mode when he spectates, his own eyes otherwise.
-function A.PlayerEar(ply)
+--- Where a player hears from according to what both realms know of his view: his view entity when he looks
+-- through a camera, the camera of his observer mode when he spectates, his own eyes otherwise. The views only
+-- his client computes (a CalcView hook: third person; the death views: the ragdoll is the client's own) are not
+-- in it: the client compares his rendered view with this model and tells the server (sh_ear.lua).
+function A.ModelEar(ply)
 	if not A.HearsFromSelf(ply) then return ply:GetViewEntity():EyePos() end
 	return observerEar(ply) or ply:EyePos()
+end
+
+--- Server side: where a player hears from: the view his client reported when it is not where the model above puts
+-- it (pba_ear_report, sh_ear.lua), the model otherwise.
+function A.PlayerEar(ply)
+	return SERVER and A.ReportedEar and A.ReportedEar(ply) or A.ModelEar(ply)
 end
 
 --- The demo map (pba_demo*): debug overlay and HUD indicator switch on by themselves there.

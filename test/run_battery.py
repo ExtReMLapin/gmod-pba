@@ -1174,6 +1174,8 @@ steps = [
     ("native_own_camera_long_sv", lambda: py("native_own_camera_long_sv.py")),
     # observer modes (Spectate + SpectateEntity): the server's ear (A.PlayerEar) is where the engine listens from (IN_EYE, CHASE, FIXED, ROAMING; bot and prop targets)
     ("observer_ear", lambda: py("observer_ear.py")),
+    # the views the server cannot compute (third person CalcView, death views): the client reports his rendered view (pba_ear_report), the server's ear is where the engine listens from
+    ("server_ear_views", lambda: py("server_ear_views.py")),
     # step isolation self-test: a step leaks three settings, the next one must start from the session's (full battery only)
     ("isolation_leak_dummy", isolation_leak_dummy),
     ("isolation_check", isolation_check),
