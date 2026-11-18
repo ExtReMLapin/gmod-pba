@@ -797,6 +797,11 @@ def npc_loop_death():
         if not (isinstance(dead, dict) and dead.get("err") == "fast zombie already removed"):
             break
     ok = isinstance(taken, dict) and taken.get("pass") is True and isinstance(dead, dict) and dead.get("pass") is True
+    # what the step leaves behind: a killed fast zombie releases a fast headcrab that lives on in the map (its
+    # sounds were relayed into the counting windows of relay_dict_overflow / relay_client_ready, 2026-11-18),
+    # and the player stays in god mode
+    lua("server", "for _, e in ipairs(ents.GetAll()) do if e:IsNPC() then e:Remove() end end "
+                  "for _, p in ipairs(player.GetHumans()) do p:GodDisable() end return true")
     return {"pass": ok, "setup": setup, "taken": taken, "kill": kill, "dead": dead}
 
 def antlion_wings():
