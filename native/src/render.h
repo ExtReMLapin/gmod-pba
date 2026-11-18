@@ -191,6 +191,10 @@ float OutputClip(float x); // the legacy output soft clip (master volume 1)
 //  premaster   the output stage (limiter / clip) acts BEFORE the master volume, as the engine's int16 mix does (its
 //              loud sounds clip at full scale whatever the volume); false: after it, so at a low volume it never acts.
 void SetMixQuality(int limiterMode, bool hqResample, bool premaster = false);
+// Fade of a captured stream's edges (pba_native_stream_fade, default 5 ms; 0 = none): a stream voice fades in when it
+// starts or comes back from an underrun, and fades out over the last `ms` of buffered data before it runs dry (or
+// ends), so that the cut / the return is not a step of the waveform (a click).
+void SetStreamFade(float ms);
 int OutputMode();         // the limiterMode in force
 void SetLimiterTuning(float fastMs, float slowMs, float slowK); // limiter release (defaults 6, 50, 3); tests
 int OutputLatency();      // frames of delay the output stage adds (0 with the legacy clip)

@@ -645,6 +645,8 @@ function N.ApplySettings()
 	if pba_native.SetMixQuality then
 		pba_native.SetMixQuality(math.floor((A.cfg.native_limiter or 1) + 0.5), (A.cfg.native_resample_hq or 1) >= 0.5, (A.cfg.native_limit_pre or 1) >= 0.5)
 	end
+	-- fade of a radio stream's start, underruns and end (modules since this option; an older one cuts to silence)
+	if pba_native.SetStreamFade then pba_native.SetStreamFade(A.cfg.native_stream_fade or 5) end
 end
 
 N.hrtfCvar = N.hrtfCvar or CreateClientConVar("pba_native_hrtf", "", true, false,
@@ -1497,6 +1499,25 @@ function N.OwnDirect(ent, chan)
 	if ent == lp then return true end
 	local _, owner = A.ShotWeapon(ent, chan)
 	return owner == lp or nil
+end
+
+local OWN_STREAM_IN, OWN_STREAM_OUT = 4, 16 -- units: a stream joins the listener's own within 4, leaves them beyond 16
+
+--- True when a radio stream of another addon is the listener's own sound: its owner put it on his body (the position it
+-- sets is his origin, his centre or his eyes: a boombox he carries, a worn speaker), so the engine would not spatialise
+-- it, and the HRTF at a few units only jitters its direction. Same options as N.OwnDirect (pba_native_own_direct,
+-- pba_native_own, his view is his own). `was`: it was his own already (hysteresis: it leaves beyond OWN_STREAM_OUT, so a
+-- stream the owner jostles by a few units does not flip back and forth). The module fixes the flag for the life of a
+-- voice: cl_streams.lua gives a new voice when the answer changes.
+function N.OwnStream(pos, was)
+	if not pos or (A.cfg.native_own_direct or 1) < 0.5 or not (A.NativeOwn and A.NativeOwn()) then return false end
+	local lp = LocalPlayer()
+	if not IsValid(lp) or not A.HearsFromSelf(lp) then return false end
+	local lim = was and OWN_STREAM_OUT or OWN_STREAM_IN
+	lim = lim * lim
+	if pos:DistToSqr(lp:GetPos()) <= lim or pos:DistToSqr(lp:WorldSpaceCenter()) <= lim then return true end
+	local L = A.ListenerPos()
+	return L ~= nil and pos:DistToSqr(L) <= lim
 end
 
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)

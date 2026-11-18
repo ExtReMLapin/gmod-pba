@@ -23,7 +23,7 @@
 //     Play(name, pos, gain, eqL, eqM, eqH [, pitch, loop, delay, sh, diffuse, send, offset]) -> id, pathFallback,
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
-//     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send]]),
+//     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]),
 //     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
@@ -39,6 +39,7 @@
 //     reverb times (off by default, see g_optSrcLongRt)
 //     SetMixQuality(limiterMode 0|1|2, hqResample [, premaster]): output limiter / legacy soft clip / hard clip, sinc / linear decode
 //     resampling; premaster: the output stage acts before the master volume (the engine's order)
+//     SetStreamFade(ms): fade of a captured stream's edges (start, underrun, end), see render.h
 //     CaptureStart(seconds) / CaptureStop(name [, bits]) / CaptureState(): debug capture of the FINAL output (after the limiter
 //     and the master volume) into garrysmod/data/pba/<name>.wav (48 kHz stereo, float or 16 bit; no other folder)
 //     SetSourceSlots: active pool size (0..16, default 16); the reflections run cost grows with it
@@ -2474,14 +2475,16 @@ LUA_FUNCTION(StreamCapture) {
 	return 1;
 }
 
-// PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send]]) -> voice id (0 = failed): the captured
-// audio of the channel played as a native voice (HRTF, reverb, paths); Update / StopVoice as usual
+// PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]) -> voice id (0 = failed): the captured
+// audio of the channel played as a native voice (HRTF, reverb, paths); Update / StopVoice as usual. own (true): the
+// listener's own stream, not spatialised, like the flag of Play (fixed for the life of the voice)
 LUA_FUNCTION(PlayStream) {
 	void* obj = LUA->GetUserType<void>(1, Type::SoundHandle);
 	if (!obj) LUA->ThrowError("PlayStream: IGModAudioChannel expected");
 	LUA->CheckType(2, Type::Vector);
 	render::VoiceParams p = ReadVoice(LUA, 2);
 	p.send = ReadSend(LUA, 8);
+	p.own = LUA->IsType(9, Type::Bool) && LUA->GetBool(9);
 	unsigned freq;
 	bool is3D;
 	ChannelFacts(LUA, &freq, &is3D);
@@ -2848,6 +2851,14 @@ LUA_FUNCTION(SetMixQuality) {
 	return 2;
 }
 
+// SetStreamFade(ms) -> ms : fade of a captured stream's edges (default 5, 0 = none). Absent in older modules.
+LUA_FUNCTION(SetStreamFade) {
+	const float ms = LUA->IsType(1, Type::Number) ? (float)LUA->GetNumber(1) : 5.0f;
+	render::SetStreamFade(ms);
+	LUA->PushNumber(ms);
+	return 1;
+}
+
 LUA_FUNCTION(SetSourceAccum) {
 	if (LUA->IsType(1, Type::Number)) g_srcAccumR = std::clamp((float)LUA->GetNumber(1), 0.0f, 20.0f);
 	if (LUA->IsType(2, Type::Number)) g_srcAccumK = std::clamp((int)LUA->GetNumber(2), 1, 256);
@@ -3064,6 +3075,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetSourceNear");
 	LUA->PushCFunction(SetMixQuality);
 	LUA->SetField(-2, "SetMixQuality");
+	LUA->PushCFunction(SetStreamFade);
+	LUA->SetField(-2, "SetStreamFade");
 	LUA->PushCFunction(CaptureStart);
 	LUA->SetField(-2, "CaptureStart");
 	LUA->PushCFunction(CaptureStop);

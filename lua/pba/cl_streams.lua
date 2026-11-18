@@ -158,21 +158,33 @@ local function heard(r, gain, send)
 	return gain, send
 end
 
+local nativeStart -- (below)
+
 local function nativeUpdate(ch, r, L)
 	if not r.nativeId then return end
+	-- the listener's own stream (its position on his body, N.OwnStream): not spatialised. The module fixes that for the
+	-- life of a voice, so a stream put on or taken off him gets a new voice (the capture goes on; the voice's fade-in
+	-- hides the join)
+	if (A.Native.OwnStream(r.pos, r.nativeOwn) or false) ~= (r.nativeOwn or false) then
+		pba_native.StopVoice(r.nativeId)
+		r.nativeId = nil
+		return nativeStart(ch, r, L)
+	end
 	local pos, gain, el, em, eh, send = nativeParams(ch, r, L)
 	gain, send = heard(r, gain, send)
 	if not pba_native.Update(r.nativeId, pos, gain, el, em, eh, pitchOf(r), r.diffuse or 0, send) then r.nativeId = nil end
 end
 
-local function nativeStart(ch, r, L)
+function nativeStart(ch, r, L)
+	local own = A.Native.OwnStream(r.pos, r.nativeOwn) or false
 	local ok, id = pcall(function()
 		local pos, gain, el, em, eh, send = nativeParams(ch, r, L)
 		gain, send = heard(r, gain, send)
-		return pba_native.PlayStream(ch, pos, gain, el, em, eh, pitchOf(r), send)
+		return pba_native.PlayStream(ch, pos, gain, el, em, eh, pitchOf(r), send, own) -- (a module without `own` ignores it)
 	end)
 	if ok and id and id > 0 then
 		r.nativeId = id
+		r.nativeOwn = own
 		O.SetVolume(ch, 0)
 	else
 		r.nativeFailed = true
@@ -182,7 +194,7 @@ end
 
 local function nativeStop(ch, r)
 	if r.nativeId and pba_native then pba_native.StopVoice(r.nativeId) end
-	r.nativeId = nil
+	r.nativeId, r.nativeOwn = nil, nil
 	if pba_native and pba_native.StreamCapture then pcall(pba_native.StreamCapture, ch, false) end
 end
 

@@ -387,6 +387,7 @@ std::vector<float> g_mix(kBlock * 2);
 bool g_limiterPre = false; // the output stage works before the master volume (SetMixQuality premaster)
 int g_limiterMode = 1; // 0 legacy soft clip, 1 limiter, 2 hard clip at full scale (what the engine's int16 mix does)
 bool g_hqResample = true;
+float g_streamFade = 0.005f * 48000; // output samples of the fade in / out of a captured stream's edges (0 = none)
 float g_limFastMs = 6.0f, g_limSlowMs = 50.0f, g_limSlowK = 3.0f; // limiter release tuning (see Limiter)
 std::vector<float> g_side(kBlock); // the side channel of the voice being rendered (stereo sounds)
 // largest lateral shift of the two channels of a stereo-width voice (tangent of the angle each one moves
@@ -530,6 +531,7 @@ struct MixSettings {
 	bool limiterPre = false;
 	bool hqRead = true;
 	bool debugOn = false;
+	float streamFadeMs = 5.0f; // fade of a captured stream's edges (SetStreamFade)
 };
 struct ListenerState {
 	IPLVector3 pos{}, ahead{0, 0, -1}, up{0, 1, 0};
@@ -1127,7 +1129,12 @@ void RenderBlock() {
 				b.r.store(b.w.load() - (uint64_t)target);
 				avail = target;
 			}
-			if (!v.primed && (avail >= target || closed)) v.primed = true; // (closed: drain what is left)
+			if (!v.primed && (avail >= target || closed)) { // (closed: drain what is left)
+				v.primed = true;
+				// the start, or the return from an underrun: the stream is at some point of its waveform, a step
+				// from the silence before it (a click). Ramped in over g_streamFade samples
+				v.fadeIn = (int)g_streamFade;
+			}
 			if (!v.primed) {
 				std::fill(m, m + kBlock, 0.0f);
 			} else {
@@ -1137,6 +1144,11 @@ void RenderBlock() {
 				uint64_t r = b.r.load(std::memory_order_relaxed);
 				const uint64_t w = b.w.load(std::memory_order_acquire);
 				const size_t ringSize = b.data.size();
+				// the fade out before an underrun / the end: over the last g_streamFade output samples' worth of
+				// stream, in the stream's own samples (the data left to read, minus what the reader needs ahead)
+				const float fadeLen = g_streamFade;
+				const double fadeSrc = fadeLen * srcRate / kRate * v.rate;
+				const double need = hqStream ? (closed ? 1.0 : (double)kIntHalf) : 1.0;
 				for (int i = 0; i < kBlock; ++i) {
 					if (!hqStream) {
 						if (r + 1 >= w) { // underrun: silence, and wait for the buffer to refill
@@ -1177,6 +1189,11 @@ void RenderBlock() {
 							}
 						}
 						m[i] = acc;
+					}
+					if (fadeLen >= 1.0f) {
+						const double left = (double)(w - r) - need - v.sfrac;
+						if (left < fadeSrc) m[i] *= (float)std::max(left / fadeSrc, 0.0);
+						if (v.fadeIn > 0) m[i] *= std::max(0.0f, 1.0f - (float)v.fadeIn-- / fadeLen);
 					}
 					v.sfrac += step;
 					while (v.sfrac >= 1.0) {
@@ -1648,6 +1665,7 @@ void ApplyMix(const MixSettings& m) {
 	g_limiterMode = m.limiterMode;
 	g_limiterPre = m.limiterPre;
 	g_hqResample = m.hqRead;
+	g_streamFade = m.streamFadeMs * 0.001f * 48000.0f;
 	g_limFastMs = m.limFastMs;
 	g_limSlowMs = m.limSlowMs;
 	g_limSlowK = m.limSlowK;
@@ -2874,6 +2892,11 @@ void SetMixQuality(int limiterMode, bool hqResample, bool premaster) {
 	g_hqDecode = hqResample;
 	SendMix();
 }
+void SetStreamFade(float ms) {
+	CtlCall cc;
+	g_c.mix.streamFadeMs = std::isfinite(ms) ? std::clamp(ms, 0.0f, 100.0f) : 0.0f;
+	SendMix();
+}
 int OutputMode() {
 	std::lock_guard<std::mutex> lk(g_ctlMtx);
 	return g_c.mix.limiterMode;
@@ -3245,6 +3268,7 @@ int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p) {
 	g_c.fxUsed[slot] = true;
 	v.c.slot = slot;
 	v.stream = std::move(buf);
+	v.c.own = p.own; // the listener's own stream: not spatialised (see VoiceParams::own)
 	// start from what is buffered now (no backlog)
 	v.stream->r.store(v.stream->w.load());
 	const uint8_t flags = kResetSlot | SetVoiceCtl(v, p);

@@ -16,8 +16,13 @@
 //   close    the stream closes: the buffered end is played and the voice ends (it must not hang on the few samples
 //            the interpolator cannot reach)
 //
+//   edges    a constant stream stalls and resumes: the cut and the return are faded, not a step of the waveform (a click)
+//   own      a stream played as the listener's own (VoiceParams::own) is the same in both ears, not spatialised
+//
 // Built with -DPBA_TESTS=ON: target pba_stream_resample_test (the module's defaults) and pba_stream_resample_red_test
-// (-DPBA_STREAM_LEGACY: pba_native_resample_hq off = linear reading; the image checks must fail there).
+// (-DPBA_STREAM_LEGACY: pba_native_resample_hq off = linear reading; the image checks must fail there);
+// pba_stream_fade_red_test (-DPBA_STREAM_NOFADE: pba_native_stream_fade 0; the edges checks must fail there) and
+// pba_stream_own_red_test (-DPBA_STREAM_NOOWN: own not passed, as PlayStream used to ignore it; the own check must fail).
 #include <phonon.h>
 
 #include <algorithm>
@@ -177,20 +182,22 @@ struct Feeder {
 // plays a stream of rate R fed from `x` through a ring of `ring` samples; returns the left ear (leading silence
 // dropped). `closeWait`: seconds to keep capturing after the last write
 struct Run {
-	std::vector<float> left;
+	std::vector<float> left, right;
 	int voicesAfter = -1; // live voices at the end (after the capture)
 };
 static Run PlayFed(int R, size_t ring, const std::vector<float>& x, double seconds, double stallFrom = -1, double stallTo = -1,
-                   bool keepOpen = true, double closeWait = 0) {
+                   bool keepOpen = true, double closeWait = 0, bool own = false, IPLVector3 at = {0, 0, -1}) {
 	auto buf = std::make_shared<StreamBuf>(ring);
 	buf->rate = (float)R;
 	double l, r;
 	render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 1.0f, &l, &r);
 	render::CaptureStart();
 	render::VoiceParams p;
-	p.pos = {0, 0, -1};
+	p.pos = at;
 	p.gain = 1;
-	// (a stream is always spatialised, PlayStream ignores own: straight ahead of the listener, through the HRTF)
+#ifndef PBA_STREAM_NOOWN
+	p.own = own;
+#endif
 	p.send = 0;
 	Run out;
 	int id = 0;
@@ -206,11 +213,16 @@ static Run PlayFed(int R, size_t ring, const std::vector<float>& x, double secon
 	render::StopVoice(id);
 	buf->closed = true;
 	out.left.resize(mix.size() / 2);
-	for (size_t i = 0; i < out.left.size(); ++i) out.left[i] = mix[i * 2];
+	out.right.resize(mix.size() / 2);
+	for (size_t i = 0; i < out.left.size(); ++i) {
+		out.left[i] = mix[i * 2];
+		out.right[i] = mix[i * 2 + 1];
+	}
 	size_t skip = 0;
-	while (skip < out.left.size() && out.left[skip] == 0.0f) ++skip;
+	while (skip < out.left.size() && out.left[skip] == 0.0f && out.right[skip] == 0.0f) ++skip;
 	skip = skip / 512 * 512;
 	out.left.erase(out.left.begin(), out.left.begin() + (std::ptrdiff_t)skip);
+	out.right.erase(out.right.begin(), out.right.begin() + (std::ptrdiff_t)skip);
 	return out;
 }
 
@@ -318,6 +330,73 @@ static void UnderrunTests() {
 	}
 }
 
+// a constant stream (DC): its cut to silence and its return from silence are steps of a known height. The output's
+// largest sample-to-sample step around an edge, over the steady level, says how abrupt the edge is: a hard cut of
+// the stream is a step of the whole level (smoothed only by the spatialisation filter), a fade of a few
+// milliseconds spreads it over hundreds of samples.
+static double EdgeStep(const std::vector<float>& v, size_t from, size_t to, double level) {
+	double m = 0;
+	for (size_t i = std::max<size_t>(from, 1); i < std::min(to, v.size()); ++i) m = std::max(m, (double)std::fabs(v[i] - v[i - 1]));
+	return m / level;
+}
+
+static void EdgeTests() {
+	std::printf("== edges: a constant stream (0.4) stalls 0.6 s then resumes; the step at each edge, over the steady level\n");
+	const int R = 22050;
+	const std::vector<float> x(R * 5, 0.4f);
+	const Run y = PlayFed(R, 16384, x, 3.0, 1.0, 1.6);
+	const std::vector<float>& v = y.left;
+	if (v.size() < 96000) { Check(false, "edges: captured too little", (double)v.size()); return; }
+	size_t zeroStart = 0, zeroLen = 0, best = 0, bestLen = 0;
+	for (size_t i = 0; i < v.size(); ++i) {
+		if (v[i] == 0.0f) {
+			if (zeroLen == 0) zeroStart = i;
+			++zeroLen;
+			if (zeroLen > bestLen) { bestLen = zeroLen; best = zeroStart; }
+		} else zeroLen = 0;
+	}
+	std::printf("  silent run: %zu samples (%.2f s) at %zu of %zu\n", bestLen, (double)bestLen / 48000, best, v.size());
+	if (bestLen < 4800 || best < 9600 + 4800 || best + bestLen + 16384 > v.size()) { Check(false, "edges: no stall / no resume found"); return; }
+	double lvl = 0;
+	for (size_t i = 4800; i < best - 4800; ++i) lvl += std::fabs(v[i]);
+	lvl /= (double)(best - 4800 - 4800);
+	// the steady level of the resumed stream, well after the return
+	double lvl2 = 0;
+	const size_t a0 = best + bestLen + 12000, a1 = v.size() - 4800;
+	for (size_t i = a0; i < a1; ++i) lvl2 += std::fabs(v[i]);
+	lvl2 /= (double)(a1 - a0);
+	const double out = EdgeStep(v, best - 3000, best + 1, lvl), back = EdgeStep(v, best + bestLen - 1, best + bestLen + 3000, lvl2);
+	std::printf("  steady level %.4f before, %.4f after; largest step at the cut %.4f, at the return %.4f (x the level)\n", lvl, lvl2, out, back);
+	Check(lvl > 0.05 && lvl2 > 0.05, "edges: the stream plays before the stall and after it", std::min(lvl, lvl2));
+	Check(out < 0.03, "edges: the cut to silence is faded (largest step < 3 % of the level)", out);
+	Check(back < 0.03, "edges: the return from silence is faded in (largest step < 3 % of the level)", back);
+}
+
+// the listener's own stream: not spatialised, as a Play of the own flag. Left of the listener a spatialised mono
+// stream is louder in the left ear by several dB and differs in the right (ITD / HRTF); an own one is the same in both ears
+static void OwnTests() {
+	std::printf("== own: a stream off to the listener's left, played as the listener's own\n");
+	const int R = 22050;
+	const std::vector<float> x = BandNoise(R, 2.5);
+	double errDb[2] = {0, 0}, ildDb[2] = {0, 0};
+	for (int own = 0; own < 2; ++own) {
+		const Run y = PlayFed(R, RingFor(R), x, 2.0, -1, -1, true, 0, own != 0, {-2, 0, 0});
+		const size_t n = std::min(y.left.size(), y.right.size());
+		if (n < 48000) { Check(false, "own: captured too little", (double)n); return; }
+		double el = 0, er = 0, ed = 0;
+		for (size_t i = 9600; i + 4800 < n; ++i) {
+			el += (double)y.left[i] * y.left[i];
+			er += (double)y.right[i] * y.right[i];
+			ed += ((double)y.left[i] - y.right[i]) * ((double)y.left[i] - y.right[i]);
+		}
+		errDb[own] = Db(ed / std::max(el, 1e-30));
+		ildDb[own] = Db(el / std::max(er, 1e-30));
+		std::printf("  %s: left / right level %6.2f dB, (left - right) energy %7.1f dB under the left ear\n", own ? "own    " : "spatial", ildDb[own], errDb[own]);
+	}
+	Check(errDb[0] > -20, "own: (reference) a spatialised stream differs between the ears", errDb[0]);
+	Check(std::fabs(ildDb[1]) < 0.5 && errDb[1] < -60, "own: the stream is the same in both ears (not spatialised)", errDb[1], ildDb[1]);
+}
+
 static void CloseTests() {
 	std::printf("== close: a stream whose buffer is closed ends once drained\n");
 	const int R = 22050;
@@ -346,9 +425,15 @@ int main() {
 	render::SetMixQuality(render::OutputMode(), false); // linear reading of the streams
 	std::printf("(legacy: pba_native_resample_hq 0, linear reading)\n");
 #endif
+#ifdef PBA_STREAM_NOFADE
+	render::SetStreamFade(0); // no fade at the stream's edges (pba_native_stream_fade 0)
+	std::printf("(no fade: pba_native_stream_fade 0)\n");
+#endif
 	ImageTests();
 	WrapTests();
 	UnderrunTests();
+	EdgeTests();
+	OwnTests();
 	CloseTests();
 	render::Stop();
 	std::printf(fails ? "FAILED %d\n" : "PASS\n", fails);
