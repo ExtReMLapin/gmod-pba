@@ -24,7 +24,7 @@
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]),
-//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k),
@@ -2517,6 +2517,13 @@ LUA_FUNCTION(SetHrtfBlend) {
 	return 0;
 }
 
+// SetPitchGlide(ms): time constant with which a voice's reading speed approaches the pitch last given to Update (0 = off,
+// the default: the speed of the last pitch from the next block on). Smooths the staircase of one Doppler value per frame.
+LUA_FUNCTION(SetPitchGlide) {
+	render::SetPitchGlide((float)LUA->CheckNumber(1));
+	return 0;
+}
+
 // SetOutputMode(0 headphones | 1 speakers)
 LUA_FUNCTION(SetOutputMode) {
 	render::SetOutputMode((int)LUA->CheckNumber(1));
@@ -3087,6 +3094,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetOutputMode");
 	LUA->PushCFunction(SetHrtfBlend);
 	LUA->SetField(-2, "SetHrtfBlend");
+	LUA->PushCFunction(SetPitchGlide);
+	LUA->SetField(-2, "SetPitchGlide");
 	LUA->PushCFunction(SetReflections);
 	LUA->SetField(-2, "SetReflections");
 	LUA->PushCFunction(SetLimits);

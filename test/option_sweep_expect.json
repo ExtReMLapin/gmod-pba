@@ -199,6 +199,10 @@
   "pos0": "hook",
   "why": "native module HRTF share"
  },
+ "native_pitch_glide": {
+  "pos0": "hook",
+  "why": "native module pitch glide"
+ },
  "native_out": {
   "pos0": "hook",
   "why": "native module output mode"

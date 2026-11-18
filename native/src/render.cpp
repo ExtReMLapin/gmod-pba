@@ -257,6 +257,7 @@ struct Voice : VoiceCtl {
 	bool alive = false;
 	bool started = false; // claimed its first block (see g_start): a stop no longer cancels it, it fades out
 	float gainCur = -1;   // current values, smoothed towards the targets over each block
+	float rateCur = -1;   // reading speed at the end of the last block (SetPitchGlide); -1: not rendered yet
 	bool wasPaused = false; // skipped during the previous block: fades in on resuming (no step in the waveform)
 	// share of the output taken from the path effect (0 straight line .. 1 baked path), smoothed over
 	// one block: a voice switching between the two (Update with or without sh) crossfades instead of
@@ -342,6 +343,7 @@ int g_outMode = 0; // 0 binaural, 1 panning
 // plane (6-16 kHz 4 to 7 dB under the file's own spectrum in front and behind, +2 dB at 2-6 kHz), where the engine's
 // panning leaves the spectrum alone; the blend gives some of that timbre back for less precise localisation.
 std::atomic<float> g_hrtfBlend{1.0f};
+std::atomic<float> g_pitchGlideMs{0.0f}; // SetPitchGlide
 IPLVector3 g_lastDir{};                // last binaural direction computed (debug)
 constexpr int kMaxLag = 48;           // +-1 ms at 48 kHz
 // the debug meters (g_xc, dbgIn/L/R) run only once Debug() was called (a test reads them): the ITD
@@ -1109,6 +1111,18 @@ void RenderBlock() {
 			}
 			v.started = true;
 		}
+		// reading speed over this block: the voice's pitch (Update), or with SetPitchGlide the speed approaching it
+		// from the end of the last block (a time constant: one value per game frame is a staircase of pitch steps),
+		// moved sample by sample from `rate0` to `rate1`
+		float rate0 = v.rate, rate1 = v.rate;
+		const float glideMs = g_pitchGlideMs.load(std::memory_order_relaxed);
+		if (glideMs > 0 && !v.dying) {
+			if (v.rateCur < 0) v.rateCur = v.rate;
+			rate0 = v.rateCur;
+			rate1 = rate0 + (v.rate - rate0) * (1.0f - std::exp(-(float)kBlock / ((float)kRate * glideMs * 0.001f)));
+			if (std::fabs(v.rate - rate1) < 1e-6f) rate1 = v.rate;
+			v.rateCur = rate1;
+		}
 		float* m = g_mono.data[0];
 		if (v.stream) {
 			// captured stream: resample to kRate; the reading speed is nudged (+-0.5 %) to hold
@@ -1139,7 +1153,7 @@ void RenderBlock() {
 				std::fill(m, m + kBlock, 0.0f);
 			} else {
 				const double adj = std::clamp((avail - target) / target * 0.01, -0.005, 0.005);
-				const double step = srcRate / kRate * (1.0 + adj) * v.rate;
+				const double step = srcRate / kRate * (1.0 + adj) * (0.5 * ((double)rate0 + (double)rate1));
 				const bool hqStream = g_hqResample;
 				uint64_t r = b.r.load(std::memory_order_relaxed);
 				const uint64_t w = b.w.load(std::memory_order_acquire);
@@ -1242,7 +1256,7 @@ void RenderBlock() {
 			const size_t k = (size_t)v.cursor;
 			const float f = (float)(v.cursor - (double)k);
 			float sd = 0;
-			if (hqRead && (f != 0.0f || v.rate != 1.0f)) {
+			if (hqRead && (f != 0.0f || rate0 != 1.0f || rate1 != 1.0f)) {
 				const InterpAt at = InterpLocate(v.cursor);
 				m[i] = InterpRead(pcm.data(), (long)pcm.size(), at, il);
 				if (st) sd = InterpRead(side.data(), (long)side.size(), at, il);
@@ -1262,7 +1276,7 @@ void RenderBlock() {
 				m[i] *= fi;
 				if (st) g_side[i] *= fi;
 			}
-			v.cursor += v.rate;
+			v.cursor += rate0 + (rate1 - rate0) * (((float)i + 0.5f) / (float)kBlock);
 		}
 		}
 		// gain smoothing over the block (no zipper noise / clicks on updates)
@@ -2397,6 +2411,8 @@ void SetOutputMode(int mode) {
 }
 
 void SetHrtfBlend(float blend) { g_hrtfBlend = std::clamp(blend, 0.0f, 1.0f); }
+
+void SetPitchGlide(float ms) { g_pitchGlideMs = std::clamp(ms, 0.0f, 500.0f); }
 
 void SetPaused(bool paused) {
 	CtlCall cc;
