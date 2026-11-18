@@ -38,7 +38,7 @@ local function loopStage(data, snd)
 		-- (only the control events of a sound — stop, change — look up the key: a player's plain sounds are hot)
 		local ctl = band(data.Flags or 0, SND_STOP + STOP_LOOPING + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 		local followed = ctl and LP.active[e:EntIndex() .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName]
-		if not followed and (ctl or (A.cfg.long_player_camera or 0) < 0.5 or A.HearsFromSelf(e) or A.IsLooping(data.SoundName)) then
+		if not followed and (ctl or (A.cfg.long_player_camera or 1) < 0.5 or A.HearsFromSelf(e) or A.IsLooping(data.SoundName)) then
 			return
 		end
 	end
