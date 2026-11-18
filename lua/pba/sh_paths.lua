@@ -2955,6 +2955,23 @@ function P.LineState(S, L, srcEnt, cfg)
 	st = st .. (wall and "1" or "0") .. (crossed and "1" or "0")
 	return st
 end
+--- True when something solid stands between the point p and the point (x, y, z) (P.LineState's trace: the walls'
+-- mask and filter, from the higher end). The cache's key is a 32 u cell: two points of one cell can lie either side
+-- of a floor or a wall, and when the straight line to the listener is blocked for both (the same line state) a
+-- result computed for one would stand for the other (pba_cache_barrier). Skipped under half a unit: the same emitter
+-- shooting again from where it stood costs no trace.
+do -- (a block: the file is at Lua's limit of 200 locals)
+	local sepV = Vector()
+	function P.BarrierBetween(p, x, y, z, ent)
+		local dx, dy, dz = p.x - x, p.y - y, p.z - z
+		if dx * dx + dy * dy + dz * dz <= 0.25 then return false end
+		sepV.x, sepV.y, sepV.z = x, y, z
+		ignoreEnt = ent
+		if p.z >= z then lineTr.start, lineTr.endpos = p, sepV else lineTr.start, lineTr.endpos = sepV, p end
+		util.TraceLine(lineTr)
+		return lineOut.Hit and lineOut.Fraction < 1
+	end
+end
 local floor, format = math.floor, string.format
 function P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	local st = P.LineState(S, L, srcEnt, cfg)
@@ -3230,7 +3247,11 @@ local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge acros
 -- with its position only), and its shots are just as alike.
 local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emitter)
 	local c = P.cache[key]
-	if c and now - c.t < cfg.cache_ttl then return c.r end
+	local barrier = (cfg.cache_barrier or 1) >= 0.5
+	if c and now - c.t < cfg.cache_ttl then
+		-- (the result of a cell-mate with a floor or a wall between: not this one's)
+		if not (barrier and (P.BarrierBetween(S, c.sx, c.sy, c.sz, emitter) or P.BarrierBetween(L, c.lx, c.ly, c.lz, emitter))) then return c.r end
+	end
 	if timeOn then
 		local mv2 = sq(cfg.reeval_move or 8)
 		local maxAge = cfg.reeval_max_s or 1
@@ -3238,7 +3259,8 @@ local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emit
 		for i = #list, 1, -1 do
 			local m = list[i]
 			if m.ent == emitter and m.gen == P.cacheGen and m.lvl == sndlvl and m.state == lineState and now - m.t <= maxAge
-				and m.S:DistToSqr(S) <= mv2 and m.L:DistToSqr(L) <= mv2 then
+				and m.S:DistToSqr(S) <= mv2 and m.L:DistToSqr(L) <= mv2
+				and not (barrier and (P.BarrierBetween(S, m.S.x, m.S.y, m.S.z, emitter) or P.BarrierBetween(L, m.L.x, m.L.y, m.L.z, emitter))) then
 				P.timeStats.reused = P.timeStats.reused + 1
 				return m.r
 			end
@@ -3255,7 +3277,8 @@ local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter,
 		local ttl = cfg.cache_ttl
 		for k, e in pairs(P.cache) do if now - e.t >= ttl then P.cache[k] = nil end end
 	end
-	P.cache[key] = { t = now, r = r }
+	-- (the points as numbers: an owner may move the Vector it handed in place)
+	P.cache[key] = { t = now, r = r, sx = S.x, sy = S.y, sz = S.z, lx = L.x, ly = L.y, lz = L.z }
 	if timeOn then
 		P.timeStats.computed = P.timeStats.computed + 1
 		local list = P.timeMemo

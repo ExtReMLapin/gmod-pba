@@ -1458,6 +1458,74 @@ local SUITE = {
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Compute cache: two sources of one 32 u cell with a floor slab between them (listener hidden from both) never share a result; neighbours with nothing between them still do", func = function()
+			-- cell z 32..63. A floor slab z 40..56 over everything; a concrete wall x 100..110 between the sources
+			-- (x = 200) and the listener (0, 8, 60), so the straight line of both ends is blocked ("w"): the key's line
+			-- state cannot tell them apart. The low source's line also crosses the slab (x 33..167 of its path).
+			local slab = { Vector(-1000, -1000, 40), Vector(1000, 1000, 56) }
+			local wall = { Vector(100, -200, -100), Vector(110, 200, 200) }
+			local boxes = { slab, wall }
+			local savedWalls, savedTrace, savedGet, savedNative = P.Walls, util.TraceLine, A.Graph.Get, A.Native
+			A.Native = nil -- (the module's own occlusion would answer in game, not these boxes)
+			P.Walls = function(a, b)
+				local out = {}
+				for _, bx in ipairs(boxes) do
+					local t0, t1 = segBox(a, b, bx[1], bx[2])
+					if t0 and t1 - t0 > 1e-6 then
+						local e, x = a + (b - a) * t0, a + (b - a) * t1
+						out[#out + 1] = { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" }
+					end
+				end
+				table.sort(out, function(p, q) return p.t < q.t end)
+				return out
+			end
+			util.TraceLine = function(t)
+				local out = traceOut(t)
+				local best
+				for _, bx in ipairs(boxes) do
+					local f = segBox(t.start, t.endpos, bx[1], bx[2])
+					if f and (not best or f < best) then best = f end
+				end
+				out.Hit, out.Fraction, out.StartSolid, out.Entity = best ~= nil, best or 1, false, nil
+				return out
+			end
+			A.Graph.Get = function() return nil end
+			local cfg = setmetatable({ probes = 0, path_props = 0 }, { __index = CFG })
+			local function rawLoss(r) return r.trans.rawLossDb or r.trans.lossDb end -- (lossDb is cut by the sound's headroom)
+			local ok, err = pcall(function()
+				local L, hi, lo = Vector(0, 8, 60), Vector(200, 8, 60), Vector(200, 8, 36)
+				expect(#P.Walls(hi, L)).to.equal(1)
+				expect(#P.Walls(lo, L)).to.equal(2)
+				expect(P.LineState(hi, L)).to.equal(P.LineState(lo, L)) -- same line state, same cell: the key was the same
+				P.InvalidateCache()
+				local alone = rawLoss(P.Compute(lo, L, 75, cfg))
+				for _, order in ipairs({ { hi, lo }, { lo, hi } }) do
+					P.InvalidateCache()
+					local seen = {}
+					for _, S in ipairs(order) do seen[S == lo and "lo" or "hi"] = rawLoss(P.Compute(S, L, 75, cfg)) end
+					expect(near(seen.lo, alone, 1e-6)).to.beTrue()
+					expect(seen.lo > seen.hi + 3).to.beTrue() -- the slab's loss is the low source's own
+				end
+				-- no floor between two neighbours: one computation serves both (the cache's purpose)
+				boxes = { wall }
+				P.InvalidateCache()
+				local a = P.Compute(Vector(200, 8, 36), L, 75, cfg)
+				local b = P.Compute(Vector(205, 12, 40), L, 75, cfg)
+				expect(rawequal(a, b)).to.beTrue()
+				-- same for the listener end: a slab between two listeners of one cell
+				boxes = { slab, wall }
+				local S = Vector(200, 8, 60)
+				local Lhi, Llo = Vector(0, 8, 60), Vector(0, 8, 36)
+				P.InvalidateCache()
+				local lAlone = rawLoss(P.Compute(S, Llo, 75, cfg))
+				P.InvalidateCache()
+				P.Compute(S, Lhi, 75, cfg)
+				expect(near(rawLoss(P.Compute(S, Llo, 75, cfg)), lAlone, 1e-6)).to.beTrue()
+			end)
+			P.Walls, util.TraceLine, A.Graph.Get, A.Native = savedWalls, savedTrace, savedGet, savedNative
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Compute cache: keyed on the emitter (a crate's own sound ignores the crate, another sound from there not)", func = function()
 			local crate = { IsValid = function() return true end, GetClass = function() return "prop_physics" end, EntIndex = function() return 9997 end,
 				IsWorld = function() return false end }
