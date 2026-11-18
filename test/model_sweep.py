@@ -131,8 +131,13 @@ def lerp(p, q, t):
 
 
 maps = OPT.get("maps", ",".join(CASES)).split(",")
-ok_all, t0 = True, time.time()
+ok_all, t0, skipped = True, time.time(), 0
+installed = set(call("map_list", {"limit": 10000}).get("maps", []))
 for m in maps:
+    if m not in installed:  # a map that is not installed is skipped, not a failure (and not a crash)
+        print(m, "SKIP: map not installed", flush=True)
+        skipped += 1
+        continue
     if lua("client", "return game.GetMap()") != m:
         call("map_load", {"map": m, "maxplayers": 4}, timeout=300)
         time.sleep(6)
@@ -222,5 +227,5 @@ for m in maps:
         if RECIP:
             rd = max(((abs(r[1] - r[9]), r[0]) for r in rows if not r[8] and len(r) > 9), default=(0, -1))
             print(f"    RECIP largest |level(S->L) - level(L->S)| = {rd[0]:.2f} dB at point {rd[1]}", flush=True)
-print(f"{'PASS' if ok_all else 'FAIL'} ({time.time() - t0:.0f} s)")
+print(f"{'PASS' if ok_all else 'FAIL'} ({time.time() - t0:.0f} s)" + (f", {skipped} map(s) skipped (not installed)" if skipped else ""))
 sys.exit(0 if ok_all else 1)
