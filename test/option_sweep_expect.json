@@ -19,6 +19,10 @@
   "pos0": "hook",
   "why": "server: other addons' EntityEmitSound hooks run first (test hook_order)"
  },
+ "source_free": {
+  "pos0": "same",
+  "why": "a source inside the solid or exactly on a face of it: the sweep's scenes put theirs in the open (test source_embedded)"
+ },
  "sound_origin": {
   "pos0": "hook",
   "why": "where an entity's sound is taken (A.SoundPos), outside P.Compute: its scenes give the position (test sound_origin)"
