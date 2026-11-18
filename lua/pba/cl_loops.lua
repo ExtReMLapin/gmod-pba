@@ -18,6 +18,10 @@ local AC = A.AC
 -- due goes back to the engine, with one console line. (d1_trainstation_05, user report 2026-11-14: Kleiner's
 -- and Barney's lines captioned, never heard, not reproduced: whatever the cause, the line is not lost.)
 local HANDBACK_S, AUDIBLE = 0.2, 1e-3
+-- pba_loops_start_sync: how long a mirror waits for a source entity the client may receive late (a speaker the server
+-- created this tick) before it is placed at the sound's position. Counted in evaluation turns it was 3 x 0.25 s and
+-- longer than HANDBACK_S: the silent-line watchdog gave one copy to the engine while its twin waited on.
+local ENT_GRACE_S = 0.1
 A.renderedT = A.renderedT or {} -- file (lower case, no sound chars) -> RealTime() of its last audible rendering
 A.handedBack = A.handedBack or {} -- the lines handed back, last 16 (tests, pba_status)
 local function lineKey(name) return string.lower((string.gsub(A.SoundFile(name or ""), "\\", "/"))) end
@@ -483,6 +487,27 @@ function MIRROR.native.update(m, S, L, gain, el, em, eh, pos, pitch, send)
 	else N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m) end
 end
 
+--- The copies of one emission (the Breencast's speakers: same file, same server start stamp) share one clock: a copy
+-- that starts after another one of its emission plays from where that one is, so the copies stay in step whatever
+-- made it late (its evaluation, its decode, the wait for its entity). Equal copies a few tens of ms apart are a
+-- comb filter. Seconds into the file, nil for the first copy (pba_loops_start_sync).
+LP.emissions = LP.emissions or {}
+local function syncOffset(m, now)
+	if not (m.once and m.stKey) or (A.cfg.loops_start_sync or 1) < 0.5 then return nil end
+	local g = LP.emissions[m.stKey]
+	if not g then return nil end
+	local off = now - g.t + g.off
+	local dur = A.PlaySeconds(m.name, m.pitch)
+	if off < 0.004 or (dur and off > dur - 0.1) then return nil end
+	return off
+end
+LP.SyncOffset = syncOffset -- (tests)
+local function noteEmission(m, now, offset)
+	if not (m.once and m.stKey) or LP.emissions[m.stKey] then return end
+	for k, g in pairs(LP.emissions) do if now - g.t > 60 then LP.emissions[k] = nil end end
+	LP.emissions[m.stKey] = { t = now, off = offset or 0 }
+end
+
 function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	local N = A.Native
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
@@ -502,8 +527,11 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	-- the engine's mix value and ducking (cl_mix): the loop's groups, found once
 	if A.Mix and not m.mixG then m.mixG = A.Mix.GroupsOf(m.name, m.ent, m.chan, m.lvl) end
 	local protect = N.ProtectLine(m.chan)
-	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, nil, protect, N.PauseFlag(m.flags))
-		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, nil, protect, N.PauseFlag(m.flags))
+	local t0 = RealTime()
+	local offset = syncOffset(m, t0)
+	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, offset, protect, N.PauseFlag(m.flags))
+		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, offset, protect, N.PauseFlag(m.flags))
+	if (id or 0) > 0 then noteEmission(m, t0, offset) end
 	-- (pba_loops_native_fail: a voice the module could not start leaves the line to the engine patch below;
 	-- marked started, a long line was then dropped there as "already played": captioned, never heard)
 	if (id or 0) > 0 or (A.cfg.loops_native_fail or 1) < 0.5 then m.started = true end
@@ -512,8 +540,8 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	m.stSel, m.stW = nil, nil
 	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
 	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_end or 1) >= 0.5 then
-		local e = A.PlayEnd(m.name, m.pitch, nil, A.END_GRACE)
-		if e then m.endT = math.max(m.endT, e) end
+		local e = A.PlayEnd(m.name, m.pitch, offset and t0 - offset or nil, A.END_GRACE)
+		if e then m.endT = offset and e or math.max(m.endT, e) end
 	end
 	-- its source reverb slot at once (else only at the next evaluation)
 	if m.nativeId then
@@ -569,7 +597,9 @@ function apply(m, fade)
 	if not IsValid(ent) then
 		-- not networked (yet?): after a grace period, fall back to an anchor at the position
 		m.waited = (m.waited or 0) + 1
-		if m.waited < 3 and m.idx ~= 0 and not m.handBack then return end
+		local wait
+		if m.born and (A.cfg.loops_start_sync or 1) >= 0.5 then wait = RealTime() - m.born < ENT_GRACE_S else wait = m.waited < 3 end
+		if wait and m.idx ~= 0 and not m.handBack then return end
 		ent = anchorFor(m)
 		if not ent then return end
 	end
@@ -841,7 +871,8 @@ net.Receive("pba_loop", function()
 	if not m and once and op == OP_UPDATE and (A.cfg.loops_once_end or 1) >= 0.5 then return end
 	local new = not m
 	if not m then
-		m = { key = key, name = name, idx = idx, chan = chan, flags = d.Flags, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil }
+		m = { key = key, name = name, idx = idx, chan = chan, flags = d.Flags, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil,
+			born = RealTime(), stKey = d.stMs and (name .. "|" .. d.stMs) or nil }
 		-- a speaker line: its DSP is the speaker preset sv_loops wrote for the flag (none on a server without
 		-- dsp_speaker: this client's own then, for its engine patch)
 		if speaker then
@@ -869,6 +900,13 @@ net.Receive("pba_loop", function()
 	end
 	if op == OP_UPDATE and (m.nativeId or m.patch) then return updateMirror(m, once, vol, pitch) end
 	apply(m, 0)
+	-- a source the client does not know: its wait is a tenth of a second (ENT_GRACE_S), taken here and not at its next
+	-- evaluation turn (up to 0.25 s later, staggered between the mirrors: the copies of one emission started apart)
+	if new and m.once and m.born and (A.cfg.loops_start_sync or 1) >= 0.5 and not m.nativeId and not m.patch and not m.done then
+		timer.Simple(A.RealDelay(ENT_GRACE_S + 0.01), function()
+			if LP.mirrors[m.key] == m and not m.done and not m.nativeId and not m.patch and not m.handBack and not m.decoding then apply(m, 0) end
+		end)
+	end
 end)
 
 --- A long line mirror nothing renders: its module voice (if any, inaudible) stopped, the engine patch plays it
