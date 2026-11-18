@@ -671,7 +671,7 @@ def source_embedded():
         on = job("server", "source_embedded.lua", 60)
         call("console_exec", {"realm": "server", "cmd": "pba_source_free 0"})
         wait_lua("server", "return (pba.cfg.source_free or 1) < 0.5", 10)
-        off = job("server", "source_embedded.lua", 60, pre="EXPECT_ON = false")
+        off = job("server", "source_embedded.lua", 60, pre="local EXPECT_ON = false")
     finally:
         call("console_exec", {"realm": "server", "cmd": "pba_source_free 1"})
     okon = isinstance(on, dict) and on.get("pass") is True
