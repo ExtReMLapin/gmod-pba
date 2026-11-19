@@ -2170,18 +2170,16 @@ local function altBranches(f, n, L)
 	end)
 	local out, roots = {}, {}
 	f.altPulled = f.altPulled or {}
-	local byFork = A.On(A.cfg, "route_alt_fork")
 	for _, c in ipairs(cands) do
 		local x, m = c[2], c[3]
 		local rt = f.root[m]
-		-- one per seed reached and per probe it leaves the branch at (sidetracks to one seed, or from one
-		-- probe, are mostly one way: the cheapest kept). pba_route_alt_fork: per probe it leaves at only: a
-		-- seed is a grid artefact (the seeds the listener sees change step by step), and two ways that
-		-- leave the branch far apart (the south way at its first bend, a parallel lane at the last) reached
-		-- one seed one step and two the next, so the way the cheapest parallel lane shadowed was lost
-		-- (rp_downtown's street walk, step 168: 4 dB)
-		if rt and not roots[-B[x]] and (byFork or not roots[rt]) then
-			roots[rt], roots[-B[x]] = true, true
+		-- one per probe it leaves the branch at (sidetracks from one probe are mostly one way: the cheapest
+		-- kept), not also one per seed reached: a seed is a grid artefact (the seeds the listener sees change
+		-- step by step), and two ways that leave the branch far apart (the south way at its first bend, a
+		-- parallel lane at the last) reached one seed one step and two the next, so the way the cheapest
+		-- parallel lane shadowed was lost (rp_downtown's street walk, step 168: 4 dB)
+		if rt and not roots[B[x]] then
+			roots[B[x]] = true
 			local key = n.id .. ":" .. B[x] .. ":" .. m
 			local pts = f.altPulled[key]
 			if not pts then
