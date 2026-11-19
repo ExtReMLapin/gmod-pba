@@ -516,7 +516,7 @@ struct MixSettings {
 	float limFastMs = 6.0f, limSlowMs = 50.0f, limSlowK = 3.0f; // limiter release tuning (see Limiter)
 	bool paused = false;
 	bool dfOn = true;        // the diffuse-field equaliser of the reverb bus's binaural decode (SetDiffuseFieldEq)
-	bool limiterPre = false; // the output stage works before the master volume (SetMixQuality premaster)
+	bool limiterPre = true;  // the output stage works before the master volume (SetMixQuality premaster)
 	bool hqRead = true;      // the voices' windowed-sinc reader (SetMixQuality hqResample), else linear interpolation
 	// the debug meters (g_xc, dbgIn/L/R) run only once Debug() was called (a test reads them): the ITD
 	// cross-correlation alone is ~40 000 multiply-adds per block on the audio thread
@@ -527,7 +527,7 @@ struct MixSettings {
 	// plane (6-16 kHz 4 to 7 dB under the file's own spectrum in front and behind, +2 dB at 2-6 kHz), where the engine's
 	// panning leaves the spectrum alone; the blend gives some of that timbre back for less precise localisation.
 	float hrtfBlend = 1.0f;
-	float pitchGlideMs = 0.0f; // SetPitchGlide
+	float pitchGlideMs = 30.0f; // SetPitchGlide
 };
 MixSettings g_set; // audio thread: the settings in force (ApplyMix)
 // output samples of the fade in / out of a captured stream's edges (0 = none)

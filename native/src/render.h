@@ -80,8 +80,8 @@ void SetOutputMode(int mode); // 0 headphones (binaural), 1 speakers (panning)
 // back in: the timbre of a source in front or behind comes closer to the file's, the direction gets blurrier.
 void SetHrtfBlend(float blend);
 // Time constant (ms) with which a voice's reading speed approaches the pitch last given to Update (Doppler of a fly-by:
-// one value per game frame was a staircase of pitch steps, 16 cents at 30 updates a second). 0 = off, the default: the
-// reading speed is the last pitch from the start of the next block, as before.
+// one value per game frame was a staircase of pitch steps, 16 cents at 30 updates a second). Default 30 (pba_native_pitch_glide).
+// 0 = off: the reading speed is the last pitch from the start of the next block, as before.
 void SetPitchGlide(float ms);
 void SetWet(float room, float echo);
 // extra room-reverb send of diffuse voices (see VoiceParams::diffuse)
@@ -215,8 +215,9 @@ float OutputClip(float x); // the legacy output soft clip (master volume 1)
 //              images) instead of miniaudio's linear interpolation (-1 dB at 10 kHz, images); the same sinc reads a
 //              captured stream (PlayStream) at its own rate, live;
 //  premaster   the output stage (limiter / clip) acts BEFORE the master volume, as the engine's int16 mix does (its
-//              loud sounds clip at full scale whatever the volume); false: after it, so at a low volume it never acts.
-void SetMixQuality(int limiterMode, bool hqResample, bool premaster = false);
+//              loud sounds clip at full scale whatever the volume; pba_native_limit_pre, default on); false: after it,
+//              so at a low volume it never acts.
+void SetMixQuality(int limiterMode, bool hqResample, bool premaster = true);
 // Fade of a captured stream's edges (pba_native_stream_fade, default 5 ms; 0 = none): a stream voice fades in when it
 // starts or comes back from an underrun, and fades out over the last `ms` of buffered data before it runs dry (or
 // ends), so that the cut / the return is not a step of the waveform (a click).

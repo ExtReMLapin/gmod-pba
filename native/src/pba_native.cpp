@@ -2560,8 +2560,8 @@ LUA_FUNCTION(SetHrtfBlend) {
 	return 0;
 }
 
-// SetPitchGlide(ms): time constant with which a voice's reading speed approaches the pitch last given to Update (0 = off,
-// the default: the speed of the last pitch from the next block on). Smooths the staircase of one Doppler value per frame.
+// SetPitchGlide(ms): time constant with which a voice's reading speed approaches the pitch last given to Update (default 30;
+// 0 = off: the speed of the last pitch from the next block on). Smooths the staircase of one Doppler value per frame.
 LUA_FUNCTION(SetPitchGlide) {
 	render::SetPitchGlide((float)LUA->CheckNumber(1));
 	return 0;
@@ -2946,13 +2946,13 @@ LUA_FUNCTION(CaptureState) {
 // SetMixQuality(limiterMode, hqResample [, premaster]) -> limiterMode, hqResample: limiterMode 1 (default) = a lookahead peak
 // limiter, transparent below 0.98; 0 = the legacy soft clip from 0.8; 2 = hard clip at full scale (the engine's
 // int16 mix). hqResample (default true): the windowed-sinc 48 kHz resampler of the sounds decoded from now on
-// instead of the linear one. premaster (default false): the limiter / clip acts before the master volume, as the
+// instead of the linear one. premaster (default true): the limiter / clip acts before the master volume, as the
 // engine's mix does (a loud sound clips at full scale whatever the volume), not after it. Absent in older modules
 // (Lua: nil, nothing pushed); an older module ignores the third argument.
 LUA_FUNCTION(SetMixQuality) {
 	const int lim = LUA->IsType(1, Type::Number) ? (int)LUA->GetNumber(1) : render::OutputMode();
 	const bool hq = LUA->IsType(2, Type::Bool) ? LUA->GetBool(2) : (LUA->IsType(2, Type::Number) ? LUA->GetNumber(2) >= 0.5 : true);
-	render::SetMixQuality(lim, hq, LUA->IsType(3, Type::Bool) ? LUA->GetBool(3) : false);
+	render::SetMixQuality(lim, hq, LUA->IsType(3, Type::Bool) ? LUA->GetBool(3) : true);
 	LUA->PushNumber(render::OutputMode());
 	LUA->PushBool(hq);
 	return 2;
