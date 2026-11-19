@@ -264,6 +264,7 @@ struct Voice : VoiceCtl {
 	// jumping from one spatialisation to the other mid-sound. -1: not rendered yet
 	float pathMixCur = -1;
 	float sendCur = -1;
+	float difCur = -1; // diffuse share (room-scaled) at the end of the last block (SetDiffuseSmooth); -1: not rendered yet
 	// srcSendCur is the level fed into srcFedSlot during the last block. Unbinding or rebinding fades the old
 	// slot's input to 0 over one block from there (a radio whose slot was dropped stopped feeding it in one step:
 	// a click in its reverb)
@@ -367,6 +368,7 @@ float g_diffuseSend = 1.5f;
 // open sky: -8 dB of direct for a winding route). The share is scaled by the room's mid-band reverb time
 // over this reference (s): 1 at and above it (a room: unchanged), 0 with no tail. 0 = always 1 (former).
 float g_diffuseRtRef = 1.0f;
+bool g_difSmooth = true; // SetDiffuseSmooth: the diffuse share ramped over the block (Voice::difCur)
 Reflection g_echo[kEchoSlots];     // per-source reflections
 Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax), bank 0
 Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same input as g_src[k])
@@ -527,6 +529,7 @@ struct MixSettings {
 	float uw = 0;
 	float wetRoom = 0, wetEcho = 0;
 	float diffuseSend = 1.5f, diffuseRtRef = 1.0f;
+	bool difSmooth = true; // SetDiffuseSmooth
 	float srcScale = 1;
 	bool slotFbGain = true; // SetSlotFallbackGain
 	float limFastMs = 6.0f, limSlowMs = 50.0f, limSlowK = 3.0f;
@@ -1355,20 +1358,27 @@ void RenderBlock() {
 		// x: the signal for the listener's room (muffled like the direct sound: what reaches the
 		// listener's space through walls and openings), weighted by the share of the branch (path or
 		// straight line) that renders it
-		auto feedRoom = [&](const float* x, float k, float w0, float w1) {
+		// k0 / k1: the extra factor at the start / end of the block (the diffuse boost, ramped)
+		auto feedRoom = [&](const float* x, float k0, float k1, float w0, float w1) {
 			float* snd = g_room.in.data[0];
 			for (int i = 0; i < kBlock; ++i) {
 				const float t = (float)i / kBlock;
-				snd[i] += x[i] * (s0 + (s1 - s0) * t) * k * (w0 + (w1 - w0) * t);
+				snd[i] += x[i] * (s0 + (s1 - s0) * t) * (k0 + (k1 - k0) * t) * (w0 + (w1 - w0) * t);
 			}
 			g_room.fed = true;
 		};
 		// diffuse energy (long winding path): the direct part gives way to the room reverb send, and
-		// its direction blurs (binaural spatial blend); the total energy is kept
+		// its direction blurs (binaural spatial blend); the total energy is kept. With g_difSmooth the share moves from
+		// the last block's to this one over the block, like the gain (taken whole, an Update from 0 to 0.85 dropped the
+		// direct sound by 8 dB in one sample); the spatial blend, one value per block, takes the block's mean share.
 		const float encl = g_diffuseRtRef > 0 ? std::clamp(g_roomRt[1] / g_diffuseRtRef, 0.0f, 1.0f) : 1.0f;
-		const float dif = v.diffuse * encl;
-		const float directGain = v.own ? 1.0f : std::sqrt(std::max(1.0f - dif, 0.0f));
-		const float sendBoost = 1.0f + g_diffuseSend * dif;
+		const float dif1 = v.diffuse * encl;
+		const float dif0 = g_difSmooth && v.difCur >= 0 ? v.difCur : dif1;
+		v.difCur = dif1;
+		const float dif = 0.5f * (dif0 + dif1);
+		const float directGain0 = v.own ? 1.0f : std::sqrt(std::max(1.0f - dif0, 0.0f));
+		const float directGain1 = v.own ? 1.0f : std::sqrt(std::max(1.0f - dif1, 0.0f));
+		const float sendBoost0 = 1.0f + g_diffuseSend * dif0, sendBoost1 = 1.0f + g_diffuseSend * dif1;
 		// path / straight-line share (see Voice::pathMixCur): a voice given a path by Update fades
 		// from the straight line into it over one block, and back when Update drops the path
 		const float pw1 = v.hasSH && v.pathSlot >= 0 ? 1.0f : 0.0f;
@@ -1382,7 +1392,7 @@ void RenderBlock() {
 			if (pw0 <= 0) iplPathEffectReset(g_pathPool[v.pathSlot].fx);
 			// own copy: the straight-line branch below still needs the untouched signal
 			std::copy(m, m + kBlock, g_monoP.data[0]);
-			feedRoom(g_monoP.data[0], v.eq[1] * sendBoost, pw0, pw1); // before the gain is applied
+			feedRoom(g_monoP.data[0], v.eq[1] * sendBoost0, v.eq[1] * sendBoost1, pw0, pw1); // before the gain is applied
 			applyGain(g_monoP.data[0]);
 			IPLPathEffectParams pp{};
 			for (int b = 0; b < 3; ++b) pp.eqCoeffs[b] = v.eq[b];
@@ -1419,7 +1429,7 @@ void RenderBlock() {
 				iplDirectEffectApply(g_pool[v.slot].direct, &dp, &g_mono, &g_mono2);
 				bin_in = &g_mono2;
 			}
-			feedRoom(bin_in->data[0], sendBoost, 1 - pw0, 1 - pw1);
+			feedRoom(bin_in->data[0], sendBoost0, sendBoost1, 1 - pw0, 1 - pw1);
 			applyGain(bin_in->data[0]);
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
@@ -1519,8 +1529,9 @@ void RenderBlock() {
 				l += g_stereoP.data[0][i] * w;
 				r += g_stereoP.data[1][i] * w;
 			}
-			l *= directGain;
-			r *= directGain;
+			const float dg = directGain0 + (directGain1 - directGain0) * (float)i / kBlock;
+			l *= dg;
+			r *= dg;
 			if (g_debugOn) {
 				dbgL += (double)l * l;
 				dbgR += (double)r * r;
@@ -1681,6 +1692,7 @@ void ApplyMix(const MixSettings& m) {
 	g_wetEcho = m.wetEcho;
 	g_diffuseSend = m.diffuseSend;
 	g_diffuseRtRef = m.diffuseRtRef;
+	g_difSmooth = m.difSmooth;
 	g_srcScale = m.srcScale;
 	g_slotFbGain = m.slotFbGain;
 	g_dfOn = m.dfOn;
@@ -2457,6 +2469,12 @@ void SetWet(float room, float echo) {
 void SetDiffuseRtRef(float s) {
 	CtlCall cc;
 	g_c.mix.diffuseRtRef = std::clamp(s, 0.0f, 10.0f);
+	SendMix();
+}
+
+void SetDiffuseSmooth(bool on) {
+	CtlCall cc;
+	g_c.mix.difSmooth = on;
 	SendMix();
 }
 

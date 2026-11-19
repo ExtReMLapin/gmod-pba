@@ -24,7 +24,7 @@
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]),
-//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k), SetSlotFallback(on),
@@ -2536,6 +2536,13 @@ LUA_FUNCTION(SetPitchGlide) {
 	return 0;
 }
 
+// SetDiffuseSmooth(bool): a voice's diffuse share changing is ramped over the block like its gain (true, the default);
+// false: the new share at once (an 8 dB step of the direct sound in one sample), as before (pba_native_diffuse_smooth)
+LUA_FUNCTION(SetDiffuseSmooth) {
+	render::SetDiffuseSmooth(LUA->GetBool(1));
+	return 0;
+}
+
 // SetOutputMode(0 headphones | 1 speakers)
 LUA_FUNCTION(SetOutputMode) {
 	render::SetOutputMode((int)LUA->CheckNumber(1));
@@ -3111,6 +3118,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetHrtfBlend");
 	LUA->PushCFunction(SetPitchGlide);
 	LUA->SetField(-2, "SetPitchGlide");
+	LUA->PushCFunction(SetDiffuseSmooth);
+	LUA->SetField(-2, "SetDiffuseSmooth");
 	LUA->PushCFunction(SetReflections);
 	LUA->SetField(-2, "SetReflections");
 	LUA->PushCFunction(SetLimits);

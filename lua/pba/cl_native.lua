@@ -635,6 +635,8 @@ function N.ApplySettings()
 	if pba_native.SetHrtfBlend then pba_native.SetHrtfBlend(A.cfg.native_hrtf_blend or 1) end -- (modules before this option: HRTF alone)
 	-- the reading speed of a voice glides to each new pitch (Doppler of a fly-by), not a step per frame (module of 2026-11-18+)
 	if pba_native.SetPitchGlide then pba_native.SetPitchGlide(A.cfg.native_pitch_glide or 30) end
+	-- a voice's diffuse share changing is ramped over the block (module of 2026-11-19+; an older one steps)
+	if pba_native.SetDiffuseSmooth then pba_native.SetDiffuseSmooth((A.cfg.native_diffuse_smooth or 1) >= 0.5) end
 	local k = N.wetScale or 1
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,

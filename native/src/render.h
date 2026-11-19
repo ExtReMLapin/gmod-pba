@@ -88,6 +88,10 @@ void SetWet(float room, float echo);
 // extra room-reverb send of diffuse voices (see VoiceParams::diffuse)
 void SetDiffuseSend(float k);
 void SetDiffuseRtRef(float s);
+// A voice's diffuse share changing (Update) is ramped over the block like its gain: the direct gain, the room send's boost
+// and the HRTF's spatial blend (pba_native_diffuse_smooth, default on). false: the new share for the whole block at once
+// (an Update from 0 to 0.85 dropped the direct sound by 8 dB in one sample: a click), as before.
+void SetDiffuseSmooth(bool on);
 // listener under water: low-pass on the whole native mix (0 = dry, 1 = fully under water)
 void SetUnderwater(float amount);
 // game paused (single player menu): the voices started with VoiceParams::pausable freeze where they are
