@@ -787,7 +787,7 @@ end
 -- (refactor step 8: one switch for the ducker, pba_native_duck, which also gated the short sounds' notes;
 -- the long lines had their own, pba_long_duck, merged into it).
 local function noteDuck(name, pos, lvl, vol, chan, e, idx, pitch)
-	if A.Num(A.cfg, "native_duck") < 0.5 or not (A.Mix and A.Mix.NoteSound) then return end
+	if not (A.Mix and A.Mix.NoteSound) then return end -- (M.NoteSound reads pba_native_duck)
 	A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, Channel = chan, Entity = e,
 		EntIndex = idx }, A.ListenerPos(), A.PlaySeconds(name, pitch) or 0)
 end
