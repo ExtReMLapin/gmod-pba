@@ -183,7 +183,7 @@ function Build.native(panel)
 	dep(sld(panel, "Props entering the scene: ms per update (0 = all at once)", "native_props_add_ms", 1), "ready")
 	dep(sld(panel, "Far moving objects: updated once at rest beyond (m, 0 = never)", "native_scene_far_m"), "ready")
 	dep(sld(panel, "Spinning objects: seconds before they are updated rarely (0 = never)", "native_spin_s", 1), "ready")
-	dep(chk(panel, "Moving objects re-evaluate only the sounds near them", "native_moved_local"), "ready")
+	dep(chk(panel, "Moving objects re-evaluate nearby sounds only", "native_moved_local"), "ready")
 
 	panel:Help("Limits:")
 	dep(sld(panel, "Max native voices", "native_max_voices"), R)
