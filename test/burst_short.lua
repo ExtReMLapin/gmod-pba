@@ -128,7 +128,8 @@ local ok, res = pcall(function()
 end)
 if N and origPV then N.PlayVoice = origPV end
 A.EmitAt, A.Emit = origEA, origE
-for k, v in pairs(saved) do A.SetOverride(k, v) end
+-- (by key: pairs() skipped the keys that had no override, and the test left its own five in memory)
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair", "burst_hold_ms", "burst_hold_short" }) do A.SetOverride(k, saved[k]) end
 P.InvalidateCache() -- (the following tests start cold, as burst_budget's timing assumes)
 if not ok then return { pass = false, err = tostring(res) } end
 local function good(r)

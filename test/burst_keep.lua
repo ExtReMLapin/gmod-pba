@@ -79,7 +79,8 @@ end)
 if N and origPV then N.PlayVoice = origPV end
 A.EmitAt, A.Emit = origEA, origE
 if A.Slicer then A.Slicer.Defer = defer end
-for k, v in pairs(saved) do A.SetOverride(k, v) end
+-- (by key: pairs() skipped the keys that had no override, and the test left its own two in memory)
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db" }) do A.SetOverride(k, saved[k]) end
 if not ok then return { pass = false, err = tostring(res) } end
 local r, d = res.ref, res.deg
 res.native = N and N.render or false
