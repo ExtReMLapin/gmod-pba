@@ -177,6 +177,7 @@ function M.ValueIn(g, mixerName, noDuck)
 end
 
 local cvMixer, cvNoDuck = GetConVar("snd_soundmixer"), GetConVar("snd_disable_mixer_duck")
+local NO_MIXER = {} -- (a key no mixer has: M.Parse names them by strings)
 M.mixer = M.mixer or (cvMixer and cvMixer:GetString() or "Default_Mix")
 
 --- The gain factor of a module voice of groups g now (pba_native_mix / pba_native_duck): 1 when both off.
@@ -187,16 +188,8 @@ function M.Value(g)
 	if not mixOn and not duckOn then return 1 end
 	local mode = (mixOn and 1 or 0) + (duckOn and 2 or 0)
 	if g.ver == M.ver and g.mode == mode then return g.val end
-	local v
-	if mixOn then v = M.ValueIn(g, M.mixer, not duckOn)
-	else
-		v = 1
-		local data = M.data
-		for _, name in ipairs(g.names) do
-			local r = data.info[name]
-			if r and r.ducked then v = math.min(v, M.duck[name] or 1) end
-		end
-	end
+	-- (mix off: the duck alone, in a mixer no file names)
+	local v = M.ValueIn(g, mixOn and M.mixer or NO_MIXER, not duckOn)
 	g.val, g.ver, g.mode = v, M.ver, mode
 	return v
 end
