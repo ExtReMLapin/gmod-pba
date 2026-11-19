@@ -66,6 +66,7 @@ local function burst(variant, hold)
 	B.loudT, B.loudDb = RealTime(), 200 -- (a loud sound just before: none of these is the loudest, all masked)
 	local st = A.burstStats
 	local deg0 = st.cheap + st.deferred + st.masked
+	local cheap0, defer0 = st.cheap, st.deferred
 	local k0 = OS.seq or 0
 	local t0 = RealTime()
 	for _, S in ipairs(spots) do A.Process(snd(S), false) end -- (one frame)
@@ -100,6 +101,8 @@ local function burst(variant, hold)
 	out.forcedCheap = A.Slicer and A.Slicer.stats.forceCheap or 0
 	out.estMs = A.Slicer and math.Round(A.Slicer.est * 1000, 2) or 0
 	out.degraded = st.cheap + st.deferred + st.masked - deg0
+	out.cheap, out.deferred = st.cheap - cheap0, st.deferred - defer0
+	out.frameMs = math.Round(A.Slicer and A.Slicer.FrameDt() * 1000 or 0, 1)
 	return out
 end
 local saved = {}
@@ -112,7 +115,8 @@ local ok, res = pcall(function()
 	end
 	return o
 end)
-for k, v in pairs(saved) do A.SetOverride(k, v) end
+-- (by key: pairs() skipped the keys that had no override, and the test left its own four in memory)
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair", "burst_hold_ms" }) do A.SetOverride(k, saved[k]) end
 P.InvalidateCache() -- (the following tests start cold, as burst_budget's timing assumes)
 if not ok then return { pass = false, err = tostring(res) } end
 local function good(r)
@@ -122,5 +126,15 @@ res.native = A.Native and A.Native.render or false
 res.onOk = { budget = good(res.budget_on), mask = good(res.mask_on) }
 res.offOk = { budget = good(res.budget_off), mask = good(res.mask_off) }
 res.hasOption = A.cfg.burst_hold_ms ~= nil
-res.pass = res.hasOption and res.onOk.budget and res.onOk.mask and not res.offOk.budget and not res.offOk.mask
+-- The budget variant's control (hold off) is red only where the slicer cannot wait for the sounds: SL.Defer queues a
+-- sound whose travel time leaves 3 frames (MARGIN_FRAMES 2 + 1), and it then starts at its full result without any
+-- hold. The spots are 450-750 u away (25-42 ms): at 45 fps none can wait (cheap model, the glide this test is
+-- about), above ~120 fps all of them can (deferred, gaps 0), and the old control failed there (battery lots at high
+-- frame rates, 2026-11-17/18: budget_off gaps 0, latest 0.009 s; reproduced at fps_max 300 on 2026-11-19). There the
+-- off arm must still start every sound at its level (nothing to hold); the mask variant's control (P.Cheap at once,
+-- no deferral) stays red at any frame rate.
+local bo = res.budget_off
+res.budgetControl = (bo.cheap or 0) > 0 and "cheap" or (bo.deferred or 0) >= #spots and "deferred" or "mixed"
+local budgetCtlOk = (res.budgetControl == "cheap" and not res.offOk.budget) or (res.budgetControl == "deferred" and res.offOk.budget)
+res.pass = res.hasOption and res.onOk.budget and res.onOk.mask and budgetCtlOk and not res.offOk.mask
 return res

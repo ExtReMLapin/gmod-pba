@@ -7,7 +7,11 @@
 local A = pba
 local P = A.Paths
 local res = {}
-local function cfgWith(v) return setmetatable({ cache_barrier = v }, { __index = A.cfg }) end
+-- pba_cache_src_near (Review P2, d8b39aa, default 1, merged after this test) also keeps the pinned pair apart: its
+-- two sources are 13 u apart, past pba_reeval_move (8 u), so with it on the barrier off no longer reproduced the
+-- shared result (shared_off = fresh, caseOk false: red since that merge). The barrier is measured alone (src_near
+-- 0 in both arms, as when the bug was found); the defaults (both on) are checked apart (caseDefaults).
+local function cfgWith(v) return setmetatable({ cache_barrier = v, cache_src_near = 0 }, { __index = A.cfg }) end
 local function level(r)
 	local s = 0
 	if r.voices then for _, v in ipairs(r.voices) do s = s + 10 ^ ((v.level or -99) / 10) end end
@@ -29,8 +33,12 @@ if game.GetMap() == "gm_construct" then
 	res.fresh, res.shared_off, res.shared_on = fresh, old, new
 	res.sameCell = P.CacheKey(a, L, 75, nil, A.cfg):match("^[^|]*") == P.CacheKey(b, L, 75, nil, A.cfg):match("^[^|]*")
 	res.caseOk = res.sameCell and math.abs(old - fresh) > 3 and math.abs(new - fresh) < 0.01
+	P.InvalidateCache()
+	P.Compute(a, L, 75, A.cfg)
+	res.shared_defaults = level(P.Compute(b, L, 75, A.cfg))
+	res.caseDefaults = math.abs(res.shared_defaults - fresh) < 0.01
 else
-	res.caseOk = true
+	res.caseOk, res.caseDefaults = true, true
 	res.note = "pinned case needs gm_construct"
 end
 
@@ -62,14 +70,23 @@ end
 local function run(list, v)
 	local cfg = cfgWith(v)
 	P.InvalidateCache()
-	local n, calls = 0, 0
+	local n, calls, dt, mine = 0, 0, 0, false
 	local walls = P.Walls
-	P.Walls = function(...) n = n + 1 return walls(...) end
-	local t0 = SysTime()
+	-- (counted only inside this run's own calls: the job yields between bursts, and the game's sounds meanwhile
+	-- must not count; the time is summed over the bursts, the frames between them left out)
+	P.Walls = function(...) if mine then n = n + 1 end return walls(...) end
 	local ok, err = pcall(function()
-		for _, b in ipairs(list) do for k = 1, 5 do calls = calls + 1 P.Compute(b[k], Lis, 75, cfg) end end
+		for _, b in ipairs(list) do
+			P.InvalidateCache() -- (each burst on its own: the frames between bursts may change the cache)
+			mine = true
+			local t0 = SysTime()
+			for k = 1, 5 do calls = calls + 1 P.Compute(b[k], Lis, 75, cfg) end
+			dt = dt + SysTime() - t0
+			mine = false
+			job:step()
+		end
 	end)
-	local dt = SysTime() - t0
+	mine = false
 	P.Walls = walls
 	if not ok then error(err, 0) end
 	return n, dt, calls
@@ -104,6 +121,7 @@ for _, b in ipairs(bursts) do
 			first = P.Compute(b[1], Lis, 75, cfg0)
 		end
 	end
+	job:step()
 end
 res.barrierHits, res.barrierWrong = removed, wrong
 -- the cost of one hit: 4000 calls in one clear cell, the source moving 4 u, then standing still (as a followed loop does)
@@ -119,10 +137,11 @@ local function hitCost(v, still)
 		local t0 = SysTime()
 		for i = 1, 4000 do P.Compute(pts[i], Lis, 75, cfg) end
 		best = math.min(best, (SysTime() - t0) / 4000 * 1e6)
+		job:step()
 	end
 	return best
 end
 res.hitUsOff, res.hitUsOn = hitCost(0, false), hitCost(1, false)
 res.hitStillUsOff, res.hitStillUsOn = hitCost(0, true), hitCost(1, true)
-res.pass = res.caseOk and res.cleanComputedOn == res.cleanComputedOff
+res.pass = res.caseOk and res.caseDefaults and res.cleanComputedOn == res.cleanComputedOff
 return res

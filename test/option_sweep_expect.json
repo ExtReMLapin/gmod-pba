@@ -379,6 +379,10 @@
   "pos0": "differs",
   "why": "bundle of lines for the transmission"
  },
+ "trans_bundle_mid_leaf": {
+  "pos0": "same",
+  "why": "needs a bundle line bending inside a shut door leaf: not met (test bundle_leaf_once)"
+ },
  "trans_bundle_edge": {
   "pos0": "same",
   "why": "needs a line beside a door leaf: not met"

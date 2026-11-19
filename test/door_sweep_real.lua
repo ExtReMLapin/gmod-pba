@@ -33,7 +33,13 @@
 -- Samples whose result is provisional (the probe search still running) or whose listener is in a solid
 -- are left out and break the neighbour chain.
 local A = pba
-local SPEED, JUMP_DB, FREE_TOL, MIN_ROT_FRAMES = 15, 3, 0.1, 20
+-- SPEED: the door state the model reads (A.Doors.byEnt[].frac) comes from the server's poll, every 0.1 s (sh_doors
+-- POLL), not from the client's angles: at 15 deg/s one update moved it 1.5-1.8 degrees (frac 0.106 -> 0.125 between two
+-- frames whose yaw differed by 0.5), so "neighbours" were not under a degree apart in what the model sees, and the
+-- rotation failed or passed with the poll's phase (3.0-3.6 dB per update at 10-14 degrees; 2 runs out of 3 red,
+-- 2026-11-19). At 8 deg/s an update moves the leaf about 1 degree (frac +0.012): the premise holds, the 3 dB limit
+-- unchanged (worst rotation pair 2.1 dB, 4 runs out of 4).
+local SPEED, JUMP_DB, FREE_TOL, MIN_ROT_FRAMES = 8, 3, 0.1, 20
 -- In the first FIRST_DEG degrees of opening the gap at the free edge goes from sealed to a few units and the
 -- level climbs fastest (pba_door_3d: up to ~8 dB per degree, halving every degree, smooth and monotonic):
 -- at ~0.45 degree per client frame a neighbour pair may step up to JUMP_FIRST_DB there. User's decision,
