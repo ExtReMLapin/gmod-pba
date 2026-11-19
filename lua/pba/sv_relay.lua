@@ -324,6 +324,16 @@ end
 -- it carried). A second stop of a stopped sound does nothing. Same for the channel rule's cut (A.CutChannel).
 local STOP_BOTH_S = 1
 
+--- Adds player p, relayed a copy at time t, to the list `recent` of the stop's second (unreliable) stream when
+-- pba_stop_both is on (`both`) and that copy is at most STOP_BOTH_S old; returns the list (nil while empty).
+local function noteRecent(recent, both, now, t, p)
+	if both and now - t <= STOP_BOTH_S then
+		recent = recent or {}
+		recent[#recent + 1] = p
+	end
+	return recent
+end
+
 --- The engine stopped `name` on entity e (chan: only that channel's copies; nil, any): clients that got
 -- relayed copies stop theirs. except: players left out (set).
 -- A player relayed a copy of that entity in this very tick gets the stop on the unreliable stream, behind that
@@ -347,10 +357,7 @@ function A.RelayStop(e, name, chan, except)
 					behind[#behind + 1] = p
 				else
 					plys[#plys + 1] = p
-					if both and now - t <= STOP_BOTH_S then
-						recent = recent or {}
-						recent[#recent + 1] = p
-					end
+					recent = noteRecent(recent, both, now, t, p)
 				end
 			end
 		else
@@ -406,10 +413,7 @@ function A.CutChannel(data, idx, chan)
 			-- (a copy is never longer than max_duration; 30 s as for recentTo)
 			if IsValid(p) and now - t < 30 then
 				plys[#plys + 1] = p
-				if both and now - t <= STOP_BOTH_S then
-					recent = recent or {}
-					recent[#recent + 1] = p
-				end
+				recent = noteRecent(recent, both, now, t, p)
 			end
 		end
 	end
