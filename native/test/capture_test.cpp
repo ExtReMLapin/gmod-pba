@@ -198,7 +198,9 @@ int main() {
 	const Back b2 = ReadBack(path2);
 	Check(b2.ok && b2.fmt == 1 && b2.bits == 16 && b2.rate == 48000 && b2.l.size() == (size_t)(0.5 * 48000), "WAV: PCM 16 bit, 48 kHz, exact length", (double)b2.l.size());
 	float p16 = 0;
+	// (both channels: the reported peak is over both, and the right one can be the louder)
 	for (float v : b2.l) p16 = std::max(p16, std::fabs(v));
+	for (float v : b2.r) p16 = std::max(p16, std::fabs(v));
 	Check(std::fabs(p16 - pk2) < 2.0f / 32768.0f && p16 > 0.003f, "16-bit peak matches the reported peak within 2 LSB", p16, pk2);
 	Check(!render::CaptureFinish(dir, "own16b", 24, nullptr, nullptr, nullptr).empty(), "bits 24: refused");
 	render::StopVoice(id);
