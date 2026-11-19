@@ -42,7 +42,9 @@ local LEAVE_SCALE = 1.1
 -- went silent there). His client renders it clear, without any path search (cl_loops pathOf).
 local function radiusFor(lvl) return A.AudibleRadius(lvl) end
 
-local function send(op, l, plys)
+-- join: these players enter the loop's range while it plays (the 0.5 s timer, or an update of the loop that finds them
+-- in range): their client fades the mirror in (pba_loops_edge_fade) instead of starting it at its whole level
+local function send(op, l, plys, join)
 	if #plys == 0 then return end
 	-- who holds a full copy of the mirror, and since when (the compact updates)
 	if op == OP_STOP then
@@ -62,6 +64,7 @@ local function send(op, l, plys)
 		A.WriteSound({ pos = l.pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
 			flags = l.speaker and (SND_SPEAKER or 64) or 0, dsp = l.dsp, idx = l.idx, st = l.st, face = l.face })
 		net.WriteBool(l.once or false)
+		net.WriteBool(join == true)
 	end
 	net.Send(plys)
 end
@@ -571,14 +574,17 @@ function LP.Take(data, snd)
 	-- a volume / pitch change of a long one-shot goes to its listeners only: to anyone else it would
 	-- start the mirror from the top, midway through the speech
 	local joinable = not (l.once and update)
-	local plys = {}
+	local plys, joined = {}, {}
 	for _, p in ipairs(player.GetHumans()) do
-		if l.subs[p] or (joinable and inRange(l, p)) then
-			l.subs[p] = true
+		if l.subs[p] then
 			plys[#plys + 1] = p
+		elseif joinable and inRange(l, p) then
+			l.subs[p] = true
+			-- (an update of a playing loop that finds him in range: he joins it midway, as at the timer's turn)
+			if update then joined[#joined + 1] = p else plys[#plys + 1] = p end
 		end
 	end
-	if update then sendUpdate(l, plys) else send(OP_START, l, plys) end
+	if update then sendUpdate(l, plys) send(OP_UPDATE, l, joined, true) else send(OP_START, l, plys) end
 	-- a long line taken over (a scene's speech longer than max_duration): the engine captions the original it
 	-- emits, suppressed here, so its listeners got no subtitle while the short lines around it had theirs
 	-- (Barney's first conversation line on d1_trainstation_06). Sent like a relayed sound's (sv_relay)
@@ -816,7 +822,7 @@ timer.Create("pba_loops", 0.5, 0, function()
 					join[#join + 1] = p
 				end
 			end
-			send(OP_START, l, join)
+			send(OP_START, l, join, true)
 			send(OP_STOP, l, leave)
 		end
 	end

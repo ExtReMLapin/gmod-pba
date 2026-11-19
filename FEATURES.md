@@ -47,6 +47,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Several speakers playing one line (the Breencast screens) start together: no comb filter behind a door | ✅ the engine's copies | ✅ | C `loops_start_sync` |
 | A line spoken while you join (a map's first scene, before PBA's client is ready) | the engine's, to its end | ✅ the rest of the line handed to the module once ready, from the point reached (the engine copy muted, the mouth still moves) | S `early_line_takeover` |
 | A sound restarted twice in one tick (a non-looped `ambient_generic` fired twice by a map's outputs: d3_citadel_01's skylift pods) plays once, as in the engine | ✅ | ✅ | S `stop_order` |
+| A loop you come within range of while it plays (a car driving into the radius the server follows it in) | ◐ started at once (the engine's law is near silent at that radius) | ✅ faded in over a second, not started at its whole level | C `loops_edge_fade` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering

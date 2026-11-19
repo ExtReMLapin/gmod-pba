@@ -256,9 +256,9 @@ local function quietFor(m, d)
 	if m.nativeId and N and (A.cfg.native_quiet_law or 0) >= 0.5 then
 		local q = A.cfg.quiet_db or -40
 		if q <= -100 then return false end
-		return (m.vol or 1) * N.PhysClear(m.lvl, math.max(d, 1)) < 10 ^ (q / 20)
+		return (m.edgeK and m.srvVol or m.vol or 1) * N.PhysClear(m.lvl, math.max(d, 1)) < 10 ^ (q / 20)
 	end
-	return A.TooQuiet and A.TooQuiet(m.lvl, m.vol, d)
+	return A.TooQuiet and A.TooQuiet(m.lvl, m.edgeK and m.srvVol or m.vol, d)
 end
 
 --- A quiet native loop (no path search: quietFor) keeps following its distance law from its last
@@ -593,6 +593,7 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	if (id or 0) > 0 or (A.cfg.loops_native_fail or 1) < 0.5 then m.started = true end
 	m.nativeId = (id or 0) > 0 and id or nil
 	if m.nativeId then A.NoteRendered(m.name, gain) end
+	if m.nativeId and m.edgeK and not m.edgeT0 then m.edgeT0 = RealTime() end -- (pba_loops_edge_fade: from its first sample)
 	m.stSel, m.stW = nil, nil
 	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
 	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_end or 1) >= 0.5 then
@@ -929,7 +930,8 @@ end
 --- A volume / pitch change reaching mirror m (the server's update, full or compact): its native voice takes it at
 -- once (volumeNow, pitchNow), an engine patch is moved to it.
 local function updateMirror(m, once, vol, pitch)
-	m.vol, m.pitch = vol, pitch
+	m.pitch = pitch
+	LP.SetVolume(m, vol)
 	if m.nativeId then
 		local vol0 = m.appliedVol
 		volumeNow(m)
@@ -973,6 +975,7 @@ net.Receive("pba_loop", function()
 	local name = net.ReadString()
 	local d = A.ReadSound() -- (the common body, sh_core: as pba_snd's)
 	local once = net.ReadBool()
+	local joined = net.ReadBool() -- (the server: this player enters the loop's range while it plays)
 	local idx, pos, vol, pitch, lvl, dsp, chan = d.EntIndex, d.Pos, d.Volume, d.Pitch, d.SoundLevel, d.DSP, d.Channel
 	local speaker = bit.band(d.Flags, SND_SPEAKER or 64) ~= 0
 	local m = LP.mirrors[key]
@@ -999,7 +1002,12 @@ net.Receive("pba_loop", function()
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	if sid ~= 0 then LP.byId[sid] = m end
-	m.vol, m.pitch = vol, pitch
+	-- a loop joined midway, rendered by the module: faded in (pba_loops_edge_fade)
+	if new and joined and not once and (A.cfg.loops_edge_fade or 0) > 0 and A.Native and A.Native.render and A.Enabled() then
+		m.edgeK = LP.EDGE_FLOOR
+	end
+	m.pitch = pitch
+	LP.SetVolume(m, vol)
 	-- a long line's start feeds the mixer's ducker as the short lines do (cl_render): a speech ducks the
 	-- other groups in the engine; without it a long line sounded quieter than the short ones around it,
 	-- the ambience left at full under it (pba_native_duck)
@@ -1051,8 +1059,46 @@ function LP.StartDecoded()
 	end
 end
 
+--- A followed loop joined midway (the server's join flag: the player entered its range while it played, sv_loops) starts
+-- at LP.EDGE_FLOOR of its volume and fades in linearly over pba_loops_edge_fade seconds from its voice's first sample
+-- (m.edgeK, the fade's factor; m.srvVol, the loop's own volume; m.vol their product, which every value of the voice
+-- carries). Before, it started at its whole level: with the module's 1/r law the server's radius (A.AudibleRadius,
+-- 2500 u at 75 dB) is no edge of audibility (-33.6 dB clear there), and gm_converted_apartment's cars stepped the
+-- output by +12..+25 dB within 10-30 ms each time one entered it (most of it their source reverb slot).
+LP.EDGE_FLOOR = 1e-3
+function LP.SetVolume(m, vol)
+	if m.edgeK then m.srvVol, m.vol = vol, vol and vol * m.edgeK else m.vol = vol end
+end
+local function edgeFade(now)
+	local N = A.Native
+	for _, m in pairs(LP.mirrors) do
+		if m.edgeK and not m.done then
+			local T = A.cfg.loops_edge_fade or 0
+			if m.patch then
+				-- an engine patch after all (its file not for the module): the engine fades it
+				m.edgeK, m.vol = nil, m.srvVol
+				A.reemitting = true
+				m.patch:ChangeVolume((m.vol or 1) * (m.g or 1), T)
+				A.reemitting = false
+			elseif m.nativeId and m.edgeT0 then
+				local k = T > 0 and math.Clamp((now - m.edgeT0) / T, LP.EDGE_FLOOR, 1) or 1
+				m.edgeK = k
+				m.vol = (m.srvVol or 1) * k
+				volumeNow(m) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
+				-- its source reverb slot's feed at once, not at its 0.3 s rebinding
+				if m.srcBound and N then
+					local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
+					if S then m.srcBound = N.BindSource(m.nativeId, S, m.srcSend) end
+				end
+				if k >= 1 then m.edgeK, m.edgeT0, m.vol = nil, nil, m.srvVol end
+			end
+		end
+	end
+end
+
 function LP.FollowNative(L)
 	local N = A.Native
+	edgeFade(RealTime())
 	LP.StartDecoded()
 	if not N or not N.Doppler then return end
 	local P, now = A.Paths, RealTime()
