@@ -1463,12 +1463,12 @@ end
 -- exchange rate (40 u per dB) gave one route per probe, and with door_s shut every probe of the room went
 -- round by the other door, 15 dB quieter than through the leaf (pba_twodoors): the routes of both fields
 -- are ranked by their level afterwards (PR.DistinctRoutes).
-function PR.BuildFields(g, L, yield, reuse, seedList)
+function PR.BuildFields(g, L, yield, seedList)
 	local extra, sig = PR.LinkCosts(g, yield)
-	local f = PR.BuildField(g, L, yield, reuse, false, seedList)
+	local f = PR.BuildField(g, L, yield, nil, false, seedList)
 	f.stateSig = sig
 	if next(extra) then
-		f.doors = PR.BuildField(g, L, yield, reuse and reuse.doors, extra, seedList)
+		f.doors = PR.BuildField(g, L, yield, nil, extra, seedList)
 		f.doors.stateSig = sig
 	end
 	return f
@@ -1536,9 +1536,9 @@ function PR.FieldFor(g, L)
 		-- request's own first slice, cl_slicer) and built in slices; any evaluation that needs it meanwhile
 		-- finishes that same build (finishField), synchronously or in its own slices
 		if sl.co and coroutine.running() == sl.co then
-			f = { building = coroutine.create(function() return PR.BuildFields(g, L, buildYield, nil, seeds) end), key = key, L = L }
+			f = { building = coroutine.create(function() return PR.BuildFields(g, L, buildYield, seeds) end), key = key, L = L }
 		else
-			f = PR.BuildFields(g, L, nil, nil, seeds)
+			f = PR.BuildFields(g, L, nil, seeds)
 			f.key, f.seedList = key, seeds
 		end
 		kept.order[#kept.order + 1] = key
