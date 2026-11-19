@@ -3302,7 +3302,12 @@ end
 -- Stage 1b, the result kept: dead entries swept (older than cache_ttl: never served again); only
 -- P.InvalidateCache emptied the cache, one entry per cell pair, level, emitter and line state, for good on a
 -- map whose doors never move
-local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L)
+local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0)
+	-- pba_cache_gen_guard: the world model changed while this evaluation ran (a far sound's job, cl_slicer: a
+	-- setting, a door state, the probe graph or a door field changed between or inside its slices). Its answer,
+	-- partly on the old inputs, was kept under the NEW generation (read at the store): the job's own restart read
+	-- it back, and the next sounds of that cell or emitter got it for cache_ttl / reeval_max_s. Not kept then.
+	if gen0 and (gen0 ~= P.cacheGen or world0 ~= P.worldGen or field0 ~= (A.Probes and A.Probes.fieldEpoch or 0)) then return end
 	if now >= (P.cacheSweepT or 0) then
 		P.cacheSweepT = now + CACHE_SWEEP_S
 		local ttl = cfg.cache_ttl
@@ -3671,6 +3676,10 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	local emitter = IsValid(srcEnt) and srcEnt or false
 	local hit = cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emitter)
 	if hit then return hit end
+	-- (the inputs' generation as the evaluation starts: storeResult keeps nothing if it moved on meanwhile)
+	-- (numbers, not a table: no garbage per evaluation)
+	local gen0 = (cfg.cache_gen_guard or 1) >= 0.5 and P.cacheGen or nil
+	local world0, field0 = P.worldGen, A.Probes and A.Probes.fieldEpoch or 0
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
@@ -3703,6 +3712,6 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		end
 		selectVoices(r, S, L, sndlvl, cfg)
 	end
-	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L)
+	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0)
 	return r
 end

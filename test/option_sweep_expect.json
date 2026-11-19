@@ -427,6 +427,10 @@
   "pos0": "same",
   "why": "the result cache across a floor or a wall: cold positions have nothing cached and the sweep scenes put no two sources of one cell either side of a solid (test cell_barrier)"
  },
+ "cache_gen_guard": {
+  "pos0": "same",
+  "why": "a result kept while the world model changed under its evaluation (far sounds' slices): the sweep's evaluations are synchronous with nothing changing during them (pure test review P1)"
+ },
  "gc_idle_step": {
   "pos0": "hook",
   "why": "garbage collector steps in idle frames (cl_sched), outside P.Compute"

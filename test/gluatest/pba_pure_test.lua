@@ -2921,6 +2921,99 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
+		{ name = "Far sliced: a job whose inputs change in its last slice, or past its restart cap, leaves no result under the new cache generation: its restart and the next sounds get the new answer (pba_cache_gen_guard, review P1)", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				A.cfg.far_sliced_ms = 4000
+				local saved, sv = cfg.trans_scale, P.SelectVoices
+				local ok, err = pcall(function()
+					local pr
+					for _, p in ipairs(list) do
+						P.InvalidateCache()
+						PR.fieldsByKey = nil
+						local r = P.Compute(p[1], p[2], 75, cfg)
+						if r.trans and r.trans.lossDb > 1 then pr = p break end
+					end
+					expect(pr ~= nil).to.beTrue()
+					local function fresh(scale)
+						cfg.trans_scale = scale
+						P.InvalidateCache()
+						PR.fieldsByKey = nil
+						return dumpResult(P.Compute(pr[1], pr[2], 75, cfg))
+					end
+					local function finish(job)
+						local got
+						job.deadline = math.huge
+						job.onDone = function(res) got = res end
+						for _ = 1, 100000 do
+							if got then break end
+							nextFrame()
+							SL.Run()
+						end
+						return got
+					end
+					local function start()
+						cfg.trans_scale = saved
+						P.InvalidateCache()
+						PR.fieldsByKey = nil
+						local _, job = SL.Compute(pr[1], pr[2], 75, nil, cfg)
+						expect(job ~= nil).to.beTrue()
+						return job
+					end
+					local before, after = fresh(saved), fresh(2)
+					expect(after ~= before).to.beTrue()
+					-- the 32 u cell cache, then the repeated-sound memo (pba_group_time)
+					-- (a) the setting changes inside the job's last slice (at its voices, the evaluation's end): the answer its
+					-- restart gives
+					local function lastSlice()
+						local job = start()
+						local armed = true
+						P.SelectVoices = function(...)
+							if armed and A.Paths.slice.co then
+								armed = false
+								cfg.trans_scale = 2
+								P.InvalidateCache()
+							end
+							return sv(...)
+						end
+						local got = finish(job)
+						P.SelectVoices = sv
+						expect(armed).to.equal(false)
+						return dumpResult(got)
+					end
+					-- (b) the setting changes while it is paused past its restart cap: it ends on its last start's inputs
+					-- (by design); whether its answer was kept (in the cell cache or the repeated-sound memo)
+					local function pastCap()
+						local job = start()
+						job.restarts = SL.GEN_RESTARTS
+						cfg.trans_scale = 2
+						P.InvalidateCache()
+						expect(finish(job) ~= nil).to.beTrue()
+						return next(P.cache) ~= nil or #P.timeMemo > 0
+					end
+					-- the 32 u cell cache, then the repeated-sound memo (pba_group_time)
+					for _, mode in ipairs({ { 10, 0 }, { 0, 1 } }) do
+						cfg.cache_ttl, cfg.group_time = mode[1], mode[2]
+						expect(lastSlice()).to.equal(after)
+						expect(dumpResult(P.Compute(pr[1], pr[2], 75, cfg))).to.equal(after)
+						expect(pastCap()).to.equal(false)
+						expect(dumpResult(P.Compute(pr[1], pr[2], 75, cfg))).to.equal(after)
+					end
+					-- control: pba_cache_gen_guard 0 (former behaviour): the restart reads the stale answer back, and the
+					-- answer past the cap is kept
+					cfg.cache_gen_guard = 0
+					cfg.cache_ttl, cfg.group_time = 10, 0
+					expect(lastSlice()).to.equal(before)
+					expect(pastCap()).to.equal(true)
+					cfg.cache_ttl, cfg.group_time = 0, 1
+					expect(pastCap()).to.equal(true)
+				end)
+				P.SelectVoices = sv
+				cfg.trans_scale = saved
+				cfg.cache_ttl, cfg.group_time, cfg.cache_gen_guard = 0, 0, nil
+				if not ok then error(err, 0) end
+			end)
+		end },
 		{ name = "Far sliced: an evaluation registers its listener field in its first slice whatever the budget: the field of a seed set is the first request's (its position is the field's), as in a synchronous run", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
