@@ -110,6 +110,7 @@ struct Result {
 	int contents;
 	bool allSolid, startSolid;
 	Vec3 endpos;
+	Vec3 normal;         // plane.normal (TraceResult.HitNormal)
 	const char* surface; // csurface_t::name (texture), may be null
 	unsigned short surfFlags;
 };
@@ -127,6 +128,7 @@ bool DoTrace(const Vec3& s, const Vec3& e, unsigned int mask, const Vec3* mins, 
 	// CBaseTrace: startpos 0, endpos 12, plane 24 (20 bytes), fraction 44, contents 48, dispFlags 52,
 	// allsolid 54, startsolid 55; CGameTrace: fractionleftsolid 56
 	std::memcpy(&out.endpos, tr.b + 12, 12);
+	std::memcpy(&out.normal, tr.b + 24, 12); // cplane_t: normal, dist, type, signbits, pad
 	std::memcpy(&out.fraction, tr.b + 44, 4);
 	std::memcpy(&out.contents, tr.b + 48, 4);
 	out.allSolid = tr.b[54] != 0;
@@ -231,6 +233,38 @@ LUA_FUNCTION(Trace) {
 	return 8;
 }
 
+// TraceN(sx, sy, sz, ex, ey, ez, mask [, minx, miny, minz, maxx, maxy, maxz]) -> fraction, startsolid, allsolid,
+// fractionleftsolid, hit x, y, z (endpos), normal x, y, z, contents, surface flags, surface (texture name or nil).
+// The same trace as Trace, in and out as numbers: no Vector made (Trace's endpos, util.TraceLine's four), which
+// is what the collector's atomic phase pays for (pba_native_trace_nums).
+LUA_FUNCTION(TraceN) {
+	Vec3 s{(float)LUA->CheckNumber(1), (float)LUA->CheckNumber(2), (float)LUA->CheckNumber(3)};
+	Vec3 e{(float)LUA->CheckNumber(4), (float)LUA->CheckNumber(5), (float)LUA->CheckNumber(6)};
+	const unsigned int mask = (unsigned int)LUA->CheckNumber(7);
+	Vec3 mn{}, mx{};
+	const bool hull = LUA->IsType(8, Type::Number) && LUA->IsType(13, Type::Number);
+	if (hull) {
+		mn = {(float)LUA->GetNumber(8), (float)LUA->GetNumber(9), (float)LUA->GetNumber(10)};
+		mx = {(float)LUA->GetNumber(11), (float)LUA->GetNumber(12), (float)LUA->GetNumber(13)};
+	}
+	Result r{};
+	if (!DoTrace(s, e, mask, hull ? &mn : nullptr, hull ? &mx : nullptr, r)) { LUA->PushNil(); return 1; }
+	LUA->PushNumber(r.fraction);
+	LUA->PushBool(r.startSolid);
+	LUA->PushBool(r.allSolid);
+	LUA->PushNumber(r.fractionLeftSolid);
+	LUA->PushNumber(r.endpos.x);
+	LUA->PushNumber(r.endpos.y);
+	LUA->PushNumber(r.endpos.z);
+	LUA->PushNumber(r.normal.x);
+	LUA->PushNumber(r.normal.y);
+	LUA->PushNumber(r.normal.z);
+	LUA->PushNumber(r.contents);
+	LUA->PushNumber(r.surfFlags);
+	if (r.surface) LUA->PushString(r.surface); else LUA->PushNil();
+	return 13;
+}
+
 // ClearBatch(coords, mask [, half]) -> table of booleans: segment k (coords[6k-5 .. 6k] = ax ay az bx by bz)
 // is clear (fraction 1, not starting in solid). half > 0: a cube hull of that half size.
 LUA_FUNCTION(ClearBatch) {
@@ -259,7 +293,7 @@ LUA_FUNCTION(ClearBatch) {
 
 } // namespace
 
-// Adds the `trace` sub-table (Init, SetLayout, PointContents, Trace, ClearBatch) to the table on top of
+// Adds the `trace` sub-table (Init, SetLayout, PointContents, Trace, TraceN, ClearBatch) to the table on top of
 // the stack (pba_native).
 void RegisterTrace(ILuaBase* LUA) {
 	LUA->CreateTable();
@@ -267,6 +301,7 @@ void RegisterTrace(ILuaBase* LUA) {
 	LUA->PushCFunction(SetLayout); LUA->SetField(-2, "SetLayout");
 	LUA->PushCFunction(PointContents); LUA->SetField(-2, "PointContents");
 	LUA->PushCFunction(Trace); LUA->SetField(-2, "Trace");
+	LUA->PushCFunction(TraceN); LUA->SetField(-2, "TraceN");
 	LUA->PushCFunction(ClearBatch); LUA->SetField(-2, "ClearBatch");
 	LUA->SetField(-2, "trace");
 }

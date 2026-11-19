@@ -33,6 +33,27 @@ end
 P.worldGen = P.worldGen or 0
 function P.ForgetWorld() P.worldGen = P.worldGen + 1 end
 
+-- pba_native_trace_nums (full version, a module with trace.TraceN): the world-only traces below (P.DetHit:
+-- segment tests, corners, the way over an edge; the inside of a wall; P.FreeSource's start in solid) go to the
+-- engine through the module, in and out as numbers, instead of util.TraceLine and its four Vectors per call
+-- (userdata: the collector's atomic phase grows with how many were made since its last cycle). Same answers:
+-- the module's traces see the world and static props as util.Trace* with a filter refusing every entity, and
+-- cl_probes checks TraceN against util.Trace* on the map before setting numTN (with util.TraceLine as it was
+-- then: a stub swapped in later, a pure test's world, keeps util.*). A change of backend empties the answers
+-- kept from world traces (P.ForgetWorld). Light, a module without TraceN, a failed check, pba_native_traces 0 or
+-- pba_native_trace_nums 0: util.TraceLine as before.
+P.numTN, P.numTL, P.numOn = P.numTN or false, P.numTL or false, P.numOn or false
+-- the inside trace of a world wall (P.WallsOneWay) too: its util.TraceLine also sees the doors and props traceFilter
+-- accepts, which matter there only when one stands inside the wall itself, past the face the line entered by
+P.numInside = P.numInside ~= false
+function P.NumTrace()
+	local f = P.numTN
+	if f and ((A.cfg.native_trace_nums or 1) < 0.5 or (A.cfg.native_traces or 1) < 0.5) then f = false end
+	if f ~= P.numOn then P.numOn = f P.ForgetWorld() end
+	if f and util.TraceLine ~= P.numTL then return false end
+	return f
+end
+
 -- ------------------------------------------------------------------ cooperative slices (cl_slicer.lua)
 -- A far sound's evaluation may run in a coroutine, a few ms per frame (pba_far_sliced): its sound needs
 -- d / speed of sound to arrive anyway. P.slice.co is that coroutine while it runs (false otherwise) and
@@ -348,10 +369,22 @@ local function onlyBackEnt(e) return e == backEnt end
 local backTr = { mask = MASK_SOLID, filter = onlyBackEnt, output = backOut }
 local function noEnt() return false end
 local detTr = { mask = bit.band(MASK_SOLID_BRUSHONLY, NO_GRATE), filter = noEnt, output = detOut }
-local function detTrace(a, b)
+--- The world-only line a -> b of detTr (world brushes and static props): hit, fraction, start in solid. Through
+-- the module's numbers when P.NumTrace allows it (no Vector), else util.TraceLine.
+function P.DetHit(a, b)
+	local TN = P.NumTrace()
+	if TN then
+		local ax, ay, az = a:Unpack()
+		local bx, by, bz = b:Unpack()
+		local f, ss = TN(ax, ay, az, bx, by, bz, detTr.mask)
+		if f then return f < 1 or ss, f, ss end
+	end
 	detTr.start, detTr.endpos = a, b
 	util.TraceLine(detTr)
-	return not detOut.Hit
+	return detOut.Hit, detOut.Fraction, detOut.StartSolid
+end
+local function detTrace(a, b)
+	return not P.DetHit(a, b)
 end
 -- world brushes only (filter noEnt): kept (P.WorldSegMemo). The corners, the way over an edge and the ways
 -- round objects (their points in the world, from the object's pose) trace the same segments again
@@ -405,8 +438,21 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 		local hitEnt = IsValid(tr.Entity) and not tr.Entity:IsWorld() and tr.Entity or nil
 		local inside = false
 		if not hitEnt then
-			insideTr.start, insideTr.endpos = P.SCR.step(P.SCR.wallsIn, entry, dir, 0.5), L
-			util.TraceLine(insideTr)
+			local s = P.SCR.step(P.SCR.wallsIn, entry, dir, 0.5)
+			-- (where the world wall ends: its start in solid, all in solid and where it leaves the solid are read)
+			local TN = P.numInside and P.NumTrace()
+			local f, ss, as, fls
+			if TN then
+				local sx, sy, sz = s:Unpack()
+				local lx, ly, lz = L:Unpack()
+				f, ss, as, fls = TN(sx, sy, sz, lx, ly, lz, insideTr.mask)
+			end
+			if f then
+				insideOut.Hit, insideOut.Fraction, insideOut.StartSolid, insideOut.AllSolid, insideOut.FractionLeftSolid = f < 1 or ss, f, ss, as, fls
+			else
+				insideTr.start, insideTr.endpos = s, L
+				util.TraceLine(insideTr)
+			end
 			inside = insideOut
 		end
 		local exit
@@ -875,13 +921,11 @@ local TAUT_PASSES = 4
 -- the length of world a straight leg a -> b cuts (from its first entry to its last exit: thin traces both ways)
 local LEG_BLOCK = 4 -- units of world cut by a leg from which its way is sealed
 local function blockedChunk(a, b)
-	detTr.start, detTr.endpos = a, b
-	util.TraceLine(detTr)
-	if not detOut.Hit then return 0 end
-	local t1 = detOut.StartSolid and 0 or detOut.Fraction
-	detTr.start, detTr.endpos = b, a
-	util.TraceLine(detTr)
-	local t2 = detOut.Hit and (detOut.StartSolid and 0 or detOut.Fraction) or 0
+	local hit, f, ss = P.DetHit(a, b)
+	if not hit then return 0 end
+	local t1 = ss and 0 or f
+	hit, f, ss = P.DetHit(b, a)
+	local t2 = hit and (ss and 0 or f) or 0
 	return math.max(1 - t1 - t2, 0) * a:Distance(b)
 end
 P.BlockedChunk = blockedChunk
@@ -3287,6 +3331,12 @@ local AXES = { Vector(1, 0, 0), Vector(-1, 0, 0), Vector(0, 1, 0), Vector(0, -1,
 local FACE_DIRS = { AXES[5], AXES[1], AXES[2], AXES[3], AXES[4], AXES[6] }
 local FACE_NUDGES = { 0.25, 1, 4 }
 local function startsSolid(p)
+	local TN = P.NumTrace()
+	if TN then
+		local x, y, z = p:Unpack()
+		local f, ss = TN(x, y, z, x, y, z, faceTr.mask)
+		if f then return ss end
+	end
 	faceTr.start, faceTr.endpos = p, p
 	util.TraceLine(faceTr)
 	return faceOut.StartSolid

@@ -307,6 +307,10 @@
   "pos0": "hook",
   "why": "native module stereo"
  },
+ "native_trace_nums": {
+  "pos0": "hook",
+  "why": "world traces as numbers through the module (needs a module with trace.TraceN and pba_native_traces); same answers as util.*, so no change in P.Compute by design"
+ },
  "native_traces": {
   "pos0": "hook",
   "why": "probe-link traces through the module: needs the module and the probe graph builds; not in P.Compute of these scenes"
