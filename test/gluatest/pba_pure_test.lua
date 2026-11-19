@@ -314,16 +314,17 @@ local function withProbeScene(fn)
 	util.TraceLine = function(t) return tr(t, 0) end
 	util.TraceHull = function(t) return tr(t, t.maxs and t.maxs.x or 0) end
 	local s = 128
-	local g = { spacing = s, nodes = {}, index = {} }
+	local g = { spacing = s, nodes = {} }
+	local at = {} -- (the fixture's own lookup of its neighbours)
 	for i = -4, 3 do for j = -3, 2 do
 		local n = { i = i, j = j, k = 0, o = 1, pos = Vector((i + 0.5) * s, (j + 0.5) * s, 64), nb = {} }
 		g.nodes[#g.nodes + 1] = n
 		n.id = #g.nodes
-		g.index[i .. "," .. j .. ",0"] = n.id
+		at[i .. "," .. j] = n.id
 	end end
 	for _, n in ipairs(g.nodes) do
 		for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
-			local m = g.index[(n.i + d[1]) .. "," .. (n.j + d[2]) .. ",0"]
+			local m = at[(n.i + d[1]) .. "," .. (n.j + d[2])]
 			if m and not probeHit(n.pos, g.nodes[m].pos, 0) then n.nb[m] = true end
 		end
 	end

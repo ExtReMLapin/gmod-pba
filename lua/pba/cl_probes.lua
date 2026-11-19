@@ -320,7 +320,6 @@ end
 local clearFatMemo = A.Paths.WorldSegMemo(clearFatWorld, 16384)
 local function clearFat(a, b) return clearFatMemo(a, b, nativeTraces() or false) end
 
-local function key(i, j, k) return i .. "," .. j .. "," .. k end
 -- a column of the grid as one number (no string per lookup): i and j stay within +-32768 on any map
 local function colKey(i, j) return (i + 32768) * 65536 + (j + 32768) end
 -- probe and gap point coordinates on a 1/8 u grid: written exactly to the cache (%.10g), so a reloaded
@@ -556,7 +555,7 @@ local DIRS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
 -- of the world (nil: 4 spacings above the highest seed down to 8 below the lowest). Yields through
 -- budgetFn. Returns the graph table (truncated when MAX_PROBES was reached).
 function PR.BuildCo(seeds, s, budgetFn, bounds)
-	local nodes, index = {}, {}
+	local nodes = {}
 	local top, bottom
 	if bounds then
 		top, bottom = bounds[2].z - 1, bounds[1].z + 1
@@ -587,7 +586,6 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		nodes[#nodes + 1] = n
 		n.id = #nodes
 		ids[k] = n.id
-		index[key(i, j, k)] = n.id
 		queue[#queue + 1] = n
 		return n
 	end
@@ -727,7 +725,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 			if budgetFn then budgetFn(#nodes) end -- (each node: its joined() searches and links are ms of work)
 		end
 	end
-	return { spacing = s, nodes = nodes, index = index, truncated = truncated, skip = skipLinks }
+	return { spacing = s, nodes = nodes, truncated = truncated, skip = skipLinks }
 end
 
 -- Cache format (text; util.JSONToTable silently truncates arrays at 15000 elements):
@@ -768,7 +766,7 @@ function PR.Deserialize(text, hash, spacing)
 	if spacing and not (want and abs(want - spacing) < 1e-3) then return nil end
 	local s = tonumber(head.spacing)
 	if not s then return nil end
-	local g = { spacing = s, want = want, nodes = {}, index = {}, truncated = head.truncated }
+	local g = { spacing = s, want = want, nodes = {}, truncated = head.truncated }
 	local id = 0
 	for line in string.gmatch(string.sub(text, (nl or #text) + 1), "[^\n]+") do
 		id = id + 1
@@ -784,7 +782,6 @@ function PR.Deserialize(text, hash, spacing)
 			else n.nb[tonumber(tok)] = true end
 		end
 		g.nodes[id] = n
-		g.index[key(i, j, k)] = id
 	end
 	if id ~= head.count then return nil end
 	return g
@@ -994,7 +991,7 @@ end
 -- is the flood fill's for a graph just built and the cache file's for one loaded from it. Equal costs
 -- in A* and in the field then broke the other way after a reload: the same sound took the other of
 -- two equal routes (a door either side of a pillar) from one session to the next.
--- Also the column index g.cols (column key -> probe ids, increasing), from g.index: PR.Visible looks
+-- Also the column index g.cols (column key -> probe ids, increasing), from each probe's i, j: PR.Visible looks
 -- up the columns around a point instead of scanning every probe.
 local nbIds = {}
 function PR.Prepare(g)
@@ -1014,16 +1011,12 @@ function PR.Prepare(g)
 	end
 	first[#g.nodes + 1] = k
 	local cols = {}
-	for kk, id in pairs(g.index) do
-		if id then
-			local i, j = string.match(kk, "^(%-?%d+),(%-?%d+),")
-			local ck = colKey(tonumber(i), tonumber(j))
-			local list = cols[ck]
-			if not list then list = {} cols[ck] = list end
-			list[#list + 1] = id
-		end
+	for id, n in ipairs(g.nodes) do
+		local ck = colKey(n.i, n.j)
+		local list = cols[ck]
+		if not list then list = {} cols[ck] = list end
+		list[#list + 1] = id -- (ids in increasing order: each list is sorted as built)
 	end
-	for _, list in pairs(cols) do table.sort(list) end
 	g.cols = cols
 	g.adj = { first = first, nid = nid, len = len }
 	return g.adj
