@@ -280,22 +280,9 @@ function A.RelaySend(data, pos, plys, echoOnly)
 	net.Send(plys)
 end
 
---- The engine stopped `name` on entity e (chan: only that channel's copies; nil, any): clients that got
--- relayed copies stop theirs. except: players left out (set).
-function A.RelayStop(e, name, chan, except)
-	local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
-	local r = idx > 0 and A.recentTo[idx]
-	if not r then return end
-	local plys, now = {}, CurTime()
-	for p, t in pairs(r) do
-		if IsValid(p) and now - t < 30 then
-			if not (except and except[p]) then plys[#plys + 1] = p end
-		else
-			r[p] = nil
-		end
-	end
-	if #plys == 0 then return end
-	net.Start("pba_snd_stop")
+--- One explicit stop (pba_snd_stop) of entity idx's `name` on chan to plys; unreliable: in order with the relays.
+local function sendStop(idx, name, chan, plys, unreliable)
+	net.Start("pba_snd_stop", unreliable)
 	net.WriteUInt(idx, 16)
 	net.WriteInt(chan or CHAN_AUTO, 10) -- CHAN_AUTO (0): any channel
 	-- the waves it stops (a sound script resolved here: the client may not know the script); none: all
@@ -309,6 +296,37 @@ function A.RelayStop(e, name, chan, except)
 	end
 	net.WriteBool(false) -- (no replacing sound: an explicit stop, at once)
 	net.Send(plys)
+end
+
+--- The engine stopped `name` on entity e (chan: only that channel's copies; nil, any): clients that got
+-- relayed copies stop theirs. except: players left out (set).
+-- A player relayed a copy of that entity in this very tick gets the stop on the unreliable stream, behind that
+-- copy (pba_stop_order): the client reads a packet's reliable messages before its unreliable ones, so a reliable stop
+-- would find nothing yet (a non-looped ambient_generic fired twice in one tick: stop, play, stop, play; both plays kept).
+function A.RelayStop(e, name, chan, except)
+	local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
+	local r = idx > 0 and A.recentTo[idx]
+	if not r then return end
+	local plys, now = {}, CurTime()
+	local inOrder = (A.cfg.stop_order or 1) >= 0.5
+	local behind -- (the players relayed a copy of e in this tick)
+	for p, t in pairs(r) do
+		if IsValid(p) and now - t < 30 then
+			if not (except and except[p]) then
+				if inOrder and t == now then
+					behind = behind or {}
+					behind[#behind + 1] = p
+				else
+					plys[#plys + 1] = p
+				end
+			end
+		else
+			r[p] = nil
+		end
+	end
+	if behind then sendStop(idx, name, chan, behind, true) end
+	if #plys == 0 then return end
+	sendStop(idx, name, chan, plys, false)
 end
 
 -- Players holding relayed copies per entity and replacing channel (A.recentChan): the channel rule reaches
