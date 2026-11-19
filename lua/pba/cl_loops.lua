@@ -526,6 +526,23 @@ local function noteEmission(m, now, offset)
 	A.CopySync.Note(m.stKey, now, offset)
 end
 
+-- (pba_early_line_takeover) the hand-over margin of every followed sound (cl_render's late hand-over: MIN_LEFT plus
+-- one update interval): a line closer to its end than this is not worth a second voice
+local function earlyMargin() return A.Sched.MIN_LEFT + A.Sched.Interval() end
+--- The engine's copy of early line m (the server's sound on its entity and channel, cl_loops LP.TakeEarly) set to
+-- volume `vol` in place (SND_CHANGE_VOL on the same index, channel and name: the engine alters that channel, the
+-- line and its mouth go on; measured with snd_dumpclientsounds, vol 255 -> 0 on the SERVER channel).
+local function earlyEngineVolume(m, vol)
+	A.reemitting = true -- (pba's own: the hook lets it through)
+	local e = Entity(m.idx)
+	if IsValid(e) then
+		e:EmitSound(m.name, m.lvl, m.pitch, vol, m.chan, SND_CHANGE_VOL)
+	else
+		EmitSound(m.name, m.pos, m.idx, m.chan, vol, m.lvl, SND_CHANGE_VOL, m.pitch)
+	end
+	A.reemitting = false
+end
+
 function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	local N = A.Native
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
@@ -546,10 +563,31 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	if A.Mix and not m.mixG then m.mixG = A.Mix.GroupsOf(m.name, m.ent, m.chan, m.lvl) end
 	local protect = N.ProtectLine(m.chan)
 	local t0 = RealTime()
-	local offset = syncOffset(m, t0)
+	local offset
+	if m.early then
+		-- (pba_early_line_takeover) a line the engine started before this client was ready: from where the engine
+		-- copy is now (the hand-over rule, N.LateVerdict); too close to its end by now (its decode took the time):
+		-- left to the engine (m.done; apply never gives an early mirror an engine patch)
+		local v, off = N.LateVerdict(true, true, "ready", true, false, t0, m.early.t0, m.early.tEnd, earlyMargin())
+		if v ~= "switch" then
+			m.done = true
+			A.stats["earlyDrop_" .. tostring(off)] = (A.stats["earlyDrop_" .. tostring(off)] or 0) + 1
+			return false
+		end
+		offset = off
+	else
+		offset = syncOffset(m, t0)
+	end
 	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, offset, protect, N.PauseFlag(m.flags))
 		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, offset, protect, N.PauseFlag(m.flags))
 	if (id or 0) > 0 then noteEmission(m, t0, offset) end
+	-- (pba_early_line_takeover) the module has the line: the engine copy goes silent (kept: it moves the mouth)
+	if (id or 0) > 0 and m.early then
+		earlyEngineVolume(m, A.MOUTH_VOL)
+		m.early.muted = true
+		A.stats.earlyTaken = (A.stats.earlyTaken or 0) + 1
+		A.earlyLast = { name = m.name, offset = offset, t = t0 }
+	end
 	-- (pba_loops_native_fail: a voice the module could not start leaves the line to the engine patch below;
 	-- marked started, a long line was then dropped there as "already played": captioned, never heard)
 	if (id or 0) > 0 or (A.cfg.loops_native_fail or 1) < 0.5 then m.started = true end
@@ -630,6 +668,8 @@ function apply(m, fade)
 		-- mode or native rendering switched off (or pba_keep_dsp switched on for a loop with its own preset):
 		-- hand the loop back to the engine without a double
 		MIRROR.native.stop(m)
+		-- (pba_early_line_takeover) an early line's engine copy still plays it, muted: heard again from there
+		if m.early and m.early.muted and RealTime() < m.early.tEnd then earlyEngineVolume(m, m.early.ev) m.early.muted = nil end
 		if m.once then m.done = true return end -- a long one-shot cannot resume midway
 	end
 	-- a one-shot that played through the module and whose voice is gone (its file ended: an update found the voice
@@ -668,6 +708,11 @@ function apply(m, fade)
 	-- (a loop with its own DSP preset stays an engine patch: the module has no presets, A.OwnDSP)
 	if nativeOn and not m.patch and not m.handBack and A.Render.NativeOK(m.name, m.dsp, ownDSP(m)) then
 		if applyNative(m, S, L) ~= false then return end
+	end
+	-- (pba_early_line_takeover) an early line is the module's or stays the engine's copy: never a patch from its top
+	if m.early then
+		if not m.nativeId then m.done = true end
+		return
 	end
 	local g, dsp = muffle(m, S, L)
 	if g == nil then return end
@@ -727,7 +772,7 @@ function LP.StopClient(idx, chan, name, patch)
 	-- a sound script reaches each of its waves (A.StopFiles); nil: every sound
 	local files = A.StopFiles(name)
 	for key, m in pairs(LP.mirrors) do
-		if m.client and m.idx == idx and (not chan or m.chan == chan) and A.StopReaches(files, m.name)
+		if (m.client or m.early) and m.idx == idx and (not chan or m.chan == chan) and A.StopReaches(files, m.name)
 			and (not patch or not m.src or m.src[1] == patch) then
 			stopMirror(m)
 			LP.mirrors[key] = nil
@@ -824,11 +869,59 @@ end
 -- do not bring it back (a new start or a stop of the loop on the server ends the silence)
 LP.silenced = LP.silenced or {}
 
+--- (pba_early_line_takeover) A spoken line the server's engine started for this player before his client was ready
+-- (sv_relay A.NoteEarly; d: the sound's body, elapsed = seconds it has played, ev = the volume the engine plays it
+-- at here, blocked = it reached the engine because this client was not ready). Taken as a long line's mirror (the one
+-- model of a followed line: paths, reverb, stops, channel rule) that plays only through the module, from where the
+-- engine copy is (N.EarlyVerdict, then again when its voice starts); that copy is muted once the module has it.
+-- Returns "taken" or why not.
+function LP.TakeEarly(d)
+	local N = A.Native
+	local name = d.SoundName
+	if (A.cfg.early_line_takeover or 1) < 0.5 or not (N and N.EarlyVerdict) or not name then return "off" end
+	local secs = A.PlaySeconds(name, d.Pitch)
+	if not secs then return "length" end
+	local now = RealTime()
+	local t0 = now - (d.elapsed or 0)
+	local caps = pba_native and pba_native.caps
+	local on = N.render and A.Enabled() and pba_native.Play ~= nil and A.Render.NativeOK(name, d.DSP)
+	local v, why = N.EarlyVerdict(on and true or false, type(caps) == "table" and caps.playOffset and true or false,
+		d.blocked, (A.cfg.native_all or 1) >= 0.5, now, t0, t0 + secs, earlyMargin())
+	if v ~= "switch" then return why end
+	local key = "early:" .. d.EntIndex .. ":" .. d.Channel .. ":" .. name
+	local old = LP.mirrors[key]
+	if old then stopMirror(old) end
+	local speaker = bit.band(d.Flags or 0, SND_SPEAKER or 64) ~= 0
+	local m = { key = key, name = name, idx = d.EntIndex, chan = d.Channel, flags = d.Flags, pos = d.Pos, lvl = d.SoundLevel,
+		dsp = d.DSP, once = true, vol = d.Volume, pitch = d.Pitch, born = now, speaker = speaker or nil,
+		endT = t0 + secs + A.END_GRACE, early = { t0 = t0, tEnd = t0 + secs, ev = d.ev or d.Volume } }
+	if speaker then -- (its speaker preset is the flag's, rendered by the module's speaker EQ: as a long speaker line)
+		local cv = GetConVar("dsp_speaker")
+		local sp = cv and cv:GetInt() or 0
+		if m.dsp == 0 or m.dsp == sp then m.speakerDsp, m.dsp = true, sp end
+	end
+	m.ent = m.idx ~= 0 and Entity(m.idx) or nil
+	LP.mirrors[key] = m
+	apply(m, 0)
+	return "taken"
+end
+net.Receive("pba_early", function()
+	for _ = 1, net.ReadUInt(5) do
+		local name = net.ReadString()
+		local d = A.ReadSound()
+		d.SoundName = name
+		d.elapsed, d.ev, d.blocked = net.ReadFloat(), net.ReadFloat(), net.ReadBool()
+		local why = LP.TakeEarly(d)
+		A.earlyTry = { name = name, elapsed = d.elapsed, why = why, t = RealTime() } -- (tests, pba_status)
+		A.stats["early_" .. tostring(why)] = (A.stats["early_" .. tostring(why)] or 0) + 1
+	end
+end)
+
 --- stopsound / snd_restart: every mirror stops.
 function LP.StopAll()
 	for key, m in pairs(LP.mirrors) do
 		stopMirror(m)
-		if not m.client then LP.silenced[key] = true end
+		if not m.client and not m.early then LP.silenced[key] = true end
 		LP.mirrors[key] = nil
 	end
 end

@@ -750,6 +750,18 @@ function N.LateVerdict(on, cap, decode, started, gone, now, t0, tEnd, margin)
 	return "switch", math.max(now - t0, 0)
 end
 
+--- (pba_early_line_takeover) What a line the engine started for this player before his client was ready (cl_loops
+-- LP.TakeEarly) does now: "switch", offset (the module plays the rest from offset seconds of playback) or "drop", why
+-- (it stays with the engine to its end). The hand-over rule of N.LateVerdict (the engine copy has started; the
+-- module's file decode is the mirror's own wait): on, cap, now, t0 (its start), tEnd (its end), margin as there.
+-- blocked: it reached the engine because the client was not ready (a line behind a wall, or any line before pba ran
+-- here); else it was a clear line left to the engine while the module was not rendering yet, which is the module's
+-- only when every sound is (allNative: pba_native_all).
+function N.EarlyVerdict(on, cap, blocked, allNative, now, t0, tEnd, margin)
+	if on and not blocked and not allNative then return "drop", "clear" end
+	return N.LateVerdict(on, cap, "ready", true, false, now, t0, tEnd, margin)
+end
+
 -- ------------------------------------------------------------------ prewarm (pba_native_predecode)
 -- At map load (module ready), the sounds a fight brings at once are decoded ahead on worker threads: the
 -- explosion script, the breakables' scripts and the physics sounds (impacts, breaks, scrapes, bullet hits)

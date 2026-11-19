@@ -493,12 +493,32 @@ local function dispatchEngineDriven(snd)
 	return false
 end
 
+--- (pba_early_line_takeover, sv_relay A.NoteEarly) A spoken line the engine plays for players whose early window
+-- is open: kept for those who are not ready (whatever their verdict: far, muffled, clear), and for the ready ones
+-- in clear sight whose module does not render every sound yet (pba_native_all_want still 0: its rendering
+-- starting); their client hands it to the module once settled.
+local function noteEarly(snd, clear, muffled, far)
+	local secs = A.EarlyLine(snd.data) -- (the line test first: most sounds are not lines)
+	if not secs then return end
+	local function note(ply, ev, verdict)
+		if not A.EarlyOpen(ply) then return end
+		local blocked = not clientReady(ply)
+		if not blocked and not (verdict == "clear" and ply:GetInfoNum("pba_native_all_want", 0) < 1) then return end
+		A.NoteEarly(snd.data, secs, ply, ev, blocked)
+	end
+	local vol = snd.data.Volume or 1
+	for _, p in ipairs(clear) do note(p, vol, "clear") end
+	for _, p in ipairs(far) do note(p, vol, "far") end
+	for _, m in ipairs(muffled) do note(m.ply, vol * m.gain, "muffled") end
+end
+
 --- A brief sound: re-emitted unchanged for the clear listeners, muffled for those over budget, relayed to the
 -- others; untouched when nobody is blocked. Returns false when the original was replaced.
 local function dispatchBrief(snd)
 	if not prepare(snd) then return end
 	local data, pos, lvl = snd.data, snd.pos, snd.lvl
 	local clear, blocked, muffled, far = audienceOf(snd)
+	if (A.cfg.early_line_takeover or 1) >= 0.5 and A.NoteEarly and not snd.sentence then noteEarly(snd, clear, muffled, far) end
 	-- clients rendering echoes natively also want the loud sounds they hear directly
 	if A.cfg.echo_relay >= 0.5 and A.cfg.allow_native >= 0.5 and lvl >= A.cfg.echo_min_level and #clear > 0 then
 		local want = {}

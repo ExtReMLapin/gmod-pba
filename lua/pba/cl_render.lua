@@ -1680,6 +1680,40 @@ function A.SoundTimeLead(ms, now) return stLead(ms, now) or 0 end
 -- relayed server sounds: always played by us (the server suppressed the original)
 A.dict = A.dict or {}
 local pendingAcks = {}
+-- (pba_early_line_takeover) The lines the server left to the engine for this client before it was ready (sv_relay
+-- A.NoteEarly) are asked for once its rendering is settled: native rendering on and its every-sound wish sent
+-- (pba_native_all_want), or no native rendering to wait for (no module, switched off, failed), or EARLY_MAX_S.
+local EARLY_POLL_S, EARLY_MAX_S = 0.1, 30
+local earlyNoModule
+local function earlySettled()
+	local N = A.Native
+	if not A.Enabled() or not N then return true end
+	if (A.cfg.native or 1) < 0.5 or (A.cfg.native_render or 1) < 0.5 or (A.cfg.allow_native or 1) < 0.5 then return true end
+	if N.render then
+		-- its every-sound wish sent now, not at the next round of its 0.5 s timer (cl_native): a clear line the server
+		-- leaves to the engine after the window shuts is one this client no longer asks for
+		local all = (A.cfg.native_all or 1) >= 0.5
+		if N.allCvar and N.allCvar:GetBool() ~= all then RunConsoleCommand("pba_native_all_want", all and "1" or "0") end
+		return true
+	end
+	if N.err ~= nil and not N.building then return true end -- (its start failed)
+	-- no module installed: nothing to wait for (pba_native itself is loaded by N.Start, a second after the map's
+	-- InitPostEntity: its absence until then says nothing)
+	return earlyNoModule
+end
+function A.EarlySettle()
+	local t0 = RealTime()
+	local N = A.Native
+	earlyNoModule = pba_native == nil and N ~= nil and N.InstallProblem ~= nil
+		and N.InstallProblem(jit.arch, function(p) return file.Exists(p, "GAME") end) ~= nil
+	timer.Create("pba_early_settle", EARLY_POLL_S, 0, function()
+		if not IsValid(LocalPlayer()) then return end
+		if not earlySettled() and RealTime() - t0 < EARLY_MAX_S then return end
+		timer.Remove("pba_early_settle")
+		net.Start("pba_early")
+		net.SendToServer()
+	end)
+end
 -- the server relays sounds to this player only once his pba client runs (sv_relay clientReady): told now
 -- (this file loads after the player entity exists: on join, and again on a Lua refresh)
 -- (with whether pba is off on this client, pba_cl_enable 0: the server then leaves his sounds to the engine)
@@ -1687,6 +1721,7 @@ local function sayReady()
 	net.Start("pba_ready")
 	net.WriteBool(not A.Enabled())
 	net.SendToServer()
+	A.EarlySettle()
 end
 A.SayReady = sayReady
 if IsValid(LocalPlayer()) then sayReady() end

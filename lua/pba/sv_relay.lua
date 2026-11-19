@@ -31,6 +31,90 @@ function A.ClientOff(ply) -- (the audience rule, sv_sound)
 	return A.PState(ply).off == true and (A.cfg.relay_cl_enable or 1) >= 0.5
 end
 
+-- (pba_early_line_takeover) Lines a joining player hears before his client can render them. On a map load the
+-- scenes start before his pba client runs (d1_trainstation_05: Alyx's first line 1.25 s after PlayerInitialSpawn,
+-- his pba Lua loaded 0.04 s after it, native rendering 0.5 s later still): such a line is left to the engine for
+-- him (not ready: treated as a far player; ready but his module not on yet: a clear line is the engine's), and his
+-- client never knew of it, so the engine played the whole line, dry, through the walls. Each player has an early
+-- window, open from the start of this Lua state until his client says its rendering is settled (net "pba_early":
+-- native rendering on and its wishes sent, or no module); the spoken lines left to the engine for him meanwhile are
+-- kept (A.NoteEarly), then sent to him with how long they have played: his client hands each one still far enough
+-- from its end to the module, from that point, and mutes the engine copy (cl_loops LP.TakeEarly).
+util.AddNetworkString("pba_early")
+local EARLY_MAX = 16      -- lines kept per player (the oldest dropped)
+local EARLY_MIN_S = 1     -- a shorter line is not worth a second voice (the margin of the hand-over is 0.75 s)
+local EARLY_OPEN_S = 60   -- a client that never asks (an older pba) closes its window after this long
+--- True while ply's early window is open (pba_early_line_takeover).
+function A.EarlyOpen(ply)
+	if (A.cfg.early_line_takeover or 1) < 0.5 then return false end
+	local st = A.PState(ply)
+	if st.earlyDone then return false end
+	local now = RealTime()
+	st.earlyT0 = st.earlyT0 or now
+	if now - st.earlyT0 > EARLY_OPEN_S then st.earlyDone, st.early = true, nil return false end
+	return true
+end
+--- Seconds the spoken line `data` plays, when it is one an early window keeps: a voice channel or a speaker's copy,
+-- on an entity (not a player's own, not a sentence), a new sound, at least EARLY_MIN_S long. nil otherwise.
+function A.EarlyLine(data)
+	local flags = data.Flags or 0
+	if bit.band(flags, SND_STOP + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 then return nil end
+	local ch = data.Channel
+	if not (ch == CHAN_VOICE or ch == CHAN_VOICE2 or bit.band(flags, SND_SPEAKER or 64) ~= 0) then return nil end
+	local e = data.Entity
+	if not IsValid(e) or e:IsWorld() or e:IsPlayer() or not isstring(data.SoundName) or A.IsSentence(data.SoundName) then return nil end
+	local secs = A.PlaySeconds(data.SoundName, data.Pitch)
+	if not secs or secs < EARLY_MIN_S then return nil end
+	return secs
+end
+--- Keeps line `data` (secs: A.EarlyLine) for player ply, whose engine plays it at volume `ev`. blocked: he got it
+-- because he is not ready (else: a clear line his module may want, pba_native_all).
+function A.NoteEarly(data, secs, ply, ev, blocked)
+	local st = A.PState(ply)
+	local now = RealTime()
+	local list = st.early or {}
+	st.early = list
+	for i = #list, 1, -1 do if list[i].t + list[i].secs < now then table.remove(list, i) end end
+	if #list >= EARLY_MAX then table.remove(list, 1) end
+	local e = data.Entity
+	list[#list + 1] = { name = data.SoundName, idx = e:EntIndex(), chan = data.Channel, lvl = data.SoundLevel or 75,
+		pitch = data.Pitch or 100, vol = data.Volume or 1, ev = ev, flags = data.Flags or 0, dsp = data.DSP or 0,
+		pos = A.SoundPos(data) or e:WorldSpaceCenter(), face = A.OnFace(e, data.Channel) or false, t = now, secs = secs,
+		blocked = blocked and true or false }
+	A.stats.earlyNoted = (A.stats.earlyNoted or 0) + 1
+end
+-- his client's rendering is settled: the lines kept for him (still playing), how long each has played; the window shuts
+net.Receive("pba_early", function(_, ply)
+	local st = A.PState(ply)
+	local list = st.early
+	st.earlyDone, st.early = true, nil
+	if not list or (A.cfg.early_line_takeover or 1) < 0.5 then return end
+	local now, out = RealTime(), {}
+	for _, x in ipairs(list) do if x.t + x.secs > now then out[#out + 1] = x end end
+	if #out == 0 then return end
+	net.Start("pba_early")
+	net.WriteUInt(#out, 5)
+	local ct = CurTime()
+	for _, x in ipairs(out) do
+		net.WriteString(x.name)
+		A.WriteSound({ pos = x.pos, lvl = x.lvl, pitch = x.pitch, vol = x.vol, chan = x.chan, flags = x.flags, dsp = x.dsp,
+			idx = x.idx, face = x.face })
+		net.WriteFloat(now - x.t)
+		net.WriteFloat(x.ev)
+		net.WriteBool(x.blocked)
+		-- his copy from now on: the stops of its entity and the channel rule reach him (A.RelayStop, A.CutChannel)
+		local e = Entity(x.idx)
+		if IsValid(e) then
+			local r = A.recentTo[x.idx] or {}
+			A.recentTo[x.idx] = r
+			r[ply] = ct
+			A.HoldCopies({ Entity = e, Channel = x.chan }, { ply })
+		end
+	end
+	net.Send(ply)
+	A.stats.earlySent = (A.stats.earlySent or 0) + #out
+end)
+
 -- Player:ConCommand("stopsound") from the server (a common way addons silence a player): it runs in his
 -- engine, never in his Lua; he is told so his client stops pba's sounds as well
 do
