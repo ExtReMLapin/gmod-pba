@@ -271,6 +271,14 @@
   "pos0": "hook",
   "why": "native module scene (far moves sent at rest): test native_scene_far"
  },
+ "native_props_still": {
+  "pos0": "hook",
+  "why": "native module door sync: how often a prop at rest is looked at (time, not the result of one evaluation): test sync_doors_alloc"
+ },
+ "native_moved_local": {
+  "pos0": "hook",
+  "why": "native module door sync: which cached paths and sounds a moving object invalidates (time, not the result of one evaluation): test moved_local"
+ },
  "native_props_add_ms": {
   "pos0": "hook",
   "why": "native module scene (when props enter it, spread over the syncs): test native_props_add"

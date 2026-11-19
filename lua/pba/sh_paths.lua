@@ -91,20 +91,31 @@ end
 -- The entries live in parallel arrays (entry k: its six numbers, its answer, the next entry of its bucket or false),
 -- reused after each emptying: a table per entry was a quarter of pba's garbage while far sounds were re-evaluated
 -- (a moving listener's segments are new ones: one entry per trace; gm_cozyforestcabin).
+-- The buckets are arrays too (bh: an entry, bg: the emptying it belongs to), indexed by the hash's bits: emptying is a
+-- new number (cur), not a new table. The former head table, made anew at each emptying and grown back to `limit` keys,
+-- was 21 % of the sampled time on gm_converted_apartment and 0.3-0.55 MB/s of garbage.
 function P.WorldSegMemo(fn, limit)
-	local t, n, gen, TL, TH, tg = {}, 0, nil, nil, nil, nil
+	local n, gen, TL, TH, tg, cur = 0, nil, nil, nil, nil, 0
 	local e1, e2, e3, e4, e5, e6, er, en = {}, {}, {}, {}, {}, {}, {}, {}
+	local size = 1
+	while size < limit do size = size * 2 end
+	local mask = size - 1
+	local bh, bg = {}, {}
+	for i = 1, size do bh[i], bg[i] = 0, 0 end
+	local band, bxor, rshift, tobit, floor = bit.band, bit.bxor, bit.rshift, bit.tobit, math.floor
 	return function(a, b, tag)
 		local ul, uh = util.TraceLine, util.TraceHull
 		if gen ~= P.worldGen or TL ~= ul or TH ~= uh or tg ~= tag or n >= limit then
-			t, n, gen, TL, TH, tg = {}, 0, P.worldGen, ul, uh, tag
+			n, gen, TL, TH, tg, cur = 0, P.worldGen, ul, uh, tag, cur + 1
 		end
 		local ax, ay, az = a:Unpack()
 		local bx, by, bz = b:Unpack()
 		local h = ax + ay * 1.7 + az * 2.9 + bx * 4.3 + by * 6.1 + bz * 8.7
-		if h ~= h then return fn(a, b) end
-		local e = t[h]
-		while e do
+		if h ~= h or h == math.huge or h == -math.huge then return fn(a, b) end
+		local k = tobit(floor(h * 8) % 4294967296)
+		local s = band(bxor(k, rshift(k, 15)), mask) + 1
+		local e = bg[s] == cur and bh[s] or 0
+		while e > 0 do
 			if same(e1[e], ax) and same(e2[e], ay) and same(e3[e], az) and same(e4[e], bx) and same(e5[e], by) and same(e6[e], bz) then
 				return er[e]
 			end
@@ -112,8 +123,8 @@ function P.WorldSegMemo(fn, limit)
 		end
 		local r = fn(a, b)
 		n = n + 1
-		e1[n], e2[n], e3[n], e4[n], e5[n], e6[n], er[n], en[n] = ax, ay, az, bx, by, bz, r, t[h] or false
-		t[h] = n
+		e1[n], e2[n], e3[n], e4[n], e5[n], e6[n], er[n], en[n] = ax, ay, az, bx, by, bz, r, bg[s] == cur and bh[s] or 0
+		bh[s], bg[s] = n, cur
 		return r
 	end
 end
@@ -2908,13 +2919,131 @@ local CACHE_SWEEP_S = 2 -- seconds between two sweeps of the dead results (P.Com
 -- pba_group_time: the last TIME_KEEP results (newest last), and how often one served again
 local TIME_KEEP = 64
 P.timeMemo = P.timeMemo or {}
+-- the same entries by emitter (false: no entity), oldest first: cachedResult reads its emitter's only (it scanned all 64)
+P.timeByEnt = P.timeByEnt or {}
+P.timeEmpty = {}
 P.timeStats = P.timeStats or { reused = 0, computed = 0 }
 
 function P.InvalidateCache()
 	P.cache = {}
 	P.timeMemo = {}
+	P.timeByEnt, P.timeIndexOf = {}, P.timeMemo
 	P.cacheGen = P.cacheGen + 1
 end
+
+--- The by-emitter index of P.timeMemo, rebuilt when P.timeMemo is another table than the one it was made for (a test
+-- or a tool emptying the memo by replacing it).
+function P.TimeIndex()
+	local list = P.timeMemo
+	if P.timeIndexOf ~= list then
+		local idx = {}
+		for _, m in ipairs(list) do
+			if m.ent ~= nil then
+				local s = idx[m.ent]
+				if not s then s = {} idx[m.ent] = s end
+				s[#s + 1] = m
+			end
+		end
+		P.timeByEnt, P.timeIndexOf = idx, list
+	end
+	return P.timeByEnt
+end
+
+-- takes memo entry m out of its emitter's list (in P: this file is at the 200 locals a chunk may have)
+function P.TimeUnlink(m)
+	if m.ent == nil then return end
+	local sub = P.TimeIndex()[m.ent]
+	if not sub then return end
+	for i = 1, #sub do
+		if sub[i] == m then
+			table.remove(sub, i)
+			break
+		end
+	end
+	if #sub == 0 then P.timeByEnt[m.ent] = nil end
+end
+
+-- pba_native_moved_local: an object that moved near the listener (N.SyncDoors) invalidates the region it swept, not the
+-- whole cache. P.regionGen counts those invalidations, P.regionLog keeps the last REGION_LOG boxes ({ gen, box }; box =
+-- { x0, y0, z0, x1, y1, z1, ... }, six numbers per object). A cached result, a memo or a sound (P.ReevalDue) whose region
+-- the box, grown by REGION_MARGIN, does not touch is kept.
+P.regionGen = P.regionGen or 0
+P.regionLog = P.regionLog or {}
+do -- (a block: this file is at the 200 locals a chunk may have)
+local REGION_LOG = 32
+local REGION_MARGIN = 128
+-- a result's region: its ends and the points of its routes and edge (computed once, kept beside the result)
+local extOf = setmetatable({}, { __mode = "k" })
+local function extentOf(r)
+	local e = extOf[r]
+	if e then return e end
+	local S, L = r.S, r.L
+	local x0, y0, z0 = math.min(S.x, L.x), math.min(S.y, L.y), math.min(S.z, L.z)
+	local x1, y1, z1 = math.max(S.x, L.x), math.max(S.y, L.y), math.max(S.z, L.z)
+	local function add(v)
+		if v.x < x0 then x0 = v.x elseif v.x > x1 then x1 = v.x end
+		if v.y < y0 then y0 = v.y elseif v.y > y1 then y1 = v.y end
+		if v.z < z0 then z0 = v.z elseif v.z > z1 then z1 = v.z end
+	end
+	for _, p in ipairs(r.paths or {}) do
+		for _, v in ipairs(p.points or {}) do add(v) end
+	end
+	if r.edge and r.edge.apex then add(r.edge.apex) end
+	e = { x0, y0, z0, x1, y1, z1 }
+	extOf[r] = e
+	return e
+end
+-- true when one of the boxes of bx (grown by REGION_MARGIN) overlaps the box x0..z1
+local function boxesTouch(bx, x0, y0, z0, x1, y1, z1)
+	local m = REGION_MARGIN
+	for i = 1, #bx, 6 do
+		if bx[i] - m <= x1 and bx[i + 3] + m >= x0 and bx[i + 1] - m <= y1 and bx[i + 4] + m >= y0
+			and bx[i + 2] - m <= z1 and bx[i + 5] + m >= z0 then return true end
+	end
+	return false
+end
+local function resultTouches(r, bx)
+	if not (r and r.S and r.L) then return true end
+	local e = extentOf(r)
+	return boxesTouch(bx, e[1], e[2], e[3], e[4], e[5], e[6])
+end
+-- true when a box logged after generation gen0 touches the region x0..z1 (or the log no longer reaches back to gen0)
+local function regionSince(gen0, x0, y0, z0, x1, y1, z1)
+	local log = P.regionLog
+	if #log == 0 or log[1].gen > gen0 + 1 then return true end
+	for i = #log, 1, -1 do
+		local g = log[i]
+		if g.gen <= gen0 then break end
+		if boxesTouch(g.box, x0, y0, z0, x1, y1, z1) then return true end
+	end
+	return false
+end
+
+--- Empties the cached results and memos whose region one of the boxes touches (bx: six numbers per box, world
+-- AABB of what an object swept; the table is kept in the log) and logs it for P.ReevalDue.
+function P.InvalidateRegion(bx)
+	if #bx == 0 then return end
+	for k, e in pairs(P.cache) do
+		if resultTouches(e.r, bx) then P.cache[k] = nil end
+	end
+	local list = P.timeMemo
+	for i = #list, 1, -1 do
+		if resultTouches(list[i].r, bx) then P.TimeUnlink(table.remove(list, i)) end
+	end
+	P.regionGen = P.regionGen + 1
+	local log = P.regionLog
+	log[#log + 1] = { gen = P.regionGen, box = bx }
+	if #log > REGION_LOG then table.remove(log, 1) end
+end
+
+--- True when a region invalidation logged after generation gen0 touches the result r (P.Compute's store guard).
+function P.RegionTouched(gen0, r)
+	if gen0 == P.regionGen then return false end
+	local e = extentOf(r)
+	return regionSince(gen0, e[1], e[2], e[3], e[4], e[5], e[6])
+end
+P.RegionSince = regionSince
+end -- (region invalidation)
 
 --- Adaptive re-evaluation of a continuous sound (loop, long sound, radio: reeval_adaptive). Its path
 -- only changes when the source or the listener moves, or when the world model changes: P.cacheGen,
@@ -2933,11 +3062,22 @@ function P.ReevalDue(state, S, L, now, cfg)
 			local mv2 = mv * mv
 			local dx, dy, dz = S.x - state.sx, S.y - state.sy, S.z - state.sz
 			local ex, ey, ez = L.x - state.lx, L.y - state.ly, L.z - state.lz
-			if dx * dx + dy * dy + dz * dz <= mv2 and ex * ex + ey * ey + ez * ez <= mv2 then return false end
+			if dx * dx + dy * dy + dz * dz <= mv2 and ex * ex + ey * ey + ez * ez <= mv2 then
+				-- pba_native_moved_local: an object moved since, somewhere: due if what it swept touches the box of
+				-- the source and the listener (then and now), else the sound keeps its path
+				local rg = state.rgen
+				if rg == P.regionGen then return false end
+				if rg and not P.RegionSince(rg, math.min(S.x, L.x, state.sx, state.lx), math.min(S.y, L.y, state.sy, state.ly),
+					math.min(S.z, L.z, state.sz, state.lz), math.max(S.x, L.x, state.sx, state.lx),
+					math.max(S.y, L.y, state.sy, state.ly), math.max(S.z, L.z, state.sz, state.lz)) then
+					state.rgen = P.regionGen
+					return false
+				end
+			end
 		end
 	end
 	-- numbers, not the vectors: an owner may move the same Vector object in place
-	state.t, state.gen, state.force, state.n = now, P.cacheGen, nil, (state.n or 0) + 1
+	state.t, state.gen, state.rgen, state.force, state.n = now, P.cacheGen, P.regionGen, nil, (state.n or 0) + 1
 	state.sx, state.sy, state.sz, state.lx, state.ly, state.lz = S.x, S.y, S.z, L.x, L.y, L.z
 	return true
 end
@@ -3063,15 +3203,28 @@ end
 -- are out of both models.
 local NATIVE_SKIP = { "tools/toolsclip", "tools/toolsplayerclip", "tools/toolsnpcclip", "tools/toolstrigger",
 	"tools/toolshint", "tools/toolsskip", "tools/toolsskybox", "tools/toolsfog", "tools/toolsoccluder" }
+-- (per texture name, once: 1 lacking, 2 a displacement, 0 held; a string.lower and nine prefix tests per wall before)
+P.lacksMemo = P.lacksMemo or {}
 function P.NativeLacks(w, nativeDisp)
 	if w.sky then return true end
-	local t = string.lower(w.tex or "")
-	if t == "**studio**" then return true end
-	if t == "**displacement**" then return not nativeDisp end
-	for _, p in ipairs(NATIVE_SKIP) do
-		if string.StartWith(t, p) then return true end
+	local raw = w.tex or ""
+	local k = P.lacksMemo[raw]
+	if not k then
+		local t = string.lower(raw)
+		if t == "**studio**" then
+			k = 1
+		elseif t == "**displacement**" then
+			k = 2
+		else
+			k = 0
+			for _, p in ipairs(NATIVE_SKIP) do
+				if string.StartWith(t, p) then k = 1 break end
+			end
+		end
+		P.lacksMemo[raw] = k
 	end
-	return false
+	if k == 2 then return not nativeDisp end
+	return k == 1
 end
 
 --- Blend of Steam Audio's occlusion o (1 = clear line: the share of the source it sees) with the
@@ -3306,10 +3459,10 @@ local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emit
 	if timeOn then
 		local mv2 = sq(cfg.reeval_move or 8)
 		local maxAge = cfg.reeval_max_s or 1
-		local list = P.timeMemo
+		local list = P.TimeIndex()[emitter] or P.timeEmpty
 		for i = #list, 1, -1 do
 			local m = list[i]
-			if m.ent == emitter and m.gen == P.cacheGen and m.lvl == sndlvl and m.state == lineState and now - m.t <= maxAge
+			if m.gen == P.cacheGen and m.lvl == sndlvl and m.state == lineState and now - m.t <= maxAge
 				and m.S:DistToSqr(S) <= mv2 and m.L:DistToSqr(L) <= mv2
 				and not (barrier and (P.BarrierBetween(S, m.S.x, m.S.y, m.S.z, emitter) or P.BarrierBetween(L, m.L.x, m.L.y, m.L.z, emitter))) then
 				P.timeStats.reused = P.timeStats.reused + 1
@@ -3322,12 +3475,14 @@ end
 -- Stage 1b, the result kept: dead entries swept (older than cache_ttl: never served again); only
 -- P.InvalidateCache emptied the cache, one entry per cell pair, level, emitter and line state, for good on a
 -- map whose doors never move
-local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0)
+local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0, region0)
 	-- pba_cache_gen_guard: the world model changed while this evaluation ran (a far sound's job, cl_slicer: a
 	-- setting, a door state, the probe graph or a door field changed between or inside its slices). Its answer,
 	-- partly on the old inputs, was kept under the NEW generation (read at the store): the job's own restart read
 	-- it back, and the next sounds of that cell or emitter got it for cache_ttl / reeval_max_s. Not kept then.
 	if gen0 and (gen0 ~= P.cacheGen or world0 ~= P.worldGen or field0 ~= (A.Probes and A.Probes.fieldEpoch or 0)) then return end
+	-- (an object near the listener swept its region meanwhile, pba_native_moved_local: the same)
+	if region0 and region0 ~= P.regionGen and P.RegionTouched(region0, r) then return end
 	if now >= (P.cacheSweepT or 0) then
 		P.cacheSweepT = now + CACHE_SWEEP_S
 		local ttl = cfg.cache_ttl
@@ -3338,8 +3493,13 @@ local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter,
 	if timeOn then
 		P.timeStats.computed = P.timeStats.computed + 1
 		local list = P.timeMemo
-		if #list >= TIME_KEEP then table.remove(list, 1) end
-		list[#list + 1] = { t = now, r = r, gen = P.cacheGen, lvl = sndlvl, state = lineState, S = Vector(S), L = Vector(L), ent = emitter }
+		if #list >= TIME_KEEP then P.TimeUnlink(table.remove(list, 1)) end
+		local m = { t = now, r = r, gen = P.cacheGen, lvl = sndlvl, state = lineState, S = Vector(S), L = Vector(L), ent = emitter }
+		list[#list + 1] = m
+		local idx = P.TimeIndex()
+		local sub = idx[emitter]
+		if not sub then sub = {} idx[emitter] = sub end
+		sub[#sub + 1] = m
 	end
 end
 
@@ -3702,6 +3862,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	-- (numbers, not a table: no garbage per evaluation)
 	local gen0 = (cfg.cache_gen_guard or 1) >= 0.5 and P.cacheGen or nil
 	local world0, field0 = P.worldGen, A.Probes and A.Probes.fieldEpoch or 0
+	local region0 = gen0 and P.regionGen or nil
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
@@ -3734,6 +3895,6 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		end
 		selectVoices(r, S, L, sndlvl, cfg)
 	end
-	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0)
+	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0, region0)
 	return r
 end

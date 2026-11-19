@@ -1351,6 +1351,105 @@ local SUITE = {
 			expect(P.ReevalDue(st, S, L, 1.0, cfg)).to.beTrue()
 			expect(P.ReevalDue(st, S, L, 1.25, cfg)).to.equal(false)
 		end },
+		{ name = "ReevalDue: an object moving away from the source and the listener (InvalidateRegion) keeps the sound; one moving near them re-evaluates it", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			P.ReevalDue(st, S, L, 0, cfg)
+			-- a lift 600 u off, sweeping 10 u: far beyond the 128 u margin
+			P.InvalidateRegion({ 600, 600, 0, 664, 664, 74 })
+			expect(P.ReevalDue(st, S, L, 0.25, cfg)).to.equal(false)
+			P.InvalidateRegion({ 600, 610, 0, 664, 674, 74 })
+			expect(P.ReevalDue(st, S, L, 0.5, cfg)).to.equal(false)
+			-- a door leaf 60 u beside the line
+			P.InvalidateRegion({ 40, 60, 0, 44, 116, 100 })
+			expect(P.ReevalDue(st, S, L, 0.75, cfg)).to.beTrue()
+			expect(P.ReevalDue(st, S, L, 1.0, cfg)).to.equal(false) -- once
+			-- more moves than the log keeps since the last evaluation: due (nothing known of the oldest)
+			for i = 1, 40 do P.InvalidateRegion({ 5000, 5000, 0, 5010, 5010, 10 }) end
+			expect(P.ReevalDue(st, S, L, 1.25, cfg)).to.beTrue()
+		end },
+		{ name = "InvalidateRegion: drops the cached results and memos whose ends or route points the box touches, keeps the others", func = function()
+			local cfg = setmetatable({ group_time = 1, reeval_move = 8, reeval_max_s = 1, cache_ttl = 0.25 }, { __index = CFG })
+			P.InvalidateCache()
+			local r1 = { S = Vector(0, 0, 0), L = Vector(100, 0, 0), paths = { { points = { Vector(50, 400, 0) } } } }
+			local r2 = { S = Vector(2000, 0, 0), L = Vector(2100, 0, 0) }
+			P.cache.a = { t = 0, r = r1 }
+			P.cache.b = { t = 0, r = r2 }
+			P.timeMemo[1] = { t = 0, r = r1 }
+			P.timeMemo[2] = { t = 0, r = r2 }
+			local g = P.cacheGen
+			-- touches r1's route point (50, 400) within the margin, not its ends; nowhere near r2
+			P.InvalidateRegion({ 40, 450, 0, 60, 460, 10 })
+			expect(P.cache.a).to.equal(nil)
+			expect(P.cache.b ~= nil).to.beTrue()
+			expect(#P.timeMemo).to.equal(1)
+			expect(P.timeMemo[1].r == r2).to.beTrue()
+			expect(P.cacheGen).to.equal(g) -- the far sounds' jobs are not restarted
+			-- the memo's by-emitter index follows P.timeMemo, also when a tool replaces it (tests empty it so)
+			local e1 = {}
+			P.timeMemo = { { t = 0, r = r2, ent = e1 }, { t = 0, r = r1, ent = false } }
+			expect(#P.TimeIndex()[e1]).to.equal(1)
+			expect(#P.TimeIndex()[false]).to.equal(1)
+			P.InvalidateRegion({ 40, 450, 0, 60, 460, 10 }) -- (r1's entry out of both)
+			expect(P.TimeIndex()[false]).to.equal(nil)
+			expect(#P.timeMemo).to.equal(1)
+			P.timeMemo = {}
+			expect(P.TimeIndex()[e1]).to.equal(nil)
+			P.InvalidateCache()
+		end },
+		{ name = "BuildField: a field no longer held gives its tables to the next build, whose costs, hops and roots are those of a build on new tables", func = function()
+			local PR = A.Probes
+			withProbeRooms({ { 16, 64, 112 }, { 360, 424, 140 } }, nil, nil, function(g)
+				local L1, L2 = Vector(300, 300, 64), Vector(800, 200, 90)
+				local function fresh(L)
+					-- (a `reuse` of new empty tables: the former build on tables of its own)
+					return PR.BuildField(g, L, nil, { g = g, cost = {}, nxt = {}, root = {} }, false, nil)
+				end
+				local function same(a, b)
+					for id = 1, #g.nodes do
+						if a.cost[id] ~= b.cost[id] or a.nxt[id] ~= b.nxt[id] or a.root[id] ~= b.root[id] then return false end
+					end
+					return true
+				end
+				-- (built and dropped in a function of its own: no stack slot of this one keeps the field)
+				local function oneUse(L)
+					local f = PR.BuildField(g, L, nil, nil, false, nil)
+					local ok = same(f, fresh(L))
+					return f.cost, ok
+				end
+				local t1, ok1 = oneUse(L1)
+				expect(ok1).to.beTrue()
+				collectgarbage() collectgarbage()
+				-- the free tables: the first field's, and any other field's of this graph no longer held
+				local free, firstFree = {}, false
+				for _, b in ipairs(PR.fieldBins) do
+					if b.g == g and b.ref[1] == nil then
+						free[b.cost] = true
+						if b.cost == t1 then firstFree = true end
+					end
+				end
+				expect(firstFree).to.beTrue() -- (the first field is gone: its tables are free)
+				local f2 = PR.BuildField(g, L2, nil, nil, false, nil)
+				expect(free[f2.cost] == true).to.beTrue() -- (recycled)
+				expect(same(f2, fresh(L2))).to.beTrue()
+				-- a field still held keeps its tables: the next build takes others
+				local f3 = PR.BuildField(g, L1, nil, nil, false, nil)
+				expect(f3.cost ~= f2.cost).to.beTrue()
+				expect(same(f2, fresh(L2)) and same(f3, fresh(L1))).to.beTrue()
+				-- garbage of a build on recycled tables vs new ones (reported)
+				oneUse(L2)
+				collectgarbage() collectgarbage()
+				collectgarbage("stop")
+				local k0 = collectgarbage("count")
+				local f4 = PR.BuildField(g, L1, nil, nil, false, nil)
+				local k1 = collectgarbage("count")
+				fresh(L1)
+				local k2 = collectgarbage("count")
+				collectgarbage("restart")
+				print(string.format("[pba test] field build garbage: %.1f KB recycled, %.1f KB on new tables (%d probes)", k1 - k0, k2 - k1, #g.nodes))
+				expect(f4 ~= nil).to.beTrue() -- (the scene's 32 probes: the three tables are a small part; in game ~220 KB of ~280)
+			end)
+		end },
 		{ name = "ReevalDue: never twice within half an update_interval, whatever changed", func = function()
 			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 0.1, update_interval = 1 }, { __index = CFG })
 			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
@@ -1395,6 +1494,13 @@ local SUITE = {
 			expect(P.NativeLacks({ tex = "CONCRETE/CONCRETEWALL001A" }, false)).to.equal(false)
 			expect(P.NativeLacks({ tex = "TOOLS/TOOLSNODRAW" }, false)).to.equal(false) -- hidden faces of real walls: in it
 			expect(P.NativeLacks({}, false)).to.equal(false)
+			-- asked again (kept per texture name): the same answers, a displacement still by nativeDisp
+			expect(P.NativeLacks({ tex = "**displacement**" }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "**displacement**" }, true)).to.equal(false)
+			expect(P.NativeLacks({ tex = "TOOLS/TOOLSSKYBOX" }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "tools/toolsskybox2d" }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "CONCRETE/CONCRETEWALL001A", sky = true }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "CONCRETE/CONCRETEWALL001A" }, true)).to.equal(false)
 		end },
 		{ name = "Compute (native): occlusion blended smoothly up to 1; a wall Steam Audio lacks keeps its Lua loss", func = function()
 			local savedWalls, savedGet, savedNative = P.Walls, A.Graph.Get, A.Native
@@ -1799,14 +1905,31 @@ local SUITE = {
 			collectgarbage("restart")
 			local perEntry = (k1 - k0) * 1024 / 4000
 			print(string.format("[pba test] WorldSegMemo garbage per new entry: %.0f bytes", perEntry))
-			-- (the head table's growth stays: a hash node per bucket)
-			expect(perEntry < 64).to.beTrue()
+			-- (the buckets are arrays emptied by a number: nothing per entry; the former head table, made anew at each
+			-- emptying, was 25 bytes per entry)
+			expect(perEntry < 2).to.beTrue()
 			-- answers unchanged: hits give the kept answer, the function is not called again
 			local c0 = calls
 			a:SetUnpacked(2e5 + 3999, 1999.5, 3) -- (kept after the last emptying)
 			b:SetUnpacked(7998, 2e5 - 3999, 7)
 			expect(memo(a, b)).to.equal(false)
 			expect(calls).to.equal(c0)
+			-- emptied by a world change (a door state, P.worldGen): nothing made either, and the answer is asked again
+			local g0 = P.worldGen
+			collectgarbage("stop")
+			local w0 = collectgarbage("count")
+			P.worldGen = (P.worldGen or 0) + 1
+			fill(3e5)
+			local w1 = collectgarbage("count")
+			collectgarbage("restart")
+			expect((w1 - w0) * 1024 / 4000 < 2).to.beTrue()
+			local c1 = calls
+			memo(a, b) -- (the last segment of that fill: kept)
+			expect(calls).to.equal(c1)
+			P.worldGen = P.worldGen + 1
+			memo(a, b) -- (emptied: asked again)
+			expect(calls).to.equal(c1 + 1)
+			P.worldGen = g0
 		end },
 		{ name = "Probe tighten: its bisections make no garbage per step (three new Vectors a step were half of pba's garbage with a far sound re-evaluated, gm_cozyforestcabin)", func = function()
 			-- a pillar between a and b (world box 640..680 x 200..300); the stub traces write their shared output table
