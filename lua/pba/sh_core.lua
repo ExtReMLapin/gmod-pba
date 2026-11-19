@@ -210,6 +210,13 @@ function A.KeepsChannel(flags)
 	return bit.band(flags or 0, NO_OVERWRITE) ~= 0
 end
 
+--- The engine's audible radius of a sound level: it sends to players within 100*(lvl-50) units (500 if lvl
+-- <= 50). One rule for the relayed sounds and the mirrors (sv_sound, sv_loops),
+-- and on the client for the mirrors' edge fade (cl_loops, pba_loops_edge_fade_near).
+function A.AudibleRadius(lvl)
+	return lvl > 50 and 100 * (lvl - 50) or 500
+end
+
 --- True for a replacing channel (not CHAN_AUTO / CHAN_STATIC, above 0): a new sound there cuts the previous one.
 function A.ReplacingChannel(chan)
 	return chan and chan ~= CHAN_AUTO and chan ~= CHAN_STATIC and chan > 0

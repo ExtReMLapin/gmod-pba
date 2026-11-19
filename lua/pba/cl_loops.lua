@@ -1023,7 +1023,8 @@ net.Receive("pba_loop", function()
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	if sid ~= 0 then LP.byId[sid] = m end
 	-- a loop joined midway, rendered by the module: faded in (pba_loops_edge_fade)
-	if new and joined and not once and (A.cfg.loops_edge_fade or 1) > 0 and A.Native and A.Native.render and A.Enabled() then
+	if new and joined and not once and (A.cfg.loops_edge_fade or 1) > 0 and A.Native and A.Native.render and A.Enabled()
+		and LP.NearEdge(pos, lvl) then
 		m.edgeK = LP.EDGE_FLOOR
 	end
 	m.pitch = pitch
@@ -1086,6 +1087,18 @@ end
 -- 2500 u at 75 dB) is no edge of audibility (-33.6 dB clear there), and gm_converted_apartment's cars stepped the
 -- output by +12..+25 dB within 10-30 ms each time one entered it (most of it their source reverb slot).
 LP.EDGE_FLOOR = 1e-3
+--- (pba_loops_edge_fade_near) True when a loop at S of level lvl joined midway is near the edge of the server's range for it
+-- (over EDGE_NEAR of A.AudibleRadius from the listener): a source driving into range, faded in. A join well inside it
+-- (a spawn, a teleport, a noclip next to the source) starts at once, as the engine plays it: the server flags every join,
+-- and a machine beside a player who spawned there was faded in from -60 dB (review M6). 0: every join faded.
+local EDGE_NEAR = 0.8
+function LP.NearEdge(S, lvl)
+	if (A.cfg.loops_edge_fade_near or 1) < 0.5 then return true end
+	local L = A.ListenerPos()
+	if not (L and S and lvl) then return true end
+	local r = A.AudibleRadius(lvl) * EDGE_NEAR
+	return S:DistToSqr(L) > r * r
+end
 function LP.SetVolume(m, vol)
 	if m.edgeK then m.srvVol, m.vol = vol, vol and vol * m.edgeK else m.vol = vol end
 end

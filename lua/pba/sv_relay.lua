@@ -245,12 +245,6 @@ function ENT:StopSound(name)
 	A.StopSource(self, name)
 end
 
---- The engine's audible radius of a sound level: it sends to players within 100*(lvl-50) units (500 if lvl
--- <= 50). One rule for the relayed sounds and the mirrors (sv_sound, sv_loops).
-function A.AudibleRadius(lvl)
-	return lvl > 50 and 100 * (lvl - 50) or 500
-end
-
 local function writeSound(data, pos, id, full, echoOnly)
 	net.WriteUInt(id, 16)
 	net.WriteBool(full)
