@@ -174,10 +174,9 @@ local function doorState(ent)
 	if CLIENT then return D.byEnt and D.byEnt[ent:EntIndex()] end
 	return D.entState and D.entState[ent:EntIndex()]
 end
-P.DoorState = doorState
 --- Mid-band loss (dB) and lowpass level of a door leaf as a closure: its one loss (sh_doors D.LeafLoss:
 -- the leaf's measured thickness and face material, replicated as closedDb), the same the portal model
--- charges (AC.LeafDb in P.EvalChain and P.SegmentDoorLoss). Never the chord the straight line cuts
+-- charges (AC.LeafDb in P.SegmentDoorLoss). Never the chord the straight line cuts
 -- through the leaf: a line crossing a leaf near its plane cut 86 u of "metal", 50 dB, where the same
 -- leaf costs 24 one step aside (door_sweep_real's 18.6 dB jump at the leaf's edge).
 local function leafLoss(ent, cfg)
@@ -189,11 +188,10 @@ local function leafLoss(ent, cfg)
 	end
 	return cfg.door_closed_db, 3
 end
-P.LeafLoss = leafLoss
 
 --- Evaluates a polyline S, v1 .. vn, L (probe paths): a corner at each inner vertex (AC.Corner: the
 -- same model as a portal opening, reverberant leak included), door entities crossed by the segments;
--- apparent position = vn. Corners capped together at diff_max_total, doors on top (as P.EvalChain).
+-- apparent position = vn. Corners capped together at diff_max_total, doors on top.
 -- Spectrum as a chain's: with no door on the way the leak carries the treble round the corners
 -- (portal_diffuse_lp), so a doorway heard round its jamb is not muffled more on a map without
 -- areaportals than on one with them.
@@ -917,7 +915,6 @@ local function leafClearance(ent, V)
 	end
 	return best, bi, bt, bq
 end
-P.LeafClearance = leafClearance
 -- The bend of a leg a -> b that the world blocks, from route vertex v seeing both (P.CornerPoint), taken again
 -- from where it got to until it stops moving: one pass from a vertex far from the leg (a leaf's top corner and
 -- a route vertex 70 u below it, round a vertical jamb edge) stopped half way, and the way round was 50 u too
