@@ -1547,8 +1547,8 @@ function finish(data, relayed, idx, copies, S, L, ang, src, r, waited, t0)
 	pf.maxCall = math.max(pf.maxCall, ms)
 	A.stats.voices = A.stats.voices + emitted
 
-	-- pba_gc_lean: the record below only feeds the report
-	if A.cfg.report < 0.5 and A.On(A.cfg, "gc_lean") then return true end
+	-- the record below only feeds the report
+	if A.cfg.report < 0.5 then return true end
 	local rec = { t = now, S = S, L = L, r = r, name = data.SoundName, relayed = relayed, ms = (SysTime() - t0) * 1000 }
 	if A.cfg.report >= 0.5 then
 		local vs = {}
