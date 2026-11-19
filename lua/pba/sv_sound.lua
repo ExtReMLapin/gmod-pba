@@ -375,7 +375,8 @@ function S.Audience(snd, ply, scale)
 	-- (pba_native_own: the relay below, as for a native-all player's clear sound)
 	-- (not through a camera: the engine spatialises his sounds from there, so they take the path of any sound)
 	local ownEar = snd.own and ply ~= snd.skip and e == ply and A.HearsFromSelf(ply)
-	if ownEar and not wantsOwn(ply) then return "clear" end
+	-- (pba_own_ready: not before his client runs; on a map change his userinfo still asks while his new client loads)
+	if ownEar and (not wantsOwn(ply) or ((A.cfg.own_ready or 1) >= 0.5 and not clientReady(ply))) then return "clear" end
 	-- his own sound for his module (pba_native_own): no wall to look for between him and himself, and no
 	-- relay budget or per-name quota (an SMG's 13 shots a second hit the quota: the shots over it went to
 	-- the engine and the next relayed shot cut them on the weapon channel)

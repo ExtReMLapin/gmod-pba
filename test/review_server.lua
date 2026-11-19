@@ -185,6 +185,30 @@ cases.S4 = function(opt)
 	return { pass = relayed == 0, relayedToNotReady = relayed }
 end
 
+-- S5: a player's own sound goes to his module (pba_native_own: his userinfo asks for it) by a relay, with no check that
+-- his client runs: on a map change the userinfo still says 1 while his new client loads, and his own sounds were relayed
+-- to nothing. Not ready, his own sound is the engine's (played on him, clear).
+cases.S5 = function(opt)
+	A.SetOverride("own_ready", opt)
+	A.SetOverride("native_relay", 1)
+	A.SetOverride("allow_native", 1)
+	A.PState(ply).ready = false
+	local PLY = FindMetaTable("Player")
+	local gin = PLY.GetInfoNum
+	PLY.GetInfoNum = function(p, k, d, ...)
+		if p == ply and k == "pba_native_own_want" then return 1 end
+		return gin(p, k, d, ...)
+	end
+	local i0 = #sent
+	local ok, err = pcall(function() ply:EmitSound(LINE1, 75, 100, 1, CHAN_VOICE) end)
+	PLY.GetInfoNum = gin
+	local relayed = #to("pba_snd", i0)
+	job:sleep(0.2)
+	ply:StopSound(LINE1)
+	if not ok then return { pass = false, err = tostring(err) } end
+	return { pass = relayed == 0, relayedToNotReady = relayed }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end
@@ -194,7 +218,7 @@ local ok, res = pcall(fn, CONTROL and 0 or nil)
 unspy()
 st0.ready = wasReady == nil and true or wasReady
 st0.earlyDone, st0.earlyT0, st0.early, st0.off = wasEarlyDone, wasEarlyT0, nil, wasOff
-for _, k in ipairs({ "loops_ready", "early_purge", "stop_both", "step_by_name", "sentence_ready", "sentences" }) do A.SetOverride(k, nil) end
+for _, k in ipairs({ "loops_ready", "early_purge", "stop_both", "step_by_name", "sentence_ready", "sentences", "own_ready", "native_relay", "allow_native", "loops_join_pos", "long_lipsync", "loops_cut_chan", "loops_world_pos" }) do A.SetOverride(k, nil) end
 for _, e in ipairs(spawned) do if IsValid(e) then if e:IsPlayer() then e:Kick("pba test") else e:Remove() end end end
 if not ok then return { pass = false, err = tostring(res) } end
 res.case, res.control = CASE, CONTROL

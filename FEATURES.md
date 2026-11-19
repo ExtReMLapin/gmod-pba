@@ -53,6 +53,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | A sound restarted a tick or two later (two outputs of a map, a client reading several ticks per packet) plays once, as in the engine | ✅ | ✅ | S `stop_both` |
 | Another player shooting while running (MP): his shot heard by those who see him, only his footstep left to their own client | ✅ | ✅ | S `step_by_name` |
 | A sentence (Combine radio) while a player joins | ✅ | ✅ left to the engine for everyone until his client runs (no relay he cannot play) | S `sentence_ready` |
+| Your own sounds while your client loads (a map change, with the module rendering your own sounds) | ✅ | ✅ the engine plays them on you until the client runs | S `own_ready` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering

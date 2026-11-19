@@ -582,5 +582,9 @@
  "sentence_ready": {
   "pos0": "hook",
   "why": "server: a sentence left to the engine when one listener's client is not ready (sv_sound dispatchBrief), outside P.Compute; covered by review_server S4"
+ },
+ "own_ready": {
+  "pos0": "hook",
+  "why": "server: a player's own sound relayed to his module only once his client is ready (sv_sound S.Audience), outside P.Compute; covered by review_server S5"
  }
 }
