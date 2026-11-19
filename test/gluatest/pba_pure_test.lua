@@ -2587,7 +2587,7 @@ local SUITE = {
 			local PR = A.Probes
 			local savedDoors, savedList, savedEpoch = A.Doors, PR.doorList, PR.doorEpoch
 			local ok, err = pcall(function()
-				PR.doorList = { fixed = true, list = {}, sig = "" } -- (no door boxes listed: the epoch stays)
+				PR.doorList = { fixed = true, sig = "" } -- (no door boxes read: the epoch stays)
 				local function order(t) local o = {} for k in pairs(t) do o[#o + 1] = k end return table.concat(o, ",") end
 				-- two tables of the same door states, built in different orders, walked by pairs() differently
 				local a, b

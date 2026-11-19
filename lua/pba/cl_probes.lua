@@ -286,21 +286,20 @@ end
 -- clearance vertex costed as its corner (P.RefineCorners now) plus the leaf's own loss, which the straight
 -- line pays too; and as obstacles, the leaves kept every route through a CLOSED door untightened (the
 -- hull cannot pass the leaf): its vertices stayed on the grid, 70 u off the jamb, 12 dB where the edge
--- gave 1 (rp_downtown, 2026-11-09). The leaves are still listed every 0.5 s with their world boxes:
--- PR.doorEpoch changes when a box does (a door opened, closed or moved), and the routes kept per S and L
--- (their door losses depend on the state) are then redone.
+-- gave 1 (rp_downtown, 2026-11-09). The leaves' world boxes are still read every 0.5 s, as a signature only:
+-- PR.doorEpoch changes when a box does (a door opened, closed or moved); PR.StateSig mixes it in.
 PR.doorEpoch = PR.doorEpoch or 0
-local function doorLeaves()
+local DOOR_CLASS_LIST = { "prop_door_rotating", "func_door", "func_door_rotating" }
+local function refreshDoorEpoch()
 	local d = PR.doorList
 	local now = SysTime()
-	if d and (d.fixed or now - d.t < 0.5) then return d.list end
-	local list, sig = {}, {}
+	if d and (d.fixed or now - d.t < 0.5) then return end
+	local sig = {}
 	if ents and ents.FindByClass then
-		for _, cls in ipairs({ "prop_door_rotating", "func_door", "func_door_rotating" }) do
+		for _, cls in ipairs(DOOR_CLASS_LIST) do
 			for _, e in ipairs(ents.FindByClass(cls)) do
 				if IsValid(e) then
 					local mn, mx = e:WorldSpaceAABB()
-					list[#list + 1] = { mn, mx }
 					sig[#sig + 1] = string.format("%.0f %.0f %.0f %.0f %.0f %.0f", mn.x, mn.y, mn.z, mx.x, mx.y, mx.z)
 				end
 			end
@@ -308,10 +307,8 @@ local function doorLeaves()
 	end
 	sig = table.concat(sig, ";")
 	if not d or d.sig ~= sig then PR.doorEpoch = PR.doorEpoch + 1 end
-	PR.doorList = { t = now, list = list, sig = sig }
-	return list
+	PR.doorList = { t = now, sig = sig }
 end
-PR.DoorLeaves = doorLeaves
 -- The routes' tightening keeps its answers (A.Paths.WorldSegMemo: world only, tagged with the trace backend):
 -- the k + 2 candidate routes of an evaluation repeat two thirds of their hull traces (offline bench), and
 -- the two fields' routes from one probe are pulled over the same chains (PR.Pull).
@@ -1118,7 +1115,6 @@ end
 -- or a portal can touch are found once per graph (its columns around the door); the costs are redone when
 -- a door or portal state changes (PR.StateSig) and the field is rebuilt with them.
 local LINK_DOOR_PAD = 4 -- P.SegmentDoorLoss's hull: a link within it of a leaf goes through that leaf
-local DOOR_CLASS_LIST = { "prop_door_rotating", "func_door", "func_door_rotating" }
 
 -- segment a-b passes within R of c
 local function segSphereHit(a, b, c, R)
@@ -1252,7 +1248,7 @@ end
 -- PR.doorEpoch): the field remembers the one it was built with and is rebuilt when it differs.
 local sigDoorIdx = {} -- (scratch: the door indexes in order when sh_doors has no sorted list)
 function PR.StateSig(g)
-	doorLeaves()
+	refreshDoorEpoch()
 	local acc = PR.doorEpoch
 	local function mix(v) acc = (acc * 31 + v) % 2147483647 end
 	local D = A.Doors
@@ -2382,7 +2378,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 		g = PR.current
 	end
 	if not g then return {} end
-	doorLeaves()
+	refreshDoorEpoch()
 	local f = PR.FieldFor(g, L)
 	if not f then return {} end
 	fieldSeen(f, L)
