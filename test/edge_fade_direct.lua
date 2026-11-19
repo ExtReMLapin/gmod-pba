@@ -45,7 +45,7 @@ local ok, err = pcall(function()
 	res.full = full
 	-- the fade's floor, sent to the voice (as at a join: the first value it plays)
 	m.edgeK = LP.EDGE_FLOOR
-	updateMirror(m, false, 1, m.pitch)
+	updateMirror(m, 1, m.pitch)
 	res.floor = gains[id]
 	-- then the fade, with the "volume at once" path off
 	A.SetOverride("native_vol_now", 0)

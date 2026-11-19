@@ -40,7 +40,7 @@ local ok, err = pcall(function()
 	job:frames(2)
 	for k in pairs(calls) do calls[k] = nil end
 	local g0 = m.appliedVol
-	updateMirror(m, false, 0.5, 150)
+	updateMirror(m, 0.5, 150)
 	LP.FollowNative(pba.ListenerPos())
 	local mine = {}
 	for _, c in ipairs(calls) do if c.id == id then mine[#mine + 1] = c end end

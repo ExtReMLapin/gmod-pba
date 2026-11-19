@@ -378,13 +378,14 @@ local function holdTunnel(m, share)
 	return m.tunnel
 end
 
---- Engine preset of low-pass level `level` with the tunnel choice already decided (held).
-local function presetFor(level, tunnel)
+--- Engine preset of low-pass level `level` with the tunnel choice already decided (held). Also cl_render's.
+function LP.PresetFor(level, tunnel)
 	level = level or 0
 	-- a share of 1 is above any diffuse_dsp_at: AC.DSPForVoice keeps its own rule (diffuse model off: plain)
 	if tunnel then return AC.DSPForVoice(level, 1) end
 	return AC.DSPForLevel(level)
 end
+local presetFor = LP.PresetFor
 
 --- Gain multiplier and DSP of a loop at S for the local listener (nil while its evaluation runs, pathOf).
 local function muffle(m, S, L)
@@ -541,8 +542,7 @@ local function earlyMargin() return A.Sched.MIN_LEFT + A.Sched.Interval() end
 -- volume `vol` in place (SND_CHANGE_VOL on the same index, channel and name: the engine alters that channel, the
 -- line and its mouth go on; measured with snd_dumpclientsounds, vol 255 -> 0 on the SERVER channel).
 -- (the name the engine copy plays: m.early.name, see LP.TakeEarly)
-local function earlyEngineVolume(m, vol)
-	A.reemitting = true -- (pba's own: the hook lets it through)
+local function emitEarlyVolume(m, vol)
 	local e = Entity(m.idx)
 	local name = m.early and m.early.name or m.name
 	if IsValid(e) then
@@ -550,8 +550,8 @@ local function earlyEngineVolume(m, vol)
 	else
 		EmitSound(name, m.pos, m.idx, m.chan, vol, m.lvl, SND_CHANGE_VOL, m.pitch)
 	end
-	A.reemitting = false
 end
+local function earlyEngineVolume(m, vol) A.Emit(emitEarlyVolume, m, vol) end -- (pba's own: the hook lets it through)
 
 --- (pba_early_release) An early line's mirror that ends on its own before its line (its module voice gone early: the
 -- module's voice cap, a module stop) gives the line back to its engine copy, muted until then: before, that copy stayed
@@ -753,24 +753,24 @@ function MIRROR.native.stop(m)
 end
 
 MIRROR.engine = {}
+local function playPatch(p, lvl, dsp, vol, pitch)
+	p:SetSoundLevel(lvl)
+	p:SetDSP(dsp)
+	p:PlayEx(vol, pitch)
+end
 function MIRROR.engine.start(m, ent, g, dsp)
 	if m.once and m.started and not m.handBack then m.done = true return end
 	m.started = true
 	m.patch = LP.origCreateSound(ent, m.name)
-	A.reemitting = true
-	m.patch:SetSoundLevel(m.lvl)
-	m.patch:SetDSP(dsp)
-	m.patch:PlayEx(m.vol * g, m.pitch)
-	A.reemitting = false
+	A.Emit(playPatch, m.patch, m.lvl, dsp, m.vol * g, m.pitch)
 	A.NoteRendered(m.name, m.vol * g)
 	m.g, m.curDsp = g, dsp
 end
 
 function MIRROR.engine.update(m, g, dsp, fade)
 	if math.abs(g - (m.g or 1)) > 0.01 then
-		A.reemitting = true -- the mirror's own change must not read as the original's (HandleClient)
-		m.patch:ChangeVolume(m.vol * g, fade or 0.2)
-		A.reemitting = false
+		-- the mirror's own change must not read as the original's (HandleClient)
+		A.Emit(m.patch.ChangeVolume, m.patch, m.vol * g, fade or 0.2)
 		m.g = g
 	end
 	if dsp ~= m.curDsp then
@@ -787,7 +787,7 @@ end
 -- (refactor step 8: one switch for the ducker, pba_native_duck, which also gated the short sounds' notes;
 -- the long lines had their own, pba_long_duck, merged into it).
 local function noteDuck(name, pos, lvl, vol, chan, e, idx, pitch)
-	if A.Num(A.cfg, "native_duck") < 0.5 or not (A.Mix and A.Mix.NoteSound) then return end
+	if not (A.Mix and A.Mix.NoteSound) then return end -- (M.NoteSound reads pba_native_duck)
 	A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, Channel = chan, Entity = e,
 		EntIndex = idx }, A.ListenerPos(), A.PlaySeconds(name, pitch) or 0)
 end
@@ -805,6 +805,10 @@ function LP.StopClient(idx, chan, name, patch)
 		end
 	end
 end
+
+--- An engine patch's volume and pitch changed (0.1 s), run under A.Emit: volume first, or pitch first.
+local function changePatch(p, vol, pitch) p:ChangeVolume(vol, 0.1) p:ChangePitch(pitch, 0.1) end
+local function changePatchPitchFirst(p, vol, pitch) p:ChangePitch(pitch, 0.1) p:ChangeVolume(vol, 0.1) end
 
 --- Client EntityEmitSound: takes a long client-side sound over. Returns true when taken (the
 -- original must be suppressed). A new sound on a replacing channel cuts the previous mirror,
@@ -846,9 +850,7 @@ function LP.HandleClient(data)
 		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end
 		if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then m.pitch = data.Pitch or m.pitch end
 		if m.patch then
-			A.reemitting = true
-			m.patch:ChangeVolume(m.vol * (m.g or 1), 0.1) m.patch:ChangePitch(m.pitch, 0.1)
-			A.reemitting = false
+			A.Emit(changePatch, m.patch, m.vol * (m.g or 1), m.pitch)
 		end
 		local vol0 = m.appliedVol
 		local pitched = changeNow(m)
@@ -969,7 +971,7 @@ end
 
 --- A volume / pitch change reaching mirror m (the server's update, full or compact): its native voice takes it at
 -- once (changeNow), an engine patch is moved to it.
-local function updateMirror(m, once, vol, pitch)
+local function updateMirror(m, vol, pitch)
 	m.pitch = pitch
 	LP.SetVolume(m, vol)
 	if m.nativeId then
@@ -980,10 +982,7 @@ local function updateMirror(m, once, vol, pitch)
 	end
 	if m.patch then
 		if onceEnded(m) then m.done = true return end -- (a finished patch would start again from its top)
-		A.reemitting = true
-		m.patch:ChangePitch(pitch, 0.1)
-		m.patch:ChangeVolume(vol * (m.g or 1), 0.1)
-		A.reemitting = false
+		A.Emit(changePatchPitchFirst, m.patch, vol * (m.g or 1), pitch)
 	else
 		apply(m, 0)
 	end
@@ -999,7 +998,7 @@ net.Receive("pba_loop", function()
 		local m = LP.byId[net.ReadUInt(16)]
 		local vol, pitch = net.ReadUInt(8) / 255, net.ReadUInt(8)
 		-- no such mirror here (stopped, or never received): the server's next full update (<= 2 s) brings it back
-		if m and LP.mirrors[m.key] == m and not LP.silenced[m.key] then updateMirror(m, m.once, vol, pitch) end
+		if m and LP.mirrors[m.key] == m and not LP.silenced[m.key] then updateMirror(m, vol, pitch) end
 		return
 	end
 	local key = net.ReadString()
@@ -1057,7 +1056,7 @@ net.Receive("pba_loop", function()
 		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end, idx, chan,
 			function() return m.decoding == true and not m.done and not m.handBack and LP.mirrors[m.key] == m end)
 	end
-	if op == OP_UPDATE and (m.nativeId or m.patch) then return updateMirror(m, once, vol, pitch) end
+	if op == OP_UPDATE and (m.nativeId or m.patch) then return updateMirror(m, vol, pitch) end
 	apply(m, 0)
 	-- a source the client does not know: its wait is a tenth of a second (ENT_GRACE_S), taken here and not at its next
 	-- evaluation turn (up to 0.25 s later, staggered between the mirrors: the copies of one emission started apart)
@@ -1129,9 +1128,7 @@ local function edgeFade(now)
 			if m.patch then
 				-- an engine patch after all (its file not for the module): the engine fades it
 				m.edgeK, m.vol = nil, m.srvVol
-				A.reemitting = true
-				m.patch:ChangeVolume((m.vol or 1) * (m.g or 1), T)
-				A.reemitting = false
+				A.Emit(m.patch.ChangeVolume, m.patch, (m.vol or 1) * (m.g or 1), T)
 			elseif m.nativeId and m.edgeT0 then
 				local k = T > 0 and math.Clamp((now - m.edgeT0) / T, LP.EDGE_FLOOR, 1) or 1
 				m.edgeK = k

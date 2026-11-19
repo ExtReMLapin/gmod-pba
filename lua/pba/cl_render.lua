@@ -27,10 +27,6 @@ local function activeCount(now)
 	return n
 end
 
---- True once this frame's path-search budget is spent (cheaper fallback for the rest): the one budget of
--- every sound kind (cl_sched.lua).
-function A.FrameBudgetExceeded() return A.Sched.BudgetExceeded() end
-
 --- Azimuth of `pos` seen from L with view yaw, degrees, positive = to the RIGHT.
 function A.Azimuth(L, viewYaw, pos)
 	local d = pos - L
@@ -104,6 +100,13 @@ local function newerSameName(h)
 	return false
 end
 
+--- The engine's own stop of a mouth copy's name on the speaker's index and channel (run under A.Emit).
+local function stopMouth(h)
+	local e = Entity(h.idx)
+	if IsValid(e) then (A.origCl and A.origCl.StopSound or e.StopSound)(e, h.name)
+	else EmitSound(h.name, h.pos, h.idx, h.srcChan, 0, h.lvl, SND_STOP, h.pitch, 0) end
+end
+
 --- Stops one copy, at once or before it starts (an emission still waiting for its propagation delay
 -- is cancelled: a StopSound 0.1 s after a far gunshot must not let the copy start 0.2 s later).
 local function stopCopy(h)
@@ -112,11 +115,7 @@ local function stopCopy(h)
 	-- a mouth copy (mouthCopy): the engine's own stop of its name on the speaker's index and channel
 	if h.mouth then
 		if newerSameName(h) then return end -- (its stop by name would end the newer line's mouth copy)
-		A.reemitting = true
-		local e = Entity(h.idx)
-		if IsValid(e) then (A.origCl and A.origCl.StopSound or e.StopSound)(e, h.name)
-		else EmitSound(h.name, h.pos, h.idx, h.srcChan, 0, h.lvl, SND_STOP, h.pitch, 0) end
-		A.reemitting = false
+		A.Emit(stopMouth, h)
 		return
 	end
 	-- a far one-shot held while its routes are computed (A.Process): never emitted, its evaluation dropped
@@ -484,13 +483,9 @@ A.tunnelHeld = A.tunnelHeld or {} -- "idx:slot" -> { on, t }
 
 local function hystMargin() return A.Num(A.cfg, "diffuse_dsp_hyst") end
 
---- Engine preset of low-pass level `level` with the tunnel choice `tunnel` already decided (held).
-local function presetFor(level, tunnel)
-	level = level or 0
-	-- a share of 1 is above any diffuse_dsp_at: AC.DSPForVoice keeps its own rule (diffuse model off: plain)
-	if tunnel then return AC.DSPForVoice(level, 1) end
-	return AC.DSPForLevel(level)
-end
+--- Engine preset of low-pass level `level` with the tunnel choice `tunnel` already decided (held): the loops' one
+-- (cl_loops, loaded first).
+local presetFor = A.Loops.PresetFor
 
 --- Tunnel choice of a new one-shot voice: held from the previous sound of the same source and slot when
 -- that one is recent (key nil: a source without an entity, no hold).
@@ -1184,6 +1179,18 @@ end
 A.OnInitPostEntity("pba_lipsync_pref", A.SendLipsyncPref)
 timer.Simple(0, A.SendLipsyncPref) -- (a reload after InitPostEntity)
 
+--- The mouth copy's emission (run under A.Emit): a sentence through the engine's sentence mixer, which drives the
+-- mouth word by word (played on the speaker); otherwise the line on the speaker, or at its position.
+local function emitMouth(name, src, pos, idx, ch, lvl, pitch)
+	if A.IsSentence(name) then
+		EmitSentence(string.sub(name, 2), pos, idx, ch, MOUTH_VOL, lvl, 0, pitch)
+	elseif IsValid(src) then
+		src:EmitSound(name, lvl, pitch, MOUTH_VOL, ch)
+	else
+		EmitSound(name, pos, idx, ch, MOUTH_VOL, lvl, 0, pitch)
+	end
+end
+
 local function mouthCopy(data, src)
 	if A.Num(A.cfg, "lipsync") < 0.5 then return end
 	local ch = data.Channel
@@ -1198,16 +1205,7 @@ local function mouthCopy(data, src)
 	end
 	local name = data.SoundName or ""
 	if name == "" then return end
-	A.reemitting = true
-	if A.IsSentence(name) then
-		-- a sentence: the engine's sentence mixer drives the mouth word by word (played on the speaker)
-		EmitSentence(string.sub(name, 2), pos, idx, ch, MOUTH_VOL, data.SoundLevel or 75, 0, data.Pitch or 100)
-	elseif IsValid(src) then
-		src:EmitSound(name, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch)
-	else
-		EmitSound(name, pos, idx, ch, MOUTH_VOL, data.SoundLevel or 75, 0, data.Pitch or 100)
-	end
-	A.reemitting = false
+	A.Emit(emitMouth, name, src, pos, idx, ch, data.SoundLevel or 75, data.Pitch or 100)
 	-- registered as a copy of the speaker: the stop path (StopSound, scene cancel, stopsound) and the channel
 	-- rule reach it as they reach the line's other copies (pba_lipsync_stop; a sentence's words play on)
 	if A.On(A.cfg, "lipsync_stop") and not A.IsSentence(name) then
