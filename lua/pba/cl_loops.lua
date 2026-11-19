@@ -303,10 +303,11 @@ end
 -- Both in one module Update (m.sentFrame: the frame it was sent, LP.FollowNative sends nothing more then): a change
 -- of both sent the voice the new gain with the old pitch, then again with the new pitch, and the frame's follower a
 -- third time (review C0). Returns true when the voice took a pitch change.
-local function changeNow(m)
+-- vol: the volume goes whatever pba_native_vol_now (a fade pba makes itself, edgeFade: review M7).
+local function changeNow(m, vol)
 	if not m.nativeId then return false end
 	local kv, kp = 1, 1
-	if (A.cfg.native_vol_now or 1) >= 0.5 then
+	if vol or (A.cfg.native_vol_now or 1) >= 0.5 then
 		local old, new = m.appliedVol, m.vol
 		if old and new and old ~= new and old > 1e-6 then kv = new / old m.appliedVol = new end
 	end
@@ -1103,7 +1104,8 @@ local function edgeFade(now)
 				local k = T > 0 and math.Clamp((now - m.edgeT0) / T, LP.EDGE_FLOOR, 1) or 1
 				m.edgeK = k
 				m.vol = (m.srvVol or 1) * k
-				changeNow(m) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
+				-- (pba_loops_edge_fade_direct: whatever pba_native_vol_now, which left the voice at the floor until an evaluation)
+				changeNow(m, (A.cfg.loops_edge_fade_direct or 1) >= 0.5) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
 				-- its source reverb slot's feed at once, not at its 0.3 s rebinding
 				if m.srcBound and N then
 					local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
