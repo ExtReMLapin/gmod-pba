@@ -44,6 +44,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Physics scrapes and rolling (props sliding or rolling) | ✅ followed like loops | ✅ played by the module | S `phys_loops_mirror` |
 | Bullet fly-bys (a miss passing your ears, NPCs' too) | ✅ the engine's whizz | ✅ or played by the module (off by default) | S `whiz`, C `native_whiz` |
 | Several speakers playing one line (the Breencast screens) start together: no comb filter behind a door | ✅ the engine's copies | ✅ | C `loops_start_sync` |
+| A line spoken while you join (a map's first scene, before PBA's client is ready) | the engine's, to its end | ✅ the rest of the line handed to the module once ready, from the point reached (the engine copy muted, the mouth still moves) | S `early_line_takeover` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering

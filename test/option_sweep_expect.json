@@ -534,5 +534,9 @@
  "native_late_handover": {
   "pos0": "hook",
   "why": "an engine copy of a followed sound handed to the module when its decode ends (render), outside P.Compute"
+ },
+ "early_line_takeover": {
+  "pos0": "hook",
+  "why": "server and client: a line the engine started before the client was ready handed to the module once it is (sv_relay A.NoteEarly, cl_loops LP.TakeEarly), outside P.Compute; covered by early_line and early_line_map"
  }
 }

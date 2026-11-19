@@ -857,6 +857,30 @@ return {
 			-- option off (or native rendering off)
 			expect(why(false, true, "ready", true, false, 10.8, 10, 13, 0.75)).to.equal("drop:off")
 		end },
+		-- A line the engine started for this player before his client was ready (pba_early_line_takeover, LP.TakeEarly):
+		-- Alyx's al_thisday (2.67 s) started at t0 = 10, ends at 12.67, margin 0.75 s.
+		{ name = "N.EarlyVerdict: an early line is handed over from where the engine copy is, while far enough from its end", func = function()
+			local v, off = N.EarlyVerdict(true, true, true, false, 10.6, 10, 12.67, 0.75)
+			expect(v).to.equal("switch")
+			expect(near(off, 0.6, 1e-9)).to.beTrue() -- the engine copy's point: now - t0
+			-- the margin's edge (12.67 - 0.75 = 11.92): still taken just before, never after
+			expect(N.EarlyVerdict(true, true, true, false, 11.9, 10, 12.67, 0.75)).to.equal("switch")
+			local function why(...) local a, w = N.EarlyVerdict(...) return a .. ":" .. tostring(w) end
+			expect(why(true, true, true, false, 11.95, 10, 12.67, 0.75)).to.equal("drop:ended")
+			-- a line already over (the client settled after it): never played again
+			expect(why(true, true, true, false, 14, 10, 12.67, 0.75)).to.equal("drop:ended")
+		end },
+		{ name = "N.EarlyVerdict: a clear line is the module's only with every sound native; off, no offset: the engine keeps it", func = function()
+			local function why(...) local a, w = N.EarlyVerdict(...) return a .. ":" .. tostring(w) end
+			-- left to the engine while the module was not rendering yet, in clear sight: pba_native_all decides
+			expect(why(true, true, false, false, 10.6, 10, 12.67, 0.75)).to.equal("drop:clear")
+			expect(why(true, true, false, true, 10.6, 10, 12.67, 0.75):sub(1, 6)).to.equal("switch")
+			-- blocked (not ready): whatever pba_native_all
+			expect(why(true, true, true, false, 10.6, 10, 12.67, 0.75):sub(1, 6)).to.equal("switch")
+			-- no module rendering, no start offset (the module would play it from its top: heard twice)
+			expect(why(false, true, true, true, 10.6, 10, 12.67, 0.75)).to.equal("drop:off")
+			expect(why(true, false, true, true, 10.6, 10, 12.67, 0.75)).to.equal("drop:nocap")
+		end },
 		{ name = "N.DecodePending: true only while the module decodes the file (no side effect, no failure, nothing decoded)", func = function()
 			local saved, failed = _G.pba_native, N.failed
 			local pend, has = {}, {}
