@@ -562,5 +562,45 @@
  "probe_air_hop": {
   "pos0": "same",
   "why": "only a source that sees no probe at all (in a void under the platforms) takes the air hop: the sweep scenes stand on floors; covered by skylift_jumps"
+ },
+ "speech_floor_switch": {
+  "pos0": "hook",
+  "why": "speech floor kept at the engine -> module switch of a followed line (render), outside P.Compute: test speech_switch"
+ },
+ "native_dry_prefix_all": {
+  "pos0": "hook",
+  "why": "\"#\" rule for handed-over copies and mirrors (render sends), outside P.Compute: test dry_prefix_all"
+ },
+ "change_copies": {
+  "pos0": "hook",
+  "why": "a client volume change of a re-emitted sound goes to its copies (hook), outside P.Compute: test change_taken"
+ },
+ "cut_at_start_held": {
+  "pos0": "hook",
+  "why": "deferred channel cut kept for a held sound's copies (copy registry), outside P.Compute: test held_cut"
+ },
+ "handback_quiet": {
+  "pos0": "hook",
+  "why": "silent-line safety net skips lines inaudible on purpose (render), outside P.Compute: test handback_quiet"
+ },
+ "cut_name_newer": {
+  "pos0": "hook",
+  "why": "a stop by name spares the newer copy of that name (copy registry), outside P.Compute: test cut_name_newer"
+ },
+ "early_release": {
+  "pos0": "hook",
+  "why": "an early line's engine copy unmuted when its module voice ends early (render), outside P.Compute: test early_release"
+ },
+ "loops_edge_fade_direct": {
+  "pos0": "hook",
+  "why": "range-edge fade reaches the native voice whatever native_vol_now (render), outside P.Compute: test edge_fade_direct"
+ },
+ "loops_edge_fade_near": {
+  "pos0": "hook",
+  "why": "range-edge fade only for a join near the edge (render), outside P.Compute: test edge_fade_near"
+ },
+ "early_line_rules": {
+  "pos0": "hook",
+  "why": "early line takeover: clear sight with native_all 0, engine copy's own name (render), outside P.Compute: test early_rules"
  }
 }
