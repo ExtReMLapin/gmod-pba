@@ -3094,10 +3094,10 @@ local SUITE = {
 				expect(dumpResult(r)).to.equal(full(list[#list][1]))
 			end)
 		end },
-		{ name = "Far sliced: a playing sound's answer worked out for where the listener (or the source) was is dropped when the answer in use is nearer to where they are now, and asked again: a view that went to a camera and came back (d3_breen_01's blackout, 2.7 s) got the camera's answers 0.1-2.5 s after it was back, one flip per far sound (pba_far_held_closer); 0 = applied (former behaviour); a listener walking on keeps getting its answers", func = function()
+		{ name = "Far sliced: a playing sound's answer worked out for where the listener (or the source) was is dropped when the answer in use is nearer to where they are now, and asked again: a view that went to a camera and came back (d3_breen_01's blackout, 2.7 s) got the camera's answers 0.1-2.5 s after it was back, one flip per far sound; a listener walking on keeps getting its answers", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL = A.Slicer
-				local saved = { A.cfg.far_sliced_ms, rawget(A.cfg, "far_held_closer") }
+				local saved = A.cfg.far_sliced_ms
 				local ok, err = pcall(function()
 					A.cfg.far_sliced_ms = 0 -- (no budget: a job waits for its deadline, reached by hand)
 					local S = list[1][1]
@@ -3121,8 +3121,7 @@ local SUITE = {
 						setNow(j.deadline)
 						SL.Run()
 					end
-					local function scenario(on)
-						A.cfg.far_held_closer = on
+					local function scenario()
 						P.cache, SL.jobs = {}, {}
 						owner = { pbaSliceSeen = true, pbaCfg = cfg }
 						-- an answer in use, for L1
@@ -3136,11 +3135,8 @@ local SUITE = {
 						finish()
 						return SL.Held(owner, S, L1, 75, nil, nil)
 					end
-					-- off: the answer for L2 applied with the listener back at L1 (the flip)
-					local r = scenario(0)
-					expect(r ~= nil and r.L:Distance(L2) < 1).to.beTrue()
-					-- on: dropped and asked again for L1, whose answer comes next
-					r = scenario(1)
+					-- the answer for L2 is dropped and asked again for L1, whose answer comes next
+					local r = scenario()
 					expect(r).to.beNil()
 					finish()
 					r = SL.Held(owner, S, L1, 75, nil, nil)
@@ -3153,15 +3149,15 @@ local SUITE = {
 					r = SL.Held(owner, S, L2, 75, nil, nil)
 					expect(r ~= nil and r.L:Distance(M) < 1).to.beTrue()
 				end)
-				A.cfg.far_sliced_ms, A.cfg.far_held_closer = saved[1], saved[2]
+				A.cfg.far_sliced_ms = saved
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "Far sliced: with pba_far_sliced_cap, a held burst's jobs (pba_burst_hold_ms) keep the pacing up to 4 x far_sliced_ms: ready by their hold's end in full instead of falling to the cheap model (pba_far_hold_pace, review M4)", func = function()
+		{ name = "Far sliced: a held burst's jobs (pba_burst_hold_ms) keep the pacing up to 4 x far_sliced_ms: ready by their hold's end in full instead of falling to the cheap model (pba_far_hold_pace, review M4)", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
 				local clock = A.Paths.slice.clock
-				local saved = { A.cfg.far_sliced_cap, A.cfg.far_force_ms, A.cfg.far_sliced_ms, rawget(A.cfg, "far_hold_pace") }
+				local saved = { A.cfg.far_force_ms, A.cfg.far_sliced_ms, rawget(A.cfg, "far_hold_pace") }
 				local L = Vector(300, 300, 64)
 				PR.fieldsByKey, P.cache = nil, {}
 				P.Compute(list[1][1], L, 75, cfg)
@@ -3169,8 +3165,8 @@ local SUITE = {
 				local B = 0
 				-- the burst, held HOLD each; returns the answers given by the cheap model, the jobs, the most ticks (one
 				-- per slice check) of one frame's SL.Run, and the burst's work in ticks
-				local function burst(pace, cap, budget, force)
-					A.cfg.far_sliced_cap, A.cfg.far_hold_pace = cap, pace
+				local function burst(pace, budget, force)
+					A.cfg.far_hold_pace = pace
 					A.cfg.far_sliced_ms, A.cfg.far_force_ms = budget * 1000, force * 1000
 					P.cache, SL.jobs = {}, {}
 					local jobs, got = {}, {}
@@ -3200,8 +3196,8 @@ local SUITE = {
 					return nCheap, #jobs, maxT, w
 				end
 				-- the burst's work (warm: the first run fills what evaluations keep across requests), all in one frame
-				burst(0, 0, 1e6, 0)
-				local _, _, _, W = burst(0, 0, 1e6, 0)
+				burst(0, 1e6, 0)
+				local _, _, _, W = burst(0, 1e6, 0)
 				local ok, err = pcall(function()
 					-- the hold leaves two frames of pacing (requested in one frame, due two frames later). A budget B of a
 					-- sixth of the work: B a frame holds a third of it, 4 x B all of it. Then a tenth: 4 x B no longer all.
@@ -3210,11 +3206,11 @@ local SUITE = {
 						B = math.ceil(W / div)
 						-- control: pba_far_hold_pace 0 (former behaviour): far_sliced_ms a frame, then far_force_ms once
 						-- due: part of the burst gets the cheap model
-						local c0, n0 = burst(0, 1, B, B / 2)
+						local c0, n0 = burst(0, B, B / 2)
 						expect(n0 >= 5).to.beTrue()
 						expect(c0 >= 1).to.beTrue()
 						-- 1: no frame past 4 x far_sliced_ms (+ a check, three bookkeeping reads a job run, the forced share)
-						local c1, n1, t1 = burst(1, 1, B, B / 2)
+						local c1, n1, t1 = burst(1, B, B / 2)
 						expect(n1).to.equal(n0)
 						expect(t1 <= 4 * B + B / 2 + 1 + 3 * (n1 + 1)).to.beTrue()
 						if div == 6 then expect(c1).to.equal(0) else expect(c1 < c0).to.beTrue() end
@@ -3222,15 +3218,14 @@ local SUITE = {
 					end
 					print("[pba test] held burst, work " .. W .. " ticks: " .. table.concat(out, "; "))
 				end)
-				A.cfg.far_sliced_cap, A.cfg.far_force_ms, A.cfg.far_sliced_ms, A.cfg.far_hold_pace = saved[1], saved[2], saved[3], saved[4]
+				A.cfg.far_force_ms, A.cfg.far_sliced_ms, A.cfg.far_hold_pace = saved[1], saved[2], saved[3]
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "Far sliced: pba_far_sliced_cap keeps a frame's work on the jobs not yet due within far_sliced_ms whatever the pacing asks; 0 = the pacing raises it; the answers are the synchronous ones either way", func = function()
+		{ name = "Far sliced: a frame's work on the jobs not yet due stays within far_sliced_ms whatever the pacing asks; the answers are the synchronous ones", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
 				local clock = A.Paths.slice.clock
-				local cap0 = A.cfg.far_sliced_cap
 				local L = Vector(300, 300, 64)
 				PR.fieldsByKey, P.cache = nil, {}
 				P.Compute(list[1][1], L, 75, cfg)
@@ -3240,8 +3235,7 @@ local SUITE = {
 				-- jobs held 10 s (never due here), and a pacing estimate far above the budget: what a listener moving
 				-- fast gave (every far evaluation a new listener field, 12-37 ms each against far_sliced_ms 1.5).
 				-- Returns the first frame's ticks, the answers, the jobs.
-				local function run(cap)
-					A.cfg.far_sliced_cap = cap
+				local function run()
 					P.cache, SL.jobs = {}, {}
 					local jobs, got = {}, {}
 					for _, pr in ipairs(list) do
@@ -3269,23 +3263,17 @@ local SUITE = {
 					return dumpResult(P.Compute(S, L, 75, cfg))
 				end
 				local ok, err = pcall(function()
-					run(0) -- (warms what an evaluation keeps across requests: the next runs do equal work)
-					-- 0: the pacing's need (est over the frames left) is the frame's budget: every job done at once
-					local T0, got0, jobs0 = run(0)
-					expect(#jobs0 >= 5).to.beTrue()
-					expect(T0 > 10 * B).to.beTrue()
-					for k, j in ipairs(jobs0) do expect(dumpResult(got0[k])).to.equal(full(j.S)) end
-					-- 1: far_sliced_ms whatever the pacing asks (one slice check past it, and each job run's three clock
-					-- reads of bookkeeping); the jobs go on over the next frames, with the same answers
-					local T1, got1, jobs1 = run(1)
+					run() -- (warms what an evaluation keeps across requests: the next run does equal work)
+					-- far_sliced_ms whatever the pacing asks (one slice check past it, and each job run's three clock
+					-- reads of bookkeeping); the jobs go on over the next frames, with the synchronous answers
+					local T1, got1, jobs1 = run()
+					expect(#jobs1 >= 5).to.beTrue()
 					expect(T1 <= B + 1 + 3 * (#jobs1 + 1)).to.beTrue()
-					expect(#jobs1).to.equal(#jobs0)
 					for k, j in ipairs(jobs1) do
 						expect(got1[k] ~= nil).to.beTrue()
 						expect(dumpResult(got1[k])).to.equal(full(j.S))
 					end
 				end)
-				A.cfg.far_sliced_cap = cap0
 				if not ok then error(err, 0) end
 			end)
 		end },
