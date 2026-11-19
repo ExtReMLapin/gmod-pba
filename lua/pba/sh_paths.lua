@@ -1580,7 +1580,6 @@ local function edgeClearAt(u, h, M, S, L)
 end
 function P.WorldEdge(S, L, walls, cfg)
 	cfg = cfg or A.cfg
-	if A.Num(cfg, "world_edge") < 0.5 then return nil end
 	local first, last
 	for _, w in ipairs(walls or {}) do
 		if not w.ent and not w.water then
@@ -1639,20 +1638,16 @@ function P.WorldEdge(S, L, walls, cfg)
 	d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
 	d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
 	if e2 and e2 == e1 then
-		-- one leaf at the apex: paid once. pba_edge_leg_doors: only that leaf is left out of the second leg,
+		-- one leaf at the apex: paid once. Only that leaf is left out of the second leg,
 		-- not every door on it (pba_demo: two shut doors behind the apex dropped, 14 dB instead of 42, while
 		-- the straight line one step on paid all three: 28 dB in 16 u)
-		if A.On(cfg, "edge_leg_doors") then
-			local list = P.SegmentDoors(best.apex, L, A.On(cfg, "door_3d"))
-			d2, l2 = 0, 0
-			for _, h in ipairs(list or {}) do
-				if h[1] ~= e1 then
-					local l, lp = P.DoorSpanLoss(h[1], best.apex, L, cfg, h[2], h[3])
-					d2, l2 = d2 + l, math.max(l2, lp or 0)
-				end
+		local list = P.SegmentDoors(best.apex, L, A.On(cfg, "door_3d"))
+		d2, l2 = 0, 0
+		for _, h in ipairs(list or {}) do
+			if h[1] ~= e1 then
+				local l, lp = P.DoorSpanLoss(h[1], best.apex, L, cfg, h[2], h[3])
+				d2, l2 = d2 + l, math.max(l2, lp or 0)
 			end
-		else
-			d2, l2 = 0, 0
 		end
 	end
 	best.doorDb = d1 + d2
@@ -1675,7 +1670,7 @@ function P.AddEdge(t, e, L, cfg)
 	if t.midDb then t.midDb = math.max(-10 * math.log10(exp((-t.midDb / 10) * LN10) + eD), 0) end
 	t.lp = math.min(t.lp or 0, AC.LowpassLevel(tilt, cfg))
 	t.edgeDb, t.edgeApex, t.tilt = e.db, e.apex, tilt
-	if t.lpDb then t.lpDb = tilt end -- (pba_trans_tilt: kept continuous)
+	if t.lpDb then t.lpDb = tilt end -- (kept continuous)
 	t.edgeShare = eD / (eT + eD) -- (the share of its energy that goes over the edge: an opening, N.OpeningShare)
 	if t.pos and L then
 		local a, b = t.pos - L, e.apex - L
@@ -2189,7 +2184,7 @@ local function bundleDoor(w) return w.ent and OPENABLE[w.ent:GetClass()] end
 function P.KeepWorldWall(w) return not w.ent and not w.water end
 function P.KeepNativeWorldWall(w, nativeDisp) return not w.ent and not w.water and not P.NativeLacks(w, nativeDisp) end
 -- tilt (optional): the centre line's muffling (P.EvalWalls' 4th); returned 4th as the bundle's, each line's weighted
--- by its energy like the loss (pba_trans_tilt: a wall entering the line moved the muffling by a whole wall's at once
+-- by its energy like the loss (a wall entering the line moved the muffling by a whole wall's at once
 -- where the loss moved by fifths)
 --- The four bend points of the bundle's offset lines (the midpoint of S-L moved across the line by the first
 -- Fresnel zone's radius there, at most pba_trans_bundle_r), or nil when that radius is under half a unit.
@@ -2262,7 +2257,7 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
 	return math.max(-10 * math.log10(gl / n) - dl, 0), lp, math.max(-10 * math.log10(gm / n) - dm, 0), bt
 end
 
---- How far inside the world the straight line runs (pba_trans_bundle_edge), as a fraction of the first Fresnel
+--- How far inside the world the straight line runs (leafFade), as a fraction of the first Fresnel
 -- zone's radius (P.BundleWalls' r): the smallest of the four offsets across it (up, down, either side) at which
 -- a parallel line first stops crossing the world walls keep(w) picks where the line crosses them (stepped, then
 -- bisected); 1 when no offset line
@@ -3258,27 +3253,12 @@ function P.Cheap(S, L, sndlvl, cfg, srcEnt)
 		return r
 	end
 	r.clear, r.paths = false, {}
-	-- pba_cheap_same_trans: the walls' transmission of P.Compute itself (its stage: the bundle of lines or the
-	-- module's occlusion, the leaf fade), the routes round them left out. The raw sum of the walls was another
-	-- model: a sound switching between the cheap and the full evaluation (a burst, a forced far job) jumped
-	-- between the two (a car behind a building: -49 / -74 dB in turns).
-	if A.On(cfg, "cheap_same_trans") and P.TransmissionStage then
-		local worldBlocked = P.LineBlockers(walls, cfg)
-		P.TransmissionStage(r, S, L, walls, walls, cfg, srcEnt, worldBlocked)
-		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
-		r.shadowDb = P.ShadowOf(r.voices, nil)
-		return r
-	end
-	local loss, lp, mid, tilt = P.EvalWalls(walls, cfg)
-	local last = walls[#walls]
-	local dir = (L - S):GetNormalized()
-	local tpos = last.exit + dir * 2
-	if A.On(cfg, "trans_pos_clamp") then -- (as P.Compute's transmission: never past the listener)
-		local rem = (L - last.exit):Dot(dir)
-		if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
-	end
-	r.trans = { walls = walls, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
-	if A.On(cfg, "trans_tilt") then r.trans.lpDb = tilt end
+	-- the walls' transmission of P.Compute itself (its stage: the bundle of lines or the module's occlusion,
+	-- the leaf fade), the routes round them left out. The raw sum of the walls was another model: a sound
+	-- switching between the cheap and the full evaluation (a burst, a forced far job) jumped between the two
+	-- (a car behind a building: -49 / -74 dB in turns).
+	local worldBlocked = P.LineBlockers(walls, cfg)
+	P.TransmissionStage(r, S, L, walls, walls, cfg, srcEnt, worldBlocked)
 	r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
 	r.shadowDb = P.ShadowOf(r.voices, nil)
 	return r
@@ -3519,9 +3499,9 @@ function P.ThroughPath(S, L, best, cfg)
 	return p
 end
 
-local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (pba_trans_leaf_fade)
+local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (leafFade)
 local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a same-way route at its own loss (pba_edge_dup_mix)
-local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
+local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (leafFade)
 -- P.Compute in stages (refactor step 14): each stage below is one part of the computation, called once in
 -- this order by P.Compute; they read and fill the result r. Same operations in the same order as the former
 -- single function (paths_golden: bit for bit).
@@ -3601,10 +3581,9 @@ end
 -- doorway: crossing it also reads the routes, whose door costs model the leaf
 local function lineBlockers(walls, cfg)
 	local worldBlocked, leafBlocked = false, false
-	local oneModel = A.On(cfg, "door_leaf_portal")
 	for _, w in ipairs(walls) do
 		if not w.ent and not w.water then worldBlocked = true end
-		if oneModel and w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
+		if w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
 	end
 	return worldBlocked, leafBlocked
 end
@@ -3692,7 +3671,7 @@ local function nativeLoss(r, S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
 				loss = math.min(bl + el, cfg.trans_max)
 				mid = math.min(bm + em, cfg.trans_max)
 				lp = math.max(blp, elp)
-				-- the continuous muffling (pba_trans_tilt): the part Steam Audio sees unmuffled, the rest
+				-- the continuous muffling: the part Steam Audio sees unmuffled, the rest
 				-- through the walls it holds, mixed by energy; then the walls it lacks, in series
 				local o = math.Clamp(d.occlusion, 0, 1)
 				tilt = math.min(AC.MixTilt2(o * o, 0, sq((1 - o) * exp((-wl / 20) * LN10)), wt) + et, cfg.trans_max)
@@ -3703,7 +3682,7 @@ local function nativeLoss(r, S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
 	return loss, lp, mid, tilt
 end
 
--- Stage 5c, pba_trans_leaf_fade: a line through the world AND through leaves a route owns (the route through
+-- Stage 5c, the leaf fade: a line through the world AND through leaves a route owns (the route through
 -- those doorways) is that route's way plus the world it grazes. Where the world part thins out (the line
 -- clipping a wall's end or a door's jamb) the line becomes the route's own way, which the route already
 -- carries: the transmission fades in with the world depth crossed (0 -> TRANS_FADE_U) instead of appearing at
@@ -3726,12 +3705,12 @@ local function leafFade(r, S, L, walls, cfg, srcEnt)
 	end
 	if owned then
 		local fade = ramp(depth, 0, TRANS_FADE_U)
-		-- pba_trans_bundle_edge: and with how far inside the world the line runs across the Fresnel zone,
+		-- and with how far inside the world the line runs across the Fresnel zone,
 		-- so it is out before the line leaves the wall (pba_demo: 14 dB under the route, the one voice
 		-- carrying the highs, gone in one step at a jamb: one-voice low-pass 27.7 -> 40.5 dB)
 		-- (only for leaves on the line: past the wall it still goes through them, not into the open, where
 		-- the clear line takes over from the transmission instead)
-		if fade > 0 and onLine and A.On(cfg, "trans_bundle_edge") then
+		if fade > 0 and onLine then
 			local e = P.BundleEdge(S, L, srcEnt, cfg, P.KeepWorldWall)
 			-- linear in dB: the voice often carries the highs (the route's leaves muffle more than the
 			-- wall), which its level sets until it is some 30 dB under the route
@@ -3759,19 +3738,17 @@ local function transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked)
 	local last = tw[#tw]
 	local dir = (L - S):GetNormalized()
 	local tpos = last.exit + dir * 2
-	-- pba_trans_pos_clamp: never past the listener (a wall exit within 2 u of L put the voice behind the
+	-- never past the listener (a wall exit within 2 u of L put the voice behind the
 	-- listener, and its direction flipped by 150-177 degrees along a wall: rp_downtown's street walk)
-	if A.On(cfg, "trans_pos_clamp") then
-		local rem = (L - last.exit):Dot(dir)
-		if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
-	end
+	local rem = (L - last.exit):Dot(dir)
+	if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
 	r.trans = { walls = tw, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
-	-- pba_trans_tilt: the transmission's muffling is its walls' in series, continuous (dB), not the level of its
+	-- the transmission's muffling is its walls' in series, continuous (dB), not the level of its
 	-- most muffling wall read back as a step: a voice through three walls was mixed as one through a single one
 	-- (it seemed to carry the highs), and its own level steps moved the one-voice low-pass by 3.9 dB in 0.25 u
 	-- (pba_demo's source walk)
-	if A.On(cfg, "trans_tilt") then r.trans.lpDb = tilt end
-	if worldBlocked and A.On(cfg, "trans_leaf_fade") then leafFade(r, S, L, walls, cfg, srcEnt) end
+	r.trans.lpDb = tilt
+	if worldBlocked then leafFade(r, S, L, walls, cfg, srcEnt) end
 end
 
 P.TransmissionStage, P.LineBlockers = transmission, lineBlockers -- (P.Cheap: the same transmission model)

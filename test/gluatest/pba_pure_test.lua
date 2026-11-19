@@ -2465,9 +2465,6 @@ local SUITE = {
 				if worst > 3 then error(string.format("largest step %.1f dB per unit", worst), 0) end
 				local deep = lossAt(0)
 				expect(deep > 5 and deep < 20).to.beTrue()
-				-- world_edge 0: the transmission alone, as before
-				cfg.world_edge = 0
-				expect(lossAt(0) > 40).to.beTrue()
 			end)
 			util.TraceLine, P.Walls, A.Graph.Get, A.Native = saved[1], saved[2], saved[3], savedNative
 			P.InvalidateCache()
@@ -2761,7 +2758,7 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "Cheap: its transmission is P.Compute's (one model of the walls on the straight line: bundle, module occlusion, leaf fade), only the routes round them are left out (pba_cheap_same_trans, review P4)", func = function()
+		{ name = "Cheap: its transmission is P.Compute's (one model of the walls on the straight line: bundle, module occlusion, leaf fade), only the routes round them are left out (review P4)", func = function()
 			withSlicedRooms(function(cfg, list)
 				cfg.far_sliced = 0
 				local function diffs()
@@ -2780,15 +2777,9 @@ local SUITE = {
 					end
 					return n, worst
 				end
-				local saved = cfg.cheap_same_trans
-				cfg.cheap_same_trans = 0
-				local n0, w0 = diffs()
-				cfg.cheap_same_trans = 1
 				local n1, w1 = diffs()
-				cfg.cheap_same_trans = saved
-				print(string.format("[pba test] cheap vs full transmission over %d pairs: worst %.2f dB (option 0) -> %.2f dB", n1, w0, w1))
+				print(string.format("[pba test] cheap vs full transmission over %d pairs: worst %.2f dB", n1, w1))
 				expect(n1 >= 3).to.beTrue()
-				expect(w0 > 0.5).to.beTrue() -- control: two models
 				expect(w1 < 1e-9).to.beTrue()
 			end)
 		end },
