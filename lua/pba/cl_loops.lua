@@ -970,7 +970,7 @@ end
 
 --- A volume / pitch change reaching mirror m (the server's update, full or compact): its native voice takes it at
 -- once (changeNow), an engine patch is moved to it.
-local function updateMirror(m, once, vol, pitch)
+local function updateMirror(m, vol, pitch)
 	m.pitch = pitch
 	LP.SetVolume(m, vol)
 	if m.nativeId then
@@ -997,7 +997,7 @@ net.Receive("pba_loop", function()
 		local m = LP.byId[net.ReadUInt(16)]
 		local vol, pitch = net.ReadUInt(8) / 255, net.ReadUInt(8)
 		-- no such mirror here (stopped, or never received): the server's next full update (<= 2 s) brings it back
-		if m and LP.mirrors[m.key] == m and not LP.silenced[m.key] then updateMirror(m, m.once, vol, pitch) end
+		if m and LP.mirrors[m.key] == m and not LP.silenced[m.key] then updateMirror(m, vol, pitch) end
 		return
 	end
 	local key = net.ReadString()
@@ -1055,7 +1055,7 @@ net.Receive("pba_loop", function()
 		A.WatchLine(name, 0, "long line mirror", function() return LP.HandBack(m) end, idx, chan,
 			function() return m.decoding == true and not m.done and not m.handBack and LP.mirrors[m.key] == m end)
 	end
-	if op == OP_UPDATE and (m.nativeId or m.patch) then return updateMirror(m, once, vol, pitch) end
+	if op == OP_UPDATE and (m.nativeId or m.patch) then return updateMirror(m, vol, pitch) end
 	apply(m, 0)
 	-- a source the client does not know: its wait is a tenth of a second (ENT_GRACE_S), taken here and not at its next
 	-- evaluation turn (up to 0.25 s later, staggered between the mirrors: the copies of one emission started apart)
