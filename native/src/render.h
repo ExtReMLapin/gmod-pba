@@ -128,6 +128,9 @@ void SrcSlotStates(SrcSlotState* out, double* seconds);
 // the simulation thread reports that slot has been simulated at generation gen:
 // -1 = room, 0..kEchoSlots-1 = echo slots, kEchoSlots + k = source reverb slot k
 void PublishSimulated(int slot, int gen);
+// the most simulated responses that reached the effects in one audio block since the previous call (each is crossfaded in
+// by its effect in that block, ~1.5x a steady block's cost): source slot banks, and all (room, echoes and slots)
+void NewResponseStats(int* maxSrc, int* maxAll);
 // binds voice id to source reverb slot `slot` simulated at generation gen (slot < 0: unbinds it);
 // srcSend: send level into the slot (linear, < 0 = keep the voice's; 0 at the first bind).
 // Several voices may share a slot. false if the voice is gone (or dying, or an echo).

@@ -57,6 +57,8 @@
 #include "miniaudio.h"
 
 #include "render.h"
+#include "prof.h"
+#include "sinc.h"
 
 #include <xmmintrin.h>
 #ifdef _WIN32
@@ -86,81 +88,7 @@
 
 namespace render {
 
-// Fractional-position reader: a sound's 48 kHz copy read at a position between two samples, which is what a voice at
-// another pitch (or Doppler) does at every output sample, and what a sentence word at its own pitch does. Linear
-// interpolation (what this was) mirrors the band of the file above the reading rate / 2 back into the sound at about
-// -30 to -45 dB (a 11.025 kHz file at pitch 95: images at -48 dB, at pitch 80 on a 22.05 kHz one: -32 dB) and loses
-// 1 dB at 10 kHz; here a Kaiser-windowed sinc, 2 x 16 taps, cutoff 0.455 x the output rate, 1024 phases (nearest),
-// every phase normalised to a gain of exactly 1 at DC: flat within 0.1 dB up to 14 kHz, images >= 80 dB down (the
-// worst case, a tone at 14 kHz, -87 dB; 18 kHz -60 dB), timing error 1 / 2048 sample (-64 dB at 10 kHz). The edges
-// repeat the first / last sample; a loop reads the samples on the other side of its wrap point (InterpFold).
-constexpr int kIntHalf = 16, kIntTaps = 2 * kIntHalf, kIntPhases = 1024;
-static double BesselI0(double x) {
-	double sum = 1, term = 1;
-	const double q = x * x / 4;
-	for (int k = 1; k < 60; ++k) {
-		term *= q / ((double)k * k);
-		sum += term;
-		if (term < 1e-14 * sum) break;
-	}
-	return sum;
-}
-struct InterpTable {
-	float k[kIntPhases][kIntTaps];
-	InterpTable() {
-		const double wc = 0.455, beta = 9.0, i0b = BesselI0(beta), pi = 3.14159265358979323846;
-		for (int ph = 0; ph < kIntPhases; ++ph) {
-			const double f = (double)ph / kIntPhases; // position of the output sample after the sample `k`
-			double tmp[kIntTaps], sum = 0;
-			for (int t = 0; t < kIntTaps; ++t) {
-				const double d = (double)(t - (kIntHalf - 1)) - f; // tap t is sample k - (half - 1) + t
-				const double x = 2 * wc * d;
-				const double sinc = std::fabs(x) < 1e-9 ? 1.0 : std::sin(pi * x) / (pi * x);
-				const double u = d / kIntHalf;
-				const double w = std::fabs(u) >= 1 ? 0.0 : BesselI0(beta * std::sqrt(1 - u * u)) / i0b;
-				tmp[t] = sinc * w;
-				sum += tmp[t];
-			}
-			for (int t = 0; t < kIntTaps; ++t) k[ph][t] = (float)(tmp[t] / sum);
-		}
-	}
-};
-static const InterpTable& InterpT() {
-	static const InterpTable t; // built at the first use (Start touches it: never on the audio thread)
-	return t;
-}
-// where a position falls: the sample before it and the phase row
-struct InterpAt {
-	const float* row;
-	long k;
-};
-static inline InterpAt InterpLocate(double pos) {
-	long k = (long)pos;
-	int ph = (int)((pos - (double)k) * kIntPhases + 0.5);
-	if (ph >= kIntPhases) { ph = 0; ++k; }
-	return {InterpT().k[ph], k};
-}
-// the loop a read may wrap through: samples from `start` to n - 1 repeat (n - 1 is `start` again, as the mixer's wrap
-// has it); `wrapped`: the read is past the first wrap, so the samples before `start` are the loop's tail
-struct InterpLoop {
-	bool loop = false, wrapped = false;
-	long start = 0, period = 1;
-};
-static inline float InterpRead(const float* x, long n, const InterpAt& at, const InterpLoop& lp) {
-	const long base = at.k - (kIntHalf - 1);
-	const float* row = at.row;
-	float acc = 0;
-	if (base >= (lp.loop && lp.wrapped ? lp.start : 0) && base + kIntTaps <= n - 1) {
-		for (int t = 0; t < kIntTaps; ++t) acc += row[t] * x[base + t];
-		return acc;
-	}
-	for (int t = 0; t < kIntTaps; ++t) {
-		long j = base + t;
-		if (lp.loop && (j >= n - 1 || (lp.wrapped && j < lp.start))) j = lp.start + (((j - lp.start) % lp.period) + lp.period) % lp.period;
-		acc += row[t] * x[std::clamp(j, 0L, n - 1)];
-	}
-	return acc;
-}
+// Fractional-position reader (InterpRead) and the decode-time resampler: sinc.h
 
 namespace {
 
@@ -323,6 +251,10 @@ struct Reflection {
 	// what its last convolved block used: the response's EQ (hybrid tail level per band) and delay (debug, SrcSlotStats)
 	std::atomic<float> eqUsed[3] = {0, 0, 0};
 	std::atomic<int> delayUsed{0};
+	// responses published for it (PublishSimulated / PublishSrcBank, simulation thread) and the count its last block saw:
+	// a new one is crossfaded in by the effect at its next block (NewResponseStats)
+	std::atomic<uint32_t> pubs{0};
+	uint32_t pubsSeen = 0;
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -964,6 +896,9 @@ void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpa
 	iplAmbisonicsDecodeEffectApply(fx, &dp, in, out);
 }
 
+int g_blkNew = 0; // responses that arrived this block (audio thread)
+std::atomic<int> g_newMaxSrc{0}, g_newMaxAll{0}; // the most in one block since NewResponseStats last read them
+
 // Applies one reflection effect (if simulated) and adds its ambisonic output to g_amb.
 // Simulation outputs are only ever read here, on the audio thread (single consumer).
 // minTail: floor of the tail length (the room's for echo and source slots: their own reverb time
@@ -980,6 +915,10 @@ void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpa
 // wOut: the W (omni) channel of what was added, accumulated there (per-slot level meter).
 void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTail = 0, float w0 = 1, float w1 = 1,
                      float* wOut = nullptr) {
+	if (const uint32_t pc = r.pubs.load(std::memory_order_relaxed); pc != r.pubsSeen) {
+		r.pubsSeen = pc;
+		++g_blkNew;
+	}
 	if (r.fed) r.idle = 0;
 	else if (r.idle < (1 << 20)) r.idle++;
 	r.fed = false;
@@ -990,7 +929,11 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	if (over) r.silent = true;
 	if (!rtOut && (wet <= 0 || over)) return;
 	IPLSimulationOutputs out{};
-	iplSourceGetOutputs(src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
+	{
+		PROF_T0();
+		iplSourceGetOutputs(src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
+		PROF_ADD(g_getOut, g_nGetOut);
+	}
 	// reverb times: the long-window estimate for the room; for an echo or source slot, the one simulated at its own
 	// position when there is one (a band at 0 keeps the main simulator's); else the main simulator's
 	float rt[3];
@@ -1034,7 +977,9 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	}
 	if (!out.reflections.ir) return;
 	if (r.stale) {
+		PROF_T0();
 		iplReflectionEffectReset(r.fx);
+		PROF_ADD(g_reset, g_nReset);
 		r.stale = false;
 	}
 	if (flush) std::fill(r.in.data[0], r.in.data[0] + kBlock, 0.0f); // (its input was copied and metered before)
@@ -1055,7 +1000,11 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	r.delayUsed = rp.delay;
 	rp.numChannels = kAmbi;
 	rp.irSize = kIR;
-	iplReflectionEffectApply(r.fx, &rp, &r.in, &g_ambTmp, nullptr);
+	{
+		PROF_T0();
+		iplReflectionEffectApply(r.fx, &rp, &r.in, &g_ambTmp, nullptr);
+		PROF_ADD(g_apply, g_nApply);
+	}
 	if (flush) return; // (convolved for its state only)
 	const float g0 = wet * a0 * w0, g1 = wet * a1 * w1;
 	for (int c = 0; c < kAmbi; ++c) {
@@ -1170,6 +1119,7 @@ void RenderBlock() {
 	for (auto& e : g_echo) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
 	for (auto& e : g_src) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
 	const IPLCoordinateSpace3 lis = ListenerSpace();
+	PROF_LAP(Clear);
 
 	for (int ai = 0; ai < g_nAct; ++ai) {
 		const int rec = g_act[ai];
@@ -1285,8 +1235,7 @@ void RenderBlock() {
 						const size_t i0 = (size_t)(base & b.mask);
 						float acc = 0;
 						if (!closed && i0 + kIntTaps <= ringSize) { // the taps do not cross the ring's end
-							const float* d = &b.data[i0];
-							for (int t = 0; t < kIntTaps; ++t) acc += row[t] * d[t];
+							acc = sinc::Dot(row, &b.data[i0], kIntTaps);
 						} else {
 							for (int t = 0; t < kIntTaps; ++t) {
 								uint64_t j = base + (uint64_t)t;
@@ -1372,6 +1321,7 @@ void RenderBlock() {
 			v.cursor += rate0 + (rate1 - rate0) * (((float)i + 0.5f) / (float)kBlock);
 		}
 		}
+		PROF_LAP(VRead);
 		// gain smoothing over the block (no zipper noise / clicks on updates)
 		const float g0 = v.gainCur < 0 ? v.gain : v.gainCur, g1 = v.gain;
 		auto applyGain = [&](float* x) {
@@ -1386,6 +1336,7 @@ void RenderBlock() {
 			float* d = r.in.data[0];
 			for (int i = 0; i < kBlock; ++i) d[i] += m[i];
 			r.fed = true;
+			PROF_LAP(VSends);
 			continue;
 		}
 
@@ -1475,6 +1426,7 @@ void RenderBlock() {
 		v.pathMixCur = pw1;
 		const bool pathOn = v.pathSlot >= 0 && (pw0 > 0 || pw1 > 0);
 		const bool directOn = pw0 < 1 || pw1 < 1;
+		PROF_LAP(VSends);
 		if (pathOn) {
 			// the path effect was not used by the previous block (taken now, or kept by the control side while it faded
 			// out and taken again): from silence, as a path effect just taken from the pool
@@ -1493,6 +1445,7 @@ void RenderBlock() {
 			pp.normalizeEQ = IPL_FALSE;
 			iplPathEffectApply(g_pathPool[v.pathSlot].fx, &pp, &g_monoP, &g_stereoP);
 		}
+		PROF_LAP(VPath);
 		if (directOn) {
 			if (pw0 >= 1) {
 				// back from the path: the straight-line effects hold the state of their last use,
@@ -1524,6 +1477,7 @@ void RenderBlock() {
 			}
 			feedRoom(bin_in->data[0], sendBoost0, sendBoost1, 1 - pw0, 1 - pw1);
 			applyGain(bin_in->data[0]);
+			PROF_LAP(VEq);
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
 			auto spatialise = [&](int slot, IPLVector3 d, IPLAudioBuffer* in, IPLAudioBuffer* out) {
@@ -1610,6 +1564,7 @@ void RenderBlock() {
 			if (g_debugOn)
 				for (int i = 0; i < kBlock; ++i) dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
 		}
+		PROF_LAP(VSpat);
 		dbgVoices++;
 		for (int i = 0; i < kBlock; ++i) {
 			const float w = pw0 + (pw1 - pw0) * (float)i / kBlock; // path share at this sample
@@ -1632,8 +1587,10 @@ void RenderBlock() {
 			g_mix[i * 2] += l;
 			g_mix[i * 2 + 1] += r;
 		}
+		PROF_LAP(VMix);
 		// (path dropped and faded out: its effect goes back to the pool for another voice, see EndBlock)
 	}
+	PROF_LAP(VRead); // voices skipped at the loop's top (paused, waiting echo): their few checks
 
 	// captures: written up to the buffer's capacity, never grown here
 	CaptureBuf* const cap = g_cap;
@@ -1647,10 +1604,15 @@ void RenderBlock() {
 		for (auto& e : g_src)
 			for (int i = 0; i < kBlock; ++i) s[i] += e.in.data[0][i];
 	}
+	PROF_LAP(Capture);
 	// reflections -> ambisonic bus -> decode
+	g_blkNew = 0;
 	ApplyReflection(g_room, g_wetRoom, g_roomRt);
+	PROF_LAP(Room);
 	// echo and source slots: their own tail, never shorter than the room's (see ApplyReflection)
 	for (auto& e : g_echo) ApplyReflection(e, g_wetEcho, nullptr, g_room.tailBlocks);
+	PROF_LAP(Echo);
+	const int newBefore = g_blkNew;
 	{
 		// source slots: both banks fed the slot's input, weighted by the blend (ramped per block)
 		const float wet = g_wetRoom * g_srcScale;
@@ -1670,14 +1632,20 @@ void RenderBlock() {
 				AddTo(g_srcInE[k], ei);
 			}
 			std::fill(g_slotW.begin(), g_slotW.end(), 0.0f);
+			PROF_LAP(SrcIn);
 			ApplyReflection(g_src[k], wet, nullptr, g_room.tailBlocks, p0, w[0], g_slotW.data());
+			PROF_LAP(SrcA);
 			if (k < kSrcBankB) ApplyReflection(g_srcB[k], wet, nullptr, g_room.tailBlocks, p1, w[1], g_slotW.data());
+			PROF_LAP(SrcB);
 			double e = 0;
 			for (int i = 0; i < kBlock; ++i) e += (double)g_slotW[i] * g_slotW[i];
 			AddTo(g_srcE[k], e);
 		}
 		AddTo(g_srcESec, (double)kBlock / kRate);
 	}
+	if (g_blkNew - newBefore > g_newMaxSrc.load(std::memory_order_relaxed)) g_newMaxSrc.store(g_blkNew - newBefore, std::memory_order_relaxed);
+	if (g_blkNew > g_newMaxAll.load(std::memory_order_relaxed)) g_newMaxAll.store(g_blkNew, std::memory_order_relaxed);
+	PROF_LAP(SrcIn);
 	if (g_decode) {
 		DecodeBus(g_decode, g_dfState, lis, &g_amb, &g_ambOut, g_outMode, g_dfOn);
 		for (int i = 0; i < kBlock; ++i) {
@@ -1685,6 +1653,7 @@ void RenderBlock() {
 			g_mix[i * 2 + 1] += g_ambOut.data[1][i];
 		}
 	}
+	PROF_LAP(Decode);
 
 	// under water: one-pole low-pass (~400 Hz, -3 dB), cross-faded in and out over ~0.1 s
 	if (g_uw > 0 || g_uwCur > 0) {
@@ -1743,6 +1712,7 @@ void RenderBlock() {
 		std::copy(g_mix.begin(), g_mix.end(), cap->out.get() + capAt * 2);
 		cap->frames.store(capAt + kBlock, std::memory_order_release);
 	}
+	PROF_LAP(Post);
 	const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	// the share of the block's wall time the thread actually ran (its CPU time over the same clock): a slow block with
 	// little CPU time was preempted or waited (a page fault served by the kernel counts as the thread's time)
@@ -1944,9 +1914,12 @@ void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 	ma_uint32 done = 0;
 	while (done < frames) {
 		if (g_fifoPos >= g_fifo.size()) {
+			PROF_BEGIN();
 			ApplyCommands();
+			PROF_LAP(Cmds);
 			RenderBlock();
 			EndBlock();
+			PROF_LAP(EndBlk);
 			g_fifo.assign(g_mix.begin(), g_mix.end()); // (same size: no allocation)
 			g_fifoPos = 0;
 		}
@@ -2720,7 +2693,16 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IP
 		while (g_cbEpoch.load(std::memory_order_acquire) == e) std::this_thread::yield();
 }
 
+void NewResponseStats(int* maxSrc, int* maxAll) {
+	if (maxSrc) *maxSrc = g_newMaxSrc.exchange(0);
+	if (maxAll) *maxAll = g_newMaxAll.exchange(0);
+}
+
 void PublishSrcBank(int k, int bank) {
+	if (k >= 0 && k < kSrcSlotsMax) {
+		if (bank == 0) g_src[k].pubs.fetch_add(1, std::memory_order_relaxed);
+		else if (k < kSrcBankB) g_srcB[k].pubs.fetch_add(1, std::memory_order_relaxed);
+	}
 	// bank 0's g_src[k].simGen is the slot's generation (PublishSimulated); bank 1 only needs "simulated"
 	if (bank == 1 && k >= 0 && k < kSrcBankB) g_srcB[k].simGen = 1;
 }
@@ -2837,9 +2819,10 @@ void RoomReverbTimes(float rt[3]) {
 }
 
 void PublishSimulated(int slot, int gen) {
-	if (slot < 0) g_room.simGen = gen;
-	else if (slot < kEchoSlots) g_echo[slot].simGen = gen;
-	else if (slot < kEchoSlots + kSrcSlotsMax) g_src[slot - kEchoSlots].simGen = gen;
+	Reflection* r = slot < 0 ? &g_room : slot < kEchoSlots ? &g_echo[slot] : slot < kEchoSlots + kSrcSlotsMax ? &g_src[slot - kEchoSlots] : nullptr;
+	if (!r) return;
+	r->simGen = gen;
+	r->pubs.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
@@ -3263,59 +3246,13 @@ static std::string FixWavFmt(const void* data, size_t size) {
 // at 14 kHz), the images of the 44.1 kHz band above 22 kHz held ~80 dB down (linear: ~ -25 dB at 10 kHz). The
 // kernel is tabulated per fractional phase (exact for rational ratios up to 8192 phases, nearest phase beyond),
 // every phase normalised to a gain of exactly 1 at DC. No delay: output sample m is the signal at m / rout. The
-// edges repeat the first / last sample.
+// edges repeat the first / last sample. sinc.h: the kernel is built once per rate pair and kept, the dot product is SSE.
 static void ResampleSinc(const float* in, size_t n, uint32_t rin, uint32_t rout, std::vector<float>& out) {
-	out.clear();
-	if (n == 0) return;
-	if (rin == rout) {
+	if (n == 0 || rin == rout) {
 		out.assign(in, in + n);
 		return;
 	}
-	const uint64_t gdiv = std::gcd((uint64_t)rin, (uint64_t)rout);
-	const uint64_t inG = rin / gdiv, outG = rout / gdiv; // out sample m sits at source position m * inG / outG
-	const int phases = (int)std::min<uint64_t>(outG, 8192);
-	const double wc = 0.465 * std::min(1.0, (double)rout / (double)rin); // cutoff, cycles per source sample
-	const int half = std::clamp((int)std::ceil(32.0 * 0.465 / wc), 32, 256);
-	const int taps = 2 * half;
-	const double beta = 8.5, i0b = BesselI0(beta), pi = 3.14159265358979323846;
-	std::vector<float> table((size_t)phases * taps);
-	std::vector<double> tmp((size_t)taps);
-	for (int ph = 0; ph < phases; ++ph) {
-		const double f = (double)ph / phases; // source sample position of the output sample, fractional part
-		double sum = 0;
-		for (int t = 0; t < taps; ++t) {
-			const double d = (double)(t - (half - 1)) - f; // tap i = ip + t - (half-1): distance to the position
-			const double x = 2 * wc * d;
-			const double sinc = std::fabs(x) < 1e-9 ? 1.0 : std::sin(pi * x) / (pi * x);
-			const double u = d / half;
-			const double w = std::fabs(u) >= 1 ? 0.0 : BesselI0(beta * std::sqrt(1 - u * u)) / i0b;
-			tmp[t] = sinc * w;
-			sum += tmp[t];
-		}
-		for (int t = 0; t < taps; ++t) table[(size_t)ph * taps + t] = (float)(tmp[t] / sum);
-	}
-	// padded input: `half` repeated samples at each end
-	std::vector<float> pad(n + 2 * (size_t)half);
-	std::fill(pad.begin(), pad.begin() + half, in[0]);
-	std::copy(in, in + n, pad.begin() + half);
-	std::fill(pad.begin() + half + n, pad.end(), in[n - 1]);
-	const uint64_t outN = (uint64_t)n * rout / rin;
-	out.resize((size_t)outN);
-	for (uint64_t m = 0; m < outN; ++m) {
-		const uint64_t num = m * inG;
-		size_t ip = (size_t)(num / outG);
-		int ph;
-		if ((uint64_t)phases == outG) ph = (int)(num % outG);
-		else {
-			ph = (int)(((num % outG) * phases + outG / 2) / outG);
-			if (ph >= phases) { ph = 0; ++ip; }
-		}
-		const float* k = &table[(size_t)ph * taps];
-		const float* x = &pad[ip + 1]; // pad index of source sample (ip - (half-1)) is ip + 1
-		float acc = 0;
-		for (int t = 0; t < taps; ++t) acc += k[t] * x[t];
-		out[(size_t)m] = acc;
-	}
+	sinc::Resample(in, n, rin, rout, out, *sinc::ResampleKernelFor(rin, rout));
 }
 
 std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart, bool* stereo) {

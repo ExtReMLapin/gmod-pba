@@ -68,6 +68,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Sounds in clear sight | vanilla (engine) | ✅ "all native": HRTF and reverb on every sound | C `native_all`, S `native_relay` |
 | Room reverb simulated from the geometry | — (the engine's automatic reverb only) | ✅ convolution plus parametric tail, ambisonic, at the listener's position | C `native_reverb` |
 | A far loud sound's reverb, before its own reverb slot is simulated, stays at the sound's level at the listener (no burst) | — | ✅ | C `native_slot_fallback` |
+| Source reverb slots simulated in groups, so their new responses do not all crossfade in the same audio block (no overrun spike) | — | ✅ | C `native_slot_group` |
 | **Echoes of loud sounds** (gunfire, explosions) simulated on the walls around the source | — | ✅ even when the engine plays the direct sound | C `native_echo`, `native_echo_lvl`, S `echo_relay` |
 | Speed-of-sound delay (343 m/s, over the real path length) | ✅ | ✅ | C `delay` |
 | Air absorption (highs fade with distance) | — | ✅ | C `native_air` |

@@ -643,6 +643,8 @@ function N.ApplySettings()
 	if pba_native.SetEqContinuous then pba_native.SetEqContinuous((A.cfg.native_eq_continuous or 1) >= 0.5) end
 	-- a source slot bank the crossfade left is flushed, not reset (module of 2026-11-19+; an older one resets it)
 	if pba_native.SetSlotBankFlush then pba_native.SetSlotBankFlush((A.cfg.native_slot_bank_flush or 1) >= 0.5) end
+	-- source reverb slots simulated in groups, their new responses spread over blocks (module of 2026-11-19+; an older one runs all at once)
+	if pba_native.SetSlotGroup then pba_native.SetSlotGroup(math.floor((A.cfg.native_slot_group or 4) + 0.5)) end
 	local k = N.wetScale or 1
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,
@@ -713,7 +715,8 @@ function N.EnsureSound(name, now)
 	-- large files decode on a worker thread; with pba_native_predecode every file does (a burst's first sounds
 	-- cost the main thread up to 12 ms each: perf bench S11), the first play of each left to the engine
 	-- now: a spoken line played this frame (pba_native_line_decode): decoded here up to 1.5 MB (a short line is at
-	-- most max_duration long: ~700 KB at 44 kHz, ~5 ms; a WAV decodes at ~7.5 ms per MB), so the module renders its
+	-- most max_duration long: ~700 KB at 44 kHz, ~5 ms; a WAV decodes at ~7 ms per MB at 44.1 kHz, ~13 at 22.05 kHz,
+	-- thread CPU measured with the SSE resampler; a module before it: ~23 and ~45 ms per MB), so the module renders its
 	-- first play like every other line (the Breencast's short lines, 340-660 KB, went to the engine's speaker
 	-- preset while its long line, a mirror waiting for its decode, stayed native)
 	local asyncAbove = now and 1536 * 1024 or (A.cfg.native_predecode or 1) >= 0.5 and 0 or 512 * 1024

@@ -24,7 +24,7 @@
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]),
-//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool), SetSlotBankFlush(bool), SetEqContinuous(bool), SetCapCompareNew(bool),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool), SetSlotBankFlush(bool), SetSlotGroup(n), SetEqContinuous(bool), SetCapCompareNew(bool),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k), SetSlotFallback(on),
@@ -79,6 +79,7 @@
 
 #include "render.h"
 #include "slot_rt.h"
+#include "stagger.h"
 #include "streams.h"
 
 using namespace GarrysMod::Lua;
@@ -282,6 +283,12 @@ IPLSimulator g_slotSim = nullptr;
 IPLSource g_srcSlotB[render::kSrcBankB] = {}; // bank 1 (bank 0 is g_srcSlot[k].src)
 std::atomic<float> g_srcAccumR{1.5f}; // m; <= 0: off (simulated at the listener, every move restarts)
 std::atomic<int> g_srcAccumK{8};      // passes for a new anchor's average to take over
+// Slots simulated per run (stagger.h, SetSlotGroup, pba_native_slot_group): a run hands each of its slots a new impulse
+// response, which its effect crossfades in at the next audio block (that block convolves it twice); 16 slots in one run made
+// that block overrun. In groups of this many, each group's responses land in a block of their own (kSlotGroupGapMs apart),
+// the slots waiting for their first response first. 0: every slot in one run, as before.
+std::atomic<int> g_optSlotGroup{4};
+constexpr double kSlotGroupGapMs = 12.0; // > one audio block (512 / 48 kHz = 10.7 ms)
 // reflection thread only (reset with the simulator)
 struct SrcAccum {
 	IPLCoordinateSpace3 anchor{};
@@ -541,6 +548,42 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 			}
 	}
 
+	// --- blend of the two banks per slot (after each group's run, so a group's new place is rendered without waiting for the
+	// next groups). The new average's weight is n / (n + m), m = the previous
+	// anchor's passes (at most K) fading linearly to 0 as the new one reaches K passes: one pass of the
+	// new anchor weighs 1/8 against a converged partner, K passes weigh all (the partner is the
+	// response of another point, up to R away: it only bridges the new average's first noisy passes).
+	auto blend = [&]() {
+		const int K = std::max(1, g_srcAccumK.load());
+		bool ready[render::kSrcSlotsMax] = {};
+		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+			const int c = bankOf(k), o = 1 - c;
+			if (A.retiring && k < render::kSrcBankB) {
+				// fade the bank to reuse out; the current one alone meanwhile, if it holds this place's
+				// response (else silent until its run: it may still hold an older anchor's or place's)
+				const float wc = samePlace(c, k) ? 1.0f : 0.0f;
+				render::SetSrcBlend(k, c == 0 ? wc : 0.0f, c == 1 ? wc : 0.0f, false);
+				ready[k] = wc > 0;
+				continue;
+			}
+			const bool hasO = accum && k < render::kSrcBankB && samePlace(o, k) && A.n[o][k] > 0;
+			const int nc = samePlace(c, k) ? A.n[c][k] : 0;
+			// nothing simulated here yet: unchanged (the weights left there may point at a bank since restarted)
+			if (nc == 0 && !hasO) continue;
+			ready[k] = true;
+			const float m = hasO ? (float)std::min(A.n[o][k], K) * std::max(0.0f, 1.0f - (float)nc / K) : 0.0f;
+			const float wc = nc > 0 ? (float)nc / ((float)nc + m) : 0.0f;
+			// a new place's first response has nothing to crossfade from (its voices waited for it); a bank
+			// restarted by a swap is not a new place: it crossfades from its partner
+			const bool snap = on[k] && newPlace[k] && !hasO;
+			render::SetSrcBlend(k, c == 0 ? wc : 1 - wc, c == 1 ? wc : 1 - wc, snap);
+		}
+		{
+			std::lock_guard<std::mutex> lk(g_stageMtx);
+			for (int k = 0; k < render::kSrcSlotsMax; ++k) g_srcReady[k] = ready[k];
+		}
+	};
+
 	bool ran = false;
 	if (any) {
 		// Steam Audio restarts the average of every simulated source when the listener or the scene
@@ -558,94 +601,84 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 				pw[k] = pw[k] == 1.0f ? 1.001f : 1.0f;
 			}
 		}
-		const auto t0 = std::chrono::steady_clock::now();
-		bool failed = false;
-		{
-			WaitSceneCommit();
-			std::lock_guard<std::mutex> lk(g_simMtx);
-			SetSharedReflInputs(A.anchor, g_slotSim);
-			for (int k = 0; k < render::kSrcSlotsMax; ++k)
-				for (int b = 0; b < 2; ++b) {
-					IPLSource src = srcOf(b, k);
-					if (!src) continue;
-					const bool run = on[k] && b == bankOf(k);
-					SetReflInputs(src, sl[k].genPos, run, {0, 0, -1}, 0, run ? pw[k] : powOf(b, k));
+		// the slots to run, the ones a sound waits for first (stagger.h: in groups of g_optSlotGroup)
+		int list[render::kSrcSlotsMax], nList = 0;
+		for (int k = 0; k < render::kSrcSlotsMax; ++k)
+			if (on[k] && pend[k]) list[nList++] = k;
+		for (int k = 0; k < render::kSrcSlotsMax; ++k)
+			if (on[k] && !pend[k]) list[nList++] = k;
+		float totalMs = 0;
+		stagger::Run(nList, g_optSlotGroup.load(), kSlotGroupGapMs, [&](int first, int count) {
+			bool part[render::kSrcSlotsMax] = {};
+			for (int i = first; i < first + count; ++i) {
+				const int k = list[i];
+				part[k] = true;
+				// a group after the first: the listener change (globalReset) was consumed by the first group's run, so
+				// Steam Audio would go on averaging this slot's old response: restart it as a new place's
+				if (first > 0 && globalReset && !fresh[k]) {
+					fresh[k] = true;
+					pw[k] = pw[k] == 1.0f ? 1.001f : 1.0f;
 				}
-			try {
-				iplSimulatorRunReflections(g_slotSim);
-			} catch (...) {
-				failed = true;
 			}
-		}
-		if (failed) g_reflErrors++;
-		else {
-			for (int k = 0; k < render::kSrcSlotsMax; ++k) {
-				if (!on[k]) continue;
-				const int b = bankOf(k);
-				A.n[b][k] = fresh[k] || globalReset ? 1 : A.n[b][k] + 1;
-				A.has[b][k] = true;
-				A.pos[b][k] = sl[k].genPos;
-				A.scene[b][k] = sceneVer;
-				A.pow[b][k] = pw[k];
-				A.reset[b][k] = false;
-				// own long-window reverb time before the renderer may use the slot (option); a first estimate takes two
-				// passes, the others come with the next full runs
-				UpdateSlotRt(g_rtSrc[k], {sl[k].genPos.x, sl[k].genPos.y + sl[k].genLift, sl[k].genPos.z}, sceneVer, render::kEchoSlots + k, pendingOnly ? 2 : 1);
-				render::PublishSrcBank(k, b);
-				render::PublishSimulated(render::kEchoSlots + k, sl[k].gen);
-			}
-			A.lastRunLis = A.anchor.origin;
-			A.lastRunScene = sceneVer;
-			A.lastRunValid = true;
-		}
-		{
-			// failed: marked simulated anyway, so that a failing slot does not spin the loop
-			std::lock_guard<std::mutex> lk(g_stageMtx);
-			for (int k = 0; k < render::kSrcSlotsMax; ++k)
-				if (on[k]) {
-					g_srcSimulatedGen[k] = std::max(g_srcSimulatedGen[k], sl[k].gen);
-					g_srcSimulatedPos[k] = sl[k].genPos;
-					g_srcSimulatedVer[k] = failed ? -1 : sceneVer;
+			const auto t0 = std::chrono::steady_clock::now();
+			bool failed = false;
+			{
+				WaitSceneCommit();
+				std::lock_guard<std::mutex> lk(g_simMtx);
+				SetSharedReflInputs(A.anchor, g_slotSim);
+				for (int k = 0; k < render::kSrcSlotsMax; ++k)
+					for (int b = 0; b < 2; ++b) {
+						IPLSource src = srcOf(b, k);
+						if (!src) continue;
+						const bool run = part[k] && b == bankOf(k);
+						SetReflInputs(src, sl[k].genPos, run, {0, 0, -1}, 0, run ? pw[k] : powOf(b, k));
+					}
+				try {
+					iplSimulatorRunReflections(g_slotSim);
+				} catch (...) {
+					failed = true;
 				}
-		}
-		const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
-		g_srcMs = g_srcMs * 0.9f + ms * 0.1f;
-		g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
+			}
+			if (failed) g_reflErrors++;
+			else {
+				for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+					if (!part[k]) continue;
+					const int b = bankOf(k);
+					A.n[b][k] = fresh[k] || globalReset ? 1 : A.n[b][k] + 1;
+					A.has[b][k] = true;
+					A.pos[b][k] = sl[k].genPos;
+					A.scene[b][k] = sceneVer;
+					A.pow[b][k] = pw[k];
+					A.reset[b][k] = false;
+					// own long-window reverb time before the renderer may use the slot (option); a first estimate takes two
+					// passes, the others come with the next full runs
+					UpdateSlotRt(g_rtSrc[k], {sl[k].genPos.x, sl[k].genPos.y + sl[k].genLift, sl[k].genPos.z}, sceneVer, render::kEchoSlots + k, pendingOnly ? 2 : 1);
+					render::PublishSrcBank(k, b);
+					render::PublishSimulated(render::kEchoSlots + k, sl[k].gen);
+				}
+				A.lastRunLis = A.anchor.origin;
+				A.lastRunScene = sceneVer;
+				A.lastRunValid = true;
+			}
+			{
+				// failed: marked simulated anyway, so that a failing slot does not spin the loop
+				std::lock_guard<std::mutex> lk(g_stageMtx);
+				for (int k = 0; k < render::kSrcSlotsMax; ++k)
+					if (part[k]) {
+						g_srcSimulatedGen[k] = std::max(g_srcSimulatedGen[k], sl[k].gen);
+						g_srcSimulatedPos[k] = sl[k].genPos;
+						g_srcSimulatedVer[k] = failed ? -1 : sceneVer;
+					}
+			}
+			const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+			totalMs += ms;
+			g_reflMaxMs = std::max(g_reflMaxMs.load(), ms);
+			if (first + count < nList) blend(); // (the last group's: below)
+		});
+		g_srcMs = g_srcMs * 0.9f + totalMs * 0.1f; // all the groups of the pass (the simulation time, not the gaps)
 		ran = true;
 	}
-
-	// --- blend of the two banks per slot. The new average's weight is n / (n + m), m = the previous
-	// anchor's passes (at most K) fading linearly to 0 as the new one reaches K passes: one pass of the
-	// new anchor weighs 1/8 against a converged partner, K passes weigh all (the partner is the
-	// response of another point, up to R away: it only bridges the new average's first noisy passes).
-	const int K = std::max(1, g_srcAccumK.load());
-	bool ready[render::kSrcSlotsMax] = {};
-	for (int k = 0; k < render::kSrcSlotsMax; ++k) {
-		const int c = bankOf(k), o = 1 - c;
-		if (A.retiring && k < render::kSrcBankB) {
-			// fade the bank to reuse out; the current one alone meanwhile, if it holds this place's
-			// response (else silent until its run: it may still hold an older anchor's or place's)
-			const float wc = samePlace(c, k) ? 1.0f : 0.0f;
-			render::SetSrcBlend(k, c == 0 ? wc : 0.0f, c == 1 ? wc : 0.0f, false);
-			ready[k] = wc > 0;
-			continue;
-		}
-		const bool hasO = accum && k < render::kSrcBankB && samePlace(o, k) && A.n[o][k] > 0;
-		const int nc = samePlace(c, k) ? A.n[c][k] : 0;
-		// nothing simulated here yet: unchanged (the weights left there may point at a bank since restarted)
-		if (nc == 0 && !hasO) continue;
-		ready[k] = true;
-		const float m = hasO ? (float)std::min(A.n[o][k], K) * std::max(0.0f, 1.0f - (float)nc / K) : 0.0f;
-		const float wc = nc > 0 ? (float)nc / ((float)nc + m) : 0.0f;
-		// a new place's first response has nothing to crossfade from (its voices waited for it); a bank
-		// restarted by a swap is not a new place: it crossfades from its partner
-		const bool snap = on[k] && newPlace[k] && !hasO;
-		render::SetSrcBlend(k, c == 0 ? wc : 1 - wc, c == 1 ? wc : 1 - wc, snap);
-	}
-	{
-		std::lock_guard<std::mutex> lk(g_stageMtx);
-		for (int k = 0; k < render::kSrcSlotsMax; ++k) g_srcReady[k] = ready[k];
-	}
+	blend();
 	g_srcCur = A.cur;
 	g_srcRetiring = A.retiring;
 	for (int k = 0; k < render::kSrcSlotsMax; ++k)
@@ -2538,6 +2571,13 @@ LUA_FUNCTION(SetPitchGlide) {
 	return 0;
 }
 
+// SetSlotGroup(n): the source reverb slots are simulated in groups of n, each group's new responses reaching the audio in a block of
+// their own (default 4); 0: every slot in one run, all their responses crossfaded in the same block, as before (pba_native_slot_group)
+LUA_FUNCTION(SetSlotGroup) {
+	g_optSlotGroup = std::clamp((int)LUA->CheckNumber(1), 0, render::kSrcSlotsMax);
+	return 0;
+}
+
 // SetSlotBankFlush(bool): a source slot bank weighted out is flushed with silence until its tail is over and keeps its response (true, the default); false: reset when weighted in again, which dropped the response, as before (pba_native_slot_bank_flush)
 LUA_FUNCTION(SetSlotBankFlush) {
 	render::SetSlotBankFlush(LUA->GetBool(1));
@@ -2734,6 +2774,17 @@ LUA_FUNCTION(Stats) {
 		LUA->SetField(-2, "srcRetiring");
 		LUA->PushNumber(g_srcMs.load());
 		LUA->SetField(-2, "srcMs");
+		// the most new responses crossfaded in one audio block since the previous Stats (slots, all), the slot group size
+		{
+			int ms = 0, ma = 0;
+			render::NewResponseStats(&ms, &ma);
+			LUA->PushNumber(ms);
+			LUA->SetField(-2, "newRespMaxSrc");
+			LUA->PushNumber(ma);
+			LUA->SetField(-2, "newRespMaxAll");
+			LUA->PushNumber(g_optSlotGroup.load());
+			LUA->SetField(-2, "slotGroup");
+		}
 		// per-slot long-window reverb time (SetSourceLongRt): on, ms per pass (smoothed), passes run since the world load
 		LUA->PushBool(g_optSrcLongRt.load());
 		LUA->SetField(-2, "srcLongRt");
@@ -3154,6 +3205,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetPitchGlide");
 	LUA->PushCFunction(SetSlotBankFlush);
 	LUA->SetField(-2, "SetSlotBankFlush");
+	LUA->PushCFunction(SetSlotGroup);
+	LUA->SetField(-2, "SetSlotGroup");
 	LUA->PushCFunction(SetEqContinuous);
 	LUA->SetField(-2, "SetEqContinuous");
 	LUA->PushCFunction(SetCapCompareNew);
