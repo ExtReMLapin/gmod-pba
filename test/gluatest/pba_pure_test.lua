@@ -2574,7 +2574,7 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "StateSig: the same door states give the same signature whatever order pairs() walks them in (a door table rehashed or a door gone and back: link costs and door fields redone for nothing, far jobs restarted; pba_state_sig_sorted, review P6)", func = function()
+		{ name = "StateSig: the same door states give the same signature whatever order pairs() walks them in (a door table rehashed or a door gone and back: link costs and door fields redone for nothing, far jobs restarted; review P6)", func = function()
 			local PR = A.Probes
 			local savedDoors, savedList, savedEpoch = A.Doors, PR.doorList, PR.doorEpoch
 			local ok, err = pcall(function()
@@ -2608,12 +2608,6 @@ local SUITE = {
 				a[k].frac = f0 < 0.5 and 1 or 0
 				expect(sig(a) ~= s0).to.beTrue()
 				a[k].frac = f0
-				-- control: pba_state_sig_sorted 0 (former behaviour): the walk's order is in the signature
-				local saved = rawget(A.cfg, "state_sig_sorted")
-				A.cfg.state_sig_sorted = 0
-				local sa, sb = sig(a), sig(b)
-				A.cfg.state_sig_sorted = saved
-				expect(sa ~= sb).to.beTrue()
 			end)
 			A.Doors, PR.doorList, PR.doorEpoch = savedDoors, savedList, savedEpoch
 			if not ok then error(err, 0) end
