@@ -75,7 +75,7 @@ local function stopNative(id)
 	if fv then fv.dead = true OS.native[id] = nil end
 end
 
---- (pba_cut_name_newer) True when a newer copy of h's name, which a stop by name would reach too, is registered and
+--- (cut_name_newer) True when a newer copy of h's name, which a stop by name would reach too, is registered and
 -- not stopped: a mouth copy on the same speaker and channel (h.mouth), or another copy at a fixed position (all share
 -- the source -1). A deferred channel cut (pba_cut_at_start) stopping an older copy by name then also stopped the new
 -- line's copy of the same name: a repeated line froze its speaker's face, a repeated shot at a fixed position was cut.
@@ -90,7 +90,7 @@ local function newerIn(list, h, now)
 	return false
 end
 local function newerSameName(h)
-	if A.Num(A.cfg, "cut_name_newer") < 0.5 or not h.regN then return false end
+	if not h.regN then return false end
 	local now = RealTime()
 	if h.mouth then
 		local list = A.emitted[h.idx]
@@ -158,7 +158,7 @@ local function register(idx, h, data)
 		h.cutAt = at
 		timer.Simple(A.RealDelay(math.max(at - RealTime(), 0)), function() stopCopy(h) end)
 	end
-	-- (pba_cut_at_start_held) a deferred channel cut its held placeholder had (A.CutChannel's h.cutAt, RealTime): the
+	-- (cut_at_start_held) a deferred channel cut its held placeholder had (A.CutChannel's h.cutAt, RealTime): the
 	-- copies emitted for it once its routes are ready stop then too
 	local held = data and data.pbaCutAt
 	if held and (not h.cutAt or held < h.cutAt) then
@@ -227,7 +227,7 @@ end
 -- sound is scheduled at the new one's start). Cut on arrival, a burst of shots reaching the client together (each
 -- delayed by its own stamp) stopped every shot but the last before it had begun.
 function A.CutChannel(idx, chan, only, delay)
-	if A.WatchCut then A.WatchCut(idx, chan) end -- (a watched line there is over: pba_handback_channel)
+	if A.WatchCut then A.WatchCut(idx, chan) end -- (a watched line there is over: handback_channel)
 	local list = only ~= "mirrors" and A.emitted[idx]
 	if list then
 		local later = delay and delay >= 0.005 and A.On(A.cfg, "cut_at_start")
@@ -561,7 +561,7 @@ local function lateWanted(name)
 	return A.On(A.cfg, "native_late_handover") and playOffsetOK() and N ~= nil and N.DecodePending ~= nil and N.DecodePending(name)
 end
 
--- (pba_loops_start_sync) The copies of one emission of a line (a speaker line: the Breencast's two jumbotrons, one
+-- (loops_start_sync) The copies of one emission of a line (a speaker line: the Breencast's two jumbotrons, one
 -- emission) start together. A.Process names the emission (data.pbaEmKey: file + start stamp, or the frame a stampless
 -- one arrived in); each copy is evaluated on its own, and the one the frame's budget did not leave time for is held in
 -- the slicer (pba_burst_hold_ms) or just comes later in the frame: 5-95 ms behind its twin, the same level behind a
@@ -796,7 +796,6 @@ local function wantsNative(rec, fv, t, now)
 	if not fv.a or not fv.started or fv.ownDsp or fv.lp0 == nil or rec.ukey or (fv.switchFails or 0) >= 3 then return false end
 	-- (pba_native_late_handover: lateCheck found its file decoded: handed over whatever its muffling)
 	local late = fv.late and fv.lateReady
-	if not late and A.Num(A.cfg, "oneshot_native_switch") < 0.5 then return false end
 	local N = A.Native
 	if not (pba_native and pba_native.Play and A.Render.NativeOK(rec.name, nil, false)) then return false end
 	-- a switch near the end is not worth a second voice (the end of a compressed file can be off)
@@ -815,9 +814,9 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	local N = A.Native
 	local ok, n = N.EnsureSound(rec.name)
 	if not ok then return false end -- not decoded yet (a large file): tried again at the next evaluation
-	-- (pba_speech_floor_switch) the stand-in is the record's first voice when fv is: a line on a face keeps its speech
+	-- (speech_floor_switch) the stand-in is the record's first voice when fv is: a line on a face keeps its speech
 	-- floor across the switch (before, the stand-in was never the first voice: -17..-29 dB until the next evaluation)
-	local g, el, em, eh, pos, pitch = targetValues(rec, NATIVE_FV, t, L, A.On(A.cfg, "speech_floor_switch") and fv == rec.voices[1])
+	local g, el, em, eh, pos, pitch = targetValues(rec, NATIVE_FV, t, L, fv == rec.voices[1])
 	-- what has been heard of it so far (the module's offset is playback time at the voice's pitch)
 	local offset = math.max(now - fv.t0, 0)
 	local sh = A.On(A.cfg, "native_path_fx") and t.sh or nil
@@ -1160,7 +1159,7 @@ end
 -- A speaker this client does not have (never in its view since it joined: out of the PVS, behind a closed
 -- areaportal) gets its copy all the same, by entity index, when the server says the line is on a face
 -- (data.Face): the engine keeps the channel under that index as it keeps the original's in vanilla, and the
--- face that comes into view during the line moves its mouth (pba_lipsync_unseen).
+-- face that comes into view during the line moves its mouth (lipsync_unseen).
 local MOUTH_VOL = A.MOUTH_VOL
 
 --- Tells the server this player's lip sync choice: it also picks the long lines' mouth copy, which the
@@ -1195,15 +1194,15 @@ local function mouthCopy(data, src)
 		if src:IsWorld() or (src.GetFlexNum and src:GetFlexNum() or 0) == 0 then return end
 		idx, pos = src:EntIndex(), src:GetPos()
 	else
-		if not data.Face or A.Num(A.cfg, "lipsync_unseen") < 0.5 or (data.EntIndex or 0) <= 0 or not data.Pos then return end
+		if not data.Face or (data.EntIndex or 0) <= 0 or not data.Pos then return end
 		idx, pos = data.EntIndex, data.Pos
 	end
 	local name = data.SoundName or ""
 	if name == "" then return end
 	A.Emit(emitMouth, name, src, pos, idx, ch, data.SoundLevel or 75, data.Pitch or 100)
 	-- registered as a copy of the speaker: the stop path (StopSound, scene cancel, stopsound) and the channel
-	-- rule reach it as they reach the line's other copies (pba_lipsync_stop; a sentence's words play on)
-	if A.On(A.cfg, "lipsync_stop") and not A.IsSentence(name) then
+	-- rule reach it as they reach the line's other copies (lipsync_stop; a sentence's words play on)
+	if not A.IsSentence(name) then
 		register(idx, { mouth = true, idx = idx, name = name, orig = name, srcChan = ch, pos = pos,
 			lvl = data.SoundLevel or 75, pitch = data.Pitch or 100,
 			tEnd = A.PlayEnd(name, data.Pitch or 100) or RealTime() + A.Num(A.cfg, "max_duration") }, data.pbaCutAt and { pbaCutAt = data.pbaCutAt } or nil)
@@ -1236,7 +1235,7 @@ end
 -- (P.Cheap: the walls' transmission, never vanilla through a wall). burst_mask_db: within BURST_MASK_S of a
 -- loud sound, a sound more than that many dB quieter at the ear (its level in plain sight, no trace)
 -- gets the cheap model at once. A followed degraded sound gets its full evaluation at its next update.
--- pba_burst_fair (the cheap model ignores the routes round the walls: an 80 dB impact behind a wall with an
+-- burst_fair (the cheap model ignores the routes round the walls: an 80 dB impact behind a wall with an
 -- open doorway came out 29 dB under its full result, then jumped up at its first update 0.1-0.26 s later,
 -- +18..+49 dB in the 2026-11-14 sweep): before the cheap model, a new sound takes the recent full result of a
 -- nearby source of its level whatever its emitter (bullet impacts, debris: the world or new entities, never
@@ -1249,7 +1248,7 @@ local BURST_REF_U = 36
 A.burst = A.burst or { frame = -1, spent = 0, loudT = -1, loudDb = -math.huge,
 	byEmitter = setmetatable({}, { __mode = "k" }) }
 A.burst.loudT, A.burst.loudDb = A.burst.loudT or -1, A.burst.loudDb or -math.huge -- (a reload over the budget's version)
-A.burst.near = A.burst.near or {} -- (pba_burst_fair) the last BURST_NEAR_N full results, a ring
+A.burst.near = A.burst.near or {} -- (burst_fair) the last BURST_NEAR_N full results, a ring
 A.burst.nearI = A.burst.nearI or 0
 function A.ResetBurstStats() A.burstStats = { full = 0, reused = 0, deferred = 0, cheap = 0, masked = 0 } end
 if not A.burstStats then A.ResetBurstStats() end
@@ -1263,7 +1262,7 @@ local function masked(db, now, maskDb)
 	return m
 end
 
--- (pba_burst_fair) the recent full result of the nearest source within BURST_NEAR_U of S, of level lvl, heard
+-- (burst_fair) the recent full result of the nearest source within BURST_NEAR_U of S, of level lvl, heard
 -- from within BURST_REUSE_U of L, the world unchanged: whatever its emitter
 local function nearResult(S, L, lvl, now, dry)
 	local B, P = A.burst, A.Paths
@@ -1282,17 +1281,16 @@ end
 -- cheap model's level, a lower bound, and glide up to its full result at its first update: instead its full
 -- evaluation is queued in the slicer (SL.Defer) and the sound held until it is there, within the longer of its
 -- propagation delay and the hold. Returns the job, or nil (hold off, not followed, slicer off).
--- (pba_burst_hold_short) a short sound (not followed: OS.Wanted false) would keep the cheap model its whole life,
+-- (burst_hold_short) a short sound (not followed: OS.Wanted false) would keep the cheap model its whole life,
 -- 26-36 dB under its full result behind a doorway (a lower bound, no routes round the walls, never corrected by an
 -- update): it is held too, its start a few tens of ms late being the lesser evil.
 local function holdJob(data, S, L, lvl, src, cfg)
 	local hold = A.Num(A.cfg, "burst_hold_ms") / 1000
 	if hold <= 0 or not A.Slicer then return nil end
-	if A.Num(A.cfg, "burst_hold_short") < 0.5 and not OS.Wanted((playLength(data.SoundName, data.Pitch))) then return nil end
 	return A.Slicer.Defer(S, L, lvl, src, cfg, hold)
 end
 
--- the ring of recent full results (pba_burst_fair, pba_impact_group): r evaluated for a source at S heard from L
+-- the ring of recent full results (burst_fair, pba_impact_group): r evaluated for a source at S heard from L
 local function noteNear(r, S, L, lvl, dry, now)
 	local B = A.burst
 	B.nearI = B.nearI % BURST_NEAR_N + 1
@@ -1313,16 +1311,15 @@ local function burstEvaluate(data, S, L, lvl, src)
 		if n then st.grouped = (st.grouped or 0) + 1 return n end
 	end
 	local maskDb = A.Num(A.cfg, "burst_mask_db")
-	local fair = A.On(A.cfg, "burst_fair")
 	-- its level at the ear, in plain sight: SNDLVL at 36 u (about 1 m), spherical spreading beyond (the
 	-- engine's gain, clamped to full scale, put a 140 dB explosion 9 dB over an 80 dB impact at 20 m)
 	local db = lvl + 20 * math.log10(math.max(data.Volume or 1, 1e-4)) - 20 * math.log10(math.max(S:Distance(L), BURST_REF_U) / BURST_REF_U)
-	-- (pba_burst_fair) louder than everything of the window by BURST_LOUDER_DB: the one heard, never degraded
-	local loudest = fair and not (B.loudT >= 0 and now - B.loudT <= BURST_MASK_S and db < B.loudDb + BURST_LOUDER_DB)
+	-- (burst_fair) louder than everything of the window by BURST_LOUDER_DB: the one heard, never degraded
+	local loudest = not (B.loudT >= 0 and now - B.loudT <= BURST_MASK_S and db < B.loudDb + BURST_LOUDER_DB)
 	if maskDb > 0 then
 		if masked(db, now, maskDb) then
 			st.masked = st.masked + 1
-			local n = fair and nearResult(S, L, lvl, now, dry)
+			local n = nearResult(S, L, lvl, now, dry)
 			if n then st.reused = st.reused + 1 return n end
 			local job = holdJob(data, S, L, lvl, src, cfg)
 			if job then
@@ -1331,7 +1328,7 @@ local function burstEvaluate(data, S, L, lvl, src)
 			end
 			return P.Cheap(S, L, lvl, cfg, src)
 		end
-	elseif fair and (B.loudT < 0 or now - B.loudT > BURST_MASK_S or db >= B.loudDb) then
+	elseif B.loudT < 0 or now - B.loudT > BURST_MASK_S or db >= B.loudDb then
 		B.loudT, B.loudDb = now, db -- (the window is kept for the loudest rule with masking off)
 	end
 	local budget = A.Num(A.cfg, "burst_budget_ms") / 1000
@@ -1345,7 +1342,7 @@ local function burstEvaluate(data, S, L, lvl, src)
 			st.reused = st.reused + 1
 			return m.r
 		end
-		local n = fair and nearResult(S, L, lvl, now, dry)
+		local n = nearResult(S, L, lvl, now, dry)
 		if n then st.reused = st.reused + 1 return n end
 		local job = holdJob(data, S, L, lvl, src, cfg) or (A.Slicer and A.Slicer.Defer(S, L, lvl, src, cfg))
 		if job then
@@ -1367,7 +1364,7 @@ local function burstEvaluate(data, S, L, lvl, src)
 		m.r, m.t, m.gen, m.lvl, m.S, m.L = r, now, P.cacheGen, lvl, Vector(S), Vector(L)
 		B.byEmitter[src] = m
 	end
-	if r and (fair or data.pbaWorld) and not r.cheap then noteNear(r, S, L, lvl, dry, now) end
+	if r and not r.cheap then noteNear(r, S, L, lvl, dry, now) end
 	return r, job
 end
 A.BurstNote = noteNear -- (a held sound's evaluation finished in the slicer: Process)
@@ -1405,8 +1402,8 @@ function A.Process(data, relayed)
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
 	-- the listener's own sound (pba_native_own, centered on him): nothing to save on, never degraded or held
 	local ownSound = IsValid(src) and src == LocalPlayer() and A.NativeOwn and A.NativeOwn() and A.HearsFromSelf(src)
-	-- (pba_loops_start_sync) the emission this copy belongs to: its file and start stamp (a stampless one: the frame it arrived in)
-	if A.On(A.cfg, "loops_start_sync") and isLine(data) then
+	-- (loops_start_sync) the emission this copy belongs to: its file and start stamp (a stampless one: the frame it arrived in)
+	if isLine(data) then
 		data.pbaEmKey = "s|" .. data.SoundName .. "|" .. (data.stampMs and ("t" .. data.stampMs) or ("f" .. FrameNumber()))
 	end
 	if not ownSound and (A.Num(A.cfg, "burst_budget_ms") > 0 or A.Num(A.cfg, "burst_mask_db") > 0 or data.pbaDense) then
@@ -1431,9 +1428,9 @@ function A.Process(data, relayed)
 			unregister(idx, h)
 			if h.cancelled then return end
 			h.cancelled = true -- (the placeholder's part is over)
-			-- (pba_cut_at_start_held) a channel cut deferred to a new sound's start reached the placeholder (h.cutAt): its
+			-- (cut_at_start_held) a channel cut deferred to a new sound's start reached the placeholder (h.cutAt): its
 			-- copies stop at that moment. Before, the placeholder's timer found it cancelled and the copies played to their end.
-			if h.cutAt and A.On(A.cfg, "cut_at_start_held") then d.pbaCutAt = h.cutAt end
+			if h.cutAt then d.pbaCutAt = h.cutAt end
 			-- (a world sound of a family counted by pba_impact_group: its full result serves the next ones near it, burstEvaluate)
 			if feeds and res and not res.cheap then A.BurstNote(res, S, L, lvl, A.Render.WaterDry(nil, d.SoundName), RealTime()) end
 			if not res or not finish(d, relayed, idx, copies, S, L, ang, src, res, RealTime() - tReq - (d.Delay or 0), SysTime()) then vanilla(d)
@@ -1597,7 +1594,7 @@ end
 -- world sound (a spike in the middle of play)
 A.OnInitPostEntity("pba_scapes", function() soundscapeWave("") end)
 function A.IsSoundscapeRandom(data, pos)
-	if data.Channel ~= CHAN_STATIC or A.Num(A.cfg, "soundscape_engine") < 0.5 then return false end
+	if data.Channel ~= CHAN_STATIC then return false end
 	local e = data.Entity
 	if not (e and e.IsWorld and e:IsWorld()) then return false end
 	local L = A.ListenerPos()
@@ -1804,7 +1801,7 @@ net.Receive(NET, function()
 		data.stMs = nil
 	end
 	if not name then return end -- id never received (lost first packets): drop
-	if A.LineKey then A.lineSeen[A.LineKey(name)] = RealTime() end -- (its caption's safety net, pba_caption_net)
+	if A.LineKey then A.lineSeen[A.LineKey(name)] = RealTime() end -- (its caption's safety net, caption_net)
 	if A.Native and A.Native.render and A.Enabled() then
 		local lp = LocalPlayer()
 		A.Native.Echo(data, data.Pos, echoOnly, IsValid(lp) and data.EntIndex == lp:EntIndex() and A.HearsFromSelf(lp))
@@ -1843,7 +1840,7 @@ net.Receive(NET, function()
 end)
 
 -- caption of a suppressed server sound (sv_relay sendCaption); nothing shown with closecaption 0
--- One caption per line (pba_caption_once): one line reaching the player as several sounds (a microphone's
+-- One caption per line (caption_once): one line reaching the player as several sounds (a microphone's
 -- line through two monitors: d1_trainstation_05's two eli_mic, one copy left to the engine, which captions
 -- it, the other relayed) was captioned once per copy, where the engine shows it once. A caption whose text
 -- was shown less than CAPTION_ONCE_S ago is dropped: pba's when any caption showed it, the engine's when pba
@@ -1856,21 +1853,21 @@ local function captionRecent(key)
 	return c and A.SoundNow() - c.t < CAPTION_ONCE_S and c or nil
 end
 hook.Add("OnCloseCaptionEmit", "pba_caption_once", function(tok, dur, fromPlayer, text)
-	if A.Num(A.cfg, "caption_once") < 0.5 or A.addingCaption then return end
+	if A.addingCaption then return end
 	local key = captionKey(text or tok)
 	if key == "" then return end
 	local c = captionRecent(key)
 	if c and c.ours then return true end -- the engine's copy of a line pba captioned already
 	A.capShown[key] = { t = A.SoundNow() }
 end)
--- Caption-armed safety net (pba_caption_net): a relayed line's caption (reliable) came, but no relay of its
+-- Caption-armed safety net (caption_net): a relayed line's caption (reliable) came, but no relay of its
 -- file (pba_snd, unreliable: lost in a full snapshot, a teleport's) within CAPTION_NET_S: subtitle without a
 -- voice nor a mouth (bug 59, d1_trainstation_05 Breen). The line is then played by the engine on its speaker,
 -- with the level, pitch, volume and channel the caption carries (the mouth moves with it).
 local CAPTION_NET_S = 0.3
 A.lineSeen = A.lineSeen or {} -- line key -> RealTime() of the last relay of that file
 local function captionNet(file, idx, chan, lvl, pitch, vol, spos)
-	if A.Num(A.cfg, "caption_net") < 0.5 or file == "" or not A.LineKey or A.IsSentence(file) then return end
+	if file == "" or not A.LineKey or A.IsSentence(file) then return end
 	local key, t = A.LineKey(file), RealTime()
 	timer.Simple(A.RealDelay(CAPTION_NET_S), function()
 		local seen = A.lineSeen[key]
@@ -1889,7 +1886,7 @@ A.CaptionNet = captionNet
 net.Receive("pba_caption", function()
 	local tok, dur = net.ReadString(), net.ReadFloat()
 	local file = net.ReadString()
-	-- (a relayed line: the safety net's data, pba_caption_net; a server without it sends none)
+	-- (a relayed line: the safety net's data, caption_net; a server without it sends none)
 	if net.ReadBool() then
 		local idx, chan = net.ReadUInt(16), net.ReadInt(16)
 		local lvl, pitch, vol = net.ReadUInt(9), net.ReadUInt(8), net.ReadFloat()
@@ -1897,13 +1894,11 @@ net.Receive("pba_caption", function()
 	end
 	local txt = language.GetPhrase(tok)
 	if not txt or txt == tok then return end
-	-- a spoken line (not an <sfx> caption): watched by the silent line safety net (pba_handback_speech)
+	-- a spoken line (not an <sfx> caption): watched by the silent line safety net (handback_speech)
 	if file ~= "" and A.LineKey and not string.find(string.lower(txt), "<sfx>", 1, true) then A.speechT[A.LineKey(file)] = RealTime() end
-	if A.On(A.cfg, "caption_once") then
-		local key = captionKey(txt)
-		if captionRecent(key) then return end
-		A.capShown[key] = { t = A.SoundNow(), ours = true }
-	end
+	local key = captionKey(txt)
+	if captionRecent(key) then return end
+	A.capShown[key] = { t = A.SoundNow(), ours = true }
 	A.addingCaption = true
 	gui.AddCaption(txt, dur > 0 and dur or 2, false)
 	A.addingCaption = false
@@ -1920,13 +1915,12 @@ do
 	end
 end
 
---- A client-side SND_CHANGE_VOL / SND_CHANGE_PITCH (data) of a short sound pba took over (pba_change_copies): true when
+--- A client-side SND_CHANGE_VOL / SND_CHANGE_PITCH (data) of a short sound pba took over (change_copies): true when
 -- a copy of it still plays (the copy registry, A.emitted), and then the change is taken: the followed record of that
 -- sound gets the new volume / pitch at once (its next evaluation, glided). The engine, finding no such sound on that
 -- channel (pba suppressed the original), started it from its top, clear through every wall (review C1: measured on
 -- pba_tworooms, vol(127) on the prop's index after an addon's fade of a line pba re-emitted).
 function A.TakeChange(data)
-	if A.Num(A.cfg, "change_copies") < 0.5 then return false end
 	local idx = sourceIndex(data)
 	local list = idx and A.emitted[idx]
 	if not list then return false end
@@ -1962,16 +1956,14 @@ function A.StopSource(idx, name, chan)
 end
 
 --- stopsound / snd_restart: the engine stops every channel; pba's copies, mirrors and native voices
--- stop with them, and so does the following of every one-shot (pba_stop_followers: a copy of a source
+-- stop with them, and so does the following of every one-shot (stop_followers: a copy of a source
 -- without an entity is in no registry, its follower kept sending volume changes to a stopped sound).
 function A.StopAllSounds()
 	for idx in pairs(A.emitted) do A.StopCopies(idx, "") end
 	for _, fv in pairs(OS.native) do fv.dead = true end
 	table.Empty(OS.native)
-	if A.On(A.cfg, "stop_followers") then
-		for _, rec in pairs(OS.recs) do
-			for _, fv in ipairs(rec.voices) do fv.dead = true end
-		end
+	for _, rec in pairs(OS.recs) do
+		for _, fv in ipairs(rec.voices) do fv.dead = true end
 	end
 	if A.Loops and A.Loops.StopAll then A.Loops.StopAll() end
 	if A.Native and A.Native.StopAllVoices then A.Native.StopAllVoices() end
@@ -2020,10 +2012,6 @@ do
 		if now < watch.nextT and watch.nextT - now <= 0.1 then return end
 		watch.nextT = now + 0.1
 		local p = watch.patch
-		if A.Num(A.cfg, "stopsound_watch") < 0.5 then
-			if p then p:Stop() watch.patch = nil end
-			return
-		end
 		if not p then
 			-- (pba's own patch: the original CreateSound, never tracked as a client loop)
 			p = (A.Loops and A.Loops.origCreateSound or CreateSound)(game.GetWorld(), "common/null.wav")

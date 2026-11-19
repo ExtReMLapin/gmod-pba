@@ -5,8 +5,7 @@
 -- (the job's onDone): the copies emitted then must stop at the cut. Before, the placeholder's timer found it cancelled
 -- (its part over) and the copies played to their end.
 -- The path search is stubbed: A.Paths.Evaluate returns a held job, completed by hand with one transmission voice.
--- Pass: the copy's module voice is stopped 0.5 s (+-0.15) after the cut. pre: `local CONTROL = true` runs with
--- pba_cut_at_start_held 0: passes when the copy is NOT stopped by then (the old behaviour).
+-- Pass: the copy's module voice is stopped 0.5 s (+-0.15) after the cut.
 local A = pba
 local N = A.Native
 if not (N and N.render) then return { pass = false, err = "native renderer not running" } end
@@ -19,7 +18,6 @@ for _, e in ipairs(ents.GetAll()) do
 end
 if not src then return { pass = false, err = "no entity to borrow an index from" } end
 local idx = src:EntIndex()
-A.SetOverride("cut_at_start_held", CONTROL and 0 or 1)
 A.SetOverride("burst_budget_ms", 0)
 A.SetOverride("burst_mask_db", 0)
 local fake = { deadline = RealTime() + 1 }
@@ -52,15 +50,10 @@ local ok, err = pcall(function()
 end)
 A.Paths.Evaluate, pba_native.StopVoice = origEval, origStop
 A.StopSource(idx, NAME)
-A.SetOverride("cut_at_start_held", nil)
 A.SetOverride("burst_budget_ms", nil)
 A.SetOverride("burst_mask_db", nil)
 if not ok then return { pass = false, err = tostring(err) } end
 res.fails = {}
 for k, okc in SortedPairs(res.checks) do if not okc then res.fails[#res.fails + 1] = k end end
 res.pass = #res.fails == 0
-if CONTROL then
-	res.controlRed = not res.pass
-	res.pass = res.checks.held and res.checks.copy and res.stopAfter == false or false
-end
 return res

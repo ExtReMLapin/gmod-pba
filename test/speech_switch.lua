@@ -4,7 +4,7 @@
 -- stand-in voice (NATIVE_FV), never the record's first one: the floor was skipped, the voice played at its path's level
 -- (-17 dB here) until the next evaluation (review C3). The switch is called directly on a record with one voice whose
 -- only path is a transmission 37 dB down. Pass: the voice's Play gain >= the floor (and the control, the voice that
--- is not the record's first, has no floor). pre: `local CONTROL = true` runs with pba_speech_floor_switch 0: passes when the floor is lost (the old behaviour).
+-- is not the record's first, has no floor).
 local A = pba
 local N = A.Native
 if not (N and N.render) then return { pass = false, err = "native renderer not running" } end
@@ -15,7 +15,6 @@ local NAME = "vo/k_lab/al_foundhim.wav"
 local L = A.ListenerPos()
 local fwd = Angle(0, LocalPlayer():EyeAngles().y, 0):Forward()
 local S = L + fwd * 670
-if CONTROL then A.SetOverride("speech_floor_switch", 0) else A.SetOverride("speech_floor_switch", 1) end
 local res = { checks = {} }
 local got
 local origPlay, origMix = pba_native.Play, A.Mix and A.Mix.Play
@@ -48,11 +47,8 @@ end)
 for _, id in ipairs(ids) do pba_native.StopVoice(id) if A.OneShots then A.OneShots.native[id] = nil end end
 pba_native.Play = origPlay
 if origMix then A.Mix.Play = origMix end
-A.SetOverride("speech_floor_switch", nil)
 if not ok then return { pass = false, err = err } end
 res.fails = {}
 for k, okc in SortedPairs(res.checks) do if not okc then res.fails[#res.fails + 1] = k end end
 res.pass = #res.fails == 0
--- the control (option 0): the floor is lost again, as before (red reproduced = control passes)
-if CONTROL then res.controlRed, res.pass = not res.pass, res.checks.switched == true and res.checks.firstAtFloor == false end
 return res
