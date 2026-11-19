@@ -2601,6 +2601,43 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
+		{ name = "AirHop: a source in the air that finds no way out is not searched again (26 directions x 5 steps of fat traces and probe lookups at every evaluation of a loop) while it, the listener, its field and the world stay the same (review M9)", func = function()
+			withSlicedRooms(function(cfg, list)
+				local PR = A.Probes
+				local g = PR.current
+				local L = Vector(300, 300, 64)
+				PR.fieldsByKey = nil
+				local f = PR.FieldFor(g, L)
+				expect(f ~= nil).to.beTrue()
+				local S = Vector(800, 250, 100)
+				-- no probe seen from anywhere the search goes: no way out (the probes' lookups counted)
+				local vis, n = PR.Visible, 0
+				PR.Visible = function() n = n + 1 return {} end
+				local ok, err = pcall(function()
+					local function calls(Sx, Lx, fx)
+						n = 0
+						local r = PR.AirHop(g, Sx, Lx, fx, 5)
+						expect(r).to.beNil()
+						return n
+					end
+					local first = calls(S, L, f)
+					expect(first > 20).to.beTrue() -- (the search ran: the room's air seen in many directions)
+					expect(calls(S, L, f)).to.equal(0) -- the same answer, kept
+					-- anything it depends on moved: searched again
+					expect(calls(S + Vector(1, 0, 0), L, f) > 0).to.beTrue()
+					expect(calls(S, L + Vector(0, 1, 0), f) > 0).to.beTrue()
+					local f2 = {} -- (another field: a rebuilt one of the same seeds)
+					for k, v in pairs(f) do if k ~= "airMiss" then f2[k] = v end end
+					expect(calls(S, L, f2) > 0).to.beTrue()
+					expect(calls(S, L, f)).to.equal(0)
+					P.ForgetWorld()
+					expect(calls(S, L, f) > 0).to.beTrue()
+					print("[pba test] AirHop with no way out: " .. first .. " probe lookups per evaluation -> 0 once known")
+				end)
+				PR.Visible = vis
+				if not ok then error(err, 0) end
+			end)
+		end },
 		{ name = "Group: off, or every source nearer than group_min_dist, gives the per-sound routes bit for bit", func = function()
 			withSlicedRooms(function(cfg, list)
 				local PR = A.Probes
