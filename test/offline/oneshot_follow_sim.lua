@@ -76,7 +76,7 @@ A.cfg.oneshot_follow, A.cfg.oneshot_follow_max = 1, 16
 local function loadRender()
 	-- (cl_render reads the scheduler's rules, A.Sched, and the shared rendering rules, A.Render: loaded first,
 	-- as pba_init does)
-	for _, name in ipairs({ "cl_sched.lua", "cl_renders.lua", "cl_render.lua" }) do
+	for _, name in ipairs({ "cl_sched.lua", "cl_renders.lua", "cl_loops.lua", "cl_render.lua" }) do
 		local f = assert(io.open(REPO .. "/lua/pba/" .. name, "rb"))
 		local src = f:read("*a")
 		f:close()
@@ -121,10 +121,12 @@ local function run(native, follow, opt)
 	A.cfg.oneshot_follow = follow and 1 or 0
 	local L = L1
 	A.ListenerPos = function() return L, { y = 0 } end
-	local updates, nextId, stops, plays = {}, 0, {}, {}
+	local updates, nextId, stops, plays, reflects = {}, 0, {}, {}, {}
 	pba_native = {
 		Update = function(id, pos, g, l, m, h, pitch) updates[#updates + 1] = { t = T, id = id, pos = Vector(pos), g = g, h = h } return true end,
 		StopVoice = function(id) stops[#stops + 1] = id end,
+		-- the source reverb slot (N.BindSource): a voice handed over binds its slot as at emission; slot 0 given
+		SourceReflect = function(id, pos, send) reflects[#reflects + 1] = { t = T, id = id, pos = Vector(pos), send = send } return 0 end,
 		-- the module's own Play (an engine copy handed over calls it directly, with its offset)
 		Play = function(name, pos, g, l, m, h, pitch, loop, delay, sh, diffuse, send, offset)
 			nextId = nextId + 1
@@ -184,7 +186,7 @@ local function run(native, follow, opt)
 		end
 		if think then think() end
 	end
-	return { taken = taken, updates = updates, first = first, stepT = stepT, t0 = t0, stops = stops, cut = cut, plays = plays,
+	return { taken = taken, updates = updates, first = first, stepT = stepT, t0 = t0, stops = stops, cut = cut, plays = plays, reflects = reflects,
 		stopped = stopped, decodes = decodes }
 end
 
@@ -291,6 +293,9 @@ check(pl ~= nil and pl.t >= r.stepT and pl.t - r.stepT <= 0.6, tag .. "within 0.
 check(pl ~= nil and pl.n == 13 and pl.offset ~= nil and math.abs(pl.offset - (pl.t - r.t0)) < 1e-6,
 	tag .. "Play's offset = what was heard so far (" .. (pl and tostring(pl.offset) or "-") .. ")")
 check(pl ~= nil and stopsOf(anchors[1]) == 1 and changesAfter(pl.t) == 0, tag .. "engine copy stopped at the switch, never driven after")
+local bound
+for _, b in ipairs(r.reflects) do if pl and b.id == pl.id and b.t == pl.t then bound = b end end
+check(bound ~= nil and bound.pos:Distance(S) < 1 and (bound.send or 0) > 0, tag .. "the voice takes its source reverb slot at the switch, as at emission")
 local lastS
 for _, u in ipairs(r.updates) do if pl and u.id == pl.id then lastS = u end end
 check(lastS ~= nil and lastS.pos:Distance(S) < 1 and math.abs(db(lastS.g, dDirect)) < 0.5, tag .. "the native voice ends at the source, direct level")

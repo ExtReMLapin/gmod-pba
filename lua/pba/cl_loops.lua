@@ -603,8 +603,7 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	else
 		offset = syncOffset(m, t0)
 	end
-	local id = A.Mix and A.Mix.Play(m.mixG, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, offset, protect, N.PauseFlag(m.flags))
-		or pba_native.Play(name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, offset, protect, N.PauseFlag(m.flags))
+	local id = N.StartVoice(m.mixG, m.name, name, pos, gain, el, em, eh, pitch, not m.once, 0, nil, m.diffuse or 0, send, offset, protect, N.PauseFlag(m.flags))
 	if (id or 0) > 0 then noteEmission(m, t0, offset) end
 	-- (pba_early_line_takeover) the module has the line: the engine copy goes silent (kept: it moves the mouth)
 	if (id or 0) > 0 and m.early then
@@ -617,7 +616,6 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	-- marked started, a long line was then dropped there as "already played": captioned, never heard)
 	if (id or 0) > 0 or A.Num(A.cfg, "loops_native_fail") < 0.5 then m.started = true end
 	m.nativeId = (id or 0) > 0 and id or nil
-	if m.nativeId then A.NoteRendered(m.name, gain) end
 	if m.nativeId and m.edgeK and not m.edgeT0 then m.edgeT0 = RealTime() end -- (pba_loops_edge_fade: from its first sample)
 	m.stSel, m.stW = nil, nil
 	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
