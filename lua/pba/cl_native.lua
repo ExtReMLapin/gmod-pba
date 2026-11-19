@@ -412,9 +412,7 @@ function N.Finish(verts, tris, matIdx, mats, mins, maxs)
 	-- the simulator is created with the current ray count (it fixes the ray directions)
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wr, we, A.cfg.native_rays, A.Num(A.cfg, "native_bounces"))
-	if pba_native.SetSimOptions then
-		pba_native.SetSimOptions(A.Num(A.cfg, "native_scene"), A.Num(A.cfg, "native_threads"), A.Num(A.cfg, "native_reverb_window"), 512)
-	end
+	pba_native.SetSimOptions(A.Num(A.cfg, "native_scene"), A.Num(A.cfg, "native_threads"), A.Num(A.cfg, "native_reverb_window"), 512)
 	local nt = pba_native.LoadWorld(verts, tris, matIdx, mats)
 	N.doors = {} -- the module released its dynamic objects with the old world
 	N.worldGen = (N.worldGen or 0) + 1 -- others holding dynamic meshes (demo panels) re-add them
@@ -446,7 +444,7 @@ end
 
 --- Disk cache of the bake (iplProbeBatchSave): first line = key, then the serialized batch.
 function N.SaveBake(nProbes)
-	if A.Num(A.cfg, "native_cache") < 0.5 or not pba_native.SavePaths then return end
+	if A.Num(A.cfg, "native_cache") < 0.5 then return end
 	local bytes = pba_native.SavePaths()
 	if not bytes then return end
 	file.CreateDir("pba")
@@ -455,7 +453,7 @@ function N.SaveBake(nProbes)
 end
 
 function N.LoadBake(nProbes)
-	if A.Num(A.cfg, "native_cache") < 0.5 or not pba_native.LoadPaths then return false end
+	if A.Num(A.cfg, "native_cache") < 0.5 then return false end
 	local data = file.Read(bakeCachePath(), "DATA")
 	if not data then return false end
 	local key = bakeCacheKey(nProbes)
@@ -615,7 +613,7 @@ function N.LowpassEQ(lp, lpDb, cfg) return N.TiltEQ(N.LowpassDb(lp, lpDb, cfg), 
 
 function N.StartRender()
 	N.render = false
-	if not N.ready or A.Num(A.cfg, "native_render") < 0.5 or not pba_native.AudioStart then return end
+	if not N.ready or A.Num(A.cfg, "native_render") < 0.5 then return end
 	local sofa
 	local hname = N.hrtfCvar and N.hrtfCvar:GetString() or ""
 	if hname ~= "" then
@@ -628,7 +626,7 @@ function N.StartRender()
 	N.paused = false -- (render::Start: not paused)
 	N.ApplySettings()
 	if N.Prewarm then N.Prewarm() end -- (a restart: the sounds decoded before were dropped)
-	local st = pba_native.Stats and pba_native.Stats()
+	local st = pba_native.Stats()
 	MsgN("[PBA] native rendering on (Steam Audio, HRTF: ", st and st.hrtf or "default", ")")
 end
 
@@ -643,7 +641,7 @@ end
 -- echo levels are compensated for the phonon.dll (N.WetLevels) and scaled by N.wetScale (0 with the head under water,
 -- see the Think below).
 function N.ApplySettings()
-	if not N.render or not pba_native.SetReflections then return end
+	if not N.render then return end
 	pba_native.SetOutputMode(A.cfg.native_out >= 0.5 and 1 or 0)
 	if pba_native.SetHrtfBlend then pba_native.SetHrtfBlend(A.Num(A.cfg, "native_hrtf_blend")) end -- (modules before this option: HRTF alone)
 	-- the reading speed of a voice glides to each new pitch (Doppler of a fly-by), not a step per frame (module of 2026-11-18+)
@@ -714,7 +712,7 @@ function N.EnsureSound(name, now)
 		if N.loading then N.loading[n] = nil end -- loaded: a later eviction must not look like a failure
 		return true, n
 	end
-	if pba_native.SoundPending and pba_native.SoundPending(n) then return false, nil, "pending" end
+	if pba_native.SoundPending(n) then return false, nil, "pending" end
 	if N.loading and N.loading[n] then
 		-- the worker finished without a sound: undecodable
 		N.loading[n] = nil
@@ -733,7 +731,7 @@ function N.EnsureSound(name, now)
 	-- first play like every other line (the Breencast's short lines, 340-660 KB, went to the engine's speaker
 	-- preset while its long line, a mirror waiting for its decode, stayed native)
 	local asyncAbove = now and 1536 * 1024 or A.On(A.cfg, "native_predecode") and 0 or 512 * 1024
-	if #data > asyncAbove and pba_native.LoadSoundAsync then
+	if #data > asyncAbove then
 		pba_native.LoadSoundAsync(n, data)
 		N.loading = N.loading or {}
 		N.loading[n] = true
@@ -836,7 +834,7 @@ end
 -- metal pipe: the first clang of a fall would otherwise be the engine's, dry, while its file decodes). Returns the
 -- number of decodes started; nothing without the module or with pba_native_predecode off.
 function N.PrewarmFiles(files)
-	if A.Num(A.cfg, "native_predecode") < 0.5 or not N.ready or not pba_native or not pba_native.LoadSoundAsync then return 0 end
+	if A.Num(A.cfg, "native_predecode") < 0.5 or not N.ready or not pba_native then return 0 end
 	local started = 0
 	for _, f in ipairs(files) do
 		local n = cleanName(f)
@@ -902,7 +900,7 @@ end
 --- Starts the prewarm (pba_native_predecode 1, module loaded); a running one is restarted.
 function N.Prewarm()
 	N.prewarm = nil
-	if A.Num(A.cfg, "native_predecode") < 0.5 or not N.ready or not pba_native.LoadSoundAsync then return end
+	if A.Num(A.cfg, "native_predecode") < 0.5 or not N.ready then return end
 	local pw = { started = 0, done = false, deadline = 0 }
 	N.prewarm = pw
 	pw.co = coroutine.create(function()
@@ -993,7 +991,7 @@ end
 
 --- True when the weapons' sounds are decoded ahead: native own sounds, background decoding and the option on.
 function N.WeaponPrewarmOn()
-	return N.ready and pba_native and pba_native.LoadSoundAsync and A.NativeOwn()
+	return N.ready and pba_native and A.NativeOwn()
 		and A.On(A.cfg, "native_predecode") and A.On(A.cfg, "native_prewarm_weapons") or false
 end
 
@@ -1488,7 +1486,7 @@ end
 -- wet: the voice's wet share (N.LoudWet), with pba_native_slot_fallback_wet the cap of what the voice hands the room bus while
 -- its slot is simulated (its gain x wet, what a voice without a slot gets; a module before 2026-11-19 ignores it)
 function N.BindSource(id, S, srcSend, wet)
-	if not (id and pba_native.SourceReflect) then return false end
+	if not id then return false end
 	if A.Num(A.cfg, "native_slot_fallback_wet") < 0.5 then wet = nil end
 	local slot = pba_native.SourceReflect(id, S, srcSend, N.ProbeLift(S) or 0, wet)
 	return slot ~= nil and slot >= 0
@@ -1758,13 +1756,13 @@ end
 
 function N.Echo(data, pos, enginePlays, own)
 
-	if not N.render or A.Num(A.cfg, "native_echo") <= 0 or not pba_native.Echo then return skip("off") end
+	if not N.render or A.Num(A.cfg, "native_echo") <= 0 then return skip("off") end
 	if own then return skip("own") end
 	if N.DryMix(data.SoundName) then return skip("dry") end
 	-- every sound played by the module ("all native"): its reflections come from its source reverb slot;
 	-- echoes too would simulate the same reflections twice (audit). The ones the engine plays have no slot:
 	-- without their echoes the player's own gunfire had no reflections at all
-	if not enginePlays and A.On(A.cfg, "native_all") and pba_native.SourceReflect then return skip("slot") end
+	if not enginePlays and A.On(A.cfg, "native_all") then return skip("slot") end
 	local lvl = data.SoundLevel or 75
 	if lvl < A.cfg.native_echo_lvl then return skip("level") end
 	local ok, n = N.EnsureSound(data.SoundName)
@@ -2413,7 +2411,7 @@ end
 -- the others playing; the module's voices played with the pausable flag freeze the same way. Think does not run
 -- during that pause (nor does a timer), a render hook does: this runs from PreRender.
 function N.UpdatePause()
-	if not N.render or not pba_native or not pba_native.SetPaused then return end
+	if not N.render or not pba_native then return end
 	local paused = A.On(A.cfg, "native_pause") and N.PauseSupported() and game.SinglePlayer() and gui.IsGameUIVisible() or false
 	if paused ~= (N.paused or false) then
 		N.paused = paused
@@ -2443,7 +2441,7 @@ hook.Add("Think", "pba_native_listener", function()
 	if A.Sched then A.Sched.Frame(L) else N.UpdateFollowers(L) end
 	-- head under water: the engine applies its own water DSP to the sounds it plays; same for ours
 	local uw = A.cfg.water >= 0.5 and A.InWater(L)
-	if uw ~= N.underwater and pba_native.SetUnderwater then
+	if uw ~= N.underwater then
 		N.underwater = uw
 		pba_native.SetUnderwater(uw and 1 or 0)
 	end
@@ -2554,8 +2552,8 @@ timer.Create("pba_native_reverb", 0.5, 0, function()
 	if N.ownCvar and N.ownCvar:GetBool() ~= own then RunConsoleCommand("pba_native_own_want", own and "1" or "0") end
 	if not N.Busy() then return end -- pba off and silent: nothing to keep in sync (pushed again once on)
 	-- limits apply whatever renders (decoding also serves echoes)
-	if N.ready and pba_native and pba_native.SetLimits then pba_native.SetLimits(A.Num(A.cfg, "native_max_voices"), A.Num(A.cfg, "native_mem_mb")) end
-	if not N.render or not pba_native or not pba_native.RoomReverb then return end
+	if N.ready and pba_native then pba_native.SetLimits(A.Num(A.cfg, "native_max_voices"), A.Num(A.cfg, "native_mem_mb")) end
+	if not N.render or not pba_native then return end
 	N.ApplySettings()
 	local ok, l, m, h = pcall(pba_native.RoomReverb)
 	if ok then N.rt = { l, m, h } end
