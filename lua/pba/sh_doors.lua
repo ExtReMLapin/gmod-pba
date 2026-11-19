@@ -8,6 +8,9 @@ local exp, LN10 = math.exp, math.log(10) -- 10 ^ x, the same compiled or interpr
 A.Doors = D
 
 local NET = "pba_doors"
+-- the door classes, in the order of the class id sent to the clients (net.WriteUInt(ci, 2))
+local DOOR_CLASSES = { "prop_door_rotating", "func_door", "func_door_rotating" }
+D.CLASSES = DOOR_CLASSES
 local POLL = 0.1
 
 -- ------------------------------------------------------------------ pure helpers
@@ -182,7 +185,6 @@ if SERVER then
 	D.state = D.state or {}  -- key -> { frac, closedDb }
 	D.ents = D.ents or {}    -- every door entity (probe paths may cross unlinked doors)
 	D.entState = D.entState or {} -- entindex -> { q, frac, closedDb }
-	local DOOR_CLASSES = { "prop_door_rotating", "func_door", "func_door_rotating" }
 	local CLASS_ID = {}
 	for i, c in ipairs(DOOR_CLASSES) do CLASS_ID[c] = i end
 
@@ -380,7 +382,6 @@ else
 	D.byEnt = D.byEnt or {}
 	D.boxes = D.boxes or {} -- entindex -> { cls, pos, ang, mins, maxs }: a shut door's box from the server
 	D.ghosts = D.ghosts or {} -- entindex -> its stand-in (D.Ghost)
-	local CLASSES = { "prop_door_rotating", "func_door", "func_door_rotating" }
 
 	-- A door this client never received (Entity(idx) NULL: its areaportal shut since the map loaded, pba_twodoors
 	-- with both doors closed) stands in the paths as a table with the entity methods they use on a shut leaf
@@ -440,7 +441,7 @@ else
 				local ci = net.ReadUInt(2)
 				local pos, ang = net.ReadVector(), net.ReadAngle()
 				local mins, maxs = net.ReadVector(), net.ReadVector()
-				D.boxes[idx] = CLASSES[ci] and { cls = CLASSES[ci], pos = pos, ang = ang, mins = mins, maxs = maxs } or nil
+				D.boxes[idx] = DOOR_CLASSES[ci] and { cls = DOOR_CLASSES[ci], pos = pos, ang = ang, mins = mins, maxs = maxs } or nil
 			else
 				D.boxes[idx] = nil
 			end

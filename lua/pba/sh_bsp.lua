@@ -31,9 +31,9 @@ function BSP.HasDisplacements(map)
 	return info[26] ~= nil and info[26].len > 0
 end
 
---- The distinct values of the keyvalue `key` over the entities of maps/<map>.bsp (the entity lump only: a header
--- and one text read, no geometry). Returns a list, or nil, reason (no file, compressed lump).
-function BSP.EntityValues(map, key)
+--- The entity lump's text of maps/<map>.bsp (a header and one text read, no geometry), or nil, reason (no
+-- file, not VBSP, compressed lump).
+function BSP.EntityText(map)
 	local f = file.Open("maps/" .. map .. ".bsp", "rb", "GAME")
 	if not f then return nil, "cannot open maps/" .. map .. ".bsp" end
 	if f:Read(4) ~= "VBSP" then f:Close() return nil, "not a VBSP file" end
@@ -42,6 +42,14 @@ function BSP.EntityValues(map, key)
 	f:Seek(L.ofs)
 	local text = f:Read(L.len) or ""
 	f:Close()
+	return text
+end
+
+--- The distinct values of the keyvalue `key` over the entities of maps/<map>.bsp (the entity lump only).
+-- Returns a list, or nil, reason (no file, compressed lump).
+function BSP.EntityValues(map, key)
+	local text, err = BSP.EntityText(map)
+	if not text then return nil, err end
 	local out, seen = {}, {}
 	local needle = '"' .. string.lower(key) .. '"'
 	for block in string.gmatch(text, "%b{}") do

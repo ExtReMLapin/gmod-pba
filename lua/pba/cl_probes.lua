@@ -213,6 +213,11 @@ local function setNativeSegs(segs)
 end
 -- (re-checked on the next map: a new client Lua state)
 PR.SetNativeSegs = setNativeSegs -- (the offline bench's graph, built outside PR.Start)
+-- The probe code's trace functions, picked at each trace (pba_native_traces, pba_native_trace_nums and the
+-- check can change; util.Trace* read at the call, as a pure test stubs them): the module's, as numbers or
+-- as tables, once checked on this map, else the engine's.
+local function lineFn() return nativeTraces() and (numsOn() and ntLineN or ntLine) or util.TraceLine end
+local function hullFn() return nativeTraces() and (numsOn() and ntHullN or ntHull) or util.TraceHull end
 
 -- A hit on an invisible tool brush (A.Paths.PassTool: toolsblockbullets...) is no obstacle: the trace
 -- goes on from where it leaves the brush (a few hops at most).
@@ -239,7 +244,7 @@ end
 local function upThroughDisp(a, b) return a.z < b.z - 1 and A.Paths.HasDisplacements and A.Paths.HasDisplacements() end
 
 local function clearSeg(a, b)
-	local TL = nativeTraces() and (numsOn() and ntLineN or ntLine) or util.TraceLine
+	local TL = lineFn()
 	segTr.start, segTr.endpos = a, b
 	TL(segTr)
 	if segOut.Hit and not passThrough(segTr, segOut, TL, b) then return false end
@@ -266,7 +271,7 @@ local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = LINK_MASK, filter = wor
 -- World only: the graph's routes (PR.Pull at search time, cached for the session) must not depend on
 -- whether a door is open.
 local function clearFatWorld(a, b)
-	local TH = nativeTraces() and (numsOn() and ntHullN or ntHull) or util.TraceHull
+	local TH = hullFn()
 	fatTr.start, fatTr.endpos = a, b
 	TH(fatTr)
 	if fatOut.Hit and not passThrough(fatTr, fatOut, TH, b) then return false end
@@ -286,21 +291,20 @@ end
 -- clearance vertex costed as its corner (P.RefineCorners now) plus the leaf's own loss, which the straight
 -- line pays too; and as obstacles, the leaves kept every route through a CLOSED door untightened (the
 -- hull cannot pass the leaf): its vertices stayed on the grid, 70 u off the jamb, 12 dB where the edge
--- gave 1 (rp_downtown, 2026-11-09). The leaves are still listed every 0.5 s with their world boxes:
--- PR.doorEpoch changes when a box does (a door opened, closed or moved), and the routes kept per S and L
--- (their door losses depend on the state) are then redone.
+-- gave 1 (rp_downtown, 2026-11-09). The leaves' world boxes are still read every 0.5 s, as a signature only:
+-- PR.doorEpoch changes when a box does (a door opened, closed or moved); PR.StateSig mixes it in.
 PR.doorEpoch = PR.doorEpoch or 0
-local function doorLeaves()
+local DOOR_CLASS_LIST = { "prop_door_rotating", "func_door", "func_door_rotating" }
+local function refreshDoorEpoch()
 	local d = PR.doorList
 	local now = SysTime()
-	if d and (d.fixed or now - d.t < 0.5) then return d.list end
-	local list, sig = {}, {}
+	if d and (d.fixed or now - d.t < 0.5) then return end
+	local sig = {}
 	if ents and ents.FindByClass then
-		for _, cls in ipairs({ "prop_door_rotating", "func_door", "func_door_rotating" }) do
+		for _, cls in ipairs(DOOR_CLASS_LIST) do
 			for _, e in ipairs(ents.FindByClass(cls)) do
 				if IsValid(e) then
 					local mn, mx = e:WorldSpaceAABB()
-					list[#list + 1] = { mn, mx }
 					sig[#sig + 1] = string.format("%.0f %.0f %.0f %.0f %.0f %.0f", mn.x, mn.y, mn.z, mx.x, mx.y, mx.z)
 				end
 			end
@@ -308,17 +312,14 @@ local function doorLeaves()
 	end
 	sig = table.concat(sig, ";")
 	if not d or d.sig ~= sig then PR.doorEpoch = PR.doorEpoch + 1 end
-	PR.doorList = { t = now, list = list, sig = sig }
-	return list
+	PR.doorList = { t = now, sig = sig }
 end
-PR.DoorLeaves = doorLeaves
 -- The routes' tightening keeps its answers (A.Paths.WorldSegMemo: world only, tagged with the trace backend):
 -- the k + 2 candidate routes of an evaluation repeat two thirds of their hull traces (offline bench), and
 -- the two fields' routes from one probe are pulled over the same chains (PR.Pull).
 local clearFatMemo = A.Paths.WorldSegMemo(clearFatWorld, 16384)
 local function clearFat(a, b) return clearFatMemo(a, b, nativeTraces() or false) end
 
-local function key(i, j, k) return i .. "," .. j .. "," .. k end
 -- a column of the grid as one number (no string per lookup): i and j stay within +-32768 on any map
 local function colKey(i, j) return (i + 32768) * 65536 + (j + 32768) end
 -- probe and gap point coordinates on a 1/8 u grid: written exactly to the cache (%.10g), so a reloaded
@@ -341,7 +342,7 @@ end
 local bOut = {}
 local bTr = { mask = LINK_MASK, filter = worldOnly, output = bOut }
 local function buildLine(a, b, mask)
-	local TL = nativeTraces() and (numsOn() and ntLineN or ntLine) or util.TraceLine
+	local TL = lineFn()
 	bTr.start, bTr.endpos, bTr.mask = a, b, mask or LINK_MASK
 	return TL(bTr)
 end
@@ -554,7 +555,7 @@ local DIRS = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
 -- of the world (nil: 4 spacings above the highest seed down to 8 below the lowest). Yields through
 -- budgetFn. Returns the graph table (truncated when MAX_PROBES was reached).
 function PR.BuildCo(seeds, s, budgetFn, bounds)
-	local nodes, index = {}, {}
+	local nodes = {}
 	local top, bottom
 	if bounds then
 		top, bottom = bounds[2].z - 1, bounds[1].z + 1
@@ -585,7 +586,6 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		nodes[#nodes + 1] = n
 		n.id = #nodes
 		ids[k] = n.id
-		index[key(i, j, k)] = n.id
 		queue[#queue + 1] = n
 		return n
 	end
@@ -725,7 +725,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 			if budgetFn then budgetFn(#nodes) end -- (each node: its joined() searches and links are ms of work)
 		end
 	end
-	return { spacing = s, nodes = nodes, index = index, truncated = truncated, skip = skipLinks }
+	return { spacing = s, nodes = nodes, truncated = truncated, skip = skipLinks }
 end
 
 -- Cache format (text; util.JSONToTable silently truncates arrays at 15000 elements):
@@ -766,7 +766,7 @@ function PR.Deserialize(text, hash, spacing)
 	if spacing and not (want and abs(want - spacing) < 1e-3) then return nil end
 	local s = tonumber(head.spacing)
 	if not s then return nil end
-	local g = { spacing = s, want = want, nodes = {}, index = {}, truncated = head.truncated }
+	local g = { spacing = s, want = want, nodes = {}, truncated = head.truncated }
 	local id = 0
 	for line in string.gmatch(string.sub(text, (nl or #text) + 1), "[^\n]+") do
 		id = id + 1
@@ -782,7 +782,6 @@ function PR.Deserialize(text, hash, spacing)
 			else n.nb[tonumber(tok)] = true end
 		end
 		g.nodes[id] = n
-		g.index[key(i, j, k)] = id
 	end
 	if id ~= head.count then return nil end
 	return g
@@ -799,19 +798,10 @@ local SEED_CLASSES = { info_node = true, info_node_hint = true, info_teleport_de
 -- at the first build (another start, another graph for good).
 function PR.MapSeeds(g)
 	local ents = g.bsp.entities or {}
-	local f = file.Open("maps/" .. g.map .. ".bsp", "rb", "GAME")
-	if f then
-		f:Seek(8) -- lump 0 (entities): offset, length
-		local ofs, len = f:ReadLong(), f:ReadLong()
-		if ofs and len and len > 0 then
-			f:Seek(ofs)
-			local text = f:Read(len)
-			if text then
-				local all = A.BSP.ParseEntities(text, SEED_CLASSES)
-				if #all > 0 then ents = all end
-			end
-		end
-		f:Close()
+	local text = A.BSP.EntityText(g.map)
+	if text then
+		local all = A.BSP.ParseEntities(text, SEED_CLASSES)
+		if #all > 0 then ents = all end
 	end
 	local seeds, seen = {}, {}
 	for _, e in ipairs(ents) do
@@ -992,7 +982,7 @@ end
 -- is the flood fill's for a graph just built and the cache file's for one loaded from it. Equal costs
 -- in A* and in the field then broke the other way after a reload: the same sound took the other of
 -- two equal routes (a door either side of a pillar) from one session to the next.
--- Also the column index g.cols (column key -> probe ids, increasing), from g.index: PR.Visible looks
+-- Also the column index g.cols (column key -> probe ids, increasing), from each probe's i, j: PR.Visible looks
 -- up the columns around a point instead of scanning every probe.
 local nbIds = {}
 function PR.Prepare(g)
@@ -1012,16 +1002,12 @@ function PR.Prepare(g)
 	end
 	first[#g.nodes + 1] = k
 	local cols = {}
-	for kk, id in pairs(g.index) do
-		if id then
-			local i, j = string.match(kk, "^(%-?%d+),(%-?%d+),")
-			local ck = colKey(tonumber(i), tonumber(j))
-			local list = cols[ck]
-			if not list then list = {} cols[ck] = list end
-			list[#list + 1] = id
-		end
+	for id, n in ipairs(g.nodes) do
+		local ck = colKey(n.i, n.j)
+		local list = cols[ck]
+		if not list then list = {} cols[ck] = list end
+		list[#list + 1] = id -- (ids in increasing order: each list is sorted as built)
 	end
-	for _, list in pairs(cols) do table.sort(list) end
 	g.cols = cols
 	g.adj = { first = first, nid = nid, len = len }
 	return g.adj
@@ -1118,7 +1104,6 @@ end
 -- or a portal can touch are found once per graph (its columns around the door); the costs are redone when
 -- a door or portal state changes (PR.StateSig) and the field is rebuilt with them.
 local LINK_DOOR_PAD = 4 -- P.SegmentDoorLoss's hull: a link within it of a leaf goes through that leaf
-local DOOR_CLASS_LIST = { "prop_door_rotating", "func_door", "func_door_rotating" }
 
 -- segment a-b passes within R of c
 local function segSphereHit(a, b, c, R)
@@ -1252,7 +1237,7 @@ end
 -- PR.doorEpoch): the field remembers the one it was built with and is rebuilt when it differs.
 local sigDoorIdx = {} -- (scratch: the door indexes in order when sh_doors has no sorted list)
 function PR.StateSig(g)
-	doorLeaves()
+	refreshDoorEpoch()
 	local acc = PR.doorEpoch
 	local function mix(v) acc = (acc * 31 + v) % 2147483647 end
 	local D = A.Doors
@@ -1410,7 +1395,7 @@ function PR.BuildField(g, L, yield, reuse, costs, seedList)
 		cost, nxt, root = {}, {}, {}
 	end
 	-- arr: arrival of each probe's route at the listener, filled on first use (pba_group, PR.SharedJoin)
-	local f = { g = g, L = L, cost = cost, nxt = nxt, root = root, base = {}, seeds = {}, pulled = {}, arr = {}, arrEpoch = PR.doorEpoch }
+	local f = { g = g, L = L, cost = cost, nxt = nxt, root = root, base = {}, seeds = {}, pulled = {}, arr = {} }
 	if bin then
 		bin.ref[1] = f
 	elseif #fieldBins < FIELD_BINS then
@@ -1462,12 +1447,12 @@ end
 -- exchange rate (40 u per dB) gave one route per probe, and with door_s shut every probe of the room went
 -- round by the other door, 15 dB quieter than through the leaf (pba_twodoors): the routes of both fields
 -- are ranked by their level afterwards (PR.DistinctRoutes).
-function PR.BuildFields(g, L, yield, reuse, seedList)
+function PR.BuildFields(g, L, yield, seedList)
 	local extra, sig = PR.LinkCosts(g, yield)
-	local f = PR.BuildField(g, L, yield, reuse, false, seedList)
+	local f = PR.BuildField(g, L, yield, nil, false, seedList)
 	f.stateSig = sig
 	if next(extra) then
-		f.doors = PR.BuildField(g, L, yield, reuse and reuse.doors, extra, seedList)
+		f.doors = PR.BuildField(g, L, yield, nil, extra, seedList)
 		f.doors.stateSig = sig
 	end
 	return f
@@ -1535,9 +1520,9 @@ function PR.FieldFor(g, L)
 		-- request's own first slice, cl_slicer) and built in slices; any evaluation that needs it meanwhile
 		-- finishes that same build (finishField), synchronously or in its own slices
 		if sl.co and coroutine.running() == sl.co then
-			f = { building = coroutine.create(function() return PR.BuildFields(g, L, buildYield, nil, seeds) end), key = key, L = L }
+			f = { building = coroutine.create(function() return PR.BuildFields(g, L, buildYield, seeds) end), key = key, L = L }
 		else
-			f = PR.BuildFields(g, L, nil, nil, seeds)
+			f = PR.BuildFields(g, L, nil, seeds)
 			f.key, f.seedList = key, seeds
 		end
 		kept.order[#kept.order + 1] = key
@@ -1549,16 +1534,12 @@ function PR.FieldFor(g, L)
 		f = finishField(f, kept)
 		f.seedList = f.seedList or seeds
 	end
-	if f.stateSig == sig then return f end
-	if f then
-		-- a door or portal state changed: the field by length stands (it reads no door: they are paid on the
-		-- route, P.EvalPolyline), only the field with the door costs is redone, in background slices, the old
-		-- one answering meanwhile. It only picks which ways round are tried; every route is costed on the
-		-- doors as they are now. Rebuilt at once, both fields and the link costs were redone at every state
-		-- change: 14 builds in one door swing on pba_tworooms, ~25 ms each on rp_downtown, any door of the map.
-		PR.QueueDoorField(g, f, sig)
-		return f
-	end
+	-- a door or portal state changed: the field by length stands (it reads no door: they are paid on the
+	-- route, P.EvalPolyline), only the field with the door costs is redone, in background slices, the old
+	-- one answering meanwhile. It only picks which ways round are tried; every route is costed on the
+	-- doors as they are now. Rebuilt at once, both fields and the link costs were redone at every state
+	-- change: 14 builds in one door swing on pba_tworooms, ~25 ms each on rp_downtown, any door of the map.
+	if f.stateSig ~= sig then PR.QueueDoorField(g, f, sig) end
 	return f
 end
 
@@ -1848,7 +1829,8 @@ PR.Tighten = tighten
 -- that did not move, re-evaluated 4 times a second) is kept on the polyline and given again instead of
 -- redoing its ~30 hull traces. Last ATTACH_KEEP (S, L) per polyline: a field route is shared by every
 -- source near its probe, and with 8 kept, 20 still loops round one listener pushed each other out and
--- re-tightened at every evaluation.
+-- re-tightened at every evaluation. Not dropped when a door moves (PR.doorEpoch): no door is read here,
+-- the doors' losses are worked out on the route afterwards (P.EvalRoute); the same goes for the field's arrivals.
 -- The joins not traced by the skipping loops are checked: S to the first vertex kept and that vertex to
 -- L when none was skipped. A field route ends at a probe the listener saw where the field was built,
 -- up to a few spacings from the listener now: round a door jamb, the listener no longer sees it and L
@@ -1860,7 +1842,7 @@ local function attach(inner, S, L, via)
 	local sx, sy, sz = S:Unpack()
 	local lx, ly, lz = L:Unpack()
 	local memo = inner.attached
-	if not memo or memo.epoch ~= PR.doorEpoch then memo = { epoch = PR.doorEpoch } inner.attached = memo end
+	if not memo then memo = {} inner.attached = memo end
 	for _, e in ipairs(memo) do
 		if e[1] == sx and e[2] == sy and e[3] == sz and e[4] == lx and e[5] == ly and e[6] == lz then return e[7] or nil end
 	end
@@ -1898,8 +1880,6 @@ PR.Attach = attach
 -- when it sees the listener). Filled on first use, shared by every source
 -- that sees n, dropped with the field. nil when the route cannot be attached (false kept in f.arr).
 local function arrival(f, n)
-	-- (a field built by hand, as in the pure tests, has no door state: its arrivals are kept)
-	if f.arrEpoch and f.arrEpoch ~= PR.doorEpoch then f.arr, f.arrEpoch = {}, PR.doorEpoch end
 	local a = f.arr[n.id]
 	if a ~= nil then return a or nil end
 	local T = attach(fieldPathFrom(f, n), n.pos, f.L)
@@ -2382,7 +2362,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 		g = PR.current
 	end
 	if not g then return {} end
-	doorLeaves()
+	refreshDoorEpoch()
 	local f = PR.FieldFor(g, L)
 	if not f then return {} end
 	fieldSeen(f, L)
@@ -2421,11 +2401,13 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	if not hop then guard, guardDone = groupGuard(S, L, cfg, srcEnt) end -- (a hop's routes are its own)
 	local evaluated = {}
 	local gs = PR.groupStats
+	local fInners -- (f's own, read again by pba_route_alt below)
 	-- the shortest ways (f) and the ways round the doors' costs (f.doors, PR.BuildFields), ranked together
 	for _, fx in ipairs({ f, f.doors or false }) do
 		if fx then
 			fieldSeen(fx, L)
 			local inners = fieldPaths(fx, starts, S, L)
+			if fx == f then fInners = inners end
 			for x, inner in ipairs(inners) do
 				sliceCheck()
 				-- pba_group: the probe's arrival shared, joined to this source (sharedJoin above)
@@ -2455,8 +2437,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	if guardDone then guardDone() end
 	-- pba_route_alt: the way the tree did not take (altBranches), from the best probe S sees
 	if A.On(cfg, "route_alt") then
-		local inners = fieldPaths(f, starts, S, L)
-		local n = inners.nodes[1]
+		local n = fInners.nodes[1]
 		if n then
 			-- the first candidate, cheapest first, that is not one of the routes already found (PR.SameRoute:
 			-- a sidetrack along a parallel row of probes tightens to the same way)
