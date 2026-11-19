@@ -58,6 +58,8 @@
 
 #include "render.h"
 
+#include <xmmintrin.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1821,8 +1823,20 @@ void EndBlock() {
 	g_pub.Write(p);
 }
 
+// Denormals (values under 1.2e-38: an IIR filter or a reverb tail decaying on silent input goes through them) cost ~100 times a
+// normal operation on many CPUs; the x64 default mode keeps them and neither miniaudio nor Steam Audio changes it. With
+// g_ftz each callback runs with flush-to-zero and denormals-are-zero (MXCSR 0x8040), the caller's mode put back after it
+// (offline, the caller is a test's own thread). SetFlushDenormals.
+std::atomic<bool> g_ftz{true};
+std::atomic<unsigned> g_cbMxcsr{0}; // the mode the last callback ran with (AudioThreadMxcsr, tests)
+
 void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 	float* o = (float*)out;
+	const unsigned csr = _mm_getcsr();
+#ifndef PBA_FTZ_STUB
+	if (g_ftz.load(std::memory_order_relaxed)) _mm_setcsr(csr | 0x8040u);
+#endif
+	g_cbMxcsr.store(_mm_getcsr(), std::memory_order_relaxed);
 #ifdef PBA_RENDER_LOCK_LEGACY
 	// red run of test/render_lock_test.cpp: the callback holds the control locks for its whole render again, as the single
 	// renderer lock did, so every API call made meanwhile waits for the render
@@ -1845,6 +1859,7 @@ void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 		done += (ma_uint32)n;
 	}
 	g_cbEpoch.fetch_add(1, std::memory_order_acq_rel); // even: out
+	_mm_setcsr(csr);
 }
 
 bool CreateReflection(Reflection& r, IPLAudioSettings& as) {
@@ -3527,6 +3542,8 @@ int QueueBacklog() {
 	return (int)g_c.overflow.size();
 }
 void SetCapCompareNew(bool on) { g_capNew = on; }
+void SetFlushDenormals(bool on) { g_ftz = on; }
+unsigned AudioThreadMxcsr() { return g_cbMxcsr.load(); }
 int CapRefused() { return g_capRefused.load(); }
 void SetLimits(int maxVoices, double memMB) {
 	g_maxVoices = std::clamp(maxVoices, 4, kMaxVoices);

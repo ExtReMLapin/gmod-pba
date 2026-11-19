@@ -239,6 +239,10 @@ void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory 
 // already gone). false: a playing voice always makes room for it, as before (an inaudible footstep evicted a gunshot).
 void SetCapCompareNew(bool on);
 int CapRefused(); // new voices the cap did not start, since the module was loaded (Stats capRefused)
+// Each audio callback runs with flush-to-zero and denormals-are-zero (true, the default; the caller's mode is put back after
+// it). Tests and diagnostics: AudioThreadMxcsr is the mode the last callback ran with.
+void SetFlushDenormals(bool on);
+unsigned AudioThreadMxcsr();
 // commands waiting for room in the audio thread's queue (diagnostics, tests): 0 while the audio thread keeps up; bounded
 // (a few per live voice) when it stalls, the parameter updates then only keep their latest value
 int QueueBacklog();
