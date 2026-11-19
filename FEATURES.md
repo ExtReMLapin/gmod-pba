@@ -49,6 +49,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | A sound restarted twice in one tick (a non-looped `ambient_generic` fired twice by a map's outputs: d3_citadel_01's skylift pods) plays once, as in the engine | ✅ | ✅ | S `stop_order` |
 | A loop you come within range of while it plays (a car driving into the radius the server follows it in) | ◐ started at once (the engine's law is near silent at that radius) | ✅ faded in over a second, not started at its whole level | C `loops_edge_fade` |
 | A loop already playing when you join (an ambience, a machine near the spawn) | ✅ | ✅ joined once your client is ready, as when you walk into its range | S `loops_ready` |
+| A line stopped or cut off while you join (a cancelled scene, the speaker interrupted) | ✅ | ✅ not handed to the module once you are ready | S `early_purge` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering

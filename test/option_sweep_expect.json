@@ -566,5 +566,9 @@
  "loops_ready": {
   "pos0": "hook",
   "why": "server: who a followed loop's mirror is sent to (sv_sound S.Audience, kind mirror: the player's client ready), outside P.Compute; covered by review_server S1"
+ },
+ "early_purge": {
+  "pos0": "hook",
+  "why": "server: the lines an early window keeps dropped at their stop or channel cut (sv_relay A.PurgeEarly), outside P.Compute; covered by review_server M2"
  }
 }

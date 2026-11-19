@@ -82,14 +82,48 @@ cases.S1 = function(opt)
 	return { pass = whileNot == 0 and after >= 1, startsWhileNotReady = whileNot, startsOnceReady = after }
 end
 
+-- M2: the lines an early window keeps for a joining player (A.NoteEarly) are those the engine still plays for him: a
+-- line stopped (StopSound), or replaced on its voice channel by a new line, is no longer one; it was handed to his
+-- module all the same once he was ready (a ghost line, or two lines over each other).
+local LINE1, LINE2 = "vo/npc/male01/question06.wav", "vo/npc/male01/question05.wav"
+cases.M2 = function(opt)
+	A.SetOverride("early_purge", opt)
+	local st = A.PState(ply)
+	st.ready, st.earlyDone, st.earlyT0, st.early = false, nil, nil, nil
+	local e = prop(Vector(320, 300, 40))
+	job:sleep(0.2)
+	local function lines()
+		local out = {}
+		for _, x in ipairs(st.early or {}) do if x.idx == e:EntIndex() then out[#out + 1] = x.name end end
+		return out
+	end
+	e:EmitSound(LINE1, 75, 100, 1, CHAN_VOICE)
+	job:sleep(0.1)
+	local noted = #lines()
+	e:StopSound(LINE1)
+	job:sleep(0.1)
+	local afterStop = #lines()
+	e:EmitSound(LINE1, 75, 100, 1, CHAN_VOICE)
+	job:sleep(0.1)
+	e:EmitSound(LINE2, 75, 100, 1, CHAN_VOICE)
+	job:sleep(0.1)
+	local afterCut = lines()
+	e:StopSound(LINE2)
+	st.early, st.earlyDone = nil, true
+	return { pass = noted == 1 and afterStop == 0 and #afterCut == 1 and afterCut[1] == LINE2, noted = noted,
+		afterStop = afterStop, afterCut = table.concat(afterCut, ",") }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end
-local wasReady = A.PState(ply).ready
+local st0 = A.PState(ply)
+local wasReady, wasEarlyDone, wasEarlyT0 = st0.ready, st0.earlyDone, st0.earlyT0
 local ok, res = pcall(fn, CONTROL and 0 or nil)
 unspy()
-A.PState(ply).ready = wasReady == nil and true or wasReady
-for _, k in ipairs({ "loops_ready" }) do A.SetOverride(k, nil) end
+st0.ready = wasReady == nil and true or wasReady
+st0.earlyDone, st0.earlyT0, st0.early = wasEarlyDone, wasEarlyT0, nil
+for _, k in ipairs({ "loops_ready", "early_purge" }) do A.SetOverride(k, nil) end
 for _, e in ipairs(spawned) do if IsValid(e) then e:Remove() end end
 if not ok then return { pass = false, err = tostring(res) } end
 res.case, res.control = CASE, CONTROL

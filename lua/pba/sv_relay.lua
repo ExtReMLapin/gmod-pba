@@ -79,9 +79,30 @@ function A.NoteEarly(data, secs, ply, ev, blocked)
 	local e = data.Entity
 	list[#list + 1] = { name = data.SoundName, idx = e:EntIndex(), chan = data.Channel, lvl = data.SoundLevel or 75,
 		pitch = data.Pitch or 100, vol = data.Volume or 1, ev = ev, flags = data.Flags or 0, dsp = data.DSP or 0,
-		pos = A.SoundPos(data) or e:WorldSpaceCenter(), face = A.OnFace(e, data.Channel) or false, t = now, secs = secs,
+		pos = A.SoundPos(data) or e:WorldSpaceCenter(), face = A.OnFace(e, data.Channel) or false, t = now, secs = secs, tick = engine.TickCount(),
 		blocked = blocked and true or false }
 	A.stats.earlyNoted = (A.stats.earlyNoted or 0) + 1
+end
+--- (pba_early_purge) The kept lines the engine no longer plays: entity idx's `name` (every name when nil / "") on chan
+-- (any when nil) stopped, or replaced on its channel. keep: the replacing sound (its own entry, noted in this tick,
+-- stays). A line left in the list after its stop was handed to the player's module once he was ready (a ghost line;
+-- replaced on its channel: two lines over each other).
+function A.PurgeEarly(idx, name, chan, keep)
+	if (A.cfg.early_purge or 1) < 0.5 or idx <= 0 then return end
+	local files = name and name ~= "" and A.StopFiles(name) or nil
+	local tick = engine.TickCount()
+	for _, p in ipairs(player.GetHumans()) do
+		local list = A.PState(p).early
+		if list then
+			for i = #list, 1, -1 do
+				local x = list[i]
+				if x.idx == idx and (not chan or x.chan == chan) and (not files or A.StopReaches(files, x.name))
+					and not (keep and x.name == keep.SoundName and x.tick == tick) then
+					table.remove(list, i)
+				end
+			end
+		end
+	end
 end
 -- his client's rendering is settled: the lines kept for him (still playing), how long each has played; the window shuts
 net.Receive("pba_early", function(_, ply)
@@ -305,6 +326,7 @@ end
 -- would find nothing yet (a non-looped ambient_generic fired twice in one tick: stop, play, stop, play; both plays kept).
 function A.RelayStop(e, name, chan, except)
 	local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
+	A.PurgeEarly(idx, name, chan)
 	local r = idx > 0 and A.recentTo[idx]
 	if not r then return end
 	local plys, now = {}, CurTime()
@@ -357,6 +379,7 @@ end
 -- still waiting for their own stamp, which a stop on arrival cut before they began (pba_cut_at_start, cl_render).
 function A.CutChannel(data, idx, chan)
 	if A.Loops and A.Loops.CutChannel then A.Loops.CutChannel(idx, chan, data.SoundName) end
+	A.PurgeEarly(idx, nil, chan, data)
 	local rc = A.recentChan[idx]
 	local held = rc and rc[chan]
 	if not held then return end
