@@ -1627,6 +1627,8 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	end
 	-- long client-side sounds (music of client-side radios): followed like a loop
 	if A.Loops and A.Loops.HandleClient and A.Loops.HandleClient(data) then return false end
+	-- (a volume / pitch change of a short sound pba re-emitted: its copies', not a restart of the original by the engine)
+	if bit.band(data.Flags or 0, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0 and A.TakeChange(data) then return false end
 	if not A.Eligible(data) then return end
 	if A.ImpactCapped(data) then return false end -- (pba_impact_cap: past the burst cap of its family)
 	-- (a sound stamped away from now waits for its stamp, as the engine would make it: A.ClientSoundDelay)
@@ -1876,6 +1878,35 @@ do
 		local idx = self:EntIndex()
 		if idx > 0 and A.StopSource then pcall(A.StopSource, idx, name or "") end
 	end
+end
+
+--- A client-side SND_CHANGE_VOL / SND_CHANGE_PITCH (data) of a short sound pba took over (pba_change_copies): true when
+-- a copy of it still plays (the copy registry, A.emitted), and then the change is taken: the followed record of that
+-- sound gets the new volume / pitch at once (its next evaluation, glided). The engine, finding no such sound on that
+-- channel (pba suppressed the original), started it from its top, clear through every wall (review C1: measured on
+-- pba_tworooms, vol(127) on the prop's index after an addon's fade of a line pba re-emitted).
+function A.TakeChange(data)
+	if (A.cfg.change_copies or 1) < 0.5 then return false end
+	local idx = sourceIndex(data)
+	local list = idx and A.emitted[idx]
+	if not list then return false end
+	local name, chan, now = data.SoundName, data.Channel or CHAN_AUTO, RealTime()
+	local live = false
+	for i = 1, #list do
+		local h = list[i]
+		if not expired(h, now) and now <= h.tEnd and (h.orig == name or h.name == name) and (h.srcChan == chan or chan == CHAN_AUTO) then live = true break end
+	end
+	if not live then return false end
+	local flags = data.Flags or 0
+	for _, rec in ipairs(OS.recs) do
+		if rec.name == name and (rec.chan == chan or chan == CHAN_AUTO) and IsValid(rec.ent) and rec.ent:EntIndex() == idx then
+			if bit.band(flags, SND_CHANGE_VOL) ~= 0 and data.Volume then rec.vol = data.Volume end
+			if bit.band(flags, SND_CHANGE_PITCH) ~= 0 and data.Pitch then rec.pitch = data.Pitch end
+			rec.tNext = now
+		end
+	end
+	A.stats.changeTaken = (A.stats.changeTaken or 0) + 1
+	return true
 end
 
 --- THE stop path of the client: the engine stopped `name` (every name when ""/nil) of entity idx on channel
