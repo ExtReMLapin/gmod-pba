@@ -26,7 +26,7 @@ A.Probes = PR
 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways; 9: probes kept off
 -- floors; 10: probes follow the floors (one per storey and column, explicit positions), map seeds only;
 -- 12: a displacement's underside adds no empty segments (floors below it no longer hidden)
-local CACHE_VERSION = 15 -- 13: links over a column whose probe left its centre (pba_probe_skip_links); 15: and over a column whose probes give no way through (a nook beside a doorway), where the graph has no way within twice the distance
+local CACHE_VERSION = 16 -- 13: links over a column whose probe left its centre; 15: and over a column whose probes give no way through (a nook beside a doorway), where the graph has no way within twice the distance; 16: those links always on (the former pba_probe_skip_links, whose 1 wrote 15.5)
 local MAX_PROBES = 30000
 -- a build that reaches MAX_PROBES is redone at a wider spacing, up to this one, instead of keeping the
 -- part of the map flood-filled first (the far side of a big map had no probe at all)
@@ -575,7 +575,6 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		end
 		return c, colIds[ck]
 	end
-	local skipLinks = A.On(A.cfg, "probe_skip_links")
 	local queue, qh, truncated = {}, 1, false
 	local function node(i, j, k)
 		local c, ids = column(i, j)
@@ -656,20 +655,18 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		-- stands on one side of that wall only; the other side of its cell has no probe, and a room behind
 		-- it reached by a doorway in that wall was never linked (gm_melancholia's upper room: the radio saw
 		-- no probe, 70 dB through the walls, 48 dB lower 4 u aside). Link over that column to the next one,
-		-- by a gap point through the doorway (pba_probe_skip_links).
-		if skipLinks then
-			for _, d in ipairs(DIRS) do
-				local i1, j1 = n.i + d[1], n.j + d[2]
-				local cx, cy = (i1 + 0.5) * s, (j1 + 0.5) * s
-				local moved = false
-				for _, q in ipairs((column(i1, j1))) do
-					if abs(q.z - n.pos.z) < s and (abs(q.x - cx) > 1 or abs(q.y - cy) > 1) then moved = true break end
-				end
-				if moved then
-					local i2, j2 = i1 + d[1], j1 + d[2]
-					for k, q in ipairs((column(i2, j2))) do
-						if abs(q.z - n.pos.z) < s then tryLink(n, i2, j2, k, q, true, false) end
-					end
+		-- by a gap point through the doorway.
+		for _, d in ipairs(DIRS) do
+			local i1, j1 = n.i + d[1], n.j + d[2]
+			local cx, cy = (i1 + 0.5) * s, (j1 + 0.5) * s
+			local moved = false
+			for _, q in ipairs((column(i1, j1))) do
+				if abs(q.z - n.pos.z) < s and (abs(q.x - cx) > 1 or abs(q.y - cy) > 1) then moved = true break end
+			end
+			if moved then
+				local i2, j2 = i1 + d[1], j1 + d[2]
+				for k, q in ipairs((column(i2, j2))) do
+					if abs(q.z - n.pos.z) < s then tryLink(n, i2, j2, k, q, true, false) end
 				end
 			end
 		end
@@ -680,7 +677,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 	-- gap point searched over both cells' width. gm_melancholia's bathroom: its doorway to the hall lies
 	-- between the columns, the middle probe in a nook beside it; with no link through it the radio came by the
 	-- far side of the house (left ear), then by the hall 14 u to the right (right ear). Existing probes only.
-	if skipLinks and not truncated then
+	if not truncated then
 		-- whether the graph already joins a and b within `limit` (a bounded Dijkstra over the links): a link over
 		-- the middle column is only wanted where the graph has no reasonable way between them (a real detour),
 		-- not as a shortcut beside one (pba_twodoors: the shortest routes of every start then went by the one
@@ -725,7 +722,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 			if budgetFn then budgetFn(#nodes) end -- (each node: its joined() searches and links are ms of work)
 		end
 	end
-	return { spacing = s, nodes = nodes, truncated = truncated, skip = skipLinks }
+	return { spacing = s, nodes = nodes, truncated = truncated }
 end
 
 -- Cache format (text; util.JSONToTable silently truncates arrays at 15000 elements):
@@ -735,7 +732,7 @@ end
 --   spacing asked for (pba_probe_spacing), `spacing` the one built (wider when MAX_PROBES was reached).
 local function num(v) return string.format("%.10g", v) end
 function PR.Serialize(g, hash)
-	local out = { util.TableToJSON({ v = CACHE_VERSION + ((g.skip and 0.5) or 0), hash = hash, spacing = g.spacing, want = g.want or g.spacing,
+	local out = { util.TableToJSON({ v = CACHE_VERSION, hash = hash, spacing = g.spacing, want = g.want or g.spacing,
 		truncated = g.truncated, count = #g.nodes }) }
 	for _, n in ipairs(g.nodes) do
 		local ids = {}
@@ -761,7 +758,7 @@ function PR.Deserialize(text, hash, spacing)
 	if not text then return nil end
 	local nl = string.find(text, "\n", 1, true)
 	local head = util.JSONToTable(nl and string.sub(text, 1, nl - 1) or text)
-	if not head or head.v ~= CACHE_VERSION + ((A.On(A.cfg, "probe_skip_links")) and 0.5 or 0) or (hash and head.hash ~= hash) then return nil end
+	if not head or head.v ~= CACHE_VERSION or (hash and head.hash ~= hash) then return nil end
 	local want = tonumber(head.want) or tonumber(head.spacing)
 	if spacing and not (want and abs(want - spacing) < 1e-3) then return nil end
 	local s = tonumber(head.spacing)
