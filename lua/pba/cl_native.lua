@@ -2060,10 +2060,116 @@ function N.Busy()
 	return A.Enabled() or (N.live or 0) > 0
 end
 
+-- The door sync's state for one call (one table, no closure per call: near / mark / track below read it)
+local SY = { gen = 0, n = 0 }
+N.syncSeen = N.syncSeen or {} -- id -> generation of the last sync that saw it (no new `seen` table per sync)
+-- what an entity is for the sync (its class never changes): "door", "mover", "prop" or false; kept per entity
+N.syncKind = setmetatable({}, { __mode = "k" })
+-- pba_native_props_still: a prop in the scene that has not moved for STILL_SYNCS syncs (and has nothing left to send) is
+-- looked at once every STILL_ROUND syncs, in turns by index; doors and movers at every sync. Reading the position and
+-- angles of every object at every sync was two userdata each, ten times a second, for objects that do not move.
+local STILL_SYNCS, STILL_ROUND = 5, 10
+-- the transform sent to the module, filled in place (VMatrix:ToTable made five tables per send)
+local MT = { { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 } }
+local function transformOf(e)
+	local a, b, c, d = MT[1], MT[2], MT[3], MT[4]
+	a[1], a[2], a[3], a[4], b[1], b[2], b[3], b[4], c[1], c[2], c[3], c[4], d[1], d[2], d[3], d[4] = e:GetWorldTransformMatrix():Unpack()
+	return MT
+end
+local function byScore(a, b) return a.s > b.s end
+local entsIter = ents and ents.Iterator or function() return ipairs(ents.GetAll()) end
+
+local function syncNear(p)
+	local L = SY.L
+	return L and p and p:DistToSqr(L) < MOVED_NEAR2
+end
+
+-- pba_native_moved_local: what the object swept (its box at its last mark and its box now, one world AABB) goes
+-- to P.InvalidateRegion; only the paths and sounds of that region are re-evaluated. 0: the whole cache emptied.
+local function syncMark(d, e)
+	if not SY.localMode then SY.moved = true return end
+	local b = d.bx
+	local x0, y0, z0, x1, y1, z1
+	if IsValid(e) then
+		local a, c = e:WorldSpaceAABB()
+		x0, y0, z0, x1, y1, z1 = a.x, a.y, a.z, c.x, c.y, c.z
+		local px0, py0, pz0, px1, py1, pz1
+		if b then
+			px0, py0, pz0, px1, py1, pz1 = b[1], b[2], b[3], b[4], b[5], b[6]
+		else
+			-- (first mark: the box it left, its box now moved back to its last place sent)
+			b = {}
+			d.bx = b
+			local q, o = e:GetPos(), d.p or e:GetPos()
+			local dx, dy, dz = o.x - q.x, o.y - q.y, o.z - q.z
+			px0, py0, pz0, px1, py1, pz1 = x0 + dx, y0 + dy, z0 + dz, x1 + dx, y1 + dy, z1 + dz
+		end
+		b[1], b[2], b[3], b[4], b[5], b[6] = x0, y0, z0, x1, y1, z1
+		x0, y0, z0 = math.min(x0, px0), math.min(y0, py0), math.min(z0, pz0)
+		x1, y1, z1 = math.max(x1, px1), math.max(y1, py1), math.max(z1, pz1)
+	elseif b then
+		x0, y0, z0, x1, y1, z1 = b[1], b[2], b[3], b[4], b[5], b[6]
+	elseif d.p then
+		local p = d.p -- (gone, its box never known: a cube round its last place)
+		x0, y0, z0, x1, y1, z1 = p.x - 64, p.y - 64, p.z - 64, p.x + 64, p.y + 64, p.z + 64
+	else
+		return
+	end
+	local boxes = SY.boxes
+	if not boxes then boxes = {} SY.boxes = boxes end
+	local n = #boxes
+	boxes[n + 1], boxes[n + 2], boxes[n + 3], boxes[n + 4], boxes[n + 5], boxes[n + 6] = x0, y0, z0, x1, y1, z1
+end
+
+local function syncTrack(e, id, d)
+	local now, hold = SY.now, SY.hold
+	local p, a = e:GetPos(), e:GetAngles()
+	local movingNow = d.sp and (d.sp ~= p or d.sa ~= a)
+	-- (still: not moving since the last look, and its pose sent; one with a move held back stays looked at)
+	if d.sp and not movingNow and d.p and d.p == p and d.a == a then d.still = (d.still or 0) + 1 else d.still = 0 end
+	-- sustained spin in place (see pba_native_spin_s): counted over the syncs, whatever was sent
+	if movingNow then
+		local c = e:WorldSpaceCenter()
+		if (d.run or 0) == 0 or c:DistToSqr(d.c0) > AMBIENT_RADIUS2 then d.run, d.c0 = 1, c else d.run = d.run + 1 end
+	else
+		d.run = 0
+	end
+	d.sp, d.sa = p, a
+	local spinS = A.cfg.native_spin_s or 3
+	if spinS > 0 and d.run >= spinS * 10 then
+		if d.tSent and now - d.tSent < AMBIENT_PERIOD then return end
+		if d.prop and hold then return end
+		d.tSent = now
+		pba_native.DynamicMove(id, SY.ToTable and e:GetWorldTransformMatrix():ToTable() or transformOf(e))
+		d.p, d.a = p, a
+		return
+	end
+	if not d.p or d.p ~= p or d.a ~= a then
+		local farR2 = SY.farR2
+		if farR2 and d.p and p:DistToSqr(SY.L) > farR2 then
+			-- far from the listener: sent once it rests (or after FAR_MAX_S of motion), not at every sync
+			if movingNow or not d.farLast then d.farLast = now end
+			d.farT0 = d.farT0 or now
+			if now - d.farLast < FAR_REST_S and now - d.farT0 < FAR_MAX_S then return end
+		end
+		d.farT0, d.farLast = nil, nil
+		if d.prop then
+			if hold then return end -- sent once the fight is over, where it came to rest
+			SY.propSent = true
+		end
+		pba_native.DynamicMove(id, SY.ToTable and e:GetWorldTransformMatrix():ToTable() or transformOf(e))
+		if d.p and syncNear(p) then syncMark(d, e) end
+		d.p, d.a = p, a
+	end
+end
+
 function N.SyncDoors()
 	if not N.ready or not pba_native.DynamicAdd or (A.cfg.native_doors or 0) < 0.5 then return end
 	if not A.Enabled() then return end -- caught up when pba is switched on again (the sync diffs the scene)
-	local seen, nProps = {}, 0
+	local nProps = 0
+	local gen = SY.gen + 1
+	SY.gen = gen
+	local seen = N.syncSeen
 	local wantProps = (A.cfg.native_props or 0) >= 0.5
 	local cap = A.cfg.native_props_max or 64
 	local now = RealTime()
@@ -2073,7 +2179,6 @@ function N.SyncDoors()
 	-- The props are sent where they came to rest, once the fight is over. Doors are never held.
 	local hold = wantProps and (A.cfg.native_props_calm or 1) >= 0.5
 		and (now < (N.propCommitT or 0) or (A.Sched and A.Sched.InCombat and A.Sched.InCombat()))
-	local propSent = false
 	-- pba_native_props_add_ms: the props entering the scene this sync stop once their DynamicAdd calls took that
 	-- long (the first always enters); the others enter at the next syncs, which the calm hold then does not wait for
 	local addMs = A.cfg.native_props_add_ms or 3
@@ -2088,96 +2193,34 @@ function N.SyncDoors()
 	local cands = rerank and {} or nil
 	-- a door, mover or large prop that moved near the listener changes paths and occlusion: the
 	-- continuous sounds re-evaluate (reeval_adaptive; P.ReevalDue watches the world version)
-	local L, moved = A.ListenerPos(), false
-	local function near(p) return L and p and p:DistToSqr(L) < MOVED_NEAR2 end
-	-- pba_native_moved_local: what the object swept (its box at its last mark and its box now, one world AABB) goes
-	-- to P.InvalidateRegion; only the paths and sounds of that region are re-evaluated. 0: the whole cache emptied.
-	local localMode = (A.cfg.native_moved_local or 1) >= 0.5 and A.Paths and A.Paths.InvalidateRegion
-	local boxes
-	local function mark(d, e)
-		if not localMode then moved = true return end
-		local b = d.bx
-		local x0, y0, z0, x1, y1, z1
-		if IsValid(e) then
-			local a, c = e:WorldSpaceAABB()
-			x0, y0, z0, x1, y1, z1 = a.x, a.y, a.z, c.x, c.y, c.z
-			local px0, py0, pz0, px1, py1, pz1
-			if b then
-				px0, py0, pz0, px1, py1, pz1 = b[1], b[2], b[3], b[4], b[5], b[6]
-			else
-				-- (first mark: the box it left, its box now moved back to its last place sent)
-				b = {}
-				d.bx = b
-				local q, o = e:GetPos(), d.p or e:GetPos()
-				local dx, dy, dz = o.x - q.x, o.y - q.y, o.z - q.z
-				px0, py0, pz0, px1, py1, pz1 = x0 + dx, y0 + dy, z0 + dz, x1 + dx, y1 + dy, z1 + dz
-			end
-			b[1], b[2], b[3], b[4], b[5], b[6] = x0, y0, z0, x1, y1, z1
-			x0, y0, z0 = math.min(x0, px0), math.min(y0, py0), math.min(z0, pz0)
-			x1, y1, z1 = math.max(x1, px1), math.max(y1, py1), math.max(z1, pz1)
-		elseif b then
-			x0, y0, z0, x1, y1, z1 = b[1], b[2], b[3], b[4], b[5], b[6]
-		elseif d.p then
-			local p = d.p -- (gone, its box never known: a cube round its last place)
-			x0, y0, z0, x1, y1, z1 = p.x - 64, p.y - 64, p.z - 64, p.x + 64, p.y + 64, p.z + 64
-		else
-			return
-		end
-		boxes = boxes or {}
-		local n = #boxes
-		boxes[n + 1], boxes[n + 2], boxes[n + 3], boxes[n + 4], boxes[n + 5], boxes[n + 6] = x0, y0, z0, x1, y1, z1
-	end
+	local L = A.ListenerPos()
 	local farM = A.cfg.native_scene_far_m or 20
-	local farR2 = farM > 0 and L and (farM * UNITS_PER_M) ^ 2 or nil
-	local function track(e, id, d)
-		local p, a = e:GetPos(), e:GetAngles()
-		local movingNow = d.sp and (d.sp ~= p or d.sa ~= a)
-		-- sustained spin in place (see pba_native_spin_s): counted over the syncs, whatever was sent
-		if d.sp and (d.sp ~= p or d.sa ~= a) then
-			local c = e:WorldSpaceCenter()
-			if (d.run or 0) == 0 or c:DistToSqr(d.c0) > AMBIENT_RADIUS2 then d.run, d.c0 = 1, c else d.run = d.run + 1 end
-		else
-			d.run = 0
-		end
-		d.sp, d.sa = p, a
-		local spinS = A.cfg.native_spin_s or 3
-		if spinS > 0 and d.run >= spinS * 10 then
-			if d.tSent and now - d.tSent < AMBIENT_PERIOD then return end
-			if d.prop and hold then return end
-			d.tSent = now
-			pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
-			d.p, d.a = p, a
-			return
-		end
-		if not d.p or d.p ~= p or d.a ~= a then
-			if farR2 and d.p and p:DistToSqr(L) > farR2 then
-				-- far from the listener: sent once it rests (or after FAR_MAX_S of motion), not at every sync
-				if movingNow or not d.farLast then d.farLast = now end
-				d.farT0 = d.farT0 or now
-				if now - d.farLast < FAR_REST_S and now - d.farT0 < FAR_MAX_S then return end
-			end
-			d.farT0, d.farLast = nil, nil
-			if d.prop then
-				if hold then return end -- sent once the fight is over, where it came to rest
-				propSent = true
-			end
-			pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
-			if d.p and near(p) then mark(d, e) end
-			d.p, d.a = p, a
-		end
-	end
-	for id in pairs(N.doors) do if N.doors[id].prop then nProps = nProps + 1 end end
-	local skip = N.dynSkip
-	for _, e in ipairs(ents.GetAll()) do
+	local still = (A.cfg.native_props_still or 1) >= 0.5
+	SY.L, SY.now, SY.hold, SY.moved, SY.propSent, SY.boxes = L, now, hold, false, false, nil
+	SY.farR2 = farM > 0 and L and (farM * UNITS_PER_M) ^ 2 or nil
+	SY.localMode = (A.cfg.native_moved_local or 1) >= 0.5 and A.Paths and A.Paths.InvalidateRegion
+	SY.ToTable = not still -- (0: the former way throughout)
+	SY.n = SY.n + 1
+	local turn = SY.n
+	for _, d in pairs(N.doors) do if d.prop then nProps = nProps + 1 end end
+	local skip, kinds = N.dynSkip, N.syncKind
+	for _, e in entsIter() do
 		-- (an entity that is neither a door, a mover nor a prop class stays one: seen once, then skipped. Every
 		-- entity of the map went through GetClass and the brush test at each sync: 1.5 ms of 764 entities, ten times a second)
-		local cls = skip[e] ~= true and e:GetClass() or nil
-		local bk = cls and brushKind(e, cls)
-		local isMover = cls and (MOVER_CLASSES[cls] or bk == "mover")
-		local isDoor, isProp = cls and (DOOR_CLASSES[cls] or bk == "door" or isMover), cls and wantProps and PROP_CLASSES[cls]
-		if cls and not isDoor and not PROP_CLASSES[cls] then skip[e] = true end
-		local id = cls and e:EntIndex()
-		if (isDoor or isProp) and id > 0 and not N.dynSkip[e] and not (hold and not isDoor and N.doors[id]
+		local kind = skip[e] ~= true and kinds[e]
+		if kind == nil then
+			local cls = e:GetClass()
+			local bk = brushKind(e, cls)
+			if MOVER_CLASSES[cls] or bk == "mover" then kind = "mover"
+			elseif DOOR_CLASSES[cls] or bk == "door" then kind = "door"
+			elseif PROP_CLASSES[cls] then kind = "prop"
+			else kind = false skip[e] = true end
+			kinds[e] = kind
+		end
+		local isMover = kind == "mover"
+		local isDoor, isProp = kind == "door" or isMover, wantProps and kind == "prop"
+		local id = kind and e:EntIndex()
+		if (isDoor or isProp) and id > 0 and not skip[e] and not (hold and not isDoor and N.doors[id]
 			and N.doors[id].ent ~= e) then -- held: an index reused by a new prop waits for the end of the hold
 			local d = N.doors[id]
 			if d and d.ent ~= e then -- entity index reused by another entity: rebuild
@@ -2205,11 +2248,11 @@ function N.SyncDoors()
 				info.pending = pending
 			end
 			if info.pending then
-				if d then seen[id] = true end -- (not in the scene yet)
+				if d then seen[id] = gen end -- (not in the scene yet)
 			elseif info.empty then
-				N.dynSkip[e] = true
+				skip[e] = true
 			elseif isDoor then
-				seen[id] = true
+				seen[id] = gen
 				if not d and info.big > 8 then
 					local v, t
 					if info.hull then v, t = info.hull.v, info.hull.t else v, t = boxMesh(info.mn, info.mx) end
@@ -2224,13 +2267,13 @@ function N.SyncDoors()
 					d = { ent = e }
 					N.doors[id] = d
 				elseif not d then
-					N.dynSkip[e] = true -- a sliver: not looked at again
+					skip[e] = true -- a sliver: not looked at again
 				end
 			elseif info.big < PROP_MIN_SIZE then
-				N.dynSkip[e] = true -- too small to matter: not looked at again
+				skip[e] = true -- too small to matter: not looked at again
 			else
 				if d then
-					seen[id] = true
+					seen[id] = gen
 				elseif nProps < cap and not hold and not (winners and not winners[id]) then
 					if addMs > 0 and addSpent >= addMs then
 						addCut = true -- (this sync's share is spent: at the next one)
@@ -2240,20 +2283,21 @@ function N.SyncDoors()
 						d = addProp(e, id, info)
 						addSpent = addSpent + (SysTime() - t0) * 1000
 						nProps = nProps + 1
-						seen[id] = true
-						propSent = true
+						seen[id] = gen
+						SY.propSent = true
 					end
 				end
 				if cands then cands[#cands + 1] = { e = e, id = id, info = info, s = propScore(e, info, L) * (d and PROP_KEEP or 1) } end
 			end
-			if d then track(e, id, d) end
+			-- (a still prop: in its turn only)
+			if d and not (still and d.prop and (d.still or 0) >= STILL_SYNCS and (turn + id) % STILL_ROUND ~= 0) then syncTrack(e, id, d) end
 		end
 	end
 	-- unseen (gone, no longer a candidate, props switched off): out of the scene
 	for id, d in pairs(N.doors) do
-		if (not seen[id] and not (hold and d.prop)) or (d.prop and not wantProps) then
-			if d.prop and near(d.p) then mark(d, d.ent) end
-			if d.prop then propSent = true end
+		if (seen[id] ~= gen and not (hold and d.prop)) or (d.prop and not wantProps) then
+			if d.prop and syncNear(d.p) then syncMark(d, d.ent) end
+			if d.prop then SY.propSent = true end
 			removeDyn(id)
 		end
 	end
@@ -2261,16 +2305,16 @@ function N.SyncDoors()
 	-- the scene never holds more than `cap` props.
 	if cands and #cands <= cap then N.propWinners = nil end -- (every candidate fits: no ranking to keep)
 	if cands and #cands > cap then
-		table.sort(cands, function(a, b) return a.s > b.s end)
+		table.sort(cands, byScore)
 		N.propWinners = {}
 		for i = 1, cap do N.propWinners[cands[i].id] = true end
 		for i = cap + 1, #cands do
 			local c = cands[i]
 			local d = N.doors[c.id]
 			if d and d.prop then
-				if near(d.p) then mark(d, c.e) end
+				if syncNear(d.p) then syncMark(d, c.e) end
 				removeDyn(c.id)
-				propSent = true
+				SY.propSent = true
 			end
 		end
 		for i = 1, cap do
@@ -2282,18 +2326,20 @@ function N.SyncDoors()
 					local t0 = SysTime()
 					local d = addProp(c.e, c.id, c.info)
 					addSpent = addSpent + (SysTime() - t0) * 1000
-					track(c.e, c.id, d)
-					if near(d.p) then mark(d, c.e) end
-					propSent = true
+					syncTrack(c.e, c.id, d)
+					if syncNear(d.p) then syncMark(d, c.e) end
+					SY.propSent = true
 				end
 			end
 		end
 	end
 	-- (props left for the next syncs: no calm hold before them, they come in at the next sync)
-	if propSent and (A.cfg.native_props_calm or 1) >= 0.5 then N.propCommitT = addCut and now or now + PROP_COMMIT_S end
+	if SY.propSent and (A.cfg.native_props_calm or 1) >= 0.5 then N.propCommitT = addCut and now or now + PROP_COMMIT_S end
 	-- the module only commits when something changed (and retries itself after a running bake)
 	pba_native.DynamicCommit()
-	if moved and A.Paths then A.Paths.InvalidateCache() end
+	local boxes = SY.boxes
+	SY.boxes, SY.L = nil, nil
+	if SY.moved and A.Paths then A.Paths.InvalidateCache() end
 	if boxes then A.Paths.InvalidateRegion(boxes) end
 end
 timer.Create("pba_native_doors", 0.1, 0, function() N.SyncDoors() end)
