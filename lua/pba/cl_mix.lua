@@ -182,8 +182,8 @@ M.mixer = M.mixer or (cvMixer and cvMixer:GetString() or "Default_Mix")
 --- The gain factor of a module voice of groups g now (pba_native_mix / pba_native_duck): 1 when both off.
 function M.Value(g)
 	if not g then return 1 end
-	local mixOn = (A.cfg.native_mix or 1) >= 0.5
-	local duckOn = (A.cfg.native_duck or 1) >= 0.5 and not (cvNoDuck and cvNoDuck:GetBool())
+	local mixOn = A.On(A.cfg, "native_mix")
+	local duckOn = A.On(A.cfg, "native_duck") and not (cvNoDuck and cvNoDuck:GetBool())
 	if not mixOn and not duckOn then return 1 end
 	local mode = (mixOn and 1 or 0) + (duckOn and 2 or 0)
 	if g.ver == M.ver and g.mode == mode then return g.val end
@@ -268,7 +268,7 @@ end
 
 --- Notes a sound pba sees (data: the EntityEmitSound table, Pos set) for the ducker.
 function M.NoteSound(data, L, secs)
-	if (A.cfg.native_duck or 1) < 0.5 or not (data and data.SoundName and data.Pos and L) then return end
+	if A.Num(A.cfg, "native_duck") < 0.5 or not (data and data.SoundName and data.Pos and L) then return end
 	local lvl = data.SoundLevel or 75
 	local g = M.GroupsOf(data.SoundName, data.Entity or data.EntIndex, data.Channel, lvl)
 	local vol = (data.Volume or 1) * math.min(A.AC.EngineGain(math.max(data.Pos:Distance(L), 1), lvl), 1) * M.ValueIn(g, M.mixer, true)
@@ -282,7 +282,7 @@ hook.Add("Think", "pba_mix", function()
 	-- the current mixer (a soundscape sets snd_soundmixer)
 	local cur = cvMixer and cvMixer:GetString() or "Default_Mix"
 	if cur ~= M.mixer then M.mixer = cur M.ver = (M.ver or 0) + 1 end
-	if (A.cfg.native_duck or 1) >= 0.5 then M.Tick(now)
+	if A.On(A.cfg, "native_duck") then M.Tick(now)
 	else
 		M.lastTick = now
 		if next(M.duck) then M.duck = {} M.ver = (M.ver or 0) + 1 end
@@ -344,7 +344,7 @@ end
 --- The level of the listener's own sounds against the engine's mix rule (pba_native_own_gain): the engine plays them
 -- about twice as loud as the group's value says. 1 = the mix value alone.
 function M.OwnGain()
-	return A.cfg.native_own_gain or 2
+	return A.Num(A.cfg, "native_own_gain")
 end
 
 function M.Wrap()

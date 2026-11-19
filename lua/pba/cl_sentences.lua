@@ -189,7 +189,7 @@ end
 --- True when sentences may be rendered by the module (option on, a module that has LoadSentence).
 function S.On()
 	local N = A.Native
-	return (A.cfg.native_sentences or 1) >= 0.5 and N and N.render and pba_native and pba_native.LoadSentence and true or false
+	return A.On(A.cfg, "native_sentences") and N and N.render and pba_native and pba_native.LoadSentence and true or false
 end
 
 -- What was left to the engine, and why (S.Note, one count per voice asked of the module): the ledger behind
@@ -224,7 +224,7 @@ function S.WhyNot(dsp, clear)
 	if not (N and N.render) then return "norender" end
 	if not S.On() then return "off" end
 	if A.OwnDSP(dsp) then return "owndsp" end
-	if clear and (A.cfg.native_all or 1) < 0.5 then return "notall" end
+	if clear and A.Num(A.cfg, "native_all") < 0.5 then return "notall" end
 	return "other"
 end
 
@@ -267,7 +267,7 @@ function S.Ensure(name)
 	-- what is past the budget decodes on the worker, and the sentence is the engine's that once
 	local fr = FrameNumber()
 	if S.frame ~= fr then S.frame, S.spentMs = fr, 0 end
-	local budget = A.cfg.native_sentence_ms or 12
+	local budget = A.Num(A.cfg, "native_sentence_ms")
 	for _, w in ipairs(words) do
 		-- a word without a file is skipped, as the engine does; one the module cannot decode: engine
 		if file.Exists("sound/" .. w.file, "GAME") then

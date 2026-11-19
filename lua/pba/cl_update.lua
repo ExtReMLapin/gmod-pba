@@ -55,7 +55,7 @@ function U.ModuleInfo()
 end
 
 local function debugLine(msg)
-	if (A.cfg.debug or 0) >= 1 then MsgN("[PBA] update check: ", msg) end
+	if A.Num(A.cfg, "debug") >= 1 then MsgN("[PBA] update check: ", msg) end
 end
 
 --- the text shown to the player, or nil when the module is up to date
@@ -109,7 +109,7 @@ end
 --- one check: cache first, then at most one request. now: os.time() (tests pass their own)
 function U.Check(now)
 	now = now or os.time()
-	if (A.cfg.update_check or 1) < 0.5 then return "off" end
+	if A.Num(A.cfg, "update_check") < 0.5 then return "off" end
 	if not U.ModuleInfo() then return "no module" end
 	local tag = cookie.GetString("pba_update_tag", "")
 	local last = tonumber(cookie.GetString("pba_update_time", "0")) or 0

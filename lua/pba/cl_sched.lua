@@ -19,12 +19,12 @@ A.Sched = SC
 SC.MIN_LEFT = 0.5
 
 --- Seconds between two re-evaluations of a sound at most (update_interval).
-function SC.Interval() return math.max(A.cfg.update_interval or 0.25, 0.05) end
+function SC.Interval() return math.max(A.Num(A.cfg, "update_interval"), 0.05) end
 
 --- True once this frame's path-search budget is spent (frame_budget_ms), for every kind of sound.
 function SC.BudgetExceeded()
 	local pf = A.perf
-	return pf ~= nil and pf.frame == FrameNumber() and pf.cur >= (A.cfg.frame_budget_ms or 1)
+	return pf ~= nil and pf.frame == FrameNumber() and pf.cur >= A.Num(A.cfg, "frame_budget_ms")
 end
 
 -- ------------------------------------------------------------------ fights and background builds
@@ -70,9 +70,9 @@ end
 -- who ("probes" / "native", the caller): with pba_build_fair the builds running together take turns, one frame
 -- each, otherwise the first to ask each frame spent it all and the other starved until the end of the fight.
 function SC.BuildBudget(who)
-	local c = A.cfg.build_ms_combat or 1
+	local c = A.Num(A.cfg, "build_ms_combat")
 	if c > 0 and SC.InCombat() then
-		if who and (A.cfg.build_fair or 1) > 0 then
+		if who and A.Num(A.cfg, "build_fair") > 0 then
 			local n, mine = 0, 0
 			for _, id in ipairs(BUILDERS) do
 				if id == who or buildRunning(id) then
@@ -92,7 +92,7 @@ end
 --- True when a build's last, indivisible step (the module's world load, the probe graph's preparation: tens of
 -- ms in one frame) must wait for the end of the fight (pba_build_ms_combat on).
 function SC.HoldLongStep()
-	return (A.cfg.build_ms_combat or 1) > 0 and SC.InCombat()
+	return A.Num(A.cfg, "build_ms_combat") > 0 and SC.InCombat()
 end
 
 --- A background build ran ms this frame: per-frame totals kept for the diagnostics and tests (SC.build:
@@ -151,7 +151,7 @@ ticks[5] = timed("streams_ramp", function() return A.Streams end, "RampTick")
 -- pba_gc_idle_step: the collector's work done in frames without a new sound (none in this frame nor the last:
 -- A.perf.frame is the last frame a sound was processed), so that it is not left to the next burst
 local function gcIdle()
-	local k = A.cfg.gc_idle_step or 0
+	local k = A.Num(A.cfg, "gc_idle_step")
 	if k <= 0 then return end
 	local pf = A.perf
 	if pf and pf.frame and pf.frame >= FrameNumber() - 1 then return end

@@ -357,6 +357,17 @@ A.CONFIG = {
 	loops           = { 1, 0, 1, "sv", "Take over looping sounds (vehicles, fire, alarms) and muffle them in place on each client." },
 }
 
+--- The one option reader. cfg: the table read (nil = A.cfg); a table without the option (a bench's partial
+-- cfg, the server reading a client option) gives the default declared in A.CONFIG, never a value guessed at the
+-- read site (`cfg.x or 0` on an option whose default is 1 was a switch upside down). A.Num gives the number,
+-- A.On the switch (>= 0.5). Hot loops read it once into a local, as for any table read.
+function A.Num(cfg, k)
+	return (cfg or A.cfg)[k] or A.CONFIG[k][1]
+end
+function A.On(cfg, k)
+	return ((cfg or A.cfg)[k] or A.CONFIG[k][1]) >= 0.5
+end
+
 A.cv = A.cv or {}
 A.cfg = A.cfg or {}
 -- in-memory overrides (demo map): name -> value. They win over the convar until cleared and
@@ -403,7 +414,7 @@ local canJit = CLIENT and jit and jit.off and jit.on and debug and debug.getinfo
 local function jitApply(name)
 	local f = A.jitChunks[name]
 	if not f then return end
-	if A.JIT_INTERP[name] and (A.cfg.lua_interp or 1) >= 0.5 then jit.off(f, true) else jit.on(f, true) end
+	if A.JIT_INTERP[name] and A.On(A.cfg, "lua_interp") then jit.off(f, true) else jit.on(f, true) end
 end
 --- Called at the top of a pba file's chunk: registers the chunk under name and applies pba_lua_interp to it.
 function A.JitFile(name)
@@ -544,10 +555,16 @@ A.MigrateDefaults()
 
 -- Change callbacks do not fire on the client for replicated convars: poll them.
 if CLIENT then
+	-- the server options, listed once (the poll walked all of A.CONFIG twice a second to keep a third of it)
+	local svNames = {}
+	for name, c in pairs(A.CONFIG) do
+		if c[4] == "sv" then svNames[#svNames + 1] = name end
+	end
 	timer.Create("pba_cfgpoll", 0.5, 0, function()
-		for name, c in pairs(A.CONFIG) do
+		for i = 1, #svNames do
+			local name = svNames[i]
 			local cv = A.cv[name]
-			if c[4] == "sv" and cv and A.override[name] == nil then
+			if cv and A.override[name] == nil then
 				local v = cv:GetFloat()
 				if v ~= A.cfg[name] then
 					A.cfg[name] = v
@@ -575,8 +592,8 @@ end
 
 --- Effective master switch for this realm.
 function A.Enabled()
-	if (A.cfg.enable or 0) < 0.5 then return false end
-	if CLIENT and (A.cfg.cl_enable or 1) < 0.5 then return false end
+	if A.Num(A.cfg, "enable") < 0.5 then return false end
+	if CLIENT and A.Num(A.cfg, "cl_enable") < 0.5 then return false end
 	return true
 end
 

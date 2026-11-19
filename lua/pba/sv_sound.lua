@@ -40,7 +40,7 @@ local function loopStage(data, snd)
 		-- (only the control events of a sound — stop, change — look up the key: a player's plain sounds are hot)
 		local ctl = band(data.Flags or 0, SND_STOP + STOP_LOOPING + SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 		local followed = ctl and LP.active[e:EntIndex() .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName]
-		if not followed and (ctl or (A.cfg.long_player_camera or 1) < 0.5 or A.HearsFromSelf(e) or A.IsLooping(data.SoundName)) then
+		if not followed and (ctl or A.Num(A.cfg, "long_player_camera") < 0.5 or A.HearsFromSelf(e) or A.IsLooping(data.SoundName)) then
 			return
 		end
 	end
@@ -56,7 +56,7 @@ local function loopStage(data, snd)
 	-- (pba_loops_world_pos) the world's positional loops by their place too: two of one name (two EmitSound(name, pos) of
 	-- a map or an addon) shared a key, the second taken as an update of the first (no start, the first one's place)
 	local pos = data.Pos
-	if idx == 0 and pos and (A.cfg.loops_world_pos or 1) >= 0.5 then
+	if idx == 0 and pos and A.On(A.cfg, "loops_world_pos") then
 		key = key .. "@" .. math.floor(pos.x + 0.5) .. "," .. math.floor(pos.y + 0.5) .. "," .. math.floor(pos.z + 0.5)
 	end
 	local l = LP.active[key]
@@ -73,7 +73,7 @@ local function loopStage(data, snd)
 			-- engine and its end never reaches Lua. Followed as a mirror that ends with the prop's scraping
 			-- (pba_phys_loops_mirror, LP.PhysEnded), else left to the engine (muffled behind a wall)
 			if LP.IsPhysicsLoop(data.SoundName, e, data.OriginalSoundName) then
-				if (A.cfg.phys_loops_mirror or 1) < 0.5 or not IsValid(e) or e:IsWorld() then return end
+				if A.Num(A.cfg, "phys_loops_mirror") < 0.5 or not IsValid(e) or e:IsWorld() then return end
 				snd.phys = true
 			end
 		else
@@ -110,7 +110,7 @@ local function briefStage(snd)
 	if LP.EngineDriven and LP.EngineDriven(data) then return "engineDriven" end
 	-- a stop event (some engine paths do send one): same relay as StopSound
 	if band(data.Flags or 0, SND_STOP) ~= 0 then return "stop" end
-	local sentence = data.SoundName == "invalid.wav" and (A.cfg.sentences or 0) >= 0.5 and (data.OriginalSoundName or "") ~= ""
+	local sentence = data.SoundName == "invalid.wav" and A.On(A.cfg, "sentences") and (data.OriginalSoundName or "") ~= ""
 	if sentence then
 		local d = {}
 		for k, v in pairs(data) do d[k] = v end
@@ -189,13 +189,13 @@ end
 -- volume through the wall: near the cap, gunfire behind a wall flipped between muffled and 20-30 dB
 -- louder shot to shot); he gets it re-emitted by the engine, muffled (see muffleFor).
 local function relayToken(ply)
-	return takeToken(A.PState(ply), "relayBucket", A.cfg.relay_rate or 80, "relayCapped")
+	return takeToken(A.PState(ply), "relayBucket", A.Num(A.cfg, "relay_rate"), "relayCapped")
 end
 
 --- Echo-only relay budget: its own bucket (same rate). Out of tokens the player only misses the
 -- client-side echo tail, he still hears the direct sound: never louder, just drier.
 local function echoToken(ply)
-	return takeToken(A.PState(ply), "echoBucket", A.cfg.relay_rate or 80, "echoCapped")
+	return takeToken(A.PState(ply), "echoBucket", A.Num(A.cfg, "relay_rate"), "echoCapped")
 end
 
 --- Engine muffling for a blocked player over budget (P.MuffleFor): DSP preset and volume factor.
@@ -283,7 +283,7 @@ end)
 local function stepper(data)
 	local e = data.Entity
 	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then
-		if (A.cfg.step_by_name or 1) >= 0.5 then
+		if A.On(A.cfg, "step_by_name") then
 			local f = A.stepFiles
 			if not f or not (A.StopReaches(f, data.SoundName) or A.StopReaches(f, data.OriginalSoundName)) then return nil end
 		end
@@ -297,7 +297,7 @@ end
 -- window it breaks) is sent to him as to anyone.
 local function predictedBy(e, predicted)
 	if not IsValid(predicted) then return false end
-	if (A.cfg.predicted_exact or 1) < 0.5 then return true end
+	if A.Num(A.cfg, "predicted_exact") < 0.5 then return true end
 	if not IsValid(e) then return false end
 	return e == predicted or e:GetOwner() == predicted
 end
@@ -333,7 +333,7 @@ local function prepare(snd)
 	-- on a player, in or outside his command (his weapon, pain, fall damage, his suit's HEV lines), is his
 	-- own: the engine plays it on him, clear. Those of his command in multiplayer go to nobody (his client
 	-- predicts them, below)
-	snd.own = (A.cfg.mp_own or 1) >= 0.5
+	snd.own = A.On(A.cfg, "mp_own")
 	-- the player whose command made the sound, when his client predicts it (nobody otherwise)
 	snd.skip = not sp and predictedBy(data.Entity, predicted) and predicted or nil
 	snd.step = not sp and stepper(data)
@@ -358,7 +358,7 @@ function S.Audience(snd, ply, scale)
 	if kind == "mirror" or snd.subs then
 		-- (pba_loops_ready) not before his client runs: a start sent while he joins is lost and he would stay
 		-- subscribed to nothing; once ready, the 0.5 s timer (sv_loops) has him join it as a player entering its range
-		if (A.cfg.loops_ready or 1) >= 0.5 and not clientReady(ply) then return nil end
+		if A.On(A.cfg, "loops_ready") and not clientReady(ply) then return nil end
 		return LP.InRange(snd, ply, scale) and "mirror" or nil
 	end
 	local pos, data = snd.pos, snd.data
@@ -382,7 +382,7 @@ function S.Audience(snd, ply, scale)
 	-- (not through a camera: the engine spatialises his sounds from there, so they take the path of any sound)
 	local ownEar = snd.own and ply ~= snd.skip and e == ply and A.HearsFromSelf(ply)
 	-- (pba_own_ready: not before his client runs; on a map change his userinfo still asks while his new client loads)
-	if ownEar and (not wantsOwn(ply) or ((A.cfg.own_ready or 1) >= 0.5 and not clientReady(ply))) then return "clear" end
+	if ownEar and (not wantsOwn(ply) or (A.On(A.cfg, "own_ready") and not clientReady(ply))) then return "clear" end
 	-- his own sound for his module (pba_native_own): no wall to look for between him and himself, and no
 	-- relay budget or per-name quota (an SMG's 13 shots a second hit the quota: the shots over it went to
 	-- the engine and the next relayed shot cut them on the weapon channel)
@@ -397,7 +397,7 @@ function S.Audience(snd, ply, scale)
 	if d2 > snd.lod2 or not clientReady(ply) then
 		-- too far for a path search (or his pba client not running): the cheap muffle of an over-budget
 		-- player when the line is blocked (pba_far_muffle; it was heard through the wall as in plain sight)
-		local walls = (A.cfg.far_muffle or 0) >= 0.5 and A.Paths.Walls(wallsFrom(snd), eye, 1, snd.srcObj) or nil
+		local walls = A.On(A.cfg, "far_muffle") and A.Paths.Walls(wallsFrom(snd), eye, 1, snd.srcObj) or nil
 		if walls and #walls > 0 then
 			local dsp, gain = muffleFor(walls)
 			A.stats.farMuffled = (A.stats.farMuffled or 0) + 1
@@ -409,7 +409,7 @@ function S.Audience(snd, ply, scale)
 	-- line: their module plays the sound instead of the engine
 	local all = A.cfg.native_relay >= 0.5 and A.cfg.allow_native >= 0.5 and ply:GetInfoNum("pba_native_all_want", 0) >= 1
 	-- one name from many sources: past its quota it takes no token of the budget the other sounds share
-	local nq = A.cfg.relay_name_rate or 8
+	local nq = A.Num(A.cfg, "relay_name_rate")
 	local ns
 	if nq > 0 then
 		ns = nameState(ply, data.SoundName)
@@ -451,7 +451,7 @@ local function reemit(data, pos, lvl, plys, name, vol, dsp)
 	local f = RecipientFilter()
 	f:AddPlayers(plys)
 	local e = data.Entity
-	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
+	local st = A.On(A.cfg, "soundtime") and data.SoundTime or 0
 	A.reemitTime = st ~= 0 and st or nil
 	if IsValid(e) and not e:IsWorld() then
 		A.Emit(A.orig.EntEmitSound, e, name, lvl, data.Pitch, vol, data.Channel, data.Flags, dsp, f)
@@ -537,7 +537,7 @@ local function dispatchBrief(snd)
 	if not prepare(snd) then return end
 	local data, pos, lvl = snd.data, snd.pos, snd.lvl
 	local clear, blocked, muffled, far = audienceOf(snd)
-	if (A.cfg.early_line_takeover or 1) >= 0.5 and A.NoteEarly and not snd.sentence then noteEarly(snd, clear, muffled, far) end
+	if A.On(A.cfg, "early_line_takeover") and A.NoteEarly and not snd.sentence then noteEarly(snd, clear, muffled, far) end
 	-- clients rendering echoes natively also want the loud sounds they hear directly
 	if A.cfg.echo_relay >= 0.5 and A.cfg.allow_native >= 0.5 and lvl >= A.cfg.echo_min_level and #clear > 0 then
 		local want = {}
@@ -553,7 +553,7 @@ local function dispatchBrief(snd)
 	if snd.sentence then
 		-- (pba_sentence_ready) ... but not to a player whose pba client is not ready: nothing would play it for him.
 		-- Then the engine plays it for everyone, as it would without pba.
-		if (A.cfg.sentence_ready or 1) >= 0.5 then
+		if A.On(A.cfg, "sentence_ready") then
 			for _, p in ipairs(clear) do if not clientReady(p) then A.stats.untouched = A.stats.untouched + 1 return end end
 			for _, m in ipairs(muffled) do if not clientReady(m.ply) then A.stats.untouched = A.stats.untouched + 1 return end end
 		end

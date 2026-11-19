@@ -35,7 +35,7 @@ end
 --- A whizz heard at `pos` (the bullet's closest point to the ears) of a sound script: played by the module as a
 -- sound of the world, the engine's stopped. Returns true when taken.
 function W.Heard(pos, script)
-	if (A.cfg.native_whiz or 0) < 0.5 then return false end
+	if A.Num(A.cfg, "native_whiz") < 0.5 then return false end
 	local N = A.Native
 	if not (N and N.render and A.Enabled()) then return false end
 	-- the files decoded ahead once (a first play of each would be left to the engine while its file decodes)

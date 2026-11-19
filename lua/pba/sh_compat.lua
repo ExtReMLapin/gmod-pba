@@ -76,7 +76,7 @@ function C.Check()
 	for _, f in ipairs(C.found) do
 		local k = f.info
 		if k.overlap == "full" and SERVER then
-			local takeOver = A.Enabled() and (A.cfg.compat_auto or 1) >= 0.5
+			local takeOver = A.Enabled() and A.On(A.cfg, "compat_auto")
 			if takeOver and f.cv:GetBool() then
 				MsgN("[PBA] ", k.name, " detected: it does the same job; turning it off (", k.cvar,
 					" 0). Set pba_compat_auto 0 to keep both.")
@@ -146,7 +146,7 @@ function C.RRadio()
 	wrapRRadio()
 	local cfg = rRadio and istable(rRadio.config) and rRadio.config.Occlusion
 	if not istable(cfg) then return end
-	local takeOver = A.Enabled() and (A.cfg.compat_auto or 1) >= 0.5
+	local takeOver = A.Enabled() and A.On(A.cfg, "compat_auto")
 	if takeOver then
 		if cfg.Enabled ~= false then
 			if C.rradioOcc == nil then

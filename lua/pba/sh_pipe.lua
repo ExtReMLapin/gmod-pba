@@ -78,7 +78,7 @@ function Pi.Pick(tier, rnd, last)
 end
 
 --- The option: the entities exist only while pba_meme_pipe is on.
-function Pi.Allowed() return (A.cfg.meme_pipe or 1) >= 0.5 end
+function Pi.Allowed() return A.On(A.cfg, "meme_pipe") end
 
 --- Every sound file (as EmitSound takes it), the hardest first (the first clang of a fall is a hard one).
 function Pi.Files()

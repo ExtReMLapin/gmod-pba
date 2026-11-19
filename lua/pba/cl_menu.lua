@@ -476,7 +476,7 @@ end)
 local GREEN, RED, ORANGE = Color(20, 110, 40), Color(180, 25, 25), Color(170, 90, 0)
 local function nativeState()
 	local N = A.Native or {}
-	if (A.cfg.allow_native or 1) < 0.5 then return "forbidden", RED, "Native backend forbidden by this server (pba_allow_native 0)." end
+	if A.Num(A.cfg, "allow_native") < 0.5 then return "forbidden", RED, "Native backend forbidden by this server (pba_allow_native 0)." end
 	if N.ready then
 		local text = string.format("Steam Audio module loaded: %d triangles%s%s.", N.tris or 0,
 			N.render and ", native rendering on" or "",
@@ -487,7 +487,7 @@ local function nativeState()
 		return "ready", GREEN, text
 	end
 	if N.building then return "module", ORANGE, "Steam Audio module: loading the map geometry..." end
-	if (A.cfg.native or 1) < 0.5 then return "module", ORANGE, "Native backend switched off (pba_native 0)." end
+	if A.Num(A.cfg, "native") < 0.5 then return "module", ORANGE, "Native backend switched off (pba_native 0)." end
 	if N.outdated then return "module", RED, "Steam Audio module NOT UP TO DATE, left unused: " .. tostring(N.err) end
 	if N.err and N.err:find("32-bit", 1, true) then return "missing", RED, "Steam Audio module unavailable: " .. N.err .. "." end
 	if N.err == "module not installed" or not N.err then
@@ -513,7 +513,7 @@ function A.RefreshMenu()
 		module = state ~= "missing" and state ~= "forbidden",
 		ready = state == "ready",
 		render = state == "ready" and N.render == true,
-		paths = state == "ready" and (A.cfg.native_paths or 0) >= 0.5,
+		paths = state == "ready" and A.On(A.cfg, "native_paths"),
 		debug = not A.DebugAllowed or A.DebugAllowed(),
 	}
 	for i = #panels, 1, -1 do

@@ -63,7 +63,7 @@ local function send(op, l, plys, join)
 		-- (pba_loops_join_pos) where its source is now: a moving source (a car, a helicopter) has left its start position,
 		-- and a player joining it out of his PVS has no entity to follow (its offset from the entity kept)
 		local pos = l.pos
-		if l.pos0 and (A.cfg.loops_join_pos or 1) >= 0.5 and IsValid(l.ent) then pos = l.pos + (l.ent:WorldSpaceCenter() - l.pos0) end
+		if l.pos0 and A.On(A.cfg, "loops_join_pos") and IsValid(l.ent) then pos = l.pos + (l.ent:WorldSpaceCenter() - l.pos0) end
 		-- the common body (sh_core A.WriteSound, as pba_snd's): the speaker flag, SoundTime and face bit with it
 		A.WriteSound({ pos = pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
 			flags = l.speaker and (SND_SPEAKER or 64) or 0, dsp = l.dsp, idx = l.idx, st = l.st, face = l.face })
@@ -76,7 +76,7 @@ end
 --- A volume / pitch update of mirror l to `plys`: compact (id, volume, pitch) for the players who got a full copy
 -- of it less than RESYNC seconds ago, the full update for the others (a first message, or the periodic resync).
 local function sendUpdate(l, plys)
-	if (A.cfg.loops_net_compact or 1) < 0.5 or not l.id or not l.fullT then return send(OP_UPDATE, l, plys) end
+	if A.Num(A.cfg, "loops_net_compact") < 0.5 or not l.id or not l.fullT then return send(OP_UPDATE, l, plys) end
 	local now = RealTime()
 	local full, compact = {}, {}
 	for _, p in ipairs(plys) do
@@ -264,7 +264,7 @@ end
 --- A physics friction / rolling loop whose lifecycle stays the physics engine's (see LP.IsPhysicsLoop): not
 -- mirrored, but its events are re-emitted muffled in place (sv_relay). True for such an event.
 function LP.EngineDriven(data)
-	if (A.cfg.phys_loops_muffle or 0) < 0.5 then return false end
+	if A.Num(A.cfg, "phys_loops_muffle") < 0.5 then return false end
 	if bit.band(data.Flags or 0, SND_STOP + (SND_STOP_LOOPING or 32)) ~= 0 then return false end
 	if not A.IsLooping(data.SoundName) then return false end
 	local e = data.Entity
@@ -274,7 +274,7 @@ end
 
 --- Long one-shot sound worth following like a loop (its path is re-evaluated while it plays).
 function LP.IsLong(data)
-	if (A.cfg.long_sounds or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
+	if A.Num(A.cfg, "long_sounds") < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
 	if not A.SoundTimeTaken(data, true) then return false end
 	local dur = A.SoundDuration(data.SoundName) or 0
 	return A.LongDuration(dur), dur
@@ -285,7 +285,7 @@ end
 -- playing (it plays once and ends; a later change starts it again). Neither a loop nor an eligible one-shot
 -- (a change flag): it crossed every wall. Followed like a long one-shot for its length. Returns true, dur.
 function LP.IsPatchStart(data)
-	if (A.cfg.patch_oneshots or 0) < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
+	if A.Num(A.cfg, "patch_oneshots") < 0.5 or (data.SoundLevel or 75) <= 0 then return false end
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(flags, SND_STOP) ~= 0 then return false end
 	local name = data.SoundName or ""
@@ -299,7 +299,7 @@ end
 -- (airboat: 6, gravity gun, mounted guns): the engine runs them at 0 at no cost. With loops_cap_audible
 -- only the audible ones count, so silent ones no longer push a new audible loop out to the engine.
 function LP.CapCount()
-	if (A.cfg.loops_cap_audible or 1) < 0.5 then return table.Count(LP.active) end
+	if A.Num(A.cfg, "loops_cap_audible") < 0.5 then return table.Count(LP.active) end
 	local n = 0
 	for _, l in pairs(LP.active) do if (l.vol or 1) > 0 then n = n + 1 end end
 	return n
@@ -428,7 +428,7 @@ end
 -- with the engine's timing (no propagation delay), as in vanilla.
 local MOUTH_VOL = A.MOUTH_VOL
 function LP.MouthStart(l, data)
-	if (A.cfg.long_lipsync or 0) < 0.5 or not l.once then return end
+	if A.Num(A.cfg, "long_lipsync") < 0.5 or not l.once then return end
 	local e, ch = l.ent, l.chan
 	if not IsValid(e) or (ch ~= CHAN_VOICE and ch ~= CHAN_VOICE2) then return end
 	if (e.GetFlexNum and e:GetFlexNum() or 0) == 0 then return end
@@ -436,7 +436,7 @@ function LP.MouthStart(l, data)
 	-- allows (pba_long_lipsync), each player's pba_lipsync chooses, as for the mouth copies of short lines his
 	-- client makes; 0 = every player gets it
 	local rf
-	if (A.cfg.long_lipsync_choice or 1) >= 0.5 then
+	if A.On(A.cfg, "long_lipsync_choice") then
 		rf = RecipientFilter()
 		for _, p in ipairs(player.GetHumans()) do if not A.PState(p).lipsyncOff then rf:AddPlayer(p) end end
 		if rf:GetCount() == 0 then return end
@@ -461,7 +461,7 @@ end
 function LP.CutChannel(idx, chan, name)
 	for _, x in pairs(LP.active) do
 		-- (pba_loops_cut_chan: that channel's only; the same name on another channel of the entity plays on)
-		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name, (A.cfg.loops_cut_chan or 1) >= 0.5 and chan or nil) end
+		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name, A.On(A.cfg, "loops_cut_chan") and chan or nil) end
 	end
 	for k, x in pairs(LP.capped) do
 		if x.idx == idx and x.chan == chan and x.name ~= name then LP.capped[k] = nil end
@@ -503,7 +503,7 @@ function LP.Take(data, snd)
 	-- (an antlion guard's near footsteps: SND_CHANGE_VOL on a file of 0.4-0.5 s, each step's emission found the
 	-- previous one's entry, kept END_GRACE past the file's end, and was sent as an update: no sound). The entry
 	-- of a short sound is over at its file's end (endT is that end plus END_GRACE), pba_once_change_restart.
-	local ended = l ~= nil and l.once and l.endT ~= nil and (A.cfg.once_change_restart or 1) >= 0.5
+	local ended = l ~= nil and l.once and l.endT ~= nil and A.On(A.cfg, "once_change_restart")
 		and RealTime() >= l.endT - A.END_GRACE
 	local update = l ~= nil and not ended and bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) ~= 0
 	local fresh = l == nil
@@ -556,12 +556,12 @@ function LP.Take(data, snd)
 	-- CHANGE_* update of a sound that is not playing, which the engine makes a new sound ON THAT CHANNEL, replacing what
 	-- the entity played there; the channel rule (sh_core WithChannelRule) leaves the CHANGE_* flags out, so a followed
 	-- line stayed over the new patch. Cut here, whether the cap then takes the patch over or leaves it to the engine.
-	if fresh and idx > 0 and bit.band(flags, VOL_PITCH) ~= 0 and (A.cfg.patch_channel_cut or 1) >= 0.5
+	if fresh and idx > 0 and bit.band(flags, VOL_PITCH) ~= 0 and A.On(A.cfg, "patch_channel_cut")
 		and A.CutsChannel(data.Channel, flags, true) and A.CutChannel then
 		A.CutChannel(data, idx, data.Channel)
 	end
 	if fresh then
-		if LP.CapCount() >= (A.cfg.loops_max or 64) then -- cap: left to the engine for now
+		if LP.CapCount() >= A.Num(A.cfg, "loops_max") then -- cap: left to the engine for now
 			-- (a NEW one-shot with a change flag past the cap goes to the brief stage instead, relayed like any new
 			-- sound: A.NewChange; kept out of capped so its later changes are known as a brief sound's)
 			if once and A.NewChange and A.NewChange(data) then return false end
@@ -591,7 +591,7 @@ function LP.Take(data, snd)
 	-- a long line taken over (a scene's speech longer than max_duration): the engine captions the original it
 	-- emits, suppressed here, so its listeners got no subtitle while the short lines around it had theirs
 	-- (Barney's first conversation line on d1_trainstation_06). Sent like a relayed sound's (sv_relay)
-	if not update and l.once and (A.cfg.long_captions or 1) >= 0.5 and A.SendCaption then A.SendCaption(data, plys) end
+	if not update and l.once and A.On(A.cfg, "long_captions") and A.SendCaption then A.SendCaption(data, plys) end
 	return true
 end
 
@@ -676,7 +676,7 @@ LP.NPC_STATE_LOOPS = { npc_antlion = ANTLION_WINGS, npc_antlion_worker = ANTLION
 
 --- The state rule { sounds, on } of NPC e's loop `name`, or nil.
 function LP.NpcStateRule(e, name, orig)
-	if (A.cfg.loops_npc_state or 1) < 0.5 then return nil end
+	if A.Num(A.cfg, "loops_npc_state") < 0.5 then return nil end
 	local rule = LP.NPC_STATE_LOOPS[e:GetClass()]
 	if not rule or rule.on(e) == nil then return nil end
 	local ck = "npcs:" .. e:GetClass()
@@ -696,7 +696,7 @@ end
 -- stops; one started after (a death sound) is new and plays. Aircraft crash with their engines on: left alone.
 LP.NPC_DEATH_KEEP = { npc_helicopter = true, npc_combinegunship = true, npc_combinedropship = true, npc_strider = true }
 hook.Add("OnNPCKilled", "pba_loops_npc_death", function(npc)
-	if (A.cfg.loops_npc_death or 1) < 0.5 or not IsValid(npc) or LP.NPC_DEATH_KEEP[npc:GetClass()] then return end
+	if A.Num(A.cfg, "loops_npc_death") < 0.5 or not IsValid(npc) or LP.NPC_DEATH_KEEP[npc:GetClass()] then return end
 	local idx = npc:EntIndex()
 	local ended = {}
 	for _, l in pairs(LP.active) do
@@ -712,7 +712,7 @@ end)
 -- timer below relays its stop once the mover is at rest.
 LP.briefMovers = LP.briefMovers or {}
 function LP.NoteBriefMover(data, took)
-	if not took or (A.cfg.brief_mover_stop or 1) < 0.5 then return end
+	if not took or A.Num(A.cfg, "brief_mover_stop") < 0.5 then return end
 	local e = data.Entity
 	if not IsValid(e) or e:IsWorld() or e:GetMoveType() ~= MOVETYPE_PUSH then return end
 	if not (string.byte(e:GetModel() or "", 1) == 42 or e:GetClass() == "prop_door_rotating") then return end
@@ -832,7 +832,7 @@ timer.Create("pba_loops", 0.5, 0, function()
 	-- capped loops: drop the ended ones; take the others over while slots are free (a loop capped
 	-- during a 70-loop battle no longer stays through every wall once the battle is over)
 	-- (counted as LP.Handle caps: with loops_cap_audible, silent patches take no slot)
-	local free = (A.cfg.loops_max or 64) - LP.CapCount()
+	local free = A.Num(A.cfg, "loops_max") - LP.CapCount()
 	local adopt = {}
 	for key, c in pairs(LP.capped) do
 		if (c.idx ~= 0 and not IsValid(c.ent)) or (c.once and RealTime() > c.endT) or endedInCpp(c) then
@@ -842,7 +842,7 @@ timer.Create("pba_loops", 0.5, 0, function()
 			adopt[#adopt + 1] = key
 		end
 	end
-	if #adopt == 0 or (A.cfg.loops or 0) < 0.5 or not A.hooksInstalled then return end
+	if #adopt == 0 or A.Num(A.cfg, "loops") < 0.5 or not A.hooksInstalled then return end
 	for _, key in ipairs(adopt) do
 		local c = LP.capped[key]
 		if c and IsValid(c.ent) then
@@ -906,7 +906,7 @@ function LP.Release()
 		send(OP_STOP, l, plys)
 		-- a long one-shot is not emitted again (pba_loops_release_restart 0): the engine would play it from its
 		-- top, midway through a speech; it ends silently, as the client's mirror (cannot resume midway)
-		if IsValid(l.ent) and (not l.once or (A.cfg.loops_release_restart or 0) >= 0.5) then
+		if IsValid(l.ent) and (not l.once or A.On(A.cfg, "loops_release_restart")) then
 			A.Emit(A.orig.EntEmitSound, l.ent, l.name, l.lvl, l.pitch, l.vol, l.chan, 0, l.dsp)
 			if not l.once then l.subs = {} LP.released[key] = l end
 		end
@@ -921,7 +921,7 @@ end
 -- routed sound, never seen by Lua); in vanilla it is the only stop of a looped or long copy on the speaker
 -- (the original's SND_STOP has volume 0, the microphone does not route it). The speaker's mirrors stop with it.
 hook.Add("AcceptInput", "pba_mic_disable", function(ent, input)
-	if (A.cfg.loops_mic_disable or 1) < 0.5 or not IsValid(ent) or ent:GetClass() ~= "env_microphone" then return end
+	if A.Num(A.cfg, "loops_mic_disable") < 0.5 or not IsValid(ent) or ent:GetClass() ~= "env_microphone" then return end
 	if string.lower(input or "") ~= "disable" then return end
 	local spk = ent:GetInternalVariable("m_hSpeaker")
 	if not IsValid(spk) then return end

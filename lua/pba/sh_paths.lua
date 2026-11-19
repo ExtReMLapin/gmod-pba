@@ -49,7 +49,7 @@ P.numTN, P.numTL, P.numOn = P.numTN or false, P.numTL or false, P.numOn or false
 P.numInside = P.numInside ~= false
 function P.NumTrace()
 	local f = P.numTN
-	if f and ((A.cfg.native_trace_nums or 1) < 0.5 or (A.cfg.native_traces or 1) < 0.5) then f = false end
+	if f and (A.Num(A.cfg, "native_trace_nums") < 0.5 or A.Num(A.cfg, "native_traces") < 0.5) then f = false end
 	if f ~= P.numOn then P.numOn = f P.ForgetWorld() end
 	if f and util.TraceLine ~= P.numTL then return false end
 	return f
@@ -162,8 +162,8 @@ end
 -- one wedge: one rule for portal chains, probe polylines and their joins. pba_corner_wedge 0: off.
 function P.WedgeDb(len, direct, cfg)
 	cfg = cfg or A.cfg
-	if (cfg.corner_wedge or 1) < 0.5 then return 0 end
-	return math.max(AC.Corner(math.max(len - direct, 0), cfg.diff_freq, cfg.diff_max_edge, cfg.portal_diffuse_db or 60), 0)
+	if A.Num(cfg, "corner_wedge") < 0.5 then return 0 end
+	return math.max(AC.Corner(math.max(len - direct, 0), cfg.diff_freq, cfg.diff_max_edge, A.Num(cfg, "portal_diffuse_db")), 0)
 end
 
 --- The door state of an openable entity ({ frac, closedDb, closedLp }, sh_doors: the server's poll,
@@ -214,7 +214,7 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	-- pba_door_3d: the leaves on the route the sound takes (taut on its corners): a clearance vertex 6 u off a
 	-- jamb crossed a leaf's free end swinging past it while the taut route stayed clear of it (5 dB on and off);
 	-- the leaf's way round bends round the world (P.LeafWay), a leg grazing an edge no longer flips it
-	local d3 = (cfg.door_3d or 0) >= 0.5
+	local d3 = A.On(cfg, "door_3d")
 	local dp = (not d3 and doorPts) or pts
 	-- A leaf crossed by several consecutive segments is judged on the whole span, from the vertex before it
 	-- to the vertex after it: the probes' routes pass the leaves (they are not shape obstacles), so a
@@ -261,9 +261,10 @@ function P.EvalPolyline(pts, cfg, doorPts)
 			end
 		end
 	end
+	local diffuseDb = A.Num(cfg, "portal_diffuse_db")
 	for i = 2, #pts - 1 do
 		local delta = pts[i - 1]:Distance(pts[i]) + pts[i]:Distance(pts[i + 1]) - pts[i - 1]:Distance(pts[i + 1])
-		diff = diff + AC.Corner(delta, cfg.diff_freq, cfg.diff_max_edge, cfg.portal_diffuse_db or 60)
+		diff = diff + AC.Corner(delta, cfg.diff_freq, cfg.diff_max_edge, diffuseDb)
 	end
 	if #pts > 2 then diff = math.max(diff, P.WedgeDb(len, pts[1]:Distance(pts[#pts]), cfg)) end
 	diff = math.min(diff, cfg.diff_max_total)
@@ -271,7 +272,7 @@ function P.EvalPolyline(pts, cfg, doorPts)
 	for i = 2, #pts - 1 do inner[#inner + 1] = pts[i] end
 	local direct, bend = P.PathShape(pts[1], inner, pts[#pts])
 	local lp = AC.LowpassLevel(diff + doorTilt, cfg)
-	if door <= 0 then lp = math.min(lp, cfg.portal_diffuse_lp or 4) end
+	if door <= 0 then lp = math.min(lp, A.Num(cfg, "portal_diffuse_lp")) end
 	return { points = inner, length = len, diffDb = diff, doorDb = door, lossDb = diff + door,
 		pos = pts[#pts - 1], lp = lp, lpDb = diff + doorTilt, direct = direct, bendDeg = bend, leaves = leaves }
 end
@@ -307,7 +308,7 @@ local function closureWeight(ent, cfg)
 	if not OPENABLE[cls] then return 1 end -- func_brush, func_wall...: part of the structure
 	local st = doorState(ent)
 	if not st then return 1 end -- state unknown: as before
-	if ((cfg or A.cfg).door_3d or 0) >= 0.5 then return (st.frac or 0) <= CLOSURE_FRAC0 and 1 or 0 end
+	if A.On(cfg, "door_3d") then return (st.frac or 0) <= CLOSURE_FRAC0 and 1 or 0 end
 	return 1 - ramp(st.frac or 0, CLOSURE_FRAC0, CLOSURE_FRAC1)
 end
 
@@ -420,7 +421,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 	local dir = (L - S):GetNormalized()
 	local start = S
 	ignoreEnt, ignoreLis, traceCfg = srcEnt, nil, cfg
-	local lisObj = lisAt and (cfg.listener_object or 1) >= 0.5
+	local lisObj = lisAt and A.On(cfg, "listener_object")
 	for i = 1, maxWalls or 6 do
 		wallTr.start, wallTr.endpos = start, L
 		util.TraceLine(wallTr)
@@ -488,7 +489,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 			w.minExtent = math.min(ext.x, ext.y, ext.z) -- panel or closed volume (P.EvalWalls)
 			w.fromInside = tr.StartSolid or nil -- the ray starts inside it: one sheet crossed
 		end
-		if hitEnt and OPENABLE[hitEnt:GetClass()] and (cfg.door_3d or 0) >= 0.5 then
+		if hitEnt and OPENABLE[hitEnt:GetClass()] and A.On(cfg, "door_3d") then
 			-- a leaf in 3-D (P.LeafWay): the straight line is a route of two points, the leaf's one model
 			-- The world this line crosses is its transmission, paid as such: a leg of a way round the leaf is
 			-- charged only for the world it cuts beyond what the line cuts on that side (blockedChunk). Charged
@@ -508,7 +509,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 		local prev = walls[#walls]
 		if not hitEnt and prev and not prev.ent and not prev.water and prev.surfIdx == w.surfIdx
 			and (prev.thickness < 0.01 or w.thickness < 0.01) and prev.exit:DistToSqr(w.entry) <= 4
-			and (cfg.wall_merge_graze or 0) >= 0.5 then
+			and A.On(cfg, "wall_merge_graze") then
 			-- the same world surface met twice within 2 u, one of the two hits a zero-thickness face: a line
 			-- grazing a brush's face (a floor's top at a wall's foot) left the 0.5 u probe out of the solid and
 			-- counted the face as a wall of its own, then the brush behind it again (rp_downtown: 18 dB in 8 u
@@ -554,10 +555,10 @@ function P.WaterWall(S, L, cfg)
 	cfg = cfg or A.cfg
 	if cfg.water < 0.5 then return false, false end
 	local wS, wL = A.InWater(S), A.InWater(L)
-	if wS == wL and (not wS or (cfg.water_planes or 1) < 0.5 or not P.WaterGap(S, L)) then return false, false end
+	if wS == wL and (not wS or A.Num(cfg, "water_planes") < 0.5 or not P.WaterGap(S, L)) then return false, false end
 	if cfg.water_skip then return false, true end
-	local filtered = wL and (cfg.native_water_listener or 1) >= 0.5 and P.ListenerWaterFiltered()
-	local m = cfg.water_margin or 0
+	local filtered = wL and A.On(cfg, "native_water_listener") and P.ListenerWaterFiltered()
+	local m = A.Num(cfg, "water_margin")
 	local shallow = wS and m > 0 and not A.InWater(S + UP * m)
 	-- two water bodies: the source's surface stays, unless the source counts as dry (shallow) and the
 	-- listener's surface is the module's filter
@@ -655,7 +656,7 @@ local srcObjOut = {}
 local srcObjTr = { mask = MASK_SOLID, ignoreworld = true, output = srcObjOut }
 function P.SourceObject(S, srcEnt, cfg)
 	if IsValid(srcEnt) and not srcEnt:IsWorld() then return srcEnt end
-	if ((cfg or A.cfg).source_object or 1) < 0.5 or not S then return srcEnt end
+	if A.Num(cfg, "source_object") < 0.5 or not S then return srcEnt end
 	srcObjTr.start, srcObjTr.endpos = S, S
 	util.TraceLine(srcObjTr)
 	local e = srcObjOut.Entity
@@ -1113,7 +1114,7 @@ function P.DoorSpanLoss(ent, a, b, cfg, hitPos, startSolid, V, d0, d9)
 	local w = { entry = hitPos, exit = hitPos, thickness = 0, ent = ent,
 		minExtent = math.min(ext.x, ext.y, ext.z), fromInside = startSolid or nil }
 	local h = 0
-	if (cfg.door_3d or 0) >= 0.5 and OPENABLE[ent:GetClass()] then
+	if A.On(cfg, "door_3d") and OPENABLE[ent:GetClass()] then
 		local clear = V ~= nil
 		V = V or { a, b }
 		if closureWeight(ent, cfg) >= 1 then
@@ -1222,7 +1223,7 @@ end
 local function dormantDoors(a, b, reach, list)
 	local D = A.Doors
 	local idxs = D and D.entIdx
-	if not idxs or #idxs == 0 or (A.cfg.door_dormant or 1) < 0.5 then return list end
+	if not idxs or #idxs == 0 or A.Num(A.cfg, "door_dormant") < 0.5 then return list end
 	local K = A.ProbeKernels
 	if not (K and K.SegBoxHit) then return list end
 	local pad = reach and LEAF_REACH or DOOR_HULL
@@ -1270,7 +1271,7 @@ end
 -- meets (P.SegmentDoors), each at its P.DoorSpanLoss, in series.
 function P.SegmentDoorLoss(a, b, cfg)
 	cfg = cfg or A.cfg
-	local list = P.SegmentDoors(a, b, (cfg.door_3d or 0) >= 0.5)
+	local list = P.SegmentDoors(a, b, A.On(cfg, "door_3d"))
 	if not list then return 0 end
 	local loss, lp, tilt = 0, 0, 0
 	for _, h in ipairs(list) do
@@ -1487,7 +1488,7 @@ function P.DetourDelta(S, L, mins, maxs, valid, sliced, va, vb, vc)
 		return r
 	end
 	local v = scr.v
-	local cap = A.cfg and A.cfg.detour_max_tests or 0
+	local cap = A.Num(A.cfg, "detour_max_tests")
 	if cap >= 1 then
 		local r = detourCapped(cand, n, math.floor(cap), valid, sliced, va, vb, vc, sx, sy, sz, lx, ly, lz, len, scr.blocked, v)
 		scratchPut(scr)
@@ -1563,7 +1564,7 @@ local function edgeClearAt(u, h, M, S, L)
 end
 function P.WorldEdge(S, L, walls, cfg)
 	cfg = cfg or A.cfg
-	if (cfg.world_edge or 1) < 0.5 then return nil end
+	if A.Num(cfg, "world_edge") < 0.5 then return nil end
 	local first, last
 	for _, w in ipairs(walls or {}) do
 		if not w.ent and not w.water then
@@ -1625,8 +1626,8 @@ function P.WorldEdge(S, L, walls, cfg)
 		-- one leaf at the apex: paid once. pba_edge_leg_doors: only that leaf is left out of the second leg,
 		-- not every door on it (pba_demo: two shut doors behind the apex dropped, 14 dB instead of 42, while
 		-- the straight line one step on paid all three: 28 dB in 16 u)
-		if (cfg.edge_leg_doors or 0) >= 0.5 then
-			local list = P.SegmentDoors(best.apex, L, (cfg.door_3d or 0) >= 0.5)
+		if A.On(cfg, "edge_leg_doors") then
+			local list = P.SegmentDoors(best.apex, L, A.On(cfg, "door_3d"))
 			d2, l2 = 0, 0
 			for _, h in ipairs(list or {}) do
 				if h[1] ~= e1 then
@@ -1709,7 +1710,7 @@ do -- (a block: the file is at Lua's 200 locals)
 	end
 	function P.SkyRoute(S, L, cfg)
 		cfg = cfg or A.cfg
-		if (cfg.sky_route or 0) < 0.5 then return nil end
+		if A.Num(cfg, "sky_route") < 0.5 then return nil end
 		local dx, dy = L.x - S.x, L.y - S.y
 		local hd = math.sqrt(dx * dx + dy * dy)
 		if hd < 32 then return nil end
@@ -1866,7 +1867,7 @@ function P.CornerPoint(a, v, b, y, cfg)
 	-- sees it: the leg it slides on stays clear (part of it), the other one is traced, the route only
 	-- shortens, and the vertex ends on the edge. Only from a vertex whose legs are both clear.
 	if cornerClear(a, q) and cornerClear(q, b) then
-		local stepFirst = ((cfg or A.cfg).corner_step_first or 0) >= 0.5
+		local stepFirst = A.On(cfg, "corner_step_first")
 		for _ = 1, CORNER_SWEEPS do
 			local moved = false
 			for side = 1, 2 do
@@ -1907,7 +1908,7 @@ local cornerKept
 local cornerT, cornerN, cornerGen, cornerTL, cornerSF = {}, 0, nil, nil, nil
 function cornerKept(a, v, b, cfg)
 	local TL = util.TraceLine
-	local sf = ((cfg or A.cfg).corner_step_first or 0) >= 0.5
+	local sf = A.On(cfg, "corner_step_first")
 	if cornerGen ~= P.worldGen or cornerTL ~= TL or cornerN >= CORNER_KEEP or cornerSF ~= sf then
 		cornerT, cornerN, cornerGen, cornerTL, cornerSF = {}, 0, P.worldGen, TL, sf
 	end
@@ -1941,10 +1942,10 @@ local refineCorners
 -- two vertices on the two jambs of one doorway would otherwise chase each other).
 function P.RefineCorners(pts, cfg)
 	cfg = cfg or A.cfg
-	if (cfg.corner_refine or 1) < 0.5 then return refineCorners(pts, false, cfg) end
+	if A.Num(cfg, "corner_refine") < 0.5 then return refineCorners(pts, false, cfg) end
 	local n, TL = #pts, util.TraceLine
 	local m = refineMemo[pts]
-	local rp = (cfg.corner_relax or 0) >= 0.5
+	local rp = A.On(cfg, "corner_relax")
 	if m and m.n == n and m.TL == TL and m.gen == P.worldGen and m.rp == rp then
 		local c, k = m.c, 0
 		for i = 1, n do
@@ -1993,7 +1994,7 @@ function refineCorners(pts, on, cfg)
 		-- stopped at the opening's sill, where the taut string between the refined corners bends at its lintel:
 		-- 14 u of detour, 4.6 dB, where the string only grazed the lintel and touched the far jamb
 		-- (gm_melancholia, under the radio's floor: 4.7 dB in 2 u as the jamb's shadow began)
-		if (cfg.corner_relax or 0) >= 0.5 and #pts > 3 then
+		if A.On(cfg, "corner_relax") and #pts > 3 then
 			out[#pts] = pts[#pts]
 			for x = 2, #pts - 1 do
 				sliceCheck()
@@ -2184,8 +2185,8 @@ function P.KeepNativeWorldWall(w, nativeDisp) return not w.ent and not w.water a
 -- Fresnel zone's radius there, at most pba_trans_bundle_r), or nil when that radius is under half a unit.
 function P.BundleMids(S, L, cfg)
 	local d = S:Distance(L)
-	local lambda = 343 / (cfg.diff_freq or 1000) / 0.01905 -- units
-	local r = math.min(cfg.trans_bundle_r or 24, 0.5 * math.sqrt(lambda * d))
+	local lambda = 343 / A.Num(cfg, "diff_freq") / 0.01905 -- units
+	local r = math.min(A.Num(cfg, "trans_bundle_r"), 0.5 * math.sqrt(lambda * d))
 	if r < 0.5 then return nil end
 	local dir = (L - S):GetNormalized()
 	local u = dir:Cross(math.abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
@@ -2204,7 +2205,7 @@ end
 -- per half nor once per re-hit of the traces restarting inside it. World walls keep their chord on both halves.
 function P.BundleLine(S, L, m, srcEnt, cfg, keep, karg)
 	local sel = {}
-	local fix = (cfg.trans_bundle_mid_leaf or 1) >= 0.5
+	local fix = A.On(cfg, "trans_bundle_mid_leaf")
 	local seen
 	for h = 1, 2 do
 		local half = P.Walls(h == 1 and S or L, m, cfg.trans_max_walls, srcEnt, true, cfg, fix)
@@ -2225,7 +2226,7 @@ function P.BundleLine(S, L, m, srcEnt, cfg, keep, karg)
 	return sel
 end
 function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
-	if (cfg.trans_bundle or 0) < 0.5 then return loss, lp, mid, tilt end
+	if A.Num(cfg, "trans_bundle") < 0.5 then return loss, lp, mid, tilt end
 	local mids = P.BundleMids(S, L, cfg)
 	if not mids then return loss, lp, mid, tilt end
 	-- door leaves count on every line of the bundle: an offset line through a shut doorway beside the wall
@@ -2265,8 +2266,8 @@ local function bundleCross(o, S, L, cfg, srcEnt, dir, spans, keep, karg)
 	return false
 end
 function P.BundleEdge(S, L, srcEnt, cfg, keep, karg)
-	local lambda = 343 / (cfg.diff_freq or 1000) / 0.01905
-	local r = math.min(cfg.trans_bundle_r or 24, 0.5 * math.sqrt(lambda * S:Distance(L)))
+	local lambda = 343 / A.Num(cfg, "diff_freq") / 0.01905
+	local r = math.min(A.Num(cfg, "trans_bundle_r"), 0.5 * math.sqrt(lambda * S:Distance(L)))
 	local dir = (L - S):GetNormalized()
 	-- the stretches of the line its own world walls take (widened by r): an offset line crossing the world
 	-- elsewhere (the far jamb of another doorway on a long line) has not stayed in these walls
@@ -2306,7 +2307,7 @@ end
 function P.EvalWalls(walls, cfg, noCap, noDetour)
 	cfg = cfg or A.cfg
 	local loss, mid, lp, tilt = 0, 0, 0, 0
-	local cap = cfg.prop_max_db or 18
+	local cap = A.Num(cfg, "prop_max_db")
 	for _, w in ipairs(walls) do
 		local db, l
 		-- a door leaf: its one loss (leafLoss), whatever chord the line cuts through it
@@ -2422,7 +2423,7 @@ function P.KeepLoudest(paths, n, sndlvl, cfg)
 	table.sort(idx, byLevelThenIndex)
 	local out = {}
 	for i = 1, n do out[i] = idx[i].p end
-	if ((cfg or A.cfg).model_soft_cull or 0) >= 0.5 then
+	if A.On(cfg, "model_soft_cull") then
 		local ln = idx[n].lvl
 		for i = n + 1, #idx do
 			local w = 1 - ramp(ln - idx[i].lvl, 0, SOFT_CULL_DB)
@@ -2470,14 +2471,14 @@ end
 -- (Steam Audio baked paths) stay clean. Replaces the length / angle guard, which faded such paths out.
 function P.PathDiffuse(p, cfg)
 	cfg = cfg or A.cfg
-	if (cfg.diffuse or 0) < 0.5 or not p.direct or not p.length then return 0, 0 end
-	local straight = math.max(p.direct, cfg.diffuse_near or 512, 1)
+	if A.Num(cfg, "diffuse") < 0.5 or not p.direct or not p.length then return 0, 0 end
+	local straight = math.max(p.direct, A.Num(cfg, "diffuse_near"), 1)
 	local fl = ramp(p.length / straight, 2, 4.5)
 	local fb = ramp(p.bendUse or p.bendDeg or 0, 180, 540)
-	local share = (1 - (1 - fl) * (1 - fb)) * (cfg.diffuse_max or 0.85)
-	local bounce = -10 * math.log10(1 - math.Clamp(cfg.diffuse_absorb or 0.1, 0, 0.99))
+	local share = (1 - (1 - fl) * (1 - fb)) * A.Num(cfg, "diffuse_max")
+	local bounce = -10 * math.log10(1 - math.Clamp(A.Num(cfg, "diffuse_absorb"), 0, 0.99))
 	local excess = math.max(p.length - straight, 0)
-	local absorb = math.min(excess / math.max(cfg.diffuse_width or 128, 16) * bounce, cfg.diffuse_max_db or 20)
+	local absorb = math.min(excess / math.max(A.Num(cfg, "diffuse_width"), 16) * bounce, A.Num(cfg, "diffuse_max_db"))
 	return share, absorb
 end
 
@@ -2500,11 +2501,11 @@ function P.DiffuseMix(p, share, absorbDb, cfg)
 	local raw = p.rawLossDb or p.lossDb or 0
 	if not share or share <= 0 then return raw, 0 end
 	local diff = math.Clamp(p.diffDb or 0, 0, math.max(raw, 0))
-	local corners = math.min((p.bendUse or p.bendDeg or 0) / 90 * (cfg.diffuse_corner_db or 3), diff)
+	local corners = math.min((p.bendUse or p.bendDeg or 0) / 90 * A.Num(cfg, "diffuse_corner_db"), diff)
 	local ec = (1 - share) * exp((-raw / 10) * LN10)
 	local ed = share * exp((-(raw - diff + corners + (absorbDb or 0)) / 10) * LN10)
 	local e = math.max(ec + ed, 1e-30)
-	return -10 * math.log10(e), math.min(ed / e, cfg.diffuse_max or 0.85)
+	return -10 * math.log10(e), math.min(ed / e, A.Num(cfg, "diffuse_max"))
 end
 
 --- Builds the voice list from evaluated portal paths and the transmission path (pure).
@@ -2588,7 +2589,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	table.sort(list, byLevelDesc)
 	local best = list[1] and list[1].level or -math.huge
 	local kept = {}
-	local soft = (cfg.model_soft_cull or 0) >= 0.5
+	local soft = A.On(cfg, "model_soft_cull")
 	for _, p in ipairs(list) do
 		if not soft then
 			if p.level >= best - cfg.reject_db then kept[#kept + 1] = p end
@@ -2618,9 +2619,9 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	-- the clear one (level 1), not the mean of their levels (2).
 	local voices = {}
 	if cfg.merge >= 0.5 then
-		local A0, D0 = cfg.split_angle or 60, cfg.split_db or 6
+		local A0, D0 = A.Num(cfg, "split_angle"), A.Num(cfg, "split_db")
 		-- portal voices: one slot is left for the transmission
-		local slots = math.max((cfg.max_voices or 3) - 1, 1)
+		local slots = math.max(A.Num(cfg, "max_voices") - 1, 1)
 		for _, p in ipairs(kept) do
 			local d, e = svDirOf(p, L), svEnergyOf(p, sndlvl)
 			if #voices == 0 then
@@ -2697,7 +2698,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		-- one voice carrying the highs, took them all away in one step as it crossed the window (pba_demo: one-voice
 		-- low-pass 30.5 -> 40.5 dB at 21 dB under the route)
 		local keep, raw = #voices == 0 or lvl >= dom - cfg.trans_window_db, trans.rawLossDb
-		if #voices > 0 and (cfg.trans_window_soft or 0) >= 0.5 then
+		if #voices > 0 and A.On(cfg, "trans_window_soft") then
 			local over = (dom - cfg.trans_window_db) - lvl
 			if over > 0 then
 				local add = TRANS_WINDOW_SLOPE * over
@@ -2721,7 +2722,7 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		while j >= 1 and voices[j].level < v.level do voices[j + 1] = voices[j] j = j - 1 end
 		voices[j + 1] = v
 	end
-	if (cfg.model_soft_cull or 0) >= 0.5 then
+	if A.On(cfg, "model_soft_cull") then
 		-- pba_model_soft_cull (A16): a voice past max_voices gives its energy to the kept voice nearest in direction
 		-- (its gain and raw loss), instead of taking it away: the last voice's level no longer vanishes at once
 		while #voices > cfg.max_voices do
@@ -2793,7 +2794,7 @@ function P.Stable(state, r, cfg)
 		return r
 	end
 	local L = r.L
-	local hyst = cfg.path_hyst_db or 2
+	local hyst = A.Num(cfg, "path_hyst_db")
 	if state.dir and #vs > 1 and hyst > 0 then
 		local keep, best = nil, COS30
 		for i, v in ipairs(vs) do
@@ -2808,7 +2809,7 @@ function P.Stable(state, r, cfg)
 	end
 	state.dir = voiceDir(r.voices[1], L) or state.dir
 	local v1 = r.voices[1]
-	local lp = AC.LowpassHold(v1.lp or 0, v1.lpDb, state.lp, cfg.lp_hyst_db or 0, cfg)
+	local lp = AC.LowpassHold(v1.lp or 0, v1.lpDb, state.lp, A.Num(cfg, "lp_hyst_db"), cfg)
 	if lp ~= (v1.lp or 0) then
 		local held = {}
 		for k, x in pairs(v1) do held[k] = x end
@@ -2971,7 +2972,7 @@ function P.FollowAssign(L, olds, voices, cfg)
 			out[i] = { pos = v.pos, gain = math.sqrt(p), lp = v.lp or 0, len = v.len, sh = v.sh, src = v }
 			-- pba_native_voice_mix (continuity review C6): a group's position, spectrum and length mixed by
 			-- energy over its voices, as one native voice's (N.MixVoices), not its first voice's
-			if #g > 1 and p > 0 and ((cfg or A.cfg).native_voice_mix or 0) >= 0.5 then
+			if #g > 1 and p > 0 and A.On(cfg, "native_voice_mix") then
 				local sum, dist, len, tilts = Vector(0, 0, 0), 0, 0, {}
 				for _, j in ipairs(g) do
 					local w = voices[j]
@@ -3137,10 +3138,10 @@ end -- (region invalidation)
 function P.ReevalDue(state, S, L, now, cfg)
 	cfg = cfg or A.cfg
 	local t = state.t
-	if t and (cfg.reeval_adaptive or 0) >= 0.5 then
-		if now - t < 0.5 * math.max(cfg.update_interval or 0.25, 0.05) then return false end
-		if not state.force and state.gen == P.cacheGen and now - t < (cfg.reeval_max_s or 1) then
-			local mv = cfg.reeval_move or 8
+	if t and A.On(cfg, "reeval_adaptive") then
+		if now - t < 0.5 * math.max(A.Num(cfg, "update_interval"), 0.05) then return false end
+		if not state.force and state.gen == P.cacheGen and now - t < A.Num(cfg, "reeval_max_s") then
+			local mv = A.Num(cfg, "reeval_move")
 			local mv2 = mv * mv
 			local dx, dy, dz = S.x - state.sx, S.y - state.sy, S.z - state.sz
 			local ex, ey, ez = L.x - state.lx, L.y - state.ly, L.z - state.lz
@@ -3229,7 +3230,7 @@ local floor, format = math.floor, string.format
 function P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	local st = P.LineState(S, L, srcEnt, cfg)
 	-- pba_gc_lean: the same key (%s formats a number as a concatenation does) in one string instead of three
-	if ((cfg or A.cfg).gc_lean or 0) >= 0.5 then
+	if A.On(cfg, "gc_lean") then
 		return format("%s,%s,%s|%s,%s,%s|%s|%s|%s", floor(S.x / 32), floor(S.y / 32), floor(S.z / 32),
 			floor(L.x / 32), floor(L.y / 32), floor(L.z / 32), sndlvl, entKey(srcEnt), st), st
 	end
@@ -3255,7 +3256,7 @@ function P.Cheap(S, L, sndlvl, cfg, srcEnt)
 	-- module's occlusion, the leaf fade), the routes round them left out. The raw sum of the walls was another
 	-- model: a sound switching between the cheap and the full evaluation (a burst, a forced far job) jumped
 	-- between the two (a car behind a building: -49 / -74 dB in turns).
-	if (cfg.cheap_same_trans or 1) >= 0.5 and P.TransmissionStage then
+	if A.On(cfg, "cheap_same_trans") and P.TransmissionStage then
 		local worldBlocked = P.LineBlockers(walls, cfg)
 		P.TransmissionStage(r, S, L, walls, walls, cfg, srcEnt, worldBlocked)
 		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
@@ -3266,12 +3267,12 @@ function P.Cheap(S, L, sndlvl, cfg, srcEnt)
 	local last = walls[#walls]
 	local dir = (L - S):GetNormalized()
 	local tpos = last.exit + dir * 2
-	if (cfg.trans_pos_clamp or 0) >= 0.5 then -- (as P.Compute's transmission: never past the listener)
+	if A.On(cfg, "trans_pos_clamp") then -- (as P.Compute's transmission: never past the listener)
 		local rem = (L - last.exit):Dot(dir)
 		if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
 	end
 	r.trans = { walls = walls, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
-	if (cfg.trans_tilt or 0) >= 0.5 then r.trans.lpDb = tilt end
+	if A.On(cfg, "trans_tilt") then r.trans.lpDb = tilt end
 	r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
 	r.shadowDb = P.ShadowOf(r.voices, nil)
 	return r
@@ -3408,7 +3409,7 @@ end
 local MEMO_N = 512
 local memoX, memoY, memoZ, memoV = {}, {}, {}, {}
 function P.FreeSource(S)
-	if (A.cfg.source_free or 1) < 0.5 then return S end
+	if A.Num(A.cfg, "source_free") < 0.5 then return S end
 	local x, y, z = S.x, S.y, S.z
 	local k = (floor(x * 8) * 73856093 + floor(y * 8) * 19349663 + floor(z * 8) * 83492791) % MEMO_N + 1
 	if memoX[k] == x and memoY[k] == y and memoZ[k] == z then local v = memoV[k] return v and v * 1 or S end -- (a copy: the callers' vector is theirs)
@@ -3530,23 +3531,23 @@ local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge acros
 -- with its position only), and its shots are just as alike.
 local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emitter)
 	local c = P.cache[key]
-	local barrier = (cfg.cache_barrier or 1) >= 0.5
+	local barrier = A.On(cfg, "cache_barrier")
 	if c and now - c.t < cfg.cache_ttl then
 		-- pba_cache_src_near: with no entity (a map's ambient sound, a far emitter the client does not have) the key
 		-- cannot tell two emitters of one cell apart: two loops 30 u apart in one 32 u cell took each other's path,
 		-- whichever was evaluated first, in turns (a level flipping about every second with the listener still). The
 		-- cached path serves it only from where the same emitter could be: within reeval_move, as pba_group_time does.
 		local far = false
-		if not emitter and (cfg.cache_src_near or 1) >= 0.5 then
+		if not emitter and A.On(cfg, "cache_src_near") then
 			local dx, dy, dz = S.x - c.sx, S.y - c.sy, S.z - c.sz
-			far = dx * dx + dy * dy + dz * dz > sq(cfg.reeval_move or 8)
+			far = dx * dx + dy * dy + dz * dz > sq(A.Num(cfg, "reeval_move"))
 		end
 		-- (the result of a cell-mate with a floor or a wall between: not this one's)
 		if not far and not (barrier and (P.BarrierBetween(S, c.sx, c.sy, c.sz, emitter) or P.BarrierBetween(L, c.lx, c.ly, c.lz, emitter))) then return c.r end
 	end
 	if timeOn then
-		local mv2 = sq(cfg.reeval_move or 8)
-		local maxAge = cfg.reeval_max_s or 1
+		local mv2 = sq(A.Num(cfg, "reeval_move"))
+		local maxAge = A.Num(cfg, "reeval_max_s")
 		local list = P.TimeIndex()[emitter] or P.timeEmpty
 		for i = #list, 1, -1 do
 			local m = list[i]
@@ -3596,7 +3597,7 @@ end
 -- doorway: crossing it also reads the routes, whose door costs model the leaf
 local function lineBlockers(walls, cfg)
 	local worldBlocked, leafBlocked = false, false
-	local oneModel = (cfg.door_leaf_portal or 1) >= 0.5
+	local oneModel = A.On(cfg, "door_leaf_portal")
 	for _, w in ipairs(walls) do
 		if not w.ent and not w.water then worldBlocked = true end
 		if oneModel and w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
@@ -3726,7 +3727,7 @@ local function leafFade(r, S, L, walls, cfg, srcEnt)
 		-- carrying the highs, gone in one step at a jamb: one-voice low-pass 27.7 -> 40.5 dB)
 		-- (only for leaves on the line: past the wall it still goes through them, not into the open, where
 		-- the clear line takes over from the transmission instead)
-		if fade > 0 and onLine and (cfg.trans_bundle_edge or 0) >= 0.5 then
+		if fade > 0 and onLine and A.On(cfg, "trans_bundle_edge") then
 			local e = P.BundleEdge(S, L, srcEnt, cfg, P.KeepWorldWall)
 			-- linear in dB: the voice often carries the highs (the route's leaves muffle more than the
 			-- wall), which its level sets until it is some 30 dB under the route
@@ -3745,7 +3746,7 @@ end
 -- Stage 5, the transmission through the walls tw (r.trans)
 local function transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked)
 	local loss, lp, mid, tilt = P.EvalWalls(tw, cfg)
-	if (cfg.trans_bundle or 0) >= 0.5 and not (CLIENT and A.Native and A.Native.ready) then
+	if A.On(cfg, "trans_bundle") and not (CLIENT and A.Native and A.Native.ready) then
 		loss, lp, mid, tilt = bundleLoss(S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
 	end
 	if CLIENT and A.Native and A.Native.ready then
@@ -3756,7 +3757,7 @@ local function transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked)
 	local tpos = last.exit + dir * 2
 	-- pba_trans_pos_clamp: never past the listener (a wall exit within 2 u of L put the voice behind the
 	-- listener, and its direction flipped by 150-177 degrees along a wall: rp_downtown's street walk)
-	if (cfg.trans_pos_clamp or 0) >= 0.5 then
+	if A.On(cfg, "trans_pos_clamp") then
 		local rem = (L - last.exit):Dot(dir)
 		if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
 	end
@@ -3765,8 +3766,8 @@ local function transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked)
 	-- most muffling wall read back as a step: a voice through three walls was mixed as one through a single one
 	-- (it seemed to carry the highs), and its own level steps moved the one-voice low-pass by 3.9 dB in 0.25 u
 	-- (pba_demo's source walk)
-	if (cfg.trans_tilt or 0) >= 0.5 then r.trans.lpDb = tilt end
-	if worldBlocked and (cfg.trans_leaf_fade or 0) >= 0.5 then leafFade(r, S, L, walls, cfg, srcEnt) end
+	if A.On(cfg, "trans_tilt") then r.trans.lpDb = tilt end
+	if worldBlocked and A.On(cfg, "trans_leaf_fade") then leafFade(r, S, L, walls, cfg, srcEnt) end
 end
 
 P.TransmissionStage, P.LineBlockers = transmission, lineBlockers -- (P.Cheap: the same transmission model)
@@ -3824,12 +3825,12 @@ local function edgeWay(r, S, L, cfg)
 	-- the edge stands for it. Else the route kept alone and the edge, once the zipper finds the two
 	-- distinct, added in full beside it: gm_melancholia's stairs, 3.7 dB (route) then route 3.6 +
 	-- edge 1.6 one 4 u step on, 6.7 dB louder.
-	if dup and (cfg.edge_dup_best or 1) >= 0.5 and e.db < (dup.lossDb or math.huge) then
+	if dup and A.On(cfg, "edge_dup_best") and e.db < (dup.lossDb or math.huge) then
 		-- pba_edge_dup_mix: the one estimate takes the route's loss moved toward the edge's by how much
 		-- cheaper the edge is (in full from EDGE_MIX_DB): the edge's search finds it from one step to the
 		-- next (the obstacle's middle moving with a wall the line grazes) already cheaper than the route,
 		-- and the swap was a step (gm_melancholia's stairs 16 u up: 1.5 dB in 4 u)
-		if (cfg.edge_dup_mix or 0) >= 0.5 and dup.lossDb then
+		if A.On(cfg, "edge_dup_mix") and dup.lossDb then
 			local diff = dup.lossDb - e.db
 			local w = ramp(diff, 0, EDGE_MIX_DB)
 			if w < 1 then
@@ -3846,8 +3847,8 @@ local function edgeWay(r, S, L, cfg)
 	-- (gm_melancholia's stairs, 16 u above the eyes: 2.2-2.6 dB in one 4 u step). A route passing
 	-- within edge_dup_blend_u of the apex is that much the same way: the weaker of the two keeps
 	-- (1 - w) of its power, w = 1 at the apex, 0 at edge_dup_blend_u.
-	if not dup and near and (cfg.edge_dup_blend or 1) >= 0.5 then
-		local span = math.max(cfg.edge_dup_blend_u or 64, 1)
+	if not dup and near and A.On(cfg, "edge_dup_blend") then
+		local span = math.max(A.Num(cfg, "edge_dup_blend_u"), 1)
 		local w = math.Clamp(1 - nearD / span, 0, 0.999)
 		if w > 0 then
 			local cut = -10 * math.log10(1 - w)
@@ -3867,7 +3868,7 @@ end
 
 -- Stage 8, objects and water on the routes
 local function routesObjectsWater(r, S, L, cfg, srcEnt)
-	if (cfg.path_props or 1) >= 0.5 then
+	if A.On(cfg, "path_props") then
 		for _, p in ipairs(r.paths) do
 			sliceCheck()
 			if p.points and #p.points > 0 then pathProps(p, S, L, cfg, srcEnt) end
@@ -3894,12 +3895,12 @@ local function edgeBounds(r, cfg)
 	-- P.AddEdge. At a door jamb's edge the route is 0 dB and the transmission through the jamb's sliver
 	-- (Steam Audio still seeing most of the source) 2 dB: summed, 2.2 dB LOUDER than in clear sight one
 	-- step before, the low-pass jumping with it (rp_downtown, outside the radio room's doorway).
-	if r.edgePath and r.trans and (cfg.edge_bound or 1) >= 0.5 then P.BoundBeside(r.trans, r.edgePath, cfg) end
+	if r.edgePath and r.trans and A.On(cfg, "edge_bound") then P.BoundBeside(r.trans, r.edgePath, cfg) end
 	-- the way over the edge found distinct from the routes (added to the transmission) and the loudest
 	-- route are still ways round the obstacle the line goes through: bounded together by the clear line too.
 	-- gm_melancholia's stairs: the edge 1.9 dB alone, one step on the edge 1.6 dB beside a 3.6 dB route
 	-- once a fixed ajar door slab separates them, -0.5 dB (louder than clear sight).
-	if r.edge and not r.edgePath and r.trans and r.trans.edgeDb and (cfg.edge_bound or 1) >= 0.5 then
+	if r.edge and not r.edgePath and r.trans and r.trans.edgeDb and A.On(cfg, "edge_bound") then
 		local best
 		for _, p in ipairs(r.paths) do if p.lossDb and (not best or p.lossDb < best.lossDb) then best = p end end
 		if best then P.BoundBeside(r.trans, best, cfg) end
@@ -3912,7 +3913,7 @@ local function throughRoutes(r, S, L, tw, cfg, srcEnt)
 	local bound = r.trans and r.trans.lossDb or nil
 	for _, q in ipairs(r.paths) do if q.lossDb and (not bound or q.lossDb < bound) then bound = q.lossDb end end
 	for x, p in ipairs(P.ThroughRoute(S, L, tw, cfg, bound) or {}) do
-		if (cfg.path_props or 1) >= 0.5 then pathProps(p, S, L, cfg, srcEnt) end
+		if A.On(cfg, "path_props") then pathProps(p, S, L, cfg, srcEnt) end
 		r.paths[#r.paths + 1] = p
 		if x == 1 then r.throughRoute = p end
 	end
@@ -3923,7 +3924,7 @@ end
 -- (probe positions, before the corners are refined): that one jumped by 90-120 deg in 8 u while the route did
 -- not change (rp_downtown street walk: diffuse share 0.13 -> 0.47 in one step)
 local function selectVoices(r, S, L, sndlvl, cfg)
-	local bendFinal = (cfg.bend_final or 0) >= 0.5
+	local bendFinal = A.On(cfg, "bend_final")
 	for _, p in ipairs(r.paths or {}) do
 		if bendFinal and p.points then
 			local _, b = P.PathShape(S, p.bendPts or p.points, L)
@@ -3942,19 +3943,19 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	S = P.FreeSource(S)
 	local key, lineState = P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	local now = RealTime()
-	local timeOn = (cfg.group_time or 0) >= 0.5
+	local timeOn = A.On(cfg, "group_time")
 	local emitter = IsValid(srcEnt) and srcEnt or false
 	local hit = cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emitter)
 	if hit then return hit end
 	-- (the inputs' generation as the evaluation starts: storeResult keeps nothing if it moved on meanwhile)
 	-- (numbers, not a table: no garbage per evaluation)
-	local gen0 = (cfg.cache_gen_guard or 1) >= 0.5 and P.cacheGen or nil
+	local gen0 = A.On(cfg, "cache_gen_guard") and P.cacheGen or nil
 	local world0, field0 = P.worldGen, A.Probes and A.Probes.fieldEpoch or 0
 	local region0 = gen0 and P.regionGen or nil
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
-	if (cfg.door_3d or 0) >= 0.5 then
+	if A.On(cfg, "door_3d") then
 		P.WallDetours(walls)
 		P.LineLeaves(S, L, walls, cfg)
 	end
@@ -3972,13 +3973,13 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		if #tw > 0 then transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked) end
 		if worldBlocked and #r.paths == 0 and CLIENT and A.Native and A.Native.pathsReady then nativePath(r, S, L, cfg) end
 		sliceCheck()
-		if worldBlocked and (cfg.sky_route or 0) >= 0.5 then
+		if worldBlocked and A.On(cfg, "sky_route") then
 			P.AddSkyRoute(r, S, L, cfg)
 		end
 		if worldBlocked and r.trans then edgeWay(r, S, L, cfg) end
 		routesObjectsWater(r, S, L, cfg, srcEnt)
 		edgeBounds(r, cfg)
-		if field and worldBlocked and (cfg.trans_route or 0) >= 0.5 and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
+		if field and worldBlocked and A.On(cfg, "trans_route") and cfg.probes >= 0.5 and S:Distance(L) <= cfg.probe_dist then
 			throughRoutes(r, S, L, tw, cfg, srcEnt)
 		end
 		selectVoices(r, S, L, sndlvl, cfg)

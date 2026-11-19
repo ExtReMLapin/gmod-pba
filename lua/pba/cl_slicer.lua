@@ -64,7 +64,7 @@ if not SL.stats then SL.ResetStats() end
 --- The slicer runs for this configuration.
 function SL.On(cfg)
 	cfg = cfg or A.cfg
-	return (cfg.far_sliced or 0) >= 0.5 and CLIENT and A.Probes ~= nil
+	return A.On(cfg, "far_sliced") and CLIENT and A.Probes ~= nil
 end
 
 --- Seconds per frame (real time), bounded: the unit of the margin and of "due before the next frame".
@@ -85,7 +85,7 @@ local function budgetLeft(first)
 		end
 		SL.frame, SL.spent, SL.spentFirst, SL.need, SL.forcedSpent, SL.needHold = fr, 0, 0, 0, 0, 0
 	end
-	local b = (A.cfg.far_sliced_ms or 1.5) / 1000
+	local b = A.Num(A.cfg, "far_sliced_ms") / 1000
 	if first then return math.max(math.min(b * SL.FIRST_SHARE - SL.spentFirst, b - SL.spent), 0) end
 	-- pba_far_sliced_cap: the jobs not yet due get far_sliced_ms a frame and no more (the time spent finishing due
 	-- ones, bounded by far_force_ms, is not taken from it). The pacing (SL.need) had no ceiling. With a listener
@@ -95,14 +95,14 @@ local function budgetLeft(first)
 	-- more garbage (d3_breen_01, noclip at 1500 u/s: test/far_slicer_budget.py). A job that does not finish in its
 	-- slices now reaches its deadline, where far_force_ms finishes it a little each frame and a playing sound keeps
 	-- its previous answer meanwhile, as before.
-	if (A.cfg.far_sliced_cap or 1) >= 0.5 then
+	if A.On(A.cfg, "far_sliced_cap") then
 		-- pba_far_hold_pace: the jobs of held sounds (pba_burst_hold_ms: a burst's impacts, held a few frames so as to
 		-- start at their full level) keep the pacing, up to HOLD_PACE x far_sliced_ms. Capped at far_sliced_ms, a
 		-- burst's jobs reached the end of their hold with a fraction of their work done and, past far_force_ms, got
 		-- the cheap model (26-36 dB under their level behind an open doorway). Their number is a burst's, not a
 		-- moving listener's far evaluations, and the ceiling stays bounded.
 		local c = b
-		if (A.cfg.far_hold_pace or 1) >= 0.5 then c = math.max(b, math.min(SL.needHold or 0, SL.HOLD_PACE * b)) end
+		if A.On(A.cfg, "far_hold_pace") then c = math.max(b, math.min(SL.needHold or 0, SL.HOLD_PACE * b)) end
 		return math.max(c - (SL.spent - SL.forcedSpent), 0)
 	end
 	return math.max(math.max(b, SL.need) - SL.spent, 0)
@@ -305,7 +305,7 @@ function SL.Run()
 	end
 	budgetLeft()
 	SL.need, SL.needHold = need, needHold
-	local forceB = (A.cfg.far_force_ms or 2) / 1000
+	local forceB = A.Num(A.cfg, "far_force_ms") / 1000
 	local i = 1
 	while i <= #jobs do
 		local j = jobs[i]
@@ -408,10 +408,10 @@ local function dist(v, x, y, z)
 end
 local function farther(owner, j, S, L)
 	local a = owner.pbaSliceAt
-	if not a or (A.cfg.far_held_closer or 1) < 0.5 then return false end
+	if not a or A.Num(A.cfg, "far_held_closer") < 0.5 then return false end
 	local off = dist(S, j.S.x, j.S.y, j.S.z) + dist(L, j.L.x, j.L.y, j.L.z) -- (the finished answer's error now)
 	local inUse = dist(S, a[1], a[2], a[3]) + dist(L, a[4], a[5], a[6]) -- (the heard one's)
-	return off > inUse + (A.cfg.reeval_move or 8)
+	return off > inUse + A.Num(A.cfg, "reeval_move")
 end
 
 --- Continuous sounds (loops, streams, followed one-shots): `owner` is the caller's table for that sound.
@@ -431,7 +431,7 @@ function SL.Held(owner, S, L, sndlvl, srcEnt, onReady)
 		SL.stats.dropped = (SL.stats.dropped or 0) + 1
 	end
 	-- after its first answer, an update may wait up to update_interval (see SL.Compute's minReach)
-	local lag = owner.pbaSliceSeen and (A.cfg.update_interval or 0.25) or nil
+	local lag = owner.pbaSliceSeen and A.Num(A.cfg, "update_interval") or nil
 	local r, job = SL.Compute(S, L, sndlvl, srcEnt, owner.pbaCfg, lag)
 	owner.pbaSliceSeen = true
 	if not job then
