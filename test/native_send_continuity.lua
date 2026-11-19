@@ -20,7 +20,10 @@
 --     Any other file (cl_streams.lua...) sending an Update without a send fails: its voice keeps the send of
 --     its start (the bug downtown_stream describes: gliding updates never passed the send);
 --   * the loop's and the stream's send is refreshed (a call carrying a send) at least every MAX_SEND_GAP s
---     while the listener moves: a kept send must not go stale;
+--     while the listener moves: a kept send must not go stale. The age is counted in the game's running time
+--     (STALL_FRAME): a frozen game (2026-11-19: "no send for 2.0 s" with both sources at once, reproduced by a
+--     2 s freeze, --stall) moves nothing and evaluates nothing, so it is no staleness; the driver's --stale
+--     control (no re-evaluation while walking) must still fail;
 --   * the room send of a sound that also feeds a source slot is judged against the larger of its two reverb
 --     feeds (room and slot sends, both steps): 20 log10(1 + |change| / larger) <= MAX_DB. The listener's room
 --     grows into the shadow from nothing in clear sight (pba_native_room_shadow): its first step past a jamb
@@ -45,6 +48,10 @@ local args = job.args or {}
 local RADIO = args.radio and Vector(args.radio[1], args.radio[2], args.radio[3]) or Vector(-2120.3, -6872.2, -50) -- (args.radio: the lateral walk's)
 local LOOP_NAME, STREAM_FILE, SHOT_NAME = "ambient/machines/spin_loop.wav", "sound/ambient/machines/spin_loop.wav", "vo/npc/male01/hi01.wav"
 local MAX_DB, MAX_DIFFUSE, MAX_SEND_GAP, MIN_PAIRS = 1.5, 0.05, 2, 20
+-- a frame longer than STALL_FRAME s is a stall of the whole game (another game starting on the machine, a page fault
+-- storm...): nothing moves and nothing is evaluated during it, the voices keep what they were told, so the send's
+-- age is counted in the game's running time, each frame counting for STALL_FRAME at most
+local STALL_FRAME = 0.25
 local FLOOR = 1e-4 -- -80 dB re full scale
 -- call sites whose Update keeps the send on purpose (see the header)
 local KEEP_OK = { ["cl_loops.lua"] = "loop glide between evaluations (LP.FollowNative)",
@@ -54,6 +61,7 @@ local function stopAll(S)
 	if not S then return end
 	timer.Remove("pba_nsc_shot")
 	hook.Remove("Think", "pba_nsc_shot")
+	hook.Remove("Think", "pba_nsc_frames")
 	if S.orig then
 		for k, f in pairs(S.orig) do pba_native[k] = f end
 		S.orig = nil
@@ -126,6 +134,19 @@ if (args.phase or "start") == "start" then
 	end)
 	-- the one-shot: once per step, 0.2 s after the step began (the teleport has landed)
 	S.shotStep = -1
+	-- every frame's time (the send ages are counted in running time, see STALL_FRAME); args.stall = { step, seconds }:
+	-- the control that freezes the game once at that step (a busy wait in this hook), as a stall of the machine does
+	S.frames = {}
+	local stall = args.stall
+	hook.Add("Think", "pba_nsc_frames", function()
+		if PBA_NSC ~= S then return end
+		if stall and S.step == stall[1] and not S.stalled then
+			S.stalled = true
+			local t = SysTime() + stall[2]
+			while SysTime() < t do end
+		end
+		if #S.frames < 200000 then S.frames[#S.frames + 1] = RealTime() end
+	end)
 	hook.Add("Think", "pba_nsc_shot", function()
 		if PBA_NSC ~= S or S.step == S.shotStep or RealTime() - (S.stepT or 0) < 0.2 then return end
 		S.shotStep = S.step
@@ -171,7 +192,29 @@ local cur = {} -- role -> current id
 local shotByStep = {} -- step -> { ids }
 local keep = { ok = {}, wrong = {} }
 local lastSendT = { loop = nil, stream = nil }
+local lastSendF, lastSendS, gapAt = {}, {}, {} -- the frame and step of the last send; where the longest gap was
 local gaps = { loop = 0, stream = 0 }
+-- the running time between t0 and t1 (see STALL_FRAME): each frame's duration, capped; args.gapClock == "real" (control):
+-- the wall-clock time, as before (a stall of the game then reads as a stale send)
+local frames = S.frames or {}
+local function running(t0, t1)
+	if args.gapClock == "real" then return t1 - t0 end
+	local lo, hi = 1, #frames + 1 -- the first frame later than t0
+	while lo < hi do
+		local m = math.floor((lo + hi) / 2)
+		if frames[m] > t0 then hi = m else lo = m + 1 end
+	end
+	local sum, prev = 0, t0
+	for i = lo, #frames do
+		local t = math.min(frames[i], t1)
+		sum = sum + math.min(t - prev, STALL_FRAME)
+		prev = t
+		if frames[i] >= t1 then break end
+	end
+	return sum + math.min(math.max(t1 - prev, 0), STALL_FRAME)
+end
+local longestFrame = 0
+for i = 2, #frames do longestFrame = math.max(longestFrame, frames[i] - frames[i - 1]) end
 local function state(id)
 	local v = voice[id]
 	if not v then return nil end
@@ -227,8 +270,12 @@ for _, r in ipairs(S.log) do
 	if (role == "loop" or role == "stream") and id == cur[role] then
 		-- a send carried during the walk: its freshness
 		if r.step >= 1 and (r.fn ~= "Update" or r.send ~= nil) and r.fn ~= "SourceReflect" then
-			if lastSendT[role] then gaps[role] = math.max(gaps[role], r.t - lastSendT[role]) end
-			lastSendT[role] = r.t
+			local gap = lastSendT[role] and running(lastSendT[role], r.t)
+			if gap and gap > gaps[role] then
+				gaps[role] = gap
+				gapAt[role] = { t0 = lastSendT[role], t1 = r.t, f0 = lastSendF[role], f1 = r.f, s0 = lastSendS[role], s1 = r.step }
+			end
+			lastSendT[role], lastSendF[role], lastSendS[role] = r.t, r.f, r.step
 		end
 		held[role][r.step] = state(id)
 	end
@@ -249,6 +296,9 @@ local function fail(s) if #out.fails < 15 then out.fails[#out.fails + 1] = s end
 for src, n in pairs(keep.wrong) do fail(string.format("%d Updates without a send from %s (not a by-design call site)", n, src)) end
 for _, role in ipairs({ "loop", "stream" }) do
 	out.sendGap[role] = math.Round(gaps[role], 2)
+	out.longestFrame = math.Round(longestFrame, 3)
+	out.sendGapAt = out.sendGapAt or {}
+	out.sendGapAt[role] = gapAt[role]
 	if gaps[role] > MAX_SEND_GAP then fail(string.format("%s: no send for %.1f s while walking", role, gaps[role])) end
 end
 for role, series in pairs({ loop = held.loop, stream = held.stream, shot = shots }) do
