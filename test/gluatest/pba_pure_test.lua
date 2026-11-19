@@ -3121,6 +3121,69 @@ local SUITE = {
 				expect(dumpResult(r)).to.equal(full(list[#list][1]))
 			end)
 		end },
+		{ name = "Far sliced: a playing sound's answer worked out for where the listener (or the source) was is dropped when the answer in use is nearer to where they are now, and asked again: a view that went to a camera and came back (d3_breen_01's blackout, 2.7 s) got the camera's answers 0.1-2.5 s after it was back, one flip per far sound (pba_far_held_closer); 0 = applied (former behaviour); a listener walking on keeps getting its answers", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL = A.Slicer
+				local saved = { A.cfg.far_sliced_ms, rawget(A.cfg, "far_held_closer") }
+				local ok, err = pcall(function()
+					A.cfg.far_sliced_ms = 0 -- (no budget: a job waits for its deadline, reached by hand)
+					local S = list[1][1]
+					local L1, L2 = Vector(60, 460, 64), Vector(470, 60, 64)
+					local function level(r)
+						if r.clear then return 0 end
+						local p = 0
+						for _, v in ipairs(r.voices or {}) do p = p + v.gain * v.gain end
+						return 10 * math.log10(math.max(p, 1e-30))
+					end
+					P.cache = {}
+					-- (the two places are heard apart: a flip between them is a level jump)
+					local db1, db2 = level(P.Compute(S, L1, 75, cfg)), level(P.Compute(S, L2, 75, cfg))
+					print(string.format("[pba test] far answer for a listener gone back: at L1 %.1f dB, the answer for L2 %.1f dB", db1, db2))
+					expect(math.abs(db1 - db2) > 3).to.beTrue()
+					local owner
+					local function finish()
+						local j = owner.pbaSlice
+						expect(j ~= nil).to.beTrue()
+						nextFrame()
+						setNow(j.deadline)
+						SL.Run()
+					end
+					local function scenario(on)
+						A.cfg.far_held_closer = on
+						P.cache, SL.jobs = {}, {}
+						owner = { pbaSliceSeen = true, pbaCfg = cfg }
+						-- an answer in use, for L1
+						expect(SL.Held(owner, S, L1, 75, nil, nil)).to.beNil()
+						finish()
+						local r = SL.Held(owner, S, L1, 75, nil, nil)
+						expect(r ~= nil and r.L:Distance(L1) < 1).to.beTrue()
+						-- the view goes to L2 (a job for L2) and is back at L1 before that job is done
+						expect(SL.Held(owner, S, L2, 75, nil, nil)).to.beNil()
+						expect(SL.Held(owner, S, L1, 75, nil, nil)).to.beNil()
+						finish()
+						return SL.Held(owner, S, L1, 75, nil, nil)
+					end
+					-- off: the answer for L2 applied with the listener back at L1 (the flip)
+					local r = scenario(0)
+					expect(r ~= nil and r.L:Distance(L2) < 1).to.beTrue()
+					-- on: dropped and asked again for L1, whose answer comes next
+					r = scenario(1)
+					expect(r).to.beNil()
+					finish()
+					r = SL.Held(owner, S, L1, 75, nil, nil)
+					expect(r ~= nil and r.L:Distance(L1) < 1).to.beTrue()
+					-- a listener walking on (L1 -> M -> L2): the answer for M, nearer to L2 than L1's, is applied
+					local M = (L1 + L2) * 0.5
+					expect(SL.Held(owner, S, M, 75, nil, nil)).to.beNil()
+					expect(SL.Held(owner, S, L2, 75, nil, nil)).to.beNil()
+					finish()
+					r = SL.Held(owner, S, L2, 75, nil, nil)
+					expect(r ~= nil and r.L:Distance(M) < 1).to.beTrue()
+				end)
+				A.cfg.far_sliced_ms, A.cfg.far_held_closer = saved[1], saved[2]
+				if not ok then error(err, 0) end
+			end)
+		end },
 		{ name = "Far sliced: with pba_far_sliced_cap, a held burst's jobs (pba_burst_hold_ms) keep the pacing up to 4 x far_sliced_ms: ready by their hold's end in full instead of falling to the cheap model (pba_far_hold_pace, review M4)", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
