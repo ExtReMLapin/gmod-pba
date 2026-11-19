@@ -2165,9 +2165,13 @@ ControlVoice* FindVoice(int id) {
 	return nullptr;
 }
 
-int FindEffect() {
+// an effect pair of the pool, marked used (-1: none free)
+int TakeEffect() {
 	for (int i = 0; i < (int)g_pool.size(); ++i)
-		if (!g_c.fxUsed[i]) return i;
+		if (!g_c.fxUsed[i]) {
+			g_c.fxUsed[i] = true;
+			return i;
+		}
 	return -1;
 }
 int FindRecord() {
@@ -2245,7 +2249,7 @@ bool Reap(const ControlVoice* cand = nullptr) {
 		ControlVoice* q = nullptr;
 		for (auto& v : g_c.voices) {
 			if (v.c.dying) continue;
-			if (!q || (q->c.protect && !v.c.protect) || (q->c.protect == v.c.protect && Audibility(v) < Audibility(*q))) q = &v;
+			if (!q || CapsFirst(v.c.protect, Audibility(v), q->c.protect, Audibility(*q))) q = &v;
 		}
 		if (!q) break;
 		StopCtl(*q);
@@ -2254,9 +2258,8 @@ bool Reap(const ControlVoice* cand = nullptr) {
 	// hard ceiling (the effect pool): fading voices still hold their effects for one block
 	while ((int)g_c.voices.size() >= kMaxVoices) {
 		auto q = std::min_element(g_c.voices.begin(), g_c.voices.end(), [](const ControlVoice& a, const ControlVoice& b) {
-			if (a.c.dying != b.c.dying) return a.c.dying; // the fading ones first
-			if (a.c.protect != b.c.protect) return !a.c.protect; // then the unprotected ones
-			return Audibility(a) < Audibility(b);
+			if (a.c.dying != b.c.dying) return a.c.dying; // the fading ones first, then the cap's own rank
+			return CapsFirst(a.c.protect, Audibility(a), b.c.protect, Audibility(b));
 		});
 		uint64_t seq = 0;
 		if (q->alive && !TryCancel(*q)) {
@@ -2274,13 +2277,14 @@ bool Reap(const ControlVoice* cand = nullptr) {
 }
 
 float SaneGain(float x); // (below)
-// what a new voice weighs at the cap (Reap's candidate): its gain, sends and protection as SetVoiceCtl will set them
-ControlVoice CapProbe(float gain, float send, bool protect) {
+// Reap with a new voice as its candidate, weighed by its gain, sends and protection as SetVoiceCtl will set them: true when
+// the cap does not start it
+bool CapRefuses(float gain, float send, bool protect) {
 	ControlVoice c;
 	c.c.gain = SaneGain(gain);
 	c.c.send = send >= 0 || std::isnan(send) ? SaneGain(send) : -1;
 	c.c.protect = protect;
-	return c;
+	return Reap(&c);
 }
 // a voice the cap refused: an id no voice will ever have (Update answers false, StopVoice does nothing), as for a voice
 // the cap took
@@ -2985,16 +2989,23 @@ bool SoundPending(const std::string& name) {
 	return g_pending.count(name) != 0;
 }
 
-std::vector<float> SoundPcm(const std::string& name) {
+namespace {
+// the decoded sound `name` (nullptr: not loaded); its samples never change once stored
+std::shared_ptr<Sound> LoadedSound(const std::string& name) {
 	std::lock_guard<std::mutex> lk(g_sndMtx);
 	auto it = g_sounds.find(name);
-	return it == g_sounds.end() ? std::vector<float>() : it->second->pcm;
+	return it == g_sounds.end() ? nullptr : it->second;
+}
+} // namespace
+
+std::vector<float> SoundPcm(const std::string& name) {
+	const std::shared_ptr<Sound> s = LoadedSound(name);
+	return s ? s->pcm : std::vector<float>();
 }
 
 std::vector<float> SoundSide(const std::string& name) {
-	std::lock_guard<std::mutex> lk(g_sndMtx);
-	auto it = g_sounds.find(name);
-	return it == g_sounds.end() ? std::vector<float>() : it->second->side;
+	const std::shared_ptr<Sound> s = LoadedSound(name);
+	return s ? s->side : std::vector<float>();
 }
 
 // ------------------------------------------------------------------ captures
@@ -3185,25 +3196,36 @@ static bool EvictTo(uint64_t target) {
 	return true;
 }
 
+// Walks the chunks of a RIFF/WAVE file in order: f(chunk, body offset, body length) until it answers true or a chunk
+// overruns the file. false: not a RIFF/WAVE file.
+template <class F>
+static bool WalkRiff(const uint8_t* b, size_t size, F&& f) {
+	if (size < 12 || memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) return false;
+	for (size_t i = 12; i + 8 <= size;) {
+		const uint32_t len = (uint32_t)b[i + 4] | (uint32_t)b[i + 5] << 8 | (uint32_t)b[i + 6] << 16 | (uint32_t)b[i + 7] << 24;
+		const size_t body = i + 8;
+		if (len > size - body || f(b + i, body, len)) break;
+		i = body + len + (len & 1);
+	}
+	return true;
+}
+
 // The loop start of a RIFF/WAVE file in its own sample frames, as the engine takes it: the first loop
 // of a "smpl" chunk, else the first point of a "cue " chunk. -1: no marker (or not a WAV).
 static double WavLoopStart(const void* data, size_t size, uint32_t* rate) {
 	const auto* b = static_cast<const uint8_t*>(data);
 	auto u32 = [b](size_t i) { return (uint32_t)b[i] | (uint32_t)b[i + 1] << 8 | (uint32_t)b[i + 2] << 16 | (uint32_t)b[i + 3] << 24; };
 	*rate = 0;
-	if (size < 12 || memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) return -1;
 	double smpl = -1, cue = -1;
-	for (size_t i = 12; i + 8 <= size;) {
-		const uint32_t len = u32(i + 4);
-		const size_t body = i + 8;
-		if (len > size - body) break;
-		if (memcmp(b + i, "fmt ", 4) == 0 && len >= 8) *rate = u32(body + 4);
+	const bool wav = WalkRiff(b, size, [&](const uint8_t* tag, size_t body, uint32_t len) {
+		if (memcmp(tag, "fmt ", 4) == 0 && len >= 8) *rate = u32(body + 4);
 		// smpl: 36-byte header (loop count at +28), then 24-byte loops (start at +8)
-		else if (memcmp(b + i, "smpl", 4) == 0 && len >= 36 + 24 && u32(body + 28) > 0) smpl = u32(body + 36 + 8);
+		else if (memcmp(tag, "smpl", 4) == 0 && len >= 36 + 24 && u32(body + 28) > 0) smpl = u32(body + 36 + 8);
 		// cue : count, then 24-byte points (sample offset at +20)
-		else if (memcmp(b + i, "cue ", 4) == 0 && len >= 4 + 24 && u32(body) > 0) cue = u32(body + 4 + 20);
-		i = body + len + (len & 1);
-	}
+		else if (memcmp(tag, "cue ", 4) == 0 && len >= 4 + 24 && u32(body) > 0) cue = u32(body + 4 + 20);
+		return false;
+	});
+	if (!wav) return -1;
 	return smpl >= 0 ? smpl : cue;
 }
 
@@ -3214,23 +3236,18 @@ static std::string Store(const std::string& name, const std::shared_ptr<Sound>& 
 // engine plays. Returns a copy with cbSize 0, or an empty string when the file needs no change.
 static std::string FixWavFmt(const void* data, size_t size) {
 	const auto* b = static_cast<const uint8_t*>(data);
-	if (size < 12 || memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) return {};
-	for (size_t i = 12; i + 8 <= size;) {
-		const uint32_t len = (uint32_t)b[i + 4] | (uint32_t)b[i + 5] << 8 | (uint32_t)b[i + 6] << 16 | (uint32_t)b[i + 7] << 24;
-		const size_t body = i + 8;
-		if (len > size - body) return {};
-		if (memcmp(b + i, "fmt ", 4) == 0) {
-			if (len < 18) return {};
-			const uint16_t cb = (uint16_t)(b[body + 16] | b[body + 17] << 8);
-			if (cb <= len - 18) return {};
-			std::string fixed(static_cast<const char*>(data), size);
-			fixed[body + 16] = (char)(len - 18);
-			fixed[body + 17] = 0;
-			return fixed;
-		}
-		i = body + len + (len & 1);
-	}
-	return {};
+	std::string fixed;
+	WalkRiff(b, size, [&](const uint8_t* tag, size_t body, uint32_t len) {
+		if (memcmp(tag, "fmt ", 4) != 0) return false;
+		if (len < 18) return true;
+		const uint16_t cb = (uint16_t)(b[body + 16] | b[body + 17] << 8);
+		if (cb <= len - 18) return true;
+		fixed.assign(static_cast<const char*>(data), size);
+		fixed[body + 16] = (char)(len - 18);
+		fixed[body + 17] = 0;
+		return true;
+	});
+	return fixed;
 }
 
 // Windowed-sinc resampler (decode time, once per file). Kaiser window (beta 8.5), cutoff 0.465 x the lower of the
@@ -3414,23 +3431,14 @@ std::string LoadSentence(const std::string& name, const SentenceWord* words, int
 // ------------------------------------------------------------------ voices (control side; the audio thread follows)
 int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFallback) {
 	if (pathFallback) *pathFallback = false;
-	std::shared_ptr<Sound> snd;
-	{
-		std::lock_guard<std::mutex> lk(g_sndMtx);
-		auto it = g_sounds.find(name);
-		if (it == g_sounds.end()) return 0;
-		snd = it->second;
-	}
+	std::shared_ptr<Sound> snd = LoadedSound(name);
+	if (!snd) return 0;
 	if (!g_running.load()) return 0;
 	CtlCall cc;
-	{
-		const ControlVoice probe = CapProbe(p.gain, p.send, p.protect);
-		if (Reap(&probe)) return Refused();
-	}
-	const int slot = FindEffect();
+	if (CapRefuses(p.gain, p.send, p.protect)) return Refused();
+	const int slot = TakeEffect();
 	if (slot < 0) return 0;
 	ControlVoice v;
-	g_c.fxUsed[slot] = true;
 	v.c.slot = slot;
 	uint8_t flags = kResetSlot;
 	v.hasSide = !snd->side.empty();
@@ -3444,9 +3452,8 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 	if (p.own && v.hasSide) {
 		// a stereo file: the side channel needs an effect pair of its own for the voice's EQ (none free: the
 		// downmix on both ears)
-		const int k = FindEffect();
+		const int k = TakeEffect();
 		if (k >= 0) {
-			g_c.fxUsed[k] = true;
 			v.c.slot2 = k;
 			flags |= kResetSlot2;
 		}
@@ -3469,14 +3476,10 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p) {
 	if (!buf || !g_running.load()) return 0;
 	CtlCall cc;
-	{
-		const ControlVoice probe = CapProbe(p.gain, p.send, p.protect);
-		if (Reap(&probe)) return Refused();
-	}
-	const int slot = FindEffect();
+	if (CapRefuses(p.gain, p.send, p.protect)) return Refused();
+	const int slot = TakeEffect();
 	if (slot < 0) return 0;
 	ControlVoice v;
-	g_c.fxUsed[slot] = true;
 	v.c.slot = slot;
 	v.stream = std::move(buf);
 	v.c.own = p.own; // the listener's own stream: not spatialised (see VoiceParams::own)
@@ -3489,19 +3492,11 @@ int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p) {
 
 int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay, bool pausable) {
 	if (slot < 0 || slot >= kEchoSlots) return 0;
-	std::shared_ptr<Sound> snd;
-	{
-		std::lock_guard<std::mutex> lk(g_sndMtx);
-		auto it = g_sounds.find(name);
-		if (it == g_sounds.end()) return 0;
-		snd = it->second;
-	}
+	std::shared_ptr<Sound> snd = LoadedSound(name);
+	if (!snd) return 0;
 	if (!g_running.load() || !g_echo[slot].fx) return 0;
 	CtlCall cc;
-	{
-		const ControlVoice probe = CapProbe(gain, -1, false);
-		if (Reap(&probe)) return Refused();
-	}
+	if (CapRefuses(gain, -1, false)) return Refused();
 	// automatic fire: at most kEchoPerSlot overlapping echo voices per slot (the oldest goes),
 	// so echoes never crowd the direct voices out of the voice budget
 	constexpr int kEchoPerSlot = 6;
@@ -3567,9 +3562,8 @@ bool SetVoiceStereo(int id, float sel, float width) {
 	uint8_t f = kSelInit; // not rendered yet: start there (no ramp from the defaults)
 	if (v->c.width > 0 && v->c.slot2 < 0 && v->hasSide && v->c.echoSlot < 0) {
 		// a second effect pair from the pool (none free: the downmix at the source, as before)
-		const int k = FindEffect();
+		const int k = TakeEffect();
 		if (k >= 0) {
-			g_c.fxUsed[k] = true;
 			v->c.slot2 = k;
 			f |= kResetSlot2;
 		}
