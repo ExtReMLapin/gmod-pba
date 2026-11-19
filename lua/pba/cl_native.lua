@@ -542,7 +542,6 @@ end
 -- frequencies diffract more) but is held at 1: the module's EQ never boosts (a full-scale voice would clip).
 N.BAND_HZ = { 400, 2500, 15000 } -- representative frequency of each band (Steam Audio's material bands)
 N.BAND_EDGE = { 800, 8000 }
-N.EQ = nil -- the former stepped table (autorefresh of a running game)
 N.failed = N.failed or {}
 
 local tanh = math.tanh
