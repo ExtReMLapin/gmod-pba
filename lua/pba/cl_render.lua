@@ -131,6 +131,13 @@ local function register(idx, h, data)
 		h.cutAt = at
 		timer.Simple(A.RealDelay(math.max(at - RealTime(), 0)), function() stopCopy(h) end)
 	end
+	-- (pba_cut_at_start_held) a deferred channel cut its held placeholder had (A.CutChannel's h.cutAt, RealTime): the
+	-- copies emitted for it once its routes are ready stop then too
+	local held = data and data.pbaCutAt
+	if held and (not h.cutAt or held < h.cutAt) then
+		h.cutAt = held
+		timer.Simple(A.RealDelay(math.max(held - RealTime(), 0)), function() stopCopy(h) end)
+	end
 	local list = A.emitted[idx]
 	if not list then list = {} A.emitted[idx] = list end
 	local now = RealTime()
@@ -1172,7 +1179,7 @@ local function mouthCopy(data, src)
 	if (A.cfg.lipsync_stop or 1) >= 0.5 and not A.IsSentence(name) then
 		register(idx, { mouth = true, idx = idx, name = name, orig = name, srcChan = ch, pos = pos,
 			lvl = data.SoundLevel or 75, pitch = data.Pitch or 100,
-			tEnd = A.PlayEnd(name, data.Pitch or 100) or RealTime() + (A.cfg.max_duration or 8) })
+			tEnd = A.PlayEnd(name, data.Pitch or 100) or RealTime() + (A.cfg.max_duration or 8) }, data.pbaCutAt and { pbaCutAt = data.pbaCutAt } or nil)
 	end
 	A.stats.mouthCopies = (A.stats.mouthCopies or 0) + 1
 	if A.OnMouthCopy then A.OnMouthCopy(idx) end -- (test watchdog: copies by index, the entity may be NULL here)
@@ -1397,6 +1404,9 @@ function A.Process(data, relayed)
 			unregister(idx, h)
 			if h.cancelled then return end
 			h.cancelled = true -- (the placeholder's part is over)
+			-- (pba_cut_at_start_held) a channel cut deferred to a new sound's start reached the placeholder (h.cutAt): its
+			-- copies stop at that moment. Before, the placeholder's timer found it cancelled and the copies played to their end.
+			if h.cutAt and (A.cfg.cut_at_start_held or 1) >= 0.5 then d.pbaCutAt = h.cutAt end
 			-- (a world sound of a family counted by pba_impact_group: its full result serves the next ones near it, burstEvaluate)
 			if feeds and res and not res.cheap then A.BurstNote(res, S, L, lvl, A.Render.WaterDry(nil, d.SoundName), RealTime()) end
 			if not res or not finish(d, relayed, idx, copies, S, L, ang, src, res, RealTime() - tReq - (d.Delay or 0), SysTime()) then vanilla(d)
