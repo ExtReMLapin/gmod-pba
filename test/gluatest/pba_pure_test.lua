@@ -2691,7 +2691,7 @@ local SUITE = {
 							if not PR.doorFieldJob and #((PR.doorFieldQueue or {}).list or {}) == 0 then break end
 						end
 						PR.current = cur
-						-- the field swapped in the background (pba_door_field_invalidate): the cached path and the loop's
+						-- the field swapped in the background: the cached path and the loop's
 						-- values were worked out on the old one: neither stands (was: up to cache_ttl / reeval_max_s more)
 						return P.cache.swapTest ~= kept, P.ReevalDue(loop, S, L, 1000.2, cfgC)
 					end
@@ -2699,17 +2699,6 @@ local SUITE = {
 					expect(fresh).to.beTrue()
 					expect(reeval).to.beTrue()
 					expect(f2.stateSig ~= nil and f2.doors == nil).to.beTrue()
-					-- control: pba_door_field_invalidate 0 (former behaviour): both stand after the swap
-					A.Doors.byEnt[9990].frac = 0
-					PR.doorList = nil
-					expect(PR.FieldFor(g, L) == f2 and f2.stateSig ~= PR.StateSig(g)).to.beTrue() -- (queued again)
-					local savedOpt = rawget(A.cfg, "door_field_invalidate")
-					A.cfg.door_field_invalidate = 0
-					fresh, reeval = swapField()
-					A.cfg.door_field_invalidate = savedOpt
-					expect(fresh).to.equal(false)
-					expect(reeval).to.equal(false)
-					expect(f2.doors ~= nil).to.beTrue() -- (it did swap: the closed door's field again)
 					A.Doors.byEnt[9990].frac = 0.5
 					expect(PR.StateSig(g) ~= f2.stateSig).to.beTrue()
 				end)
