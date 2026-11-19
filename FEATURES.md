@@ -28,6 +28,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Glass windows (`func_areaportalwindow`) | ✅ transmission through the glass, sound placed on the pane | ✅ | — |
 | Props: a big object casts a shadow, a closed crate muffles, a can changes nothing | ✅ detours checked with traces, mass law for hollow objects | ✅ and big props reflect sound, with their collision shape | S `trans_props`, C `native_props`, `native_props_hull` |
 | Moving map parts (garage doors, lifts, bridges) | ◐ obstacles for the traces | ✅ moving objects of the acoustic scene, with their solid shape | C `native_doors`, `native_movers_brushes` |
+| A source in the open air away from the floors (a lift or a pod hanging in a void) keeps its routes as it moves | ✅ it joins the probe graph through the air it sees | ✅ | C `probe_air_hop` |
 | Water surface between source and listener | ✅ air-water interface, heavily muffled | ✅ plus a low-pass on the mix when the head is under water | S `water`, `water_db` |
 
 ## Sounds handled
