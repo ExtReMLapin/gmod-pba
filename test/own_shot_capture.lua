@@ -33,7 +33,7 @@ end
 
 -- the settings that matter, as the game sees them now
 for _, c in ipairs({ "pba_enable", "pba_cl_enable", "pba_native_render", "pba_native_all", "pba_native_own", "pba_native_own_direct",
-	"pba_native_reverb", "pba_native_limiter", "pba_native_resample_hq", "pba_native_quiet_law", "volume", "snd_musicvolume", "snd_mixahead" }) do
+	"pba_native_reverb", "pba_native_limiter", "pba_native_quiet_law", "volume", "snd_musicvolume", "snd_mixahead" }) do
 	local cv = GetConVar(c)
 	res.cvars[c] = cv and cv:GetString() or "(absent)"
 end

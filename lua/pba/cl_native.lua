@@ -653,14 +653,6 @@ function N.ApplySettings()
 	if pba_native.SetHrtfBlend then pba_native.SetHrtfBlend(A.Num(A.cfg, "native_hrtf_blend")) end -- (modules before this option: HRTF alone)
 	-- the reading speed of a voice glides to each new pitch (Doppler of a fly-by), not a step per frame (module of 2026-11-18+)
 	if pba_native.SetPitchGlide then pba_native.SetPitchGlide(A.Num(A.cfg, "native_pitch_glide")) end
-	-- a voice's diffuse share changing is ramped over the block (module of 2026-11-19+; an older one steps)
-	if pba_native.SetDiffuseSmooth then pba_native.SetDiffuseSmooth(A.On(A.cfg, "native_diffuse_smooth")) end
-	-- at the voice cap, a new voice is ranked with the playing ones (module of 2026-11-19+; an older one always makes room)
-	if pba_native.SetCapCompareNew then pba_native.SetCapCompareNew(A.On(A.cfg, "native_cap_new")) end
-	-- a voice's direct EQ, once used, is applied at every block (module of 2026-11-19+; an older one skips it at 1)
-	if pba_native.SetEqContinuous then pba_native.SetEqContinuous(A.On(A.cfg, "native_eq_continuous")) end
-	-- a source slot bank the crossfade left is flushed, not reset (module of 2026-11-19+; an older one resets it)
-	if pba_native.SetSlotBankFlush then pba_native.SetSlotBankFlush(A.On(A.cfg, "native_slot_bank_flush")) end
 	-- source reverb slots simulated in groups, their new responses spread over blocks (module of 2026-11-19+; an older one runs all at once)
 	if pba_native.SetSlotGroup then pba_native.SetSlotGroup(math.floor(A.Num(A.cfg, "native_slot_group") + 0.5)) end
 	local k = N.wetScale or 1
@@ -671,11 +663,11 @@ function N.ApplySettings()
 	if pba_native.SetSourceNear then pba_native.SetSourceNear(A.Num(A.cfg, "native_src_near")) end
 	-- each source reverb slot / echo rings with the long-window reverb time of its own position (newer modules)
 	if pba_native.SetSourceLongRt then pba_native.SetSourceLongRt(A.On(A.cfg, "native_source_long_rt")) end
-	-- a source slot not simulated yet hands its share to the room bus at the sound's level at the listener, not its 1 m power (newer modules)
-	if pba_native.SetSlotFallback then pba_native.SetSlotFallback(A.On(A.cfg, "native_slot_fallback")) end
-	-- output stage and decode resampling (newer modules; an older module keeps its soft clip and linear resampling)
+	-- output stage: 1 limiter, 2 hard clip (never the former soft clip, 0), before the master volume; the sinc resampler
+	-- (newer modules; an older one keeps its soft clip and linear resampling; one of 2026-11-18 or older reads the last two
+	-- arguments, the current one ignores them)
 	if pba_native.SetMixQuality then
-		pba_native.SetMixQuality(math.floor(A.Num(A.cfg, "native_limiter") + 0.5), A.On(A.cfg, "native_resample_hq"), A.On(A.cfg, "native_limit_pre"))
+		pba_native.SetMixQuality(math.max(1, math.floor(A.Num(A.cfg, "native_limiter") + 0.5)), true, true)
 	end
 	-- fade of a radio stream's start, underruns and end (modules since this option; an older one cuts to silence)
 	if pba_native.SetStreamFade then pba_native.SetStreamFade(A.Num(A.cfg, "native_stream_fade")) end
@@ -1485,11 +1477,10 @@ function N.SlotFadeSend(o, bound, entry, gain)
 end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
 -- the voice has a slot (then the room bus must only get the transmission part).
--- wet: the voice's wet share (N.LoudWet), with pba_native_slot_fallback_wet the cap of what the voice hands the room bus while
--- its slot is simulated (its gain x wet, what a voice without a slot gets; a module before 2026-11-19 ignores it)
+-- wet: the voice's wet share (N.LoudWet), the cap of what the voice hands the room bus while its slot is simulated (its
+-- gain x wet, what a voice without a slot gets; a module before 2026-11-19 ignores it)
 function N.BindSource(id, S, srcSend, wet)
 	if not id then return false end
-	if A.Num(A.cfg, "native_slot_fallback_wet") < 0.5 then wet = nil end
 	local slot = pba_native.SourceReflect(id, S, srcSend, N.ProbeLift(S) or 0, wet)
 	return slot ~= nil and slot >= 0
 end

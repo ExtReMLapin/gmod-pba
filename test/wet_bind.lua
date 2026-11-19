@@ -1,6 +1,6 @@
 -- Wet share through every N.BindSource (client lua_job, pba_tworooms, native rendering on, player in room A). While a
 -- voice's source reverb slot is not simulated yet, the module caps its room-bus share at gain x wet (SourceReflect's 5th
--- argument, pba_native_slot_fallback_wet; review M3). Only N.PlayVoice passed wet: the loop / long-sound mirrors
+-- argument; review M3). Only N.PlayVoice passed wet: the loop / long-sound mirrors
 -- (cl_loops), a followed copy handed to the module mid-sound (cl_render switchNative) and the streams (cl_streams) bound
 -- their slot without it, so a loud far sound got its gain x 1 (up to +20 dB of room reverb for 50-300 ms).
 -- pba_native.SourceReflect is wrapped (the voices still play) and every call's wet is kept per voice id:
@@ -8,7 +8,6 @@
 -- 2. a 140 dB long music emitted client-side on a model in room B (a client mirror: its start and its rebindings);
 -- 3. a BASS stream (no sound level: its room send has no N.LoudWet, so wet = 1, given explicitly).
 -- Pass: every SourceReflect call of these voices carries that wet.
--- pre: `local CONTROL = true` runs with pba_native_slot_fallback_wet 0: passes when every call carries no wet.
 local A = pba
 local N = A.Native
 job:wait(function() return N and N.ready and N.render end, 15)
@@ -19,7 +18,6 @@ local switch = VOICE.native and VOICE.native.start
 local LINE = "vo/npc/male01/hi01.wav"
 local LONG = "music/hl2_song12_long.mp3"
 local LOUD = 140
-A.SetOverride("native_slot_fallback_wet", CONTROL and 0 or 1)
 local L = A.ListenerPos()
 local B = Vector(784, 256, 40) -- room B, behind the wall
 local calls = {} -- voice id -> { wet values ("nil" when absent) }
@@ -40,7 +38,7 @@ local function summary(id, want)
 			if math.abs(w - want) > 1e-6 then s.bad = s.bad + 1 end
 		end
 	end
-	s.ok = s.n > 0 and (CONTROL and s.nils == s.n or s.nils == 0 and s.bad == 0)
+	s.ok = s.n > 0 and s.nils == 0 and s.bad == 0
 	return s
 end
 local res = { checks = {}, loudWet = N.LoudWet(LOUD) }
@@ -89,7 +87,6 @@ end)
 pba_native.SourceReflect = orig
 for _, id in ipairs(ids) do pba_native.StopVoice(id) if A.OneShots then A.OneShots.native[id] = nil end end
 if IsValid(ch) then ch:Stop() end
-A.SetOverride("native_slot_fallback_wet", nil)
 if IsValid(e) then e:Remove() end
 if not ok then return { pass = false, err = tostring(err) } end
 res.checks.switched = res.switched
