@@ -1406,7 +1406,7 @@ function PR.BuildField(g, L, yield, reuse, costs, seedList)
 		cost, nxt, root = {}, {}, {}
 	end
 	-- arr: arrival of each probe's route at the listener, filled on first use (pba_group, PR.SharedJoin)
-	local f = { g = g, L = L, cost = cost, nxt = nxt, root = root, base = {}, seeds = {}, pulled = {}, arr = {}, arrEpoch = PR.doorEpoch }
+	local f = { g = g, L = L, cost = cost, nxt = nxt, root = root, base = {}, seeds = {}, pulled = {}, arr = {} }
 	if bin then
 		bin.ref[1] = f
 	elseif #fieldBins < FIELD_BINS then
@@ -1844,7 +1844,8 @@ PR.Tighten = tighten
 -- that did not move, re-evaluated 4 times a second) is kept on the polyline and given again instead of
 -- redoing its ~30 hull traces. Last ATTACH_KEEP (S, L) per polyline: a field route is shared by every
 -- source near its probe, and with 8 kept, 20 still loops round one listener pushed each other out and
--- re-tightened at every evaluation.
+-- re-tightened at every evaluation. Not dropped when a door moves (PR.doorEpoch): no door is read here,
+-- the doors' losses are worked out on the route afterwards (P.EvalRoute); the same goes for the field's arrivals.
 -- The joins not traced by the skipping loops are checked: S to the first vertex kept and that vertex to
 -- L when none was skipped. A field route ends at a probe the listener saw where the field was built,
 -- up to a few spacings from the listener now: round a door jamb, the listener no longer sees it and L
@@ -1856,7 +1857,7 @@ local function attach(inner, S, L, via)
 	local sx, sy, sz = S:Unpack()
 	local lx, ly, lz = L:Unpack()
 	local memo = inner.attached
-	if not memo or memo.epoch ~= PR.doorEpoch then memo = { epoch = PR.doorEpoch } inner.attached = memo end
+	if not memo then memo = {} inner.attached = memo end
 	for _, e in ipairs(memo) do
 		if e[1] == sx and e[2] == sy and e[3] == sz and e[4] == lx and e[5] == ly and e[6] == lz then return e[7] or nil end
 	end
@@ -1894,8 +1895,6 @@ PR.Attach = attach
 -- when it sees the listener). Filled on first use, shared by every source
 -- that sees n, dropped with the field. nil when the route cannot be attached (false kept in f.arr).
 local function arrival(f, n)
-	-- (a field built by hand, as in the pure tests, has no door state: its arrivals are kept)
-	if f.arrEpoch and f.arrEpoch ~= PR.doorEpoch then f.arr, f.arrEpoch = {}, PR.doorEpoch end
 	local a = f.arr[n.id]
 	if a ~= nil then return a or nil end
 	local T = attach(fieldPathFrom(f, n), n.pos, f.L)
