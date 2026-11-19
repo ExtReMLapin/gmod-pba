@@ -3,10 +3,9 @@ behind the closed door's areaportal, is never sent to the player in room A: his 
 In vanilla the engine still plays his line on a channel keyed by his entity index (snd_dumpclientsounds:
 "chan:2 ent(N):NULL"), and the face that comes into view during the line moves its mouth from it. pba relays
 the line (a wall between) and played no mouth copy for a speaker it could not find: no channel on the index.
-Fix: the relay says the line is on a face, the client plays its copy by index (pba_lipsync_unseen).
-Probe: snd_dumpclientsounds during the line, with pba_lipsync_unseen 1 then 0.
-Pass: the client really lacks the entity, pba relayed the line both times, and a channel of the line plays on
-the citizen's index with the option on and none with it off.
+Fix: the relay says the line is on a face, the client plays its copy by index (lipsync_unseen).
+Probe: snd_dumpclientsounds during the line.
+Pass: the client really lacks the entity, pba relayed the line, and a channel of the line plays on the citizen's index.
 Usage: python -I test/lipsync_unseen.py <mcp.py>"""
 import json, re, subprocess, sys, time
 MCP = sys.argv[1]
@@ -43,8 +42,7 @@ if not idx or idx <= 0:
 time.sleep(1.5)
 
 
-def phase(on):
-    call("console_exec", {"realm": "client", "cmd": f"pba_lipsync_unseen {1 if on else 0}"})
+def phase():
     time.sleep(0.6)
     missing = lua("client", f"return not IsValid(Entity({idx}))")
     r0 = lua("server", "return pba.stats.relayed or 0")
@@ -65,10 +63,8 @@ def phase(on):
     return {"clientLacksEntity": missing, "relayed": relayed, "samplesOnIndex": on_idx}
 
 
-a = phase(True)
-b = phase(False)
+a = phase()
 lua("server", "if IsValid(PBA_LIPUNSEEN) then PBA_LIPUNSEEN:Remove() end return true")
-ok = (a["clientLacksEntity"] and b["clientLacksEntity"] and a["relayed"] >= 1 and b["relayed"] >= 1
-      and a["samplesOnIndex"] >= 1 and b["samplesOnIndex"] == 0)
-print(json.dumps({"pass": bool(ok), "idx": idx, "on": a, "off": b}))
+ok = a["clientLacksEntity"] and a["relayed"] >= 1 and a["samplesOnIndex"] >= 1
+print(json.dumps({"pass": bool(ok), "idx": idx, "on": a}))
 sys.exit(0 if ok else 1)

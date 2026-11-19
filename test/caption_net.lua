@@ -1,6 +1,6 @@
 -- Bug 59 (d1_trainstation_05 teleporter, Breen 'Who are you?'): subtitle, but no voice and no lip sync. The
 -- caption goes reliable, the relayed line (pba_snd) unreliable: a relay lost (a teleport's full snapshot) left
--- the caption alone. Safety net pba_caption_net: a relayed line's caption with no relay of its file within 0.3 s
+-- the caption alone. Safety net caption_net: a relayed line's caption with no relay of its file within 0.3 s
 -- is played by the engine on its speaker (the caption carries its index, channel, level, pitch, volume).
 -- Client lua_job, the server half (caption_net_sv.lua) makes a can in the next room say k_lab.br_tele_03 1 s
 -- later; every pba_snd is dropped here meanwhile (the simulated loss).
@@ -36,4 +36,4 @@ hook.Remove("OnCloseCaptionEmit", "pba_test_capnet")
 probeOff()
 local lag = played and capT and played.t - capT or nil
 return { pass = dropped > 0 and capT ~= nil and lag ~= nil and lag <= 1, dropped = dropped, caption = capT ~= nil, lag = lag,
-	chan = played and played.chan, lvl = played and played.lvl, option = pba.cfg.caption_net }
+	chan = played and played.chan, lvl = played and played.lvl }

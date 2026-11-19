@@ -5,11 +5,9 @@ engine playing it at volume 0.001 on his index so his face moves). He says the s
 second line's mouth copy is emitted at once on the same channel. The deferred stop of the FIRST mouth copy is a stop
 by name on the speaker (the engine has no other way): it stopped the second one, and the face froze for the rest of
 the line. Pass: 0.7 s after the second line, an engine channel of the line is still on his index.
---control (pba_cut_name_newer 0): pass = no channel left (the old behaviour).
-Usage: python -I test/cut_name_newer.py <mcp.py> [--control]"""
+Usage: python -I test/cut_name_newer.py <mcp.py>"""
 import json, os, re, subprocess, sys, time
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-CONTROL = "--control" in sys.argv
 MCP = args[0]
 LINE = "vo/breencast/br_welcome01.wav"
 KEY = "br_welcome01"
@@ -51,7 +49,6 @@ def dump(idx, tag):
     return out
 
 
-call("console_exec", {"realm": "client", "cmd": "pba_cut_name_newer %d" % (0 if CONTROL else 1)})
 idx = lua("server", """
 for _, p in ipairs(player.GetHumans()) do p:SetPos(Vector(256, 256, 0)) end
 local e = ents.Create("npc_citizen") e:SetPos(Vector(150, 450, 0)) e:Spawn()
@@ -84,6 +81,6 @@ say = res.get("say")
 ok_setup = isinstance(say, dict) and say.get("first") is True and say.get("second") is True and say.get("mouths", 0) >= 2
 res["setup"] = ok_setup
 alive = len(res["after"]) > 0
-res["pass"] = bool(ok_setup and (alive != CONTROL))
+res["pass"] = bool(ok_setup and alive)
 print(json.dumps(res))
 sys.exit(0 if res["pass"] else 1)

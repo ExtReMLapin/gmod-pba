@@ -1,4 +1,4 @@
-"""A line's inaudible mouth copy stops with the line (pba_lipsync_stop, K1 / bug 27).
+"""A line's inaudible mouth copy stops with the line (lipsync_stop, K1 / bug 27).
 pba plays a copy of a taken voice line on the speaker itself at -60 dB so the engine moves its mouth. When the
 line stops (StopSound on the speaker, a cancelled choreographed scene) that copy must stop too, or the mouth
 keeps moving after the voice. mouth_stop only sees that a stop call is made; this test reads the engine's own
@@ -8,7 +8,7 @@ Phases (speaker, stop):
   seen_server    a citizen in clear sight (the client has him), short line, server StopSound (relayed)
   seen_client    same, the client's own Entity:StopSound
   seen_scene     same, a choreographed scene cancelled
-  unseen_server  citizen in room B behind the closed door (never sent to the client: pba_lipsync_unseen), server StopSound
+  unseen_server  citizen in room B behind the closed door (never sent to the client: lipsync_unseen), server StopSound
   unseen_scene   same, scene cancelled
   seen_pba       the stop pba itself sends (pba_snd_stop) without the engine's own StopSound: the engine broadcasts its
                  stop to every client by name, which hides a mouth copy pba forgot; this one cannot
@@ -20,10 +20,9 @@ Needs native rendering on (pba_native_render 1, the default): with it off, a lin
 sound (nothing taken, no mouth copy) and its server channel plays on after a stop pba alone sends: seen_pba is then
 meaningless, the test refuses to run (the battery step switches it on).
 Pass: before each stop a channel of the line is on the speaker's index (the copy exists), 0.2 s after it none.
-Usage: python -I test/mouth_chan.py <mcp.py> [phase,...] [--off]   (--off: the stop option off, must fail)"""
+Usage: python -I test/mouth_chan.py <mcp.py> [phase,...]"""
 import json, re, subprocess, sys, time, os
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-OFF = "--off" in sys.argv
 MCP = args[0]
 LINE = "vo/npc/male01/question06.wav"
 SCENE = "scenes/npc/male01/question06.vcd"
@@ -120,8 +119,6 @@ if e:GetInternalVariable("m_hOwner") == PBA_MC_NPC then e:Fire("Cancel") end end
     return {"pass": bool(ok), "clientLacksEntity": missing, "before": before, "after02s": after, "after05s": later}
 
 
-if OFF:
-    call("console_exec", {"realm": "client", "cmd": "pba_lipsync_stop 0"})
 phases = args[1].split(",") if len(args) > 1 else PHASES
 res = {p: phase(p) for p in phases}
 ok = all(v["pass"] for v in res.values())

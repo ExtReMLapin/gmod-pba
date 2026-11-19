@@ -241,7 +241,7 @@ end
 -- Every sound the client's engine plays on a face's voice channel drives its mouth: pba's mouth copies
 -- (volume 0.001) and pba's own engine playback of a relayed line (cl_render vanilla(): the module could not
 -- play it yet, e.g. a large file still loading) alike. Counted once the pba handler let it through. A mouth
--- copy for a speaker this client does not have (by index, pba_lipsync_unseen) has a NULL Entity in the hook:
+-- copy for a speaker this client does not have (by index, lipsync_unseen) has a NULL Entity in the hook:
 -- pba tells it through pba.OnMouthCopy.
 local function addCopy(i)
 	W.copies[i] = W.copies[i] or {}
@@ -363,7 +363,7 @@ timer.Create("pba_watch_cl", 0.1, 0, function()
 		-- louder than vanilla (module loops only). Compared: the gain last SENT to the module voice (the outermost
 		-- Update wrap above: path losses, volume and pba_native_gain included, before the mix groups that the
 		-- engine applies alike), not the law recomputed at the current distance (that hid a voice frozen at its
-		-- near level while quiet: pba_native_quiet_law). Vanilla: AC.EngineGain x volume, which matches the real
+		-- near level while quiet: native_quiet_law). Vanilla: AC.EngineGain x volume, which matches the real
 		-- engine's output (startmovie recordings, gm_flatgrass, +-2 dB) while audible; below ENGINE_CUT_DB the
 		-- engine plays nothing at all (recorded digital silence), where AC.EngineGain still says -40..-60 dB.
 		-- Samples carry lawDb (the module's own law at that distance: the 1/r choice, pba_native_law_engine)

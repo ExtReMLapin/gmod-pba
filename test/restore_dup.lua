@@ -3,8 +3,7 @@
 -- makes anew (its own channel, 6). Each reached HandleClient as a start: two mirrors per loop (3 before the load,
 -- 6 after), the restored ones audible beside the real ones. Client lua_job after manhack_loop_setup.lua; the two
 -- starts are replayed in both orders (the engine sent the restored one first) on the manhack's own loops.
--- Pass: exactly one mirror per loop and entity in each order, the entity's own (channel 6) kept; with
--- pba_patch_restore_dedupe 0 the two stay (the old behaviour).
+-- Pass: exactly one mirror per loop and entity in each order, the entity's own (channel 6) kept.
 local A, LP = pba, pba.Loops
 local mh = ents.FindByClass("npc_manhack")[1]
 if not IsValid(mh) then return { pass = false, err = "no manhack (run manhack_loop_setup.lua)" } end
@@ -35,18 +34,13 @@ local function order(restoredFirst)
 	return count()
 end
 local res = { checks = {} }
-local saved = A.cfg.patch_restore_dedupe
 local ok, err = pcall(function()
 	local n1, c1 = order(true)
 	local n2, c2 = order(false)
-	A.cfg.patch_restore_dedupe = 0
-	local n3 = order(true)
-	res.restoredFirst, res.restoredLast, res.off = n1 .. " [" .. c1 .. "]", n2 .. " [" .. c2 .. "]", n3
+	res.restoredFirst, res.restoredLast = n1 .. " [" .. c1 .. "]", n2 .. " [" .. c2 .. "]"
 	res.checks.restoredFirstOne = n1 == #FILES and c1 == "6,6,6"
 	res.checks.restoredLastOne = n2 == #FILES and c2 == "6,6,6"
-	res.checks.optionOff = n3 == 2 * #FILES
 end)
-A.cfg.patch_restore_dedupe = saved
 fresh()
 if not ok then return { pass = false, err = tostring(err) } end
 res.fails = {}

@@ -1,9 +1,9 @@
--- A degraded SHORT sound starts at its level (pba_burst_hold_short): client lua_job, pba_tworooms. A burst of new
+-- A degraded SHORT sound starts at its level (burst_hold_short): client lua_job, pba_tworooms. A burst of new
 -- bullet impacts behind the wall (80 dB, world emitter, room B, listener in room A, doorway open: full model
 -- -21..-31 dB, cheap model -55..-60 dB: the walls' transmission alone, a LOWER bound that ignores the way round
 -- through the doorway). A short sound (0.44 s: not followed, OS.Wanted false) that got the cheap model (burst
 -- budget spent, or masked by a loud sound) kept it for its whole life: 26-36 dB too quiet. A long sound is held
--- until its full result (pba_burst_hold_ms, burst_hold.lua); with pba_burst_hold_short the short ones are too.
+-- until its full result (pba_burst_hold_ms, burst_hold.lua); the short ones are too.
 --   emitted level = what the voice is given at emission (native PlayVoice gain, engine copy volume), per impact
 --   (each one its own pitch to tell them apart), the dominant voice; reference = the same impacts with the burst
 --   limits off (fully evaluated at once).
@@ -11,7 +11,6 @@
 --     (variant "mask", budget off), no reusable result, spots > 128 u apart; N impacts in ONE frame.
 --   Pass = every impact played, at least N-1 degraded, the worst deficit to the reference <= GAP_DB, and the
 --     latest start within LATE_S of the reference's (the hold is bounded).
--- Red without the option (pba_burst_hold_short 0), and on a build without it.
 local A = pba
 if game.GetMap() ~= "pba_tworooms" then return { pass = false, err = "needs pba_tworooms" } end
 local P, B, OS = A.Paths, A.burst, A.OneShots
@@ -48,13 +47,9 @@ local function wrapEA(f) return function(nm, pos, idx, chan, vol, lvl, flags, pi
 local function wrapE(f) return function(fn, ent, nm, lvl, pitch, vol, ...)
 	if type(nm) == "string" then note(nm, pitch or 100, vol or 0) end
 	return f(fn, ent, nm, lvl, pitch, vol, ...) end end
-local function setOpt(k, v)
-	if A.cfg[k] ~= nil or k ~= "burst_hold_short" then A.SetOverride(k, v) end -- (a build without the option: red)
-end
-local function burst(variant, short)
-	setOpt("burst_hold_short", short)
+local function setOpt(k, v) A.SetOverride(k, v) end
+local function burst(variant)
 	setOpt("burst_hold_ms", 50)
-	setOpt("burst_fair", 1)
 	if variant == "ref" then
 		setOpt("burst_budget_ms", 0) setOpt("burst_mask_db", 0)
 	elseif variant == "budget" then
@@ -109,7 +104,7 @@ local function compare(r, ref, refRes)
 	r.late = math.Round(r.latest - ref.latest, 3)
 end
 local saved = {}
-for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair", "burst_hold_ms", "burst_hold_short" }) do saved[k] = A.override[k] end
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_hold_ms" }) do saved[k] = A.override[k] end
 local ok, res = pcall(function()
 	if N and origPV then N.PlayVoice = wrapPV(origPV) end
 	A.EmitAt, A.Emit = wrapEA(origEA), wrapE(origE)
@@ -118,18 +113,15 @@ local ok, res = pcall(function()
 		job:wait(function() return pba_native.HasSound(name) end, 5)
 	end
 	local o = {}
-	o.ref = burst("ref", 1)
-	for _, variant in ipairs({ "budget", "mask" }) do
-		o[variant .. "_on"] = burst(variant, 1)
-		o[variant .. "_off"] = burst(variant, 0)
-	end
-	for _, k in ipairs({ "budget_on", "budget_off", "mask_on", "mask_off" }) do compare(o[k], o.ref) end
+	o.ref = burst("ref")
+	for _, variant in ipairs({ "budget", "mask" }) do o[variant .. "_on"] = burst(variant) end
+	for _, k in ipairs({ "budget_on", "mask_on" }) do compare(o[k], o.ref) end
 	return o
 end)
 if N and origPV then N.PlayVoice = origPV end
 A.EmitAt, A.Emit = origEA, origE
--- (by key: pairs() skipped the keys that had no override, and the test left its own five in memory)
-for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair", "burst_hold_ms", "burst_hold_short" }) do A.SetOverride(k, saved[k]) end
+-- (by key: pairs() skipped the keys that had no override, and the test left its own in memory)
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_hold_ms" }) do A.SetOverride(k, saved[k]) end
 P.InvalidateCache() -- (the following tests start cold, as burst_budget's timing assumes)
 if not ok then return { pass = false, err = tostring(res) } end
 local function good(r)
@@ -138,7 +130,5 @@ end
 res.native = N and N.render or false
 res.refOk = res.ref.played == #spots
 res.onOk = { budget = good(res.budget_on), mask = good(res.mask_on) }
-res.offOk = { budget = good(res.budget_off), mask = good(res.mask_off) }
-res.hasOption = A.cfg.burst_hold_short ~= nil
-res.pass = res.hasOption and res.refOk and res.onOk.budget and res.onOk.mask and not res.offOk.budget and not res.offOk.mask
+res.pass = res.refOk and res.onOk.budget and res.onOk.mask
 return res

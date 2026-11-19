@@ -1,11 +1,11 @@
--- pba_burst_fair: client lua_job, pba_tworooms. A new sound left without its full evaluation by the burst
+-- burst_fair: client lua_job, pba_tworooms. A new sound left without its full evaluation by the burst
 -- budget or the masking got the cheap model (the walls' transmission alone): with the open doorway between the
 -- rooms, an 80 dB impact in room B came out 29 dB under its full result, then jumped up at its first update
 -- (sweep 2026-11-14: impacts +18..+30 dB, explode5 +43..+49 dB 0.1-0.26 s after their start).
 --   impacts: one full evaluation, then the budget spent; five more 80 dB impacts (world emitter) near it: their
 --     level at birth within FAIR_DB of their full result (nearby result reused);
 --   explosion: the budget spent by an impact, then a 140 dB explosion: fully evaluated (the loudest of the burst);
--- pass = both with burst_fair 1, and none of them with burst_fair 0 (red without the option).
+-- pass = both.
 local A = pba
 if game.GetMap() ~= "pba_tworooms" then return { pass = false, err = "needs pba_tworooms" } end
 if not A.BurstEvaluate then return { pass = false, err = "no A.BurstEvaluate (code before burst_fair)" } end
@@ -16,7 +16,7 @@ local function set(name, v)
 	job:wait(function() return A.cfg[name] == v end, 3)
 end
 local saved = {}
-for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair", "burst_hold_ms" }) do saved[k] = A.cfg[k] end
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_hold_ms" }) do saved[k] = A.cfg[k] end
 if LocalPlayer():GetPos():Distance(Vector(256, 256, 0)) > 1 then
 	RunConsoleCommand("setpos", "256", "256", "0")
 	job:sleep(0.5)
@@ -70,11 +70,7 @@ local ok, res = pcall(function()
 	if saved.burst_hold_ms then set("burst_hold_ms", 0) end -- (the cheap path itself: burst_hold.lua tests the hold)
 	set("burst_mask_db", 0)
 	set("burst_budget_ms", 2)
-	set("burst_fair", 0)
-	local off = run()
-	set("burst_fair", 1)
-	local on = run()
-	return { off = off, on = on }
+	return { on = run() }
 end)
 for k, v in pairs(saved) do set(k, v) end
 if not ok then return { pass = false, err = tostring(res) } end
@@ -82,8 +78,6 @@ local function good(o)
 	return o.worstDeficit <= FAIR_DB, not o.explosionCheap
 end
 local a1, a2 = good(res.on)
-local b1, b2 = good(res.off)
 res.onOk = { impacts = a1, explosion = a2 }
-res.offOk = { impacts = b1, explosion = b2 }
-res.pass = a1 and a2 and not b1 and not b2
+res.pass = a1 and a2
 return res

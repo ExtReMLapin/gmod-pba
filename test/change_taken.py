@@ -3,14 +3,12 @@ A client-side EmitSound of a short line (vo/breencast/br_welcome01.wav, 3.9 s, C
 room B (kept in the host's PVS by the test) is suppressed by pba and re-emitted (copies, a module voice). The same
 entity then sends SND_CHANGE_VOL (volume 0.5) for it, as an addon fading its sound does. The engine finds no such
 sound on that channel and starts it from its top, clear through the wall (measured on main: snd_dumpclientsounds,
-vol(127) timeleft 3.38 s on the prop's index right after the change, none before it). With pba_change_copies 1 the
+vol(127) timeleft 3.38 s on the prop's index right after the change, none before it). Now the
 change is taken: no engine channel, the followed copy's volume follows.
 Pass: before and after the change, no engine channel of the line on the prop's index above vol 3 (/255).
---control (pba_change_copies 0): pass = the engine channel appears (the old behaviour).
-Usage: python -I test/change_taken.py <mcp.py> [--control]"""
+Usage: python -I test/change_taken.py <mcp.py>"""
 import json, os, re, subprocess, sys, time
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-CONTROL = "--control" in sys.argv
 MCP = args[0]
 LINE = "vo/breencast/br_welcome01.wav"
 KEY = "br_welcome01"
@@ -53,7 +51,6 @@ def dump(idx, tag):
     return out
 
 
-call("console_exec", {"realm": "client", "cmd": "pba_change_copies %d" % (0 if CONTROL else 1)})
 idx = lua("server", """
 for _, p in ipairs(player.GetHumans()) do p:SetPos(Vector(256, 256, 0)) end
 hook.Add("SetupPlayerVisibility", "pba_change_taken", function() AddOriginToPVS(Vector(784, 256, 40)) end)
@@ -85,10 +82,7 @@ taken = isinstance(res.get("emit"), dict) and res["emit"].get("copies", 0) >= 1
 loud_before = any(v > 3 for v in res["before"])
 loud_after = any(v > 3 for v in res["after"])
 res["taken"] = taken
-if CONTROL:
-    ok = taken and not loud_before and loud_after
-else:
-    ok = taken and not loud_before and not loud_after
+ok = taken and not loud_before and not loud_after
 res["pass"] = bool(ok)
 print(json.dumps(res))
 sys.exit(0 if ok else 1)
