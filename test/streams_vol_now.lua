@@ -1,9 +1,9 @@
 -- Radio volume change (client lua_job, any map with 200+ u of free space around the player, native renderer
 -- running): a natively rendered stream of another addon follows its owner's SetVolume at once
--- (pba_streams_vol_now), as BASS does. Before, SetVolume only forced a re-evaluation at the stream's next turn
+-- (streams_vol_now), as BASS does. Before, SetVolume only forced a re-evaluation at the stream's next turn
 -- (up to an update_interval, then a ramp over one interval): a radio turned down by its server knob stayed loud
 -- meanwhile (pba-side-bugs #54). Pass: 0.1 s after SetVolume(0.5 -> 0.125) the voice gain is within 1.5 dB of
--- the gain before x 0.25. args.expectOff: the option is at 0 (the result is reported, pass = the old delay seen).
+-- the gain before x 0.25.
 local N = pba.Native
 job:wait(function() return N.ready and N.render end, 15)
 if not (N.ready and N.render) then return { pass = false, err = "native renderer not running" } end

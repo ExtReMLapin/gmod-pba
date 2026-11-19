@@ -2,18 +2,15 @@
 -- native renderer running; parity P2-14, measured by stream_calls.lua). The impulse method: an 8 s file of 0.25 s
 -- noise bursts every 0.5 s (2 Hz), looped; the module's energy per frame (SetListener's returns) gives the
 -- bursts it plays, the latency of a cut is the time until that energy falls.
---   pba_streams_rate: the voice follows IGModAudioChannel:SetPlaybackRate (BASS plays 4 Hz bursts at rate 2, 1 Hz
+--   streams_rate: the voice follows IGModAudioChannel:SetPlaybackRate (BASS plays 4 Hz bursts at rate 2, 1 Hz
 --     at 0.5): the module's burst count over a window within 1 edge + 12 % of 2 * rate * window. Before: the
 --     voice always read at x1 (2 Hz whatever the rate, its ring under / overflowing).
---   pba_streams_stop_now: Pause / Stop silence the voice within 0.12 s (median of four; before: 0.16-0.23 s, the ring of ~120 ms
+--   streams_stop_now: Pause / Stop silence the voice within 0.12 s (median of four; before: 0.16-0.23 s, the ring of ~120 ms
 --     plus BASS's DSP write-ahead), and Play brings it back.
 -- Frame-rate: run it with fps_max / fps_max_nofocus 60 (a latency is read per frame: at 20 fps it is quantised to 50 ms).
--- With an option at 0 the test passes when the OLD behaviour is seen (the red of that option).
 local N = pba.Native
 local ST = pba.Streams
 if not (N and N.ready) then return { pass = false, err = "native not ready" } end
-local function opt(n) local c = GetConVar(n) return c == nil or c:GetInt() ~= 0 end
-local rateOn, stopOn = opt("pba_streams_rate"), opt("pba_streams_stop_now")
 local saved = {}
 for _, c in ipairs({ "pba_native_render", "pba_streams_native", "pba_streams", "pba_native_reverb", "pba_native_echo" }) do
 	saved[c] = GetConVar(c):GetString()
@@ -22,7 +19,7 @@ RunConsoleCommand("pba_native_render", "1")
 RunConsoleCommand("pba_streams_native", "1")
 RunConsoleCommand("pba_streams", "1")
 job:wait(function() return N.render end, 20)
-local out = { rateOn = rateOn, stopOn = stopOn }
+local out = {}
 -- ---------- test files -------------------------------------------------------------------------
 math.randomseed(14)
 local RATE = 22050
@@ -218,5 +215,5 @@ out.stopFast = ok2 and fast(out.pauseLatency) and fast(out.stopLatency)
 out.comesBack = ok2 and out.resumeLatency <= 0.8
 finish()
 -- the option off: the old behaviour is what passes (that option's red)
-out.pass = ok1 and ok2 and not out.noSignal and (out.rateFollowed == rateOn) and (out.stopFast == stopOn) and out.comesBack == true
+out.pass = ok1 and ok2 and not out.noSignal and out.rateFollowed == true and out.stopFast == true and out.comesBack == true
 return out

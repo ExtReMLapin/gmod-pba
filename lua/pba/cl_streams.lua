@@ -121,7 +121,7 @@ local function streamSend(ch, r, L, g, pos)
 	local N = A.Native
 	local now = RealTime()
 	-- a halted (paused) channel feeds its source slot nothing: that send is taken before the voice's gain, so
-	-- muting the gain alone left the radio's reverb sounding (pba_streams_stop_now); a change of state is bound at once
+	-- muting the gain alone left the radio's reverb sounding (streams_stop_now); a change of state is bound at once
 	local halted = r.halted and true or false
 	if r.nativeId and (not r.srcNext or now >= r.srcNext or r.srcHalted ~= halted) then
 		r.srcNext, r.srcHalted = now + 0.3, halted
@@ -144,15 +144,14 @@ local function nativeParams(ch, r, L)
 	return pos, gain, el, em, eh, send
 end
 
---- The native voice's reading speed, percent: the channel's playback rate (pba_streams_rate). BASS produces the
+--- The native voice's reading speed, percent: the channel's playback rate (streams_rate). BASS produces the
 -- samples the module captures at that speed (a rate of 2 delivers them twice as fast), so a voice reading at x1
 -- played 2 bursts per second where BASS played 4 and its ring ran dry or over (gaps and skips).
 local function pitchOf(r)
-	if A.Num(A.cfg, "streams_rate") < 0.5 then return 100 end
 	return (r.rate or 1) * 100
 end
 
---- A paused or stopped channel's voice is muted at once (pba_streams_stop_now, haltNow): its gain and sends are 0
+--- A paused or stopped channel's voice is muted at once (streams_stop_now, haltNow): its gain and sends are 0
 -- whatever the targets say, until the owner plays the channel again.
 local function heard(r, gain, send)
 	if r.halted then return 0, 0 end
@@ -407,9 +406,9 @@ function meta:SetVolume(v)
 	local old = r.nativeId and srcVol(self, r)
 	r.vol = v
 	if r.nativeId and r.reeval then r.reeval.force = true end -- the route follows at its next turn
-	-- the native voice's gain follows at once (pba_streams_vol_now), as BASS's channel does: before, the change
+	-- the native voice's gain follows at once (streams_vol_now), as BASS's channel does: before, the change
 	-- waited for the forced re-evaluation (up to an update interval, then a ramp over one interval)
-	if old and A.On(A.cfg, "streams_vol_now") then pcall(volumeNow, self, r, old) end
+	if old then pcall(volumeNow, self, r, old) end
 	local ok = pcall(applyVol, self, r)
 	if not ok then return O.SetVolume(self, v) end
 end
@@ -422,7 +421,7 @@ local function voiceNow(ch, r)
 	if r.ramp and r.ramp.to then applyRamp(ch, r, L, RealTime()) else nativeUpdate(ch, r, L) end
 end
 
---- The owner's SetPlaybackRate reaches the voice at once (pba_streams_rate): BASS's own channel speeds up or
+--- The owner's SetPlaybackRate reaches the voice at once (streams_rate): BASS's own channel speeds up or
 -- slows down at the call, and the module reads the captured samples at the same speed. The rate is read back
 -- from BASS (it may have clamped the request).
 function meta:SetPlaybackRate(rate)
@@ -432,15 +431,15 @@ function meta:SetPlaybackRate(rate)
 	local ok, got = pcall(O.GetPlaybackRate, self)
 	if ok and type(got) == "number" and got > 0 then r.rate = got
 	elseif type(rate) == "number" and rate > 0 then r.rate = rate end
-	if r.nativeId and enabled() and A.On(A.cfg, "streams_rate") then pcall(voiceNow, self, r) end
+	if r.nativeId and enabled() then pcall(voiceNow, self, r) end
 end
 
---- Pause, Stop and Play of the owner (pba_streams_stop_now). The voice plays what the module captured: the ~120 ms
+--- Pause, Stop and Play of the owner (streams_stop_now). The voice plays what the module captured: the ~120 ms
 -- of its ring plus what BASS's DSP wrote ahead, 0.2-0.3 s after a cut the radio went on talking. A Pause mutes
 -- the voice at once (its gain and sends 0 until Play; the ring empties meanwhile), a Stop ends it (a stopped
 -- channel is destroyed by GMod; if it were not, the next evaluation starts a new voice).
 local function cutNow(ch, r, stop)
-	if not (r.nativeId and enabled() and A.On(A.cfg, "streams_stop_now")) then return end
+	if not (r.nativeId and enabled()) then return end
 	if stop then
 		nativeStop(ch, r)
 		dropRamp(r)
