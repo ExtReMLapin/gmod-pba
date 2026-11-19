@@ -228,14 +228,16 @@ int main() {
 			bool fb = false;
 			const render::VoiceParams p = params();
 			const std::string name = randomName();
+			const int refused0 = render::CapRefused();
 			const int id = render::Play(name, p, rng() % 4 == 0, &fb);
+			const bool refused = render::CapRefused() != refused0; // (the cap left it out: the least audible, SetCapCompareNew)
 			++plays;
 			playsOk += id > 0 ? 1 : 0;
 			newId(id);
 			// a voice just started is there for the calls of the same frame (Update / Stop right after Play). Only for a
 			// sound longer than a few blocks at any pitch (the base ones, >= 0.5 s), played from its start: a short
 			// sentence or a start offset past the end ends on the first block, which may render between the two calls
-			if (id > 0 && p.offset == 0 && name.compare(0, 4, "base") == 0 && !render::Update(id, params()))
+			if (id > 0 && !refused && p.offset == 0 && name.compare(0, 4, "base") == 0 && !render::Update(id, params()))
 				Fail(playLost, "a voice just played answers Update", id);
 		} else if (op < 27) {
 			const int id = render::PlayEcho(randomName(), (int)(rng() % render::kEchoSlots), 1 + (int)(rng() % 5), 0.1f, 100, 0, rng() % 2 == 0);

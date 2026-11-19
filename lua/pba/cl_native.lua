@@ -635,6 +635,14 @@ function N.ApplySettings()
 	if pba_native.SetHrtfBlend then pba_native.SetHrtfBlend(A.cfg.native_hrtf_blend or 1) end -- (modules before this option: HRTF alone)
 	-- the reading speed of a voice glides to each new pitch (Doppler of a fly-by), not a step per frame (module of 2026-11-18+)
 	if pba_native.SetPitchGlide then pba_native.SetPitchGlide(A.cfg.native_pitch_glide or 30) end
+	-- a voice's diffuse share changing is ramped over the block (module of 2026-11-19+; an older one steps)
+	if pba_native.SetDiffuseSmooth then pba_native.SetDiffuseSmooth((A.cfg.native_diffuse_smooth or 1) >= 0.5) end
+	-- at the voice cap, a new voice is ranked with the playing ones (module of 2026-11-19+; an older one always makes room)
+	if pba_native.SetCapCompareNew then pba_native.SetCapCompareNew((A.cfg.native_cap_new or 1) >= 0.5) end
+	-- a voice's direct EQ, once used, is applied at every block (module of 2026-11-19+; an older one skips it at 1)
+	if pba_native.SetEqContinuous then pba_native.SetEqContinuous((A.cfg.native_eq_continuous or 1) >= 0.5) end
+	-- a source slot bank the crossfade left is flushed, not reset (module of 2026-11-19+; an older one resets it)
+	if pba_native.SetSlotBankFlush then pba_native.SetSlotBankFlush((A.cfg.native_slot_bank_flush or 1) >= 0.5) end
 	local k = N.wetScale or 1
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,
@@ -1445,9 +1453,12 @@ function N.SlotFadeSend(o, bound, entry, gain)
 end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
 -- the voice has a slot (then the room bus must only get the transmission part).
-function N.BindSource(id, S, srcSend)
+-- wet: the voice's wet share (N.LoudWet), with pba_native_slot_fallback_wet the cap of what the voice hands the room bus while
+-- its slot is simulated (its gain x wet, what a voice without a slot gets; a module before 2026-11-19 ignores it)
+function N.BindSource(id, S, srcSend, wet)
 	if not (id and pba_native.SourceReflect) then return false end
-	local slot = pba_native.SourceReflect(id, S, srcSend, N.ProbeLift(S))
+	if (A.cfg.native_slot_fallback_wet or 1) < 0.5 then wet = nil end
+	local slot = pba_native.SourceReflect(id, S, srcSend, N.ProbeLift(S) or 0, wet)
 	return slot ~= nil and slot >= 0
 end
 
@@ -1561,7 +1572,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, opt.offset, opt.protect, opt.pausable, opt.own) end
 	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
 	if id and id > 0 and srcPos and L then
-		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
+		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain, opt.wet) and not opt.roomSend then
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain
 		end
 	end
@@ -1804,6 +1815,12 @@ end
 
 N.BoxMesh = boxMesh
 local MOVED_NEAR2 = 1024 * 1024 -- units: dynamic objects whose motion re-evaluates the continuous sounds
+-- pba_native_scene_far_m: a door, mover or prop farther than that from the listener sends its move once it has rested
+-- FAR_REST_S (or after FAR_MAX_S of motion). Every scene commit restarts Steam Audio's accumulated reflections of every
+-- source (and the source slots' listener anchor): a door swinging or a car driving 40 m off committed the scene at every
+-- 0.1 s sync, and the reverb's averages never converged (srcAnchorMoves ~4/s with the listener still)
+local FAR_REST_S, FAR_MAX_S = 0.3, 5
+local UNITS_PER_M = 1 / 0.01905
 -- Spinners: an object that has moved at every sync for pba_native_spin_s (3 s) without its centre leaving a
 -- AMBIENT_RADIUS2 (16 u) circle turns in place for ever (a ceiling fan, a radar, a windmill): its place in the
 -- scene is refreshed every AMBIENT_PERIOD s only, and it no longer empties the path cache. Each refresh is a scene
@@ -2061,6 +2078,11 @@ function N.SyncDoors()
 	-- long (the first always enters); the others enter at the next syncs, which the calm hold then does not wait for
 	local addMs = A.cfg.native_props_add_ms or 3
 	local addSpent, addCut = 0, false
+	-- pba_native_props_rank_keep: once a ranking found more props than the cap, the props entering before the next one are
+	-- its winners only (the fill below put in whichever came first in ents.GetAll(), losers included, which the next
+	-- ranking took out again: props in and out every 2 s with nothing moving, a DynamicAdd and a commit each time)
+	if not wantProps then N.propWinners = nil end
+	local winners = (A.cfg.native_props_rank_keep or 1) >= 0.5 and N.propWinners or nil
 	local rerank = wantProps and not hold and now >= (N.propRankT or 0)
 	if rerank then N.propRankT = now + PROP_RANK_S end
 	local cands = rerank and {} or nil
@@ -2068,8 +2090,11 @@ function N.SyncDoors()
 	-- continuous sounds re-evaluate (reeval_adaptive; P.ReevalDue watches the world version)
 	local L, moved = A.ListenerPos(), false
 	local function near(p) return L and p and p:DistToSqr(L) < MOVED_NEAR2 end
+	local farM = A.cfg.native_scene_far_m or 20
+	local farR2 = farM > 0 and L and (farM * UNITS_PER_M) ^ 2 or nil
 	local function track(e, id, d)
 		local p, a = e:GetPos(), e:GetAngles()
+		local movingNow = d.sp and (d.sp ~= p or d.sa ~= a)
 		-- sustained spin in place (see pba_native_spin_s): counted over the syncs, whatever was sent
 		if d.sp and (d.sp ~= p or d.sa ~= a) then
 			local c = e:WorldSpaceCenter()
@@ -2088,6 +2113,13 @@ function N.SyncDoors()
 			return
 		end
 		if not d.p or d.p ~= p or d.a ~= a then
+			if farR2 and d.p and p:DistToSqr(L) > farR2 then
+				-- far from the listener: sent once it rests (or after FAR_MAX_S of motion), not at every sync
+				if movingNow or not d.farLast then d.farLast = now end
+				d.farT0 = d.farT0 or now
+				if now - d.farLast < FAR_REST_S and now - d.farT0 < FAR_MAX_S then return end
+			end
+			d.farT0, d.farLast = nil, nil
 			if d.prop then
 				if hold then return end -- sent once the fight is over, where it came to rest
 				propSent = true
@@ -2162,7 +2194,7 @@ function N.SyncDoors()
 			else
 				if d then
 					seen[id] = true
-				elseif nProps < cap and not hold then
+				elseif nProps < cap and not hold and not (winners and not winners[id]) then
 					if addMs > 0 and addSpent >= addMs then
 						addCut = true -- (this sync's share is spent: at the next one)
 					else
@@ -2190,8 +2222,11 @@ function N.SyncDoors()
 	end
 	-- ranking: the `cap` most relevant props are in the scene, the others out (swapped). Outs first, so
 	-- the scene never holds more than `cap` props.
+	if cands and #cands <= cap then N.propWinners = nil end -- (every candidate fits: no ranking to keep)
 	if cands and #cands > cap then
 		table.sort(cands, function(a, b) return a.s > b.s end)
+		N.propWinners = {}
+		for i = 1, cap do N.propWinners[cands[i].id] = true end
 		for i = cap + 1, #cands do
 			local c = cands[i]
 			local d = N.doors[c.id]

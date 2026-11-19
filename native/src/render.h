@@ -88,6 +88,14 @@ void SetWet(float room, float echo);
 // extra room-reverb send of diffuse voices (see VoiceParams::diffuse)
 void SetDiffuseSend(float k);
 void SetDiffuseRtRef(float s);
+// A voice's diffuse share changing (Update) is ramped over the block like its gain: the direct gain, the room send's boost
+// and the HRTF's spatial blend (pba_native_diffuse_smooth, default on). false: the new share for the whole block at once
+// (an Update from 0 to 0.85 dropped the direct sound by 8 dB in one sample: a click), as before.
+void SetDiffuseSmooth(bool on);
+// A voice's direct EQ, once applied, is applied at every block after it, even with every band at 1 (pba_native_eq_continuous,
+// default on): the filters' state follows the signal. false: skipped while every band is >= 0.999 and resumed with the state
+// and gain of its last use, possibly seconds old (a transient), as before.
+void SetEqContinuous(bool on);
 // listener under water: low-pass on the whole native mix (0 = dry, 1 = fully under water)
 void SetUnderwater(float amount);
 // game paused (single player menu): the voices started with VoiceParams::pausable freeze where they are
@@ -123,7 +131,10 @@ void PublishSimulated(int slot, int gen);
 // binds voice id to source reverb slot `slot` simulated at generation gen (slot < 0: unbinds it);
 // srcSend: send level into the slot (linear, < 0 = keep the voice's; 0 at the first bind).
 // Several voices may share a slot. false if the voice is gone (or dying, or an echo).
-bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend);
+// fbWet: the share of its reverb the voice keeps (Lua's N.LoudWet: a loud sound stays dry), which caps what the voice hands the
+// room bus while its slot is not simulated yet (SetSlotFallbackGain): its gain x fbWet, what Lua gives a voice without a slot
+// (< 0: unchanged; 1 at the first bind, the former cap: its gain alone).
+bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend, float fbWet = -1);
 // live[k]: number of live (not dying) voices bound to source reverb slot k, k < kSrcSlotsMax.
 // Returns the slot voice id is bound to (-1: none or gone; id <= 0: -1)
 int SrcSlotLive(int live[kSrcSlotsMax], int id = 0);
@@ -134,6 +145,12 @@ void SetSourceReverbScale(float k);
 // share a voice whose source reverb slot is not simulated yet hands to the room bus meanwhile: true (default) = no more
 // than the voice's gain at the listener (what Lua sends a voice without a slot), false = the slot send (legacy)
 void SetSlotFallbackGain(bool on);
+// A source slot bank weighted out (its blend weight at 0) while it still rings is flushed: convolved with silence, its output
+// discarded, until its tail is over; weighted in again it still holds its impulse response (pba_native_slot_bank_flush,
+// default on). false: marked stale and reset when weighted in again, as before; Steam Audio's reset also drops the response
+// the effect holds, so a bank back without a new simulation (the listener crossing the anchor radius back and forth) rang
+// with none: silent.
+void SetSlotBankFlush(bool on);
 // latest reverb times at the listener (read by the audio thread from the simulation outputs)
 void RoomReverbTimes(float rt[3]);
 // hybrid tail EQ last applied to the room reverb (3 bands)
@@ -226,6 +243,15 @@ void ClearSlotReverbTimes();
 // long-window ones; false: no such slot
 bool SlotReverbTimes(int slot, float used[3], float mainRt[3], bool* longOn);
 void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory budget (LRU eviction)
+// At the voice cap, a new voice (Play, PlayStream, Echo) is ranked with the playing ones (pba_native_cap_new, default on):
+// when it is the one the cap would take (spoken lines last, then the least audible) it is not started (Play answers an id
+// already gone). false: a playing voice always makes room for it, as before (an inaudible footstep evicted a gunshot).
+void SetCapCompareNew(bool on);
+int CapRefused(); // new voices the cap did not start, since the module was loaded (Stats capRefused)
+// Each audio callback runs with flush-to-zero and denormals-are-zero (true, the default; the caller's mode is put back after
+// it). Tests and diagnostics: AudioThreadMxcsr is the mode the last callback ran with.
+void SetFlushDenormals(bool on);
+unsigned AudioThreadMxcsr();
 // commands waiting for room in the audio thread's queue (diagnostics, tests): 0 while the audio thread keeps up; bounded
 // (a few per live voice) when it stalls, the parameter updates then only keep their latest value
 int QueueBacklog();
@@ -252,6 +278,17 @@ void StopVoice(int id);
 int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, double* eL, double* eR);
 // audio thread load: average and max milliseconds per 512-sample block since the last call
 void Load(double* avgMs, double* maxMs, int* blocks);
+// The same window, told whole (pba_native.Stats): the largest block's wall time, the thread's own CPU time over that block (a
+// slow block with little CPU time was preempted or waited; with most of it, it was work), the largest CPU time of any block,
+// how long ago the largest block ended and how long the window is (since the previous read). Both reads start a new window.
+struct LoadStats {
+	double avgMs = 0, maxMs = 0, maxCpuMs = 0, cpuMaxMs = 0, maxAgoS = 0, windowS = 0;
+	int blocks = 0;
+};
+void LoadEx(LoadStats* out);
+#ifdef PBA_LOAD_TEST_HOOK
+void TestBlockExtra(double busyMs, double sleepMs); // tests: busy work or a sleep added to the next block
+#endif
 
 // Radius (m) within which a source reverb slot keeps the response simulated at one place: `base` near
 // the listener, `frac` of the source - listener distance far away (frac <= 0: base alone).

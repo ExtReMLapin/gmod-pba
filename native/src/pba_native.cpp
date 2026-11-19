@@ -24,7 +24,7 @@
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]),
-//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool), SetSlotBankFlush(bool), SetEqContinuous(bool), SetCapCompareNew(bool),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k), SetSlotFallback(on),
@@ -2110,6 +2110,10 @@ LUA_FUNCTION(Echo) {
 		return 1;
 	}
 	const IPLVector3 p = ToSA(LUA->GetVector(2));
+	if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) { // (never simulated at a position that is not one)
+		LUA->PushNumber(0);
+		return 1;
+	}
 	// 7: the shooter's aim (Source direction), 8: dipole weight (0 omni .. 1 figure of eight)
 	IPLVector3 aim{0, 0, -1};
 	float dipole = 0;
@@ -2184,7 +2188,8 @@ LUA_FUNCTION(Echo) {
 	return 2;
 }
 
-// SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot (0-based) | -1. Source reverb slot for a voice (lift: metres above pos
+// SourceReflect(voiceId, pos [, srcSend [, lift [, wet]]]) -> slot (0-based) | -1. wet: the voice's wet share (Lua's N.LoudWet), which
+// caps what it hands the room bus while its slot is not simulated yet (render::SetVoiceSrcSlot fbWet; absent: unchanged). Source reverb slot for a voice (lift: metres above pos
 // at which the slot's long-window reverb time is estimated, pba_native_source_long_rt: a point within ~0.5 m of the floor gives a
 // meaningless estimate, so Lua lifts a sound on the floor towards head height, under the ceiling; 0 = at pos):
 // reflections simulated from the source's position, so the source room's reverberant field reaches
@@ -2206,6 +2211,7 @@ LUA_FUNCTION(SourceReflect) {
 	const int id = (int)LUA->CheckNumber(1);
 	const float srcSend = LUA->IsType(3, Type::Number) ? std::max((float)LUA->GetNumber(3), 0.0f) : -1.0f;
 	const float lift = LUA->IsType(4, Type::Number) ? std::clamp((float)LUA->GetNumber(4), 0.0f, 2.0f) : 0.0f;
+	const float wet = LUA->IsType(5, Type::Number) ? std::clamp((float)LUA->GetNumber(5), 0.0f, 1.0f) : -1.0f;
 	const int n = std::clamp(g_srcPool.load(), 0, render::kSrcSlotsMax);
 	if (!LUA->IsType(2, Type::Vector) || !g_sim || !g_srcSlot[0].src || id <= 0 || n == 0) {
 		render::SetVoiceSrcSlot(id, -1, 0, 0);
@@ -2284,7 +2290,7 @@ LUA_FUNCTION(SourceReflect) {
 		return 1;
 	}
 	g_reflCv.notify_one();
-	if (!render::SetVoiceSrcSlot(id, slot, gen, srcSend)) { // the voice is gone (the slot frees itself)
+	if (!render::SetVoiceSrcSlot(id, slot, gen, srcSend, wet)) { // the voice is gone (the slot frees itself)
 		LUA->PushNumber(-1);
 		return 1;
 	}
@@ -2532,6 +2538,31 @@ LUA_FUNCTION(SetPitchGlide) {
 	return 0;
 }
 
+// SetSlotBankFlush(bool): a source slot bank weighted out is flushed with silence until its tail is over and keeps its response (true, the default); false: reset when weighted in again, which dropped the response, as before (pba_native_slot_bank_flush)
+LUA_FUNCTION(SetSlotBankFlush) {
+	render::SetSlotBankFlush(LUA->GetBool(1));
+	return 0;
+}
+
+// SetEqContinuous(bool): a voice's direct EQ, once used, is applied at every block after it, even with every band at 1 (true, the default); false: skipped while clear and resumed with stale filter state, as before (pba_native_eq_continuous)
+LUA_FUNCTION(SetEqContinuous) {
+	render::SetEqContinuous(LUA->GetBool(1));
+	return 0;
+}
+
+// SetCapCompareNew(bool): at the voice cap, a new voice is ranked with the playing ones and left out when it is the least audible (true, the default); false: a playing voice always makes room for it, as before (pba_native_cap_new)
+LUA_FUNCTION(SetCapCompareNew) {
+	render::SetCapCompareNew(LUA->GetBool(1));
+	return 0;
+}
+
+// SetDiffuseSmooth(bool): a voice's diffuse share changing is ramped over the block like its gain (true, the default);
+// false: the new share at once (an 8 dB step of the direct sound in one sample), as before (pba_native_diffuse_smooth)
+LUA_FUNCTION(SetDiffuseSmooth) {
+	render::SetDiffuseSmooth(LUA->GetBool(1));
+	return 0;
+}
+
 // SetOutputMode(0 headphones | 1 speakers)
 LUA_FUNCTION(SetOutputMode) {
 	render::SetOutputMode((int)LUA->CheckNumber(1));
@@ -2559,11 +2590,15 @@ LUA_FUNCTION(SetLimits) {
 	return 0;
 }
 
-// Stats() -> table: reflection thread and audio thread load, reverb times, HRTF
+// Stats() -> table: reflection thread and audio thread load, reverb times, HRTF. The audio thread's load covers the time since
+// the previous Stats call (audioWindowS): audioAvgMs / audioMaxMs (wall time per 512-sample block, budget 10.7 ms), with
+// audioMaxCpuMs the thread's own CPU time over the largest block (close to audioMaxMs: work; much less: preempted or
+// waiting), audioCpuMaxMs the largest CPU time of any block and audioMaxAgoS how long ago the largest block ended
 LUA_FUNCTION(Stats) {
-	double avg = 0, mx = 0;
-	int blocks = 0;
-	render::Load(&avg, &mx, &blocks);
+	render::LoadStats ls;
+	render::LoadEx(&ls);
+	const double avg = ls.avgMs, mx = ls.maxMs;
+	const int blocks = ls.blocks;
 	float rt[3];
 	{
 		std::lock_guard<std::mutex> lk(g_stageMtx);
@@ -2576,6 +2611,16 @@ LUA_FUNCTION(Stats) {
 	LUA->SetField(-2, "audioMaxMs");
 	LUA->PushNumber(blocks);
 	LUA->SetField(-2, "audioBlocks");
+	LUA->PushNumber(ls.maxCpuMs);
+	LUA->SetField(-2, "audioMaxCpuMs");
+	LUA->PushNumber(ls.cpuMaxMs);
+	LUA->SetField(-2, "audioCpuMaxMs");
+	LUA->PushNumber(ls.maxAgoS);
+	LUA->SetField(-2, "audioMaxAgoS");
+	LUA->PushNumber(ls.windowS);
+	LUA->SetField(-2, "audioWindowS");
+	LUA->PushNumber(render::CapRefused()); // new voices the cap left out (pba_native_cap_new)
+	LUA->SetField(-2, "capRefused");
 	LUA->PushNumber(g_reflMs.load());
 	LUA->SetField(-2, "reflMs");
 	LUA->PushNumber(g_reflMaxMs.exchange(0));
@@ -2916,7 +2961,8 @@ LUA_FUNCTION(SetListener) {
 	const float master = LUA->IsType(4, Type::Number) ? (float)LUA->GetNumber(4) : 1.0f;
 	double eL = 0, eR = 0;
 	const IPLVector3 pos = ToSA(LUA->GetVector(1)), ahead = DirToSA(LUA->GetVector(2)), up = DirToSA(LUA->GetVector(3));
-	{
+	auto finite = [](const IPLVector3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+	if (finite(pos) && finite(ahead) && finite(up)) { // (a NaN listener never reaches the simulation; the renderer ignores it too)
 		std::lock_guard<std::mutex> lk(g_stageMtx);
 		g_stageLis.origin = pos;
 		g_stageLis.ahead = ahead;
@@ -3106,6 +3152,14 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetHrtfBlend");
 	LUA->PushCFunction(SetPitchGlide);
 	LUA->SetField(-2, "SetPitchGlide");
+	LUA->PushCFunction(SetSlotBankFlush);
+	LUA->SetField(-2, "SetSlotBankFlush");
+	LUA->PushCFunction(SetEqContinuous);
+	LUA->SetField(-2, "SetEqContinuous");
+	LUA->PushCFunction(SetCapCompareNew);
+	LUA->SetField(-2, "SetCapCompareNew");
+	LUA->PushCFunction(SetDiffuseSmooth);
+	LUA->SetField(-2, "SetDiffuseSmooth");
 	LUA->PushCFunction(SetReflections);
 	LUA->SetField(-2, "SetReflections");
 	LUA->PushCFunction(SetLimits);
