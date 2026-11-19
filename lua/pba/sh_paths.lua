@@ -3280,8 +3280,17 @@ local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emit
 	local c = P.cache[key]
 	local barrier = (cfg.cache_barrier or 1) >= 0.5
 	if c and now - c.t < cfg.cache_ttl then
+		-- pba_cache_src_near: with no entity (a map's ambient sound, a far emitter the client does not have) the key
+		-- cannot tell two emitters of one cell apart: two loops 30 u apart in one 32 u cell took each other's path,
+		-- whichever was evaluated first, in turns (a level flipping about every second with the listener still). The
+		-- cached path serves it only from where the same emitter could be: within reeval_move, as pba_group_time does.
+		local far = false
+		if not emitter and (cfg.cache_src_near or 1) >= 0.5 then
+			local dx, dy, dz = S.x - c.sx, S.y - c.sy, S.z - c.sz
+			far = dx * dx + dy * dy + dz * dz > sq(cfg.reeval_move or 8)
+		end
 		-- (the result of a cell-mate with a floor or a wall between: not this one's)
-		if not (barrier and (P.BarrierBetween(S, c.sx, c.sy, c.sz, emitter) or P.BarrierBetween(L, c.lx, c.ly, c.lz, emitter))) then return c.r end
+		if not far and not (barrier and (P.BarrierBetween(S, c.sx, c.sy, c.sz, emitter) or P.BarrierBetween(L, c.lx, c.ly, c.lz, emitter))) then return c.r end
 	end
 	if timeOn then
 		local mv2 = sq(cfg.reeval_move or 8)

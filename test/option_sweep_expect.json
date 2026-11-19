@@ -427,6 +427,10 @@
   "pos0": "same",
   "why": "the result cache across a floor or a wall: cold positions have nothing cached and the sweep scenes put no two sources of one cell either side of a solid (test cell_barrier)"
  },
+ "cache_src_near": {
+  "pos0": "same",
+  "why": "two sources with no entity in one 32 u cell more than reeval_move apart, within cache_ttl: the sweep evaluates one position at a time (pure test review P2)"
+ },
  "cache_gen_guard": {
   "pos0": "same",
   "why": "a result kept while the world model changed under its evaluation (far sounds' slices): the sweep's evaluations are synchronous with nothing changing during them (pure test review P1)"

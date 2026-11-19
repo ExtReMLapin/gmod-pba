@@ -74,6 +74,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Third-person and death views: the server hears from where the player's view really is | ✅ | ✅ | S `ear_report` |
 | Far sounds' paths worked out over several frames within a fixed time per frame, also while the listener moves fast | ✅ | ✅ | C `far_sliced`, `far_sliced_ms`, `far_sliced_cap` |
 | Cached paths never kept from a world that changed while they were worked out | ✅ | ✅ | C `cache_gen_guard` |
+| Two sounds with no entity close to each other never share a cached path | ✅ | ✅ | C `cache_src_near` |
 | `pba_enable 0` = exact vanilla (A/B) | ✅ | ✅ | S `enable` |
 | Menus (player, admin, Steam Audio) | ✅ | ✅ | — |
 | The server can forbid the native module (fairness in competitive play) | — | ✅ | S `allow_native` |

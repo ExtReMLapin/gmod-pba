@@ -1549,6 +1549,47 @@ local SUITE = {
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Compute cache: two sources with no entity in one 32 u cell are two emitters: one does not get the other's path unless it stands within reeval_move of it (pba_cache_src_near, review P2)", func = function()
+			-- a concrete wall x 100..110 ending at y = 16 between the listener and both sources (line state "w" for both)
+			local mn, mx = Vector(100, -200, -100), Vector(110, 16, 100)
+			local savedWalls, savedTrace, savedGet = P.Walls, util.TraceLine, A.Graph.Get
+			P.Walls = function(a, b)
+				local t0, t1 = segBox(a, b, mn, mx)
+				if not t0 then return {} end
+				local e, x = a + (b - a) * t0, a + (b - a) * t1
+				return { { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" } }
+			end
+			util.TraceLine = function(t)
+				local out = traceOut(t)
+				local f = segBox(t.start, t.endpos, mn, mx)
+				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
+				return out
+			end
+			A.Graph.Get = function() return nil end
+			local cfg = setmetatable({ probes = 0, path_props = 0, cache_ttl = 10 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local L, Sa, Sb, Sn = Vector(0, -40, 0), Vector(194, -60, 0), Vector(222, -36, 20), Vector(198, -55, 3)
+				expect(P.CacheKey(Sa, L, 75, nil, cfg)).to.equal(P.CacheKey(Sb, L, 75, nil, cfg)) -- (one key: the bug's premise)
+				P.InvalidateCache()
+				local ownB = P.Compute(Sb, L, 75, cfg)
+				P.InvalidateCache()
+				local a = P.Compute(Sa, L, 75, cfg)
+				local b = P.Compute(Sb, L, 75, cfg)
+				expect(rawequal(a, b)).to.equal(false)
+				expect(b.S == Sb).to.beTrue()
+				expect(dumpResult(b)).to.equal(dumpResult(ownB))
+				-- the same emitter a little further (within reeval_move, 8 u): still one computation
+				expect(rawequal(P.Compute(Sn, L, 75, cfg), a)).to.beTrue()
+				-- control: pba_cache_src_near 0 (former behaviour): b gets a's path
+				cfg.cache_src_near = 0
+				P.InvalidateCache()
+				a = P.Compute(Sa, L, 75, cfg)
+				expect(rawequal(P.Compute(Sb, L, 75, cfg), a)).to.beTrue()
+			end)
+			P.Walls, util.TraceLine, A.Graph.Get = savedWalls, savedTrace, savedGet
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Compute cache: entries past cache_ttl are swept (it grew without limit on a map whose doors never move)", func = function()
 			local savedWalls, savedGet, savedRT = P.Walls, A.Graph.Get, _G.RealTime
 			P.Walls = function() return {} end
