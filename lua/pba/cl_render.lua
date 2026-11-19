@@ -221,14 +221,13 @@ end
 -- on channel chan stops, every copy (anchors, native voices, those at a fixed position past the anchor
 -- cap, mouth copies) and every client-side long sound mirror (whichever started it: a long line cut the
 -- brief copies of its channel, a brief one the long mirror).
--- only: "copies" or "mirrors" restricts the cut to one kind (pba_channel_one_rule 0: each path cut its own).
 -- `delay` (s, pba_cut_at_start): when the new sound STARTS after that long (the start time its stamp carries, its
 -- propagation delay), the copies it replaces play on until then, as the engine's delayed channel does (the stop of the old
 -- sound is scheduled at the new one's start). Cut on arrival, a burst of shots reaching the client together (each
 -- delayed by its own stamp) stopped every shot but the last before it had begun.
-function A.CutChannel(idx, chan, only, delay)
+function A.CutChannel(idx, chan, delay)
 	if A.WatchCut then A.WatchCut(idx, chan) end -- (a watched line there is over: handback_channel)
-	local list = only ~= "mirrors" and A.emitted[idx]
+	local list = A.emitted[idx]
 	if list then
 		local later = delay and delay >= 0.005 and A.On(A.cfg, "cut_at_start")
 		local held
@@ -255,7 +254,7 @@ function A.CutChannel(idx, chan, only, delay)
 		end
 		if #list == 0 then A.emitted[idx] = nil end
 	end
-	if only ~= "copies" and A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
+	if A.Loops and A.Loops.StopClient then A.Loops.StopClient(idx, chan) end
 end
 
 -- Channel-rule cuts of the server read in this frame or just before (pba_snd_stop with the stamp of the sound that replaces):
@@ -296,12 +295,6 @@ local function cutAfter(idx, chan, stampMs)
 	return best
 end
 
---- The kind a path cuts under pba_channel_one_rule 0 (nil: everything, the one rule).
-function A.ChannelCutOnly(kind)
-	if A.On(A.cfg, "channel_one_rule") then return nil end
-	return kind
-end
-
 --- Copy set of a sound's source on a replacing channel; a new sound there cuts every earlier copy of
 -- that channel (A.CutChannel).
 local function beginCopies(data, idx)
@@ -314,7 +307,7 @@ local function beginCopies(data, idx)
 			local L = A.ListenerPos()
 			if L then d = d + data.Pos:Distance(L) / SPEED end
 		end
-		A.CutChannel(idx, chan, A.ChannelCutOnly("copies"), d)
+		A.CutChannel(idx, chan, d)
 	end
 	-- (a relayed copy the server's cut already read replaces: it stops at that sound's start, pba_cut_at_start)
 	if A.On(A.cfg, "cut_at_start") then data.cutAfter = cutAfter(idx, chan, data.stampMs) end
@@ -758,8 +751,8 @@ local function targetValues(rec, fv, t, L, first)
 		-- Doppler of a moving source or listener, as loops and clear voices (N.UpdateFollowers) have it
 		local el, em, eh = N.VoiceEQ(t.lp, t.len, t.lpDb)
 		local pitch
-		-- a speaker's EQ, as at emission (pba_native_speaker_follow)
-		local spk = rec.speaker and A.On(A.cfg, "native_speaker_follow")
+		-- a speaker's EQ, as at emission
+		local spk = rec.speaker
 		el, em, eh, pitch = A.Render.Tail(el, em, eh, rec.pitch, spk, rec.S, rec.ent, L)
 		local g = rec.vol * N.PhysPath(t.gain, t.len, rec.lvl, t.rawLossDb) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim)
 		-- a speaking face's loudest voice keeps its floor while followed (pba_speech_floor_db)
@@ -1014,8 +1007,8 @@ function OS.Add(data, src, S, L, r, list, play, ukey)
 		fv.tEnd, fv.pos, fv.ramp = fv.t0 + play, v.epos or v.pos, {}
 		if fv.id then
 			local el, em, eh = N.VoiceEQ(v.lp, v.len, v.lpDb)
-			-- the ramp starts from what was played: a speaker's EQ included (pba_native_speaker_follow)
-			if rec.speaker and A.On(A.cfg, "native_speaker_follow") then
+			-- the ramp starts from what was played: a speaker's EQ included
+			if rec.speaker then
 				el, em, eh = el * N.SPEAKER_EQ[1], em * N.SPEAKER_EQ[2], eh * N.SPEAKER_EQ[3]
 			end
 			A.Paths.RampTo(fv.ramp, now, 0, L, v.vol * A.cfg.native_gain, el, em, eh, v.pos, rec.pitch)
@@ -1810,7 +1803,7 @@ net.Receive(NET, function()
 	if echoOnly then return end
 	-- a sound of my own the server relayed all the same (a sentence: EmitSentence takes no
 	-- filter, every listener gets the relay when one is blocked) is played by the engine on me, attached
-	if A.On(A.cfg, "mp_own") then
+	do
 		local lp = LocalPlayer()
 		if IsValid(lp) and data.EntIndex == lp:EntIndex() and A.HearsFromSelf(lp) and not (A.NativeOwn and A.NativeOwn()) then vanilla(data) return end
 	end
@@ -2037,7 +2030,7 @@ net.Receive("pba_snd_stop", function()
 	local stMs = net.ReadBool() and net.ReadUInt(16) or nil
 	if n == 0 then
 		if stMs and chan ~= CHAN_AUTO and A.On(A.cfg, "cut_at_start") then
-			A.CutChannel(idx, chan, nil, A.SoundTimeLead(stMs, RealTime()))
+			A.CutChannel(idx, chan, A.SoundTimeLead(stMs, RealTime()))
 			A.NoteCut(idx, chan, stMs) -- (the relayed copies read after it in the same packet)
 		else
 			A.StopSource(idx, "", chan)

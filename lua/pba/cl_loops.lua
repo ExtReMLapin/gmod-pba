@@ -850,7 +850,7 @@ function LP.HandleClient(data)
 		return true
 	end
 	-- (a new sound: a change flag here is a patch's Play)
-	if A.CutsChannel(chan, flags, true) and A.CutChannel then A.CutChannel(idx, chan, A.ChannelCutOnly("mirrors")) end
+	if A.CutsChannel(chan, flags, true) and A.CutChannel then A.CutChannel(idx, chan) end
 	local lvl = data.SoundLevel or 75
 	if lvl <= 0 or lvl >= 256 then return false end
 	if src or cpp then
@@ -977,7 +977,7 @@ local function updateMirror(m, vol, pitch)
 	end
 end
 
--- the mirrors by the server's handle (pba_loops_net_compact): a compact update names its mirror by it
+-- the mirrors by the server's handle: a compact update names its mirror by it
 LP.byId = LP.byId or setmetatable({}, { __mode = "v" })
 local OP_COMPACT = 3
 

@@ -125,7 +125,6 @@ local function keeps(p, s, moved)
 end
 c.blockedKeepsEQ = keeps(res.blockedPlain, res.blockedSpeaker, false)
 c.clearKeepsEQ = keeps(res.clearPlain, res.clearSpeaker, true)
-res.option = A.cfg.native_speaker_follow
 res.fails = {}
 for k, v in SortedPairs(c) do if not v then res.fails[#res.fails + 1] = k end end
 res.pass = #res.fails == 0

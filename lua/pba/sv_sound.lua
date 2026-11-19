@@ -325,11 +325,10 @@ local function prepare(snd)
 	-- singleplayer has no prediction: the engine sends the player his own sounds from here, and his
 	-- client never sees them (no echoes on his own gunfire)
 	local sp = game.SinglePlayer()
-	-- one rule for "the player's own sound", singleplayer or multiplayer (mp_own): everything the server plays
+	-- one rule for "the player's own sound", singleplayer or multiplayer: everything the server plays
 	-- on a player, in or outside his command (his weapon, pain, fall damage, his suit's HEV lines), is his
 	-- own: the engine plays it on him, clear. Those of his command in multiplayer go to nobody (his client
 	-- predicts them, below)
-	snd.own = A.On(A.cfg, "mp_own")
 	-- the player whose command made the sound, when his client predicts it (nobody otherwise)
 	snd.skip = not sp and predictedBy(data.Entity, predicted) and predicted or nil
 	snd.step = not sp and stepper(data)
@@ -376,7 +375,7 @@ function S.Audience(snd, ply, scale)
 	-- his own sound: the engine plays it on him, untouched, unless his module plays it like every other sound
 	-- (pba_native_own: the relay below, as for a native-all player's clear sound)
 	-- (not through a camera: the engine spatialises his sounds from there, so they take the path of any sound)
-	local ownEar = snd.own and ply ~= snd.skip and e == ply and A.HearsFromSelf(ply)
+	local ownEar = ply ~= snd.skip and e == ply and A.HearsFromSelf(ply)
 	-- (not before his client runs; on a map change his userinfo still asks while his new client loads)
 	if ownEar and (not wantsOwn(ply) or not clientReady(ply)) then return "clear" end
 	-- his own sound for his module (pba_native_own): no wall to look for between him and himself, and no

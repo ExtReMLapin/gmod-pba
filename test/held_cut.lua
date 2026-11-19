@@ -35,7 +35,7 @@ local ok, err = pcall(function()
 	res.checks.held = res.held
 	if not res.held then return end
 	local tCut = RealTime()
-	A.CutChannel(idx, CHAN_VOICE, nil, 0.5)
+	A.CutChannel(idx, CHAN_VOICE, 0.5)
 	-- the routes are ready at once (before the cut's time)
 	fake.onDone({ clear = false, voices = { { pos = Vector(500, 256, 40), gain = 0.05, len = 600, lp = 1, rawLossDb = 26 } } })
 	local id

@@ -5,7 +5,6 @@
 -- 1. switchNative on a "#" line through a wall (dominant voice, a transmission path); 2. a 73 s "#" music emitted
 -- client-side on a model in room B (a client long-sound mirror). pba_native.Play / Update / SourceReflect are
 -- wrapped (the voices still play). Pass: neither voice gets a slot nor a non-zero room send.
--- pre: `local CONTROL = true` runs with pba_native_dry_prefix_all 0: passes when they get them again (old behaviour).
 local A = pba
 local N = A.Native
 if not (N and N.render) then return { pass = false, err = "native renderer not running" } end
@@ -14,7 +13,6 @@ local VOICE = A.Render.Strategy("oneshot")
 local switch = VOICE.native and VOICE.native.start
 local LINE = "#vo/npc/male01/hi01.wav"
 local LONG = "#music/hl2_song12_long.mp3"
-A.SetOverride("native_dry_prefix_all", CONTROL and 0 or 1)
 local L = A.ListenerPos()
 local B = Vector(784, 256, 40) -- room B, behind the wall
 local watch = {} -- voice id -> true
@@ -84,14 +82,9 @@ local ok, err = pcall(function()
 end)
 for _, id in ipairs(ids) do pba_native.StopVoice(id) if A.OneShots then A.OneShots.native[id] = nil end end
 pba_native.Play, pba_native.Update, pba_native.SourceReflect = orig.Play, orig.Update, orig.SourceReflect
-A.SetOverride("native_dry_prefix_all", nil)
 if IsValid(e) then e:Remove() end
 if not ok then return { pass = false, err = tostring(err) } end
 res.fails = {}
 for k, okc in SortedPairs(res.checks) do if not okc then res.fails[#res.fails + 1] = k end end
 res.pass = #res.fails == 0
-if CONTROL then
-	res.controlRed = not res.pass
-	res.pass = res.checks.switched and res.checks.mirror and not res.checks.switchNoSlot and not res.checks.mirrorNoSlot or false
-end
 return res
