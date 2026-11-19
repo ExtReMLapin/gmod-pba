@@ -57,6 +57,7 @@
 #include "miniaudio.h"
 
 #include "render.h"
+#include "prof.h"
 
 #include <xmmintrin.h>
 #ifdef _WIN32
@@ -990,7 +991,11 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	if (over) r.silent = true;
 	if (!rtOut && (wet <= 0 || over)) return;
 	IPLSimulationOutputs out{};
-	iplSourceGetOutputs(src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
+	{
+		PROF_T0();
+		iplSourceGetOutputs(src, IPL_SIMULATIONFLAGS_REFLECTIONS, &out);
+		PROF_ADD(g_getOut, g_nGetOut);
+	}
 	// reverb times: the long-window estimate for the room; for an echo or source slot, the one simulated at its own
 	// position when there is one (a band at 0 keeps the main simulator's); else the main simulator's
 	float rt[3];
@@ -1034,7 +1039,9 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	}
 	if (!out.reflections.ir) return;
 	if (r.stale) {
+		PROF_T0();
 		iplReflectionEffectReset(r.fx);
+		PROF_ADD(g_reset, g_nReset);
 		r.stale = false;
 	}
 	if (flush) std::fill(r.in.data[0], r.in.data[0] + kBlock, 0.0f); // (its input was copied and metered before)
@@ -1055,7 +1062,11 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	r.delayUsed = rp.delay;
 	rp.numChannels = kAmbi;
 	rp.irSize = kIR;
-	iplReflectionEffectApply(r.fx, &rp, &r.in, &g_ambTmp, nullptr);
+	{
+		PROF_T0();
+		iplReflectionEffectApply(r.fx, &rp, &r.in, &g_ambTmp, nullptr);
+		PROF_ADD(g_apply, g_nApply);
+	}
 	if (flush) return; // (convolved for its state only)
 	const float g0 = wet * a0 * w0, g1 = wet * a1 * w1;
 	for (int c = 0; c < kAmbi; ++c) {
@@ -1170,6 +1181,7 @@ void RenderBlock() {
 	for (auto& e : g_echo) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
 	for (auto& e : g_src) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
 	const IPLCoordinateSpace3 lis = ListenerSpace();
+	PROF_LAP(Clear);
 
 	for (int ai = 0; ai < g_nAct; ++ai) {
 		const int rec = g_act[ai];
@@ -1372,6 +1384,7 @@ void RenderBlock() {
 			v.cursor += rate0 + (rate1 - rate0) * (((float)i + 0.5f) / (float)kBlock);
 		}
 		}
+		PROF_LAP(VRead);
 		// gain smoothing over the block (no zipper noise / clicks on updates)
 		const float g0 = v.gainCur < 0 ? v.gain : v.gainCur, g1 = v.gain;
 		auto applyGain = [&](float* x) {
@@ -1386,6 +1399,7 @@ void RenderBlock() {
 			float* d = r.in.data[0];
 			for (int i = 0; i < kBlock; ++i) d[i] += m[i];
 			r.fed = true;
+			PROF_LAP(VSends);
 			continue;
 		}
 
@@ -1475,6 +1489,7 @@ void RenderBlock() {
 		v.pathMixCur = pw1;
 		const bool pathOn = v.pathSlot >= 0 && (pw0 > 0 || pw1 > 0);
 		const bool directOn = pw0 < 1 || pw1 < 1;
+		PROF_LAP(VSends);
 		if (pathOn) {
 			// the path effect was not used by the previous block (taken now, or kept by the control side while it faded
 			// out and taken again): from silence, as a path effect just taken from the pool
@@ -1493,6 +1508,7 @@ void RenderBlock() {
 			pp.normalizeEQ = IPL_FALSE;
 			iplPathEffectApply(g_pathPool[v.pathSlot].fx, &pp, &g_monoP, &g_stereoP);
 		}
+		PROF_LAP(VPath);
 		if (directOn) {
 			if (pw0 >= 1) {
 				// back from the path: the straight-line effects hold the state of their last use,
@@ -1524,6 +1540,7 @@ void RenderBlock() {
 			}
 			feedRoom(bin_in->data[0], sendBoost0, sendBoost1, 1 - pw0, 1 - pw1);
 			applyGain(bin_in->data[0]);
+			PROF_LAP(VEq);
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
 			auto spatialise = [&](int slot, IPLVector3 d, IPLAudioBuffer* in, IPLAudioBuffer* out) {
@@ -1610,6 +1627,7 @@ void RenderBlock() {
 			if (g_debugOn)
 				for (int i = 0; i < kBlock; ++i) dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
 		}
+		PROF_LAP(VSpat);
 		dbgVoices++;
 		for (int i = 0; i < kBlock; ++i) {
 			const float w = pw0 + (pw1 - pw0) * (float)i / kBlock; // path share at this sample
@@ -1632,8 +1650,10 @@ void RenderBlock() {
 			g_mix[i * 2] += l;
 			g_mix[i * 2 + 1] += r;
 		}
+		PROF_LAP(VMix);
 		// (path dropped and faded out: its effect goes back to the pool for another voice, see EndBlock)
 	}
+	PROF_LAP(VRead); // voices skipped at the loop's top (paused, waiting echo): their few checks
 
 	// captures: written up to the buffer's capacity, never grown here
 	CaptureBuf* const cap = g_cap;
@@ -1647,10 +1667,13 @@ void RenderBlock() {
 		for (auto& e : g_src)
 			for (int i = 0; i < kBlock; ++i) s[i] += e.in.data[0][i];
 	}
+	PROF_LAP(Capture);
 	// reflections -> ambisonic bus -> decode
 	ApplyReflection(g_room, g_wetRoom, g_roomRt);
+	PROF_LAP(Room);
 	// echo and source slots: their own tail, never shorter than the room's (see ApplyReflection)
 	for (auto& e : g_echo) ApplyReflection(e, g_wetEcho, nullptr, g_room.tailBlocks);
+	PROF_LAP(Echo);
 	{
 		// source slots: both banks fed the slot's input, weighted by the blend (ramped per block)
 		const float wet = g_wetRoom * g_srcScale;
@@ -1670,14 +1693,18 @@ void RenderBlock() {
 				AddTo(g_srcInE[k], ei);
 			}
 			std::fill(g_slotW.begin(), g_slotW.end(), 0.0f);
+			PROF_LAP(SrcIn);
 			ApplyReflection(g_src[k], wet, nullptr, g_room.tailBlocks, p0, w[0], g_slotW.data());
+			PROF_LAP(SrcA);
 			if (k < kSrcBankB) ApplyReflection(g_srcB[k], wet, nullptr, g_room.tailBlocks, p1, w[1], g_slotW.data());
+			PROF_LAP(SrcB);
 			double e = 0;
 			for (int i = 0; i < kBlock; ++i) e += (double)g_slotW[i] * g_slotW[i];
 			AddTo(g_srcE[k], e);
 		}
 		AddTo(g_srcESec, (double)kBlock / kRate);
 	}
+	PROF_LAP(SrcIn);
 	if (g_decode) {
 		DecodeBus(g_decode, g_dfState, lis, &g_amb, &g_ambOut, g_outMode, g_dfOn);
 		for (int i = 0; i < kBlock; ++i) {
@@ -1685,6 +1712,7 @@ void RenderBlock() {
 			g_mix[i * 2 + 1] += g_ambOut.data[1][i];
 		}
 	}
+	PROF_LAP(Decode);
 
 	// under water: one-pole low-pass (~400 Hz, -3 dB), cross-faded in and out over ~0.1 s
 	if (g_uw > 0 || g_uwCur > 0) {
@@ -1743,6 +1771,7 @@ void RenderBlock() {
 		std::copy(g_mix.begin(), g_mix.end(), cap->out.get() + capAt * 2);
 		cap->frames.store(capAt + kBlock, std::memory_order_release);
 	}
+	PROF_LAP(Post);
 	const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 	// the share of the block's wall time the thread actually ran (its CPU time over the same clock): a slow block with
 	// little CPU time was preempted or waited (a page fault served by the kernel counts as the thread's time)
@@ -1944,9 +1973,12 @@ void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 	ma_uint32 done = 0;
 	while (done < frames) {
 		if (g_fifoPos >= g_fifo.size()) {
+			PROF_BEGIN();
 			ApplyCommands();
+			PROF_LAP(Cmds);
 			RenderBlock();
 			EndBlock();
+			PROF_LAP(EndBlk);
 			g_fifo.assign(g_mix.begin(), g_mix.end()); // (same size: no allocation)
 			g_fifoPos = 0;
 		}
