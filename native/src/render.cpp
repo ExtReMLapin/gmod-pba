@@ -2071,15 +2071,35 @@ float Audibility(const ControlVoice& v) {
 	return std::max({v.c.gain, send * g_c.mix.wetRoom, v.c.srcSend * g_c.mix.wetRoom * g_c.mix.srcScale});
 }
 
+// SetCapCompareNew: a new voice is ranked with the playing ones at the cap (see Reap)
+std::atomic<bool> g_capNew{true};
+
+// the voice the cap takes first between a and b: a protected one (a spoken line) only after the others, then the least audible
+inline bool CapsFirst(bool aProtect, float aAud, bool bProtect, float bAud) {
+	if (aProtect != bProtect) return !aProtect;
+	return aAud < bAud;
+}
+
 // drops dead voices; caps the voice count: the least audible voices fade out (dying, one block)
-// instead of being cut.
-void Reap() {
+// instead of being cut. cand: the voice about to start (Play / PlayEcho), ranked with the others when g_capNew (the
+// former cap stopped a playing voice for any newcomer: an inaudible footstep evicted a full-level gunshot or line); true
+// when it is the one to go (it is not started).
+bool Reap(const ControlVoice* cand = nullptr) {
 	for (auto& v : g_c.voices)
 		if (!v.alive) FreeVoice(v, 0); // ended (reported: nothing of it is read any more) or cancelled (never read)
 	g_c.voices.erase(std::remove_if(g_c.voices.begin(), g_c.voices.end(), [](const ControlVoice& v) { return !v.alive; }),
 	                 g_c.voices.end());
 	int n = 0;
 	for (auto& v : g_c.voices) n += v.c.dying ? 0 : 1;
+	if (cand && g_capNew.load(std::memory_order_relaxed) && n >= g_maxVoices.load()) {
+		// at the cap: the newcomer goes instead of the quietest playing voice when it ranks below it
+		const ControlVoice* q = nullptr;
+		for (auto& v : g_c.voices) {
+			if (v.c.dying) continue;
+			if (!q || CapsFirst(v.c.protect, Audibility(v), q->c.protect, Audibility(*q))) q = &v;
+		}
+		if (q && CapsFirst(cand->c.protect, Audibility(*cand), q->c.protect, Audibility(*q))) return true;
+	}
 	while (n >= g_maxVoices.load()) {
 		// the quietest voice goes; a protected one (a spoken line) only when nothing else is left
 		ControlVoice* q = nullptr;
@@ -2110,6 +2130,24 @@ void Reap() {
 		FreeVoice(*q, seq);
 		g_c.voices.erase(q);
 	}
+	return false;
+}
+
+float SaneGain(float x); // (below)
+// what a new voice weighs at the cap (Reap's candidate): its gain, sends and protection as SetVoiceCtl will set them
+ControlVoice CapProbe(float gain, float send, bool protect) {
+	ControlVoice c;
+	c.c.gain = SaneGain(gain);
+	c.c.send = send >= 0 || std::isnan(send) ? SaneGain(send) : -1;
+	c.c.protect = protect;
+	return c;
+}
+// a voice the cap refused: an id no voice will ever have (Update answers false, StopVoice does nothing), as for a voice
+// the cap took
+std::atomic<int> g_capRefused{0}; // voices the cap did not start (CapRefused)
+int Refused() {
+	g_capRefused++;
+	return g_c.nextId++;
 }
 
 // Gives a voice that wants a baked path a path effect from the pool. A voice that finds
@@ -3286,7 +3324,10 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 	}
 	if (!g_running.load()) return 0;
 	CtlCall cc;
-	Reap();
+	{
+		const ControlVoice probe = CapProbe(p.gain, p.send, p.protect);
+		if (Reap(&probe)) return Refused();
+	}
 	const int slot = FindEffect();
 	if (slot < 0) return 0;
 	ControlVoice v;
@@ -3329,7 +3370,10 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p) {
 	if (!buf || !g_running.load()) return 0;
 	CtlCall cc;
-	Reap();
+	{
+		const ControlVoice probe = CapProbe(p.gain, p.send, p.protect);
+		if (Reap(&probe)) return Refused();
+	}
 	const int slot = FindEffect();
 	if (slot < 0) return 0;
 	ControlVoice v;
@@ -3355,7 +3399,10 @@ int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch
 	}
 	if (!g_running.load() || !g_echo[slot].fx) return 0;
 	CtlCall cc;
-	Reap();
+	{
+		const ControlVoice probe = CapProbe(gain, -1, false);
+		if (Reap(&probe)) return Refused();
+	}
 	// automatic fire: at most kEchoPerSlot overlapping echo voices per slot (the oldest goes),
 	// so echoes never crowd the direct voices out of the voice budget
 	constexpr int kEchoPerSlot = 6;
@@ -3465,6 +3512,8 @@ int QueueBacklog() {
 	std::lock_guard<std::mutex> lk(g_ctlMtx);
 	return (int)g_c.overflow.size();
 }
+void SetCapCompareNew(bool on) { g_capNew = on; }
+int CapRefused() { return g_capRefused.load(); }
 void SetLimits(int maxVoices, double memMB) {
 	g_maxVoices = std::clamp(maxVoices, 4, kMaxVoices);
 	g_memBudget = (uint64_t)(std::clamp(memMB, 16.0, 16384.0) * 1048576.0);

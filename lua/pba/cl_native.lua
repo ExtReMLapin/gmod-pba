@@ -637,6 +637,8 @@ function N.ApplySettings()
 	if pba_native.SetPitchGlide then pba_native.SetPitchGlide(A.cfg.native_pitch_glide or 30) end
 	-- a voice's diffuse share changing is ramped over the block (module of 2026-11-19+; an older one steps)
 	if pba_native.SetDiffuseSmooth then pba_native.SetDiffuseSmooth((A.cfg.native_diffuse_smooth or 1) >= 0.5) end
+	-- at the voice cap, a new voice is ranked with the playing ones (module of 2026-11-19+; an older one always makes room)
+	if pba_native.SetCapCompareNew then pba_native.SetCapCompareNew((A.cfg.native_cap_new or 1) >= 0.5) end
 	local k = N.wetScale or 1
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,

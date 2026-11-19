@@ -230,6 +230,11 @@ void ClearSlotReverbTimes();
 // long-window ones; false: no such slot
 bool SlotReverbTimes(int slot, float used[3], float mainRt[3], bool* longOn);
 void SetLimits(int maxVoices, double memMB); // voice cap, decoded-sound memory budget (LRU eviction)
+// At the voice cap, a new voice (Play, PlayStream, Echo) is ranked with the playing ones (pba_native_cap_new, default on):
+// when it is the one the cap would take (spoken lines last, then the least audible) it is not started (Play answers an id
+// already gone). false: a playing voice always makes room for it, as before (an inaudible footstep evicted a gunshot).
+void SetCapCompareNew(bool on);
+int CapRefused(); // new voices the cap did not start, since the module was loaded (Stats capRefused)
 // commands waiting for room in the audio thread's queue (diagnostics, tests): 0 while the audio thread keeps up; bounded
 // (a few per live voice) when it stalls, the parameter updates then only keep their latest value
 int QueueBacklog();

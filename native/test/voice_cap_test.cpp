@@ -7,7 +7,7 @@
 // unprotected (the option off: this is the red run).
 // Pass: capped at 4 voices, a quiet 5 s line followed by 12 loud shots is still alive after the burst when
 // protected; the unprotected line is dropped (control); two protected lines and 10 shots: the quieter
-// line stays too while shots remain to drop; with protected voices only, the quietest still goes.
+// line stays too while shots remain to drop; with protected voices only, the quietest still goes (a newcomer included).
 #include <phonon.h>
 
 #include <chrono>
@@ -111,7 +111,9 @@ int main() {
 	int alive = 0;
 	for (int i = 0; i < 5; ++i) alive += (lines[i] > 0 && render::Update(lines[i], Params(g[i], true))) ? 1 : 0;
 	Check(alive == 4, "only protected voices: the cap holds", alive, 4);
-	Check(!render::Update(lines[3], Params(g[3], true)), "only protected voices: the quietest of the live ones goes", 0);
+	// the quietest of all goes: the newcomer itself here (0.05; the voice cap ranks a new voice with the playing ones, see
+	// voice_cap_new_test.cpp; the former cap took the quietest playing one, 0.1, to make room for it)
+	Check(!render::Update(lines[4], Params(g[4], true)) && render::Update(lines[3], Params(g[3], true)), "only protected voices: the quietest one goes (the newcomer)", 0);
 	for (int id : lines) render::StopVoice(id);
 	render::Stop();
 	std::printf("%s\n", fails ? "FAILED" : "PASSED");

@@ -24,7 +24,7 @@
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]),
-//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool), SetCapCompareNew(bool),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k), SetSlotFallback(on),
@@ -2536,6 +2536,12 @@ LUA_FUNCTION(SetPitchGlide) {
 	return 0;
 }
 
+// SetCapCompareNew(bool): at the voice cap, a new voice is ranked with the playing ones and left out when it is the least audible (true, the default); false: a playing voice always makes room for it, as before (pba_native_cap_new)
+LUA_FUNCTION(SetCapCompareNew) {
+	render::SetCapCompareNew(LUA->GetBool(1));
+	return 0;
+}
+
 // SetDiffuseSmooth(bool): a voice's diffuse share changing is ramped over the block like its gain (true, the default);
 // false: the new share at once (an 8 dB step of the direct sound in one sample), as before (pba_native_diffuse_smooth)
 LUA_FUNCTION(SetDiffuseSmooth) {
@@ -2587,6 +2593,8 @@ LUA_FUNCTION(Stats) {
 	LUA->SetField(-2, "audioMaxMs");
 	LUA->PushNumber(blocks);
 	LUA->SetField(-2, "audioBlocks");
+	LUA->PushNumber(render::CapRefused()); // new voices the cap left out (pba_native_cap_new)
+	LUA->SetField(-2, "capRefused");
 	LUA->PushNumber(g_reflMs.load());
 	LUA->SetField(-2, "reflMs");
 	LUA->PushNumber(g_reflMaxMs.exchange(0));
@@ -3118,6 +3126,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetHrtfBlend");
 	LUA->PushCFunction(SetPitchGlide);
 	LUA->SetField(-2, "SetPitchGlide");
+	LUA->PushCFunction(SetCapCompareNew);
+	LUA->SetField(-2, "SetCapCompareNew");
 	LUA->PushCFunction(SetDiffuseSmooth);
 	LUA->SetField(-2, "SetDiffuseSmooth");
 	LUA->PushCFunction(SetReflections);

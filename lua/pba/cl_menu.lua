@@ -218,6 +218,7 @@ function Build.native(panel)
 
 	panel:Help("Limits:")
 	dep(sld(panel, "Max native voices", "native_max_voices"), R)
+	dep(chk(panel, "Voice cap: a quieter new sound does not evict a louder one", "native_cap_new"), R)
 	dep(chk(panel, "Spoken lines dropped last past the cap", "native_protect_lines"), R)
 	dep(chk(panel, "Pausable sounds freeze with the game (single player)", "native_pause"), R)
 	dep(sld(panel, "Decoded sounds memory (MB)", "native_mem_mb"), R)
