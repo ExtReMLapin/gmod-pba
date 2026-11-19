@@ -203,6 +203,20 @@ local function recover(j)
 	if ok then j.r = r else j.r = nil ErrorNoHaltWithStack("[PBA] far sound evaluation failed: " .. tostring(r)) end
 end
 
+-- A new job, due `reach` seconds from now, with its coroutine. S and L copied: an owner may move its Vector in place
+-- while the job waits. Every field a job gets later is named here (nil until then): the table is made at its final
+-- size, it does not grow (and get its hash part reallocated) twice during its first slice.
+local function newJob(S, L, sndlvl, srcEnt, cfg, reach, holdFor)
+	SL.seq = SL.seq + 1
+	local now = RealTime()
+	local j = { S = Vector(S), L = Vector(L), lvl = sndlvl, ent = srcEnt, cfg = cfg, tReq = now, deadline = now + reach,
+		seq = SL.seq, segs = 0, restarts = 0, cpu = 0, holdFor = holdFor,
+		co = nil, hold = nil, fresh = nil, in1 = nil, in2 = nil, in3 = nil, in4 = nil, in5 = nil, in6 = nil, in7 = nil, in8 = nil,
+		r = nil, finished = nil, stale = nil, err = nil, cancelled = nil, canWait = nil, heldReady = nil, heldOwner = nil, onDone = nil }
+	newCo(j)
+	return j
+end
+
 --- Evaluation of a sound at S heard at L (A.Paths.Compute's arguments). Returns its result when it is
 -- ready now (near, cheap, or slicing off), else nil and the job: its answer arrives later through
 -- job.onDone(r, job) (set by the caller right away), from the slicer's Think hook, by its deadline.
@@ -222,12 +236,7 @@ function SL.Compute(S, L, sndlvl, srcEnt, cfg, minReach)
 		st.near = st.near + 1
 		return P.Compute(S, L, sndlvl, cfg, srcEnt)
 	end
-	SL.seq = SL.seq + 1
-	local now = RealTime()
-	-- S and L copied: an owner may move its Vector in place while the job waits
-	local j = { S = Vector(S), L = Vector(L), lvl = sndlvl, ent = srcEnt, cfg = cfg, tReq = now, deadline = now + reach,
-		seq = SL.seq, segs = 0, restarts = 0, cpu = 0 }
-	newCo(j)
+	local j = newJob(S, L, sndlvl, srcEnt, cfg, reach, nil)
 	local res = run(j, A.Paths.slice.clock() + budgetLeft(true), true)
 	if res == "done" then
 		st.first = st.first + 1
@@ -260,15 +269,7 @@ function SL.Defer(S, L, sndlvl, srcEnt, cfg, holdS)
 	local st = SL.stats
 	st.requests, st.held = st.requests + 1, st.held + 1
 	st.deferred = (st.deferred or 0) + 1
-	SL.seq = SL.seq + 1
-	local now = RealTime()
-	-- every field a job gets later is named here (nil until then): the table is made at its final size, it does not
-	-- grow (and get its hash part reallocated) twice during its first slice
-	local j = { S = Vector(S), L = Vector(L), lvl = sndlvl, ent = srcEnt, cfg = cfg, tReq = now, deadline = now + reach,
-		seq = SL.seq, segs = 0, restarts = 0, cpu = 0, holdFor = held and holdS or nil,
-		co = nil, hold = nil, fresh = nil, in1 = nil, in2 = nil, in3 = nil, in4 = nil, in5 = nil, in6 = nil, in7 = nil, in8 = nil,
-		r = nil, finished = nil, stale = nil, err = nil, cancelled = nil, canWait = nil, heldReady = nil, heldOwner = nil, onDone = nil }
-	newCo(j)
+	local j = newJob(S, L, sndlvl, srcEnt, cfg, reach, held and holdS or nil)
 	snap(j) -- (its inputs as of now: its first slice, later, is its start)
 	SL.jobs[#SL.jobs + 1] = j
 	return j

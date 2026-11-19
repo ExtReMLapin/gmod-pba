@@ -99,8 +99,11 @@ function P.SCR.step(out, q, d, k)
 end
 -- table.sort orders, made once: a comparator written inline is a new closure at every call (LuaJIT NYI FNEW)
 local function byFirst(u, v) return u[1] < v[1] end
--- table.insert(t, at, v) without the library call (its position form is LuaJIT NYI)
-local function insertAt(t, at, v)
+--- Inserts v into t, ordered by distance from S: before the first entry whose point (field `key`) is farther than
+-- sqrt(d2). (A shift by hand: table.insert(t, at, v) is a LuaJIT NYI.)
+local function insertByDist(t, v, d2, S, key)
+	local at = #t + 1
+	for i = 1, #t do if t[i][key]:DistToSqr(S) > d2 then at = i break end end
 	for i = #t, at, -1 do t[i + 1] = t[i] end
 	t[at] = v
 end
@@ -174,10 +177,9 @@ local function doorState(ent)
 	if CLIENT then return D.byEnt and D.byEnt[ent:EntIndex()] end
 	return D.entState and D.entState[ent:EntIndex()]
 end
-P.DoorState = doorState
 --- Mid-band loss (dB) and lowpass level of a door leaf as a closure: its one loss (sh_doors D.LeafLoss:
 -- the leaf's measured thickness and face material, replicated as closedDb), the same the portal model
--- charges (AC.LeafDb in P.EvalChain and P.SegmentDoorLoss). Never the chord the straight line cuts
+-- charges (AC.LeafDb in P.SegmentDoorLoss). Never the chord the straight line cuts
 -- through the leaf: a line crossing a leaf near its plane cut 86 u of "metal", 50 dB, where the same
 -- leaf costs 24 one step aside (door_sweep_real's 18.6 dB jump at the leaf's edge).
 local function leafLoss(ent, cfg)
@@ -189,11 +191,10 @@ local function leafLoss(ent, cfg)
 	end
 	return cfg.door_closed_db, 3
 end
-P.LeafLoss = leafLoss
 
 --- Evaluates a polyline S, v1 .. vn, L (probe paths): a corner at each inner vertex (AC.Corner: the
 -- same model as a portal opening, reverberant leak included), door entities crossed by the segments;
--- apparent position = vn. Corners capped together at diff_max_total, doors on top (as P.EvalChain).
+-- apparent position = vn. Corners capped together at diff_max_total, doors on top.
 -- Spectrum as a chain's: with no door on the way the leak carries the treble round the corners
 -- (portal_diffuse_lp), so a doorway heard round its jamb is not muffled more on a map without
 -- areaportals than on one with them.
@@ -621,10 +622,7 @@ local function addWater(walls, S, L, cfg)
 	end
 	local ws = { entry = p, exit = p, thickness = 0, mat = MAT_SLOSH, surf = "pba_water", water = true }
 	-- keep the walls ordered from S
-	local dS = p:DistToSqr(S)
-	local at = #walls + 1
-	for i, w in ipairs(walls) do if w.entry:DistToSqr(S) > dS then at = i break end end
-	insertAt(walls, at, ws)
+	insertByDist(walls, ws, p:DistToSqr(S), S, "entry")
 	return walls
 end
 
@@ -917,7 +915,6 @@ local function leafClearance(ent, V)
 	end
 	return best, bi, bt, bq
 end
-P.LeafClearance = leafClearance
 -- The bend of a leg a -> b that the world blocks, from route vertex v seeing both (P.CornerPoint), taken again
 -- from where it got to until it stops moving: one pass from a vertex far from the leg (a leaf's top corner and
 -- a route vertex 70 u below it, round a vertical jamb edge) stopped half way, and the way round was 50 u too
@@ -943,6 +940,7 @@ local function tautCorner(a, v, b)
 	end
 	return q
 end
+-- the 12 edges of a box as corner index pairs (bit k of the index: max on axis k; P.LeafWay, P.DetourDelta)
 local EDGE_PAIRS = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
 --- The way a route V (world points; clear: its segments are clear of the world) takes past leaf `ent` (game
 -- state: traces). d0, d9: the route's length before V[1] and after V[#V] (Fresnel distances). cutBefore,
@@ -1155,12 +1153,7 @@ function P.LineLeaves(S, L, walls, cfg)
 				local ext = ent:OBBMaxs() - ent:OBBMins()
 				local w = { entry = h[2], exit = h[2], thickness = 0, ent = ent, minExtent = math.min(ext.x, ext.y, ext.z),
 					detour = delta, gapDb = gapDb, fade = 1 - ramp(hc, DOOR_HULL, LEAF_REACH), beside = true }
-				if P.EvalWalls({ w }, cfg) > 0.05 then
-					local d = h[2]:DistToSqr(S)
-					local at = #walls + 1
-					for i, x in ipairs(walls) do if x.entry:DistToSqr(S) > d then at = i break end end
-					insertAt(walls, at, w)
-				end
+				if P.EvalWalls({ w }, cfg) > 0.05 then insertByDist(walls, w, h[2]:DistToSqr(S), S, "entry") end
 			end
 		end
 	end
@@ -1239,10 +1232,7 @@ local function dormantDoors(a, b, reach, list)
 			local t = l2 > 0 and math.Clamp((c - a):Dot(ab) / l2, 0, 1) or 0
 			local hit = a + ab * t
 			list = list or {}
-			local at = #list + 1
-			local d = hit:DistToSqr(a)
-			for j = 1, #list do if list[j][2]:DistToSqr(a) > d then at = j break end end
-			table.insert(list, at, { ents[i], hit, false })
+			insertByDist(list, { ents[i], hit, false }, hit:DistToSqr(a), a, 2)
 		end
 	end
 	return list
@@ -1303,8 +1293,7 @@ local function enclosed(p, mins, maxs)
 	local d = math.min(p.x - mins.x, maxs.x - p.x, p.y - mins.y, maxs.y - p.y, p.z - mins.z, maxs.z - p.z)
 	return d > ENCLOSED_DEPTH
 end
-local EDGES = { -- the 12 edges of a box as corner index pairs (bit k of the index: max on axis k)
-	{ 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } }
+local EDGES = EDGE_PAIRS -- the 12 edges of a box as corner index pairs (bit k of the index: max on axis k)
 -- (module-level helpers of P.DetourDelta: no closure made per call, LuaJIT NYI FNEW; no table or Vector
 -- made per call either: its own Lua was ~15 ms of a combat frame on d1_canals_01, garbage included)
 local N_EDGES = #EDGES
@@ -1769,18 +1758,13 @@ do -- (a block: the file is at Lua's 200 locals)
 	function P.AddSkyRoute(r, S, L, cfg)
 		local sp = P.SkyRoute(S, L, cfg)
 		if not sp then return end
-		local way = { S }
-		for _, v in ipairs(sp.points) do way[#way + 1] = v end
-		way[#way + 1] = L
+		local way = P.RoutePts(S, sp.points, L)
 		local keep = {}
 		for _, p in ipairs(r.paths) do
 			local same = false
 			if p.points and #p.points > 0 and not p.native then
 				sliceCheck()
-				local pts = { S }
-				for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-				pts[#pts + 1] = L
-				same = P.SameRoute(way, pts)
+				same = P.SameRoute(way, P.RoutePts(S, p.points, L))
 			end
 			if same and (p.lossDb or math.huge) < sp.lossDb then return end -- a cheaper estimate of that way: kept alone
 			if not same then keep[#keep + 1] = p end
@@ -2067,6 +2051,13 @@ end
 local SAME_KEEP = 4096
 local sameMemo, sameN, sameTL, sameGen = {}, 0, nil, nil
 local sameTraced
+--- A route's whole polyline: { S, points..., L } (a new table).
+function P.RoutePts(S, points, L)
+	local pts = { S }
+	for _, v in ipairs(points) do pts[#pts + 1] = v end
+	pts[#pts + 1] = L
+	return pts
+end
 function P.SameRoute(a, b, clear, tag)
 	clear = clear or detClear
 	local na, nb = #a, #b
@@ -2173,6 +2164,7 @@ local HOLLOW_MIN = 16
 -- offset end inside it) and are traced from each end towards the offset midpoint, so a midpoint inside a wall
 -- counts that wall's chord on both halves. keep(w, karg) picks the walls counted (the caller's split). Returns
 -- loss, lp (the centre's), mid.
+do -- (the bundle's helpers: a scope of their own, the main chunk is at its 200 locals)
 local function bundleDoor(w) return w.ent and OPENABLE[w.ent:GetClass()] end
 --- P.BundleWalls / P.BundleEdge's keep for the world walls (P.Compute's split), and for those Steam Audio's scene
 -- holds (karg: the native module read displacements). Module-level: no closure per call (LuaJIT NYI FNEW).
@@ -2183,15 +2175,21 @@ function P.KeepNativeWorldWall(w, nativeDisp) return not w.ent and not w.water a
 -- where the loss moved by fifths)
 --- The four bend points of the bundle's offset lines (the midpoint of S-L moved across the line by the first
 -- Fresnel zone's radius there, at most pba_trans_bundle_r), or nil when that radius is under half a unit.
-function P.BundleMids(S, L, cfg)
-	local d = S:Distance(L)
+-- The radius: sqrt(lambda d) / 2 at pba_diff_freq, at most pba_trans_bundle_r (P.BundleMids, P.BundleEdge).
+local function bundleRadius(S, L, cfg)
 	local lambda = 343 / A.Num(cfg, "diff_freq") / 0.01905 -- units
-	local r = math.min(A.Num(cfg, "trans_bundle_r"), 0.5 * math.sqrt(lambda * d))
-	if r < 0.5 then return nil end
-	local dir = (L - S):GetNormalized()
+	return math.min(A.Num(cfg, "trans_bundle_r"), 0.5 * math.sqrt(lambda * S:Distance(L)))
+end
+-- Two unit vectors across the unit direction dir, and across each other.
+local function acrossBase(dir)
 	local u = dir:Cross(math.abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
 	u:Normalize()
-	local v = dir:Cross(u)
+	return u, dir:Cross(u)
+end
+function P.BundleMids(S, L, cfg)
+	local r = bundleRadius(S, L, cfg)
+	if r < 0.5 then return nil end
+	local u, v = acrossBase((L - S):GetNormalized())
 	local M = (S + L) * 0.5
 	return { M + u * r, M + u * -r, M + v * r, M + v * -r }
 end
@@ -2266,8 +2264,7 @@ local function bundleCross(o, S, L, cfg, srcEnt, dir, spans, keep, karg)
 	return false
 end
 function P.BundleEdge(S, L, srcEnt, cfg, keep, karg)
-	local lambda = 343 / A.Num(cfg, "diff_freq") / 0.01905
-	local r = math.min(A.Num(cfg, "trans_bundle_r"), 0.5 * math.sqrt(lambda * S:Distance(L)))
+	local r = bundleRadius(S, L, cfg)
 	local dir = (L - S):GetNormalized()
 	-- the stretches of the line its own world walls take (widened by r): an offset line crossing the world
 	-- elsewhere (the far jamb of another doorway on a long line) has not stayed in these walls
@@ -2280,9 +2277,7 @@ function P.BundleEdge(S, L, srcEnt, cfg, keep, karg)
 	end
 	if #spans == 0 then return 0 end
 	if r < 0.5 then return 1 end
-	local u = dir:Cross(math.abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
-	u:Normalize()
-	local v = dir:Cross(u)
+	local u, v = acrossBase(dir)
 	local f = 1
 	for _, o in ipairs({ u, -u, v, -v }) do
 		-- the first clear offset, stepped (a doorway's far jamb crosses again further out), then bisected
@@ -2303,6 +2298,7 @@ function P.BundleEdge(S, L, srcEnt, cfg, keep, karg)
 	end
 	return f
 end
+end -- (the bundle's block)
 
 function P.EvalWalls(walls, cfg, noCap, noDetour)
 	cfg = cfg or A.cfg
@@ -3165,8 +3161,6 @@ function P.ReevalDue(state, S, L, now, cfg)
 	return true
 end
 
-local function q(v) return math.floor(v.x / 32) .. "," .. math.floor(v.y / 32) .. "," .. math.floor(v.z / 32) end
-
 -- The result cache is keyed on 32 u cells, which can straddle a wall: a sound 8 u behind a concrete
 -- wall shared the cell of one 8 u past its edge, and whichever came first gave the other its result
 -- (the hidden one heard clear, 46 dB too loud, or the visible one muffled). The key also holds the
@@ -3229,12 +3223,9 @@ end
 local floor, format = math.floor, string.format
 function P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	local st = P.LineState(S, L, srcEnt, cfg)
-	-- pba_gc_lean: the same key (%s formats a number as a concatenation does) in one string instead of three
-	if A.On(cfg, "gc_lean") then
-		return format("%s,%s,%s|%s,%s,%s|%s|%s|%s", floor(S.x / 32), floor(S.y / 32), floor(S.z / 32),
-			floor(L.x / 32), floor(L.y / 32), floor(L.z / 32), sndlvl, entKey(srcEnt), st), st
-	end
-	return q(S) .. "|" .. q(L) .. "|" .. sndlvl .. "|" .. entKey(srcEnt) .. "|" .. st, st
+	-- one string (%s formats a number as a concatenation does: the key pba_gc_lean 0 built in three)
+	return format("%s,%s,%s|%s,%s,%s|%s|%s|%s", floor(S.x / 32), floor(S.y / 32), floor(S.z / 32),
+		floor(L.x / 32), floor(L.y / 32), floor(L.z / 32), sndlvl, entKey(srcEnt), st), st
 end
 
 --- The cheap evaluation of a new sound (pba_burst_budget_ms past its budget, pba_burst_mask_db under a loud
@@ -3340,9 +3331,7 @@ local function objectsOn(a, b, srcEnt, cfg, out)
 end
 
 local function pathProps(p, S, L, cfg, srcEnt)
-	local pts = { S }
-	for _, q in ipairs(p.points) do pts[#pts + 1] = q end
-	pts[#pts + 1] = L
+	local pts = P.RoutePts(S, p.points, L)
 	local objs = {}
 	for i = 1, #pts - 1 do objectsOn(pts[i], pts[i + 1], srcEnt, cfg, objs) end
 	if #objs == 0 then return end
@@ -3809,9 +3798,7 @@ local function edgeWay(r, S, L, cfg)
 	for _, p in ipairs(r.paths) do
 		if p.points and #p.points > 0 and not p.native then
 			sliceCheck()
-			local pts = { S }
-			for _, v in ipairs(p.points) do pts[#pts + 1] = v end
-			pts[#pts + 1] = L
+			local pts = P.RoutePts(S, p.points, L)
 			if P.SameRoute(way, pts) then dup = p break end
 			-- how far this route passes from the edge's apex (pba_edge_dup_blend)
 			for i = 1, #pts - 1 do
@@ -3833,8 +3820,7 @@ local function edgeWay(r, S, L, cfg)
 		if A.On(cfg, "edge_dup_mix") and dup.lossDb then
 			local diff = dup.lossDb - e.db
 			local w = ramp(diff, 0, EDGE_MIX_DB)
-			if w < 1 then
-				e = table.Copy(e)
+			if w < 1 then -- (e: P.WorldEdge's own new table, changed in place)
 				e.db = dup.lossDb - diff * w
 				e.mixDb = e.db - (dup.lossDb - diff)
 			end
@@ -3856,7 +3842,6 @@ local function edgeWay(r, S, L, cfg)
 				near.lossDb = near.lossDb + cut
 				near.blendDb = cut
 			else
-				e = table.Copy(e)
 				e.db = e.db + cut
 				e.blendDb = cut
 			end

@@ -1,5 +1,5 @@
 -- Pure acoustic functions (no game state): engine gain model, diffraction, transmission,
--- volume compensation, low-pass mapping. Unit-tested in test/gluatest/.
+-- low-pass mapping. Unit-tested in test/gluatest/.
 -- Engine facts (gain formula, presets) were measured in game; see THIRD_PARTY.md for sources.
 
 local A = pba
@@ -35,15 +35,6 @@ function AC.EngineGain(dist, sndlvl)
 	return g
 end
 
---- Volume to give a re-emission at distance `d` from the listener so that it is heard as the
--- original source at path length `L`, minus `lossDb`. Same sound level as the original.
-function AC.Compensate(vol0, sndlvl, L, d, lossDb)
-	local gl = AC.EngineGain(L, sndlvl)
-	local gd = AC.EngineGain(max(d, 1), sndlvl)
-	local v = vol0 * (gl / gd) * exp((-(lossDb or 0) / 20) * LN10)
-	return min(v, 1), v
-end
-
 --- Kurze-Anderson barrier attenuation on path difference `delta` (units), shifted so that
 -- delta = 0 (shadow boundary) gives 0 dB. Clamped to [0, maxDb].
 function AC.Diffraction(delta, freq, maxDb)
@@ -58,7 +49,7 @@ function AC.Diffraction(delta, freq, maxDb)
 end
 
 --- One corner of a path, the single model for every bend a path takes round the structure: a portal
--- opening (P.EvalChain) and a probe vertex (P.EvalPolyline) alike. Two parts in power: the coherent wave
+-- opening and a probe vertex alike (P.EvalPolyline). Two parts in power: the coherent wave
 -- diffracted at the edge (Kurze-Anderson on the path difference `delta`, at most maxDb) and the source
 -- space's reverberant field, which lights the edge from every direction and leaks round it whatever the
 -- bend (leakDb below the direct sound; 60 or more = none). The leak belongs to the edge, not to the way

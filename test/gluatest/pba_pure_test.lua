@@ -626,16 +626,6 @@ local SUITE = {
 				prev = g
 			end
 		end },
-		{ name = "Compensate: equal lengths and no loss keep the volume", func = function()
-			local v = AC.Compensate(0.8, 75, 500, 500, 0)
-			expect(near(v, 0.8)).to.beTrue()
-		end },
-		{ name = "Compensate: never above 1, lower with loss", func = function()
-			local v1 = AC.Compensate(1, 75, 1200, 200, 0)
-			local v2 = AC.Compensate(1, 75, 1200, 200, 10)
-			expect(v1 <= 1).to.beTrue()
-			expect(near(v2 / v1, 10 ^ (-0.5), 1e-3)).to.beTrue()
-		end },
 		{ name = "Diffraction: 0 at shadow boundary, monotonic, capped", func = function()
 			expect(AC.Diffraction(0, 500, 20)).to.equal(0)
 			expect(AC.Diffraction(10, 500, 20) < AC.Diffraction(50, 500, 20)).to.beTrue()
