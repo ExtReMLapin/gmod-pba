@@ -26,6 +26,12 @@ STEP = next((float(a[7:]) for a in sys.argv[2:] if a.startswith("--step=")), 8.0
 # the spot a player reported (2026-11-10: half a metre sideways changed the reverb completely), the sources at
 # that player's radio (-2046.7, -6755.6, -59.5), feet z -68 then -44, x -2234 -> -2154 (y -6957), 4 u steps
 WALK = next((a[7:] for a in sys.argv[2:] if a.startswith("--walk=")), "axial")
+# controls of the send-age check (the send's age is counted in the game's running time: a frame longer than 0.25 s is
+# a stall of the whole game, nothing moves nor is evaluated during it): --stall=<step>:<seconds> freezes the game once
+# at that step (it must still pass); --gap-clock=real counts the age in wall-clock time, as before (with --stall it
+# fails: a stall read as a stale send, the intermittent "no send for 2.0 s" of 2026-11-19)
+STALL = next(([int(a[8:].split(":")[0]), float(a[8:].split(":")[1])] for a in sys.argv[2:] if a.startswith("--stall=")), None)
+GAP_CLOCK = next((a[12:] for a in sys.argv[2:] if a.startswith("--gap-clock=")), None)
 TEST = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -56,6 +62,10 @@ def job(phase, extra=None, timeout_s=120):
     a = {"phase": phase}
     if WALK == "lateral":
         a["radio"] = RADIO_LATERAL
+    if STALL:
+        a["stall"] = STALL
+    if GAP_CLOCK:
+        a["gapClock"] = GAP_CLOCK
     a.update(extra or {})
     r = call("lua_job", {"realm": "client", "code": code, "timeout_s": timeout_s, "args": a}, timeout=timeout_s + 60)
     return (r.get("values") or [r])[0] if isinstance(r, dict) else r
@@ -88,6 +98,10 @@ call("console_exec", {"realm": "client", "cmd": "pba_native_render 1"})
 # (2026-11-13: 1.5-2.0 dB steps on main and on older Lua alike, 1 run in 4 green). The adaptive cadence is not
 # what this test checks (reeval_adaptive has its own steps).
 call("console_exec", {"realm": "client", "cmd": f"pba_reeval_move {STEP / 2:g}"})
+if "--stale" in sys.argv[2:]:
+    # control (must fail): the continuous sounds are no longer re-evaluated while the listener walks (a move never
+    # counts, a still sound every 5 s): their sends go stale for seconds of running time
+    call("console_exec", {"realm": "client", "cmd": "pba_reeval_move 256; pba_reeval_max_s 5"})
 for _ in range(60):
     if lua("client", "return pba.Native.ready == true and pba.Native.render == true and not pba.Native.building"):
         break
