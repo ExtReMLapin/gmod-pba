@@ -1586,6 +1586,28 @@ function N.OwnStream(pos, was)
 	return L ~= nil and pos:DistToSqr(L) <= lim
 end
 
+--- Starts a module voice: pba_native.Play's arguments (n: the clean name EnsureSound gave), through the mix groups
+-- `mix` when there are some (A.Mix.Play: the engine's mix value and ducking, cl_mix), and notes the line as heard
+-- (A.NoteRendered with the sound's own name). -> the voice id, nil when the module did not start it. Every start of a
+-- module voice goes through here (N.PlayVoice; cl_render's hand-over, cl_loops' mirrors).
+function N.StartVoice(mix, name, n, pos, g, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable, own)
+	local id
+	if A.Mix and mix then id = A.Mix.Play(mix, n, pos, g, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable, own)
+	else id = pba_native.Play(n, pos, g, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable, own) end
+	if not id or id <= 0 then return nil end
+	if A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
+	return id
+end
+
+--- The reverb of a voice just started (N.StartVoice) that has no listener-room send of its own (roomFed false): its
+-- source slot at srcPos (N.BindSource, srcSend), else the room bus at its gain times wet (a voice that is not a
+-- transmission). srcPos nil: no slot to take, the room bus. -> true when bound to a slot.
+function N.BindOrRoom(id, srcPos, srcSend, wet, roomFed, pos, g, l, m, h, pitch)
+	local bound = srcPos ~= nil and N.BindSource(id, srcPos, srcSend, wet)
+	if not bound and not roomFed then pba_native.Update(id, pos, g, l, m, h, pitch, nil, g * (wet or 1)) end -- no slot: the room bus at its gain
+	return bound
+end
+
 function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	if not N.render then return false end
 	opt = opt or {}
@@ -1606,19 +1628,12 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	-- "#" (dry mix): the engine runs no DSP on it, no room reverb; the module gives it none either
 	local srcPos = opt.srcPos
 	if N.DryMix(name) then roomSend, srcPos = 0, nil end
-	local id
-	if A.Mix and opt.mix then id = A.Mix.Play(opt.mix, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, opt.offset, opt.protect, opt.pausable, opt.own)
-	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, opt.offset, opt.protect, opt.pausable, opt.own) end
-	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
-	if id and id > 0 and srcPos and L then
-		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain, opt.wet) and not opt.roomSend then
-			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain
-		end
-	end
-	if id and id > 0 and L then
+	local id = N.StartVoice(opt.mix, name, n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, opt.offset, opt.protect, opt.pausable, opt.own)
+	if id and srcPos and L then N.BindOrRoom(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain, opt.wet, opt.roomSend, pos, g, l, m, h, pitch or 100) end
+	if id and L then
 		N.ApplyStereo(id, name, opt.len or pos:Distance(L), opt.follow and opt.follow.ent, opt.srcPos or pos, L, opt.follow)
 	end
-	if id and id > 0 and opt.follow and IsValid(opt.follow.ent) then
+	if id and opt.follow and IsValid(opt.follow.ent) then
 		-- direct voice of a moving entity: follows it every frame like the engine does
 		opt.follow.pitch = pitch or 100
 		opt.follow.name = name
@@ -1630,7 +1645,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 		end
 		N.follow[id] = opt.follow
 	end
-	return id and id > 0 and id or false
+	return id or false
 end
 
 -- Doppler shift between a moving source and listener: f' = f (c + vL.u) / (c - vS.u), u = unit
