@@ -232,6 +232,32 @@ cases.S6 = function(opt)
 	return { pass = off < 16, joinPosOff = math.Round(off, 1) }
 end
 
+-- S7: pba's own emissions of sv_loops (a long line's mouth copy, its stop) set A.reemitting around an engine call with
+-- no pcall: an error there left it true, and every later sound of the server went through untouched (pba off for good).
+cases.S7 = function()
+	local e = ents.Create("prop_dynamic")
+	e:SetModel("models/humans/group01/male_07.mdl")
+	e:SetPos(Vector(320, 256, 0))
+	e:Spawn()
+	spawned[#spawned + 1] = e
+	A.SetOverride("long_lipsync", 1)
+	local l = { once = true, ent = e, chan = CHAN_VOICE, name = LINE1 }
+	local emit, stop = A.orig.EntEmitSound, A.orig.EntStopSound
+	A.orig.EntEmitSound = function() error("injected emit failure") end
+	pcall(LP.MouthStart, l, { SoundName = LINE1, SoundLevel = 75, Pitch = 100 })
+	A.orig.EntEmitSound = emit
+	local afterStart = A.reemitting
+	A.reemitting = false
+	l.mouth = true
+	A.orig.EntStopSound = function() error("injected stop failure") end
+	pcall(LP.MouthStop, l)
+	A.orig.EntStopSound = stop
+	local afterStop = A.reemitting
+	A.reemitting = false
+	return { pass = afterStart == false and afterStop == false, flexes = e:GetFlexNum(), afterStart = tostring(afterStart),
+		afterStop = tostring(afterStop) }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end

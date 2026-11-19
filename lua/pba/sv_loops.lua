@@ -441,9 +441,8 @@ function LP.MouthStart(l, data)
 		for _, p in ipairs(player.GetHumans()) do if not A.PState(p).lipsyncOff then rf:AddPlayer(p) end end
 		if rf:GetCount() == 0 then return end
 	end
-	A.reemitting = true
-	e:EmitSound(data.SoundName, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch, 0, 0, rf)
-	A.reemitting = false
+	-- (A.Emit: under pcall, so a failure cannot leave A.reemitting set and every later sound untouched)
+	A.Emit(e.EmitSound, e, data.SoundName, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch, 0, 0, rf)
 	l.mouth = true
 	A.stats.mouthLong = (A.stats.mouthLong or 0) + 1
 end
@@ -454,9 +453,7 @@ function LP.MouthStop(l)
 	l.mouth = nil
 	-- the engine's StopSound, not sv_relay's detour: that one relays a stop and calls LP.Stop again, from
 	-- inside LP.Stop (OP_STOP sent twice)
-	A.reemitting = true
-	A.orig.EntStopSound(l.ent, l.name)
-	A.reemitting = false
+	A.Emit(A.orig.EntStopSound, l.ent, l.name)
 end
 
 --- The channel rule (sv_relay A.CutChannel): a new sound `name` on entity idx's replacing channel cuts the long
