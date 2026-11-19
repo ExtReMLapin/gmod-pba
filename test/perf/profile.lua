@@ -25,6 +25,22 @@ local mainStack = {}
 local topMs = 0        -- this frame: time in depth-0 calls of the main thread (pba's own entry points)
 local dropped = 0
 
+-- the call's results passed through as they are (their count too: a fixed "return a, b, c, d, e" turned a
+-- one-result call in last position of an argument list into five arguments, trailing nils included, e.g.
+-- math.max(diff, P.WedgeDb(...)) -> "bad argument #3 to 'max'": far evaluations failed under the profiler)
+local function done(name, st, depth, co, fr0, t0, ...)
+	local dt = (clock() - t0) * 1000
+	local child = st[depth] or 0
+	st[depth] = nil
+	if frameNo() ~= fr0 then dropped = dropped + 1 return ... end
+	curX[name] = (curX[name] or 0) + dt - child
+	curT[name] = (curT[name] or 0) + dt
+	curN[name] = (curN[name] or 0) + 1
+	if depth > 1 then st[depth - 1] = (st[depth - 1] or 0) + dt
+	elseif not co then topMs = topMs + dt end
+	return ...
+end
+
 local function wrapped(name, f)
 	return function(...)
 		if not R.on then return f(...) end
@@ -34,18 +50,7 @@ local function wrapped(name, f)
 		if co and not stacks[co] then st = {} stacks[co] = st end
 		local depth = #st + 1
 		st[depth] = 0
-		local fr0, t0 = frameNo(), clock()
-		local a, b, c, d, e = f(...)
-		local dt = (clock() - t0) * 1000
-		local child = st[depth] or 0
-		st[depth] = nil
-		if frameNo() ~= fr0 then dropped = dropped + 1 return a, b, c, d, e end
-		curX[name] = (curX[name] or 0) + dt - child
-		curT[name] = (curT[name] or 0) + dt
-		curN[name] = (curN[name] or 0) + 1
-		if depth > 1 then st[depth - 1] = (st[depth - 1] or 0) + dt
-		elseif not co then topMs = topMs + dt end
-		return a, b, c, d, e
+		return done(name, st, depth, co, frameNo(), clock(), f(...))
 	end
 end
 
