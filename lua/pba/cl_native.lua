@@ -544,7 +544,7 @@ N.failed = N.failed or {}
 
 local tanh = math.tanh
 --- x of the Kurze-Anderson law (A = 20 log10(x / tanh x), x = sqrt(2 pi N)) giving a loss of `db` dB.
-local function kaX(db)
+local function kaXSolve(db)
 	local G = 10 ^ (db / 20)
 	if G <= 1.0000001 then return 0 end
 	-- x / tanh x rises from 1 (x = 0) and lies between x and x + 1: bisection on [G - 1, G]
@@ -555,7 +555,21 @@ local function kaX(db)
 	end
 	return (lo + hi) * 0.5
 end
+-- Memo of kaX per loss value (exact: the same db gives the same x; 40 tanh per solve, 3 bands per voice update).
+-- Losses repeat (thresholds, cached paths, followed voices); the table is emptied when it grows past KAX_MAX.
+local kaxMemo, kaxN, KAX_MAX = {}, 0, 4096
+local function kaX(db)
+	local x = kaxMemo[db]
+	if x then return x end
+	x = kaXSolve(db)
+	if db == db then -- (a NaN key cannot be stored)
+		if kaxN >= KAX_MAX then kaxMemo, kaxN = {}, 0 end
+		kaxMemo[db], kaxN = x, kaxN + 1
+	end
+	return x
+end
 N.KaX = kaX
+N.KaXSolve = kaXSolve
 
 --- Loss (dB at diff_freq) behind a voice's low-pass: its continuous loss lpDb (sh_paths: path.lpDb) when it
 -- explains the level; a level set by a discrete cause (closed leaf, wall material, masking object, cap) or
@@ -574,6 +588,16 @@ function N.LowpassDb(lp, lpDb, cfg)
 	return T
 end
 
+-- gain of band b (1 low, 2 mid, 3 high) for the Kurze-Anderson x0 (a0 = x0 / tanh x0) at diff_freq f0
+local function tiltBand(b, x0, a0, f0)
+	local lo, hi = N.BAND_EDGE[b - 1] or 0, N.BAND_EDGE[b] or math.huge
+	local f = N.BAND_HZ[b]
+	if f0 >= lo and f0 < hi then f = f0 end -- the band the gain is expressed in
+	if f <= f0 then return 1 end
+	local x = x0 * math.sqrt(f / f0)
+	return math.max(a0 * tanh(x) / x, 1e-3)
+end
+
 --- EQ (low, mid, high) of a loss of `db` dB at diff_freq, relative to that frequency (see above).
 function N.TiltEQ(db, cfg)
 	cfg = cfg or A.cfg
@@ -583,19 +607,7 @@ function N.TiltEQ(db, cfg)
 	if x0 <= 0 then return 1, 1, 1 end
 	local f0 = cfg.diff_freq or 500
 	local a0 = x0 / tanh(x0) -- = 10^(db/20)
-	local out = {}
-	for b = 1, 3 do
-		local lo, hi = N.BAND_EDGE[b - 1] or 0, N.BAND_EDGE[b] or math.huge
-		local f = N.BAND_HZ[b]
-		if f0 >= lo and f0 < hi then f = f0 end -- the band the gain is expressed in
-		if f <= f0 then
-			out[b] = 1
-		else
-			local x = x0 * math.sqrt(f / f0)
-			out[b] = math.max(a0 * tanh(x) / x, 1e-3)
-		end
-	end
-	return out[1], out[2], out[3]
+	return tiltBand(1, x0, a0, f0), tiltBand(2, x0, a0, f0), tiltBand(3, x0, a0, f0)
 end
 
 --- EQ of a voice's low-pass: level lp, continuous loss lpDb when known (N.LowpassDb).
