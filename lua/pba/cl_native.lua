@@ -1825,7 +1825,6 @@ end
 --- Shapes of the movers present (N.MoverHull, cached per map and model), computed while the world is built: in its
 -- coroutine, spread over frames. One found later is computed when the door sync first sees it.
 function N.PrecomputeMovers()
-	if A.Num(A.cfg, "native_movers_brushes") < 0.5 then return end
 	local t0 = SysTime()
 	for _, e in ipairs(ents.GetAll()) do
 		if N.Yield then N.Yield() end
@@ -2240,11 +2239,11 @@ function N.SyncDoors()
 	-- long (the first always enters); the others enter at the next syncs, which the calm hold then does not wait for
 	local addMs = A.Num(A.cfg, "native_props_add_ms")
 	local addSpent, addCut = 0, false
-	-- pba_native_props_rank_keep: once a ranking found more props than the cap, the props entering before the next one are
-	-- its winners only (the fill below put in whichever came first in ents.GetAll(), losers included, which the next
-	-- ranking took out again: props in and out every 2 s with nothing moving, a DynamicAdd and a commit each time)
+	-- once a ranking found more props than the cap, the props entering before the next one are its winners only (filling
+	-- with whichever came first in ents.GetAll(), losers included, the next ranking took them out again: props in and out
+	-- every 2 s with nothing moving, a DynamicAdd and a commit each time)
 	if not wantProps then N.propWinners = nil end
-	local winners = A.On(A.cfg, "native_props_rank_keep") and N.propWinners or nil
+	local winners = N.propWinners
 	local rerank = wantProps and not hold and now >= (N.propRankT or 0)
 	if rerank then N.propRankT = now + PROP_RANK_S end
 	local cands = rerank and {} or nil
@@ -2287,12 +2286,12 @@ function N.SyncDoors()
 			end
 			local info = N.propInfo[e]
 			if not info then
-				-- a prop takes the shape of its collision model (pba_native_props_hull), a mover its solid brushes
-				-- (pba_native_movers_brushes), a door its box (a closed door is a slab: the box is its shape)
+				-- a prop takes the shape of its collision model, a mover its solid brushes (their boxes sealed the open
+				-- space of a hollow model or a lift cabin), a door its box (a closed door is a slab: the box is its shape)
 				local hull, empty, pending
-				if isMover and A.On(A.cfg, "native_movers_brushes") then
+				if isMover then
 					hull, empty, pending = N.MoverHullAsync(e:GetModel())
-				elseif not isDoor and A.On(A.cfg, "native_props_hull") then
+				elseif not isDoor then
 					hull, empty = N.PropHull(e:GetModel(), e:GetModelScale())
 				end
 				info = boxInfo(e, hull)
