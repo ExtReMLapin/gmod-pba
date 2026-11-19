@@ -24,7 +24,7 @@
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]),
-//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool), SetEqContinuous(bool), SetCapCompareNew(bool),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool), SetSlotBankFlush(bool), SetEqContinuous(bool), SetCapCompareNew(bool),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k), SetSlotFallback(on),
@@ -2536,6 +2536,12 @@ LUA_FUNCTION(SetPitchGlide) {
 	return 0;
 }
 
+// SetSlotBankFlush(bool): a source slot bank weighted out is flushed with silence until its tail is over and keeps its response (true, the default); false: reset when weighted in again, which dropped the response, as before (pba_native_slot_bank_flush)
+LUA_FUNCTION(SetSlotBankFlush) {
+	render::SetSlotBankFlush(LUA->GetBool(1));
+	return 0;
+}
+
 // SetEqContinuous(bool): a voice's direct EQ, once used, is applied at every block after it, even with every band at 1 (true, the default); false: skipped while clear and resumed with stale filter state, as before (pba_native_eq_continuous)
 LUA_FUNCTION(SetEqContinuous) {
 	render::SetEqContinuous(LUA->GetBool(1));
@@ -3144,6 +3150,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetHrtfBlend");
 	LUA->PushCFunction(SetPitchGlide);
 	LUA->SetField(-2, "SetPitchGlide");
+	LUA->PushCFunction(SetSlotBankFlush);
+	LUA->SetField(-2, "SetSlotBankFlush");
 	LUA->PushCFunction(SetEqContinuous);
 	LUA->SetField(-2, "SetEqContinuous");
 	LUA->PushCFunction(SetCapCompareNew);

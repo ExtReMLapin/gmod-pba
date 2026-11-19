@@ -641,6 +641,8 @@ function N.ApplySettings()
 	if pba_native.SetCapCompareNew then pba_native.SetCapCompareNew((A.cfg.native_cap_new or 1) >= 0.5) end
 	-- a voice's direct EQ, once used, is applied at every block (module of 2026-11-19+; an older one skips it at 1)
 	if pba_native.SetEqContinuous then pba_native.SetEqContinuous((A.cfg.native_eq_continuous or 1) >= 0.5) end
+	-- a source slot bank the crossfade left is flushed, not reset (module of 2026-11-19+; an older one resets it)
+	if pba_native.SetSlotBankFlush then pba_native.SetSlotBankFlush((A.cfg.native_slot_bank_flush or 1) >= 0.5) end
 	local k = N.wetScale or 1
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,

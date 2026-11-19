@@ -313,6 +313,7 @@ struct Reflection {
 	// fed but not convolved (a source slot bank weighted out): its input history is missing, so it
 	// restarts from silence when weighted in again instead of replaying input from long ago
 	bool stale = false;
+	int flushLeft = -1; // (g_bankFlush) weighted out: blocks of silence still to convolve before it is clean; -1: not flushing
 	// long-window reverb times of this slot's own position (SetSlotReverbTimes), and the ones its last block used
 	std::atomic<float> rtLong[3] = {0, 0, 0};
 	std::atomic<bool> rtLongOn{false};
@@ -379,6 +380,7 @@ float g_diffuseSend = 1.5f;
 // over this reference (s): 1 at and above it (a room: unchanged), 0 with no tail. 0 = always 1 (former).
 float g_diffuseRtRef = 1.0f;
 bool g_difSmooth = true; // SetDiffuseSmooth: the diffuse share ramped over the block (Voice::difCur)
+bool g_bankFlush = true; // SetSlotBankFlush: a source slot bank weighted out is flushed with silence, not reset (ApplyReflection)
 bool g_eqCont = true;    // SetEqContinuous: a voice's direct EQ, once used, is applied every block (Voice::eqUsed)
 Reflection g_echo[kEchoSlots];     // per-source reflections
 Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax), bank 0
@@ -580,6 +582,7 @@ struct MixSettings {
 	float diffuseSend = 1.5f, diffuseRtRef = 1.0f;
 	bool difSmooth = true; // SetDiffuseSmooth
 	bool eqCont = true;    // SetEqContinuous
+	bool bankFlush = true; // SetSlotBankFlush
 	float srcScale = 1;
 	bool slotFbGain = true; // SetSlotFallbackGain
 	float limFastMs = 6.0f, limSlowMs = 50.0f, limSlowK = 3.0f;
@@ -1005,16 +1008,36 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	if (rtOut)
 		for (int b = 0; b < 3; ++b) rtOut[b] = rt[b];
 	if (wet <= 0 || over) return;
+	// weighted out (a source slot bank the blend left) while it still rings. g_bankFlush: it goes on being convolved, with
+	// silence and its output discarded, until its tail is over; weighted in again meanwhile it restarts from that silence
+	// with its impulse response kept. Otherwise (the former way) it is left as it is, marked stale, and reset when weighted
+	// in again; that reset also drops the response the effect holds (see above): a bank back without a new simulation of
+	// its source (the listener crossing the anchor radius back and forth) rang with none, silent for up to 1-2 s.
+	bool flush = false;
 	if (w0 <= 0 && w1 <= 0) {
-		if (!r.silent) r.stale = true;
-		return;
+		if (r.silent) return;
+		if (!g_bankFlush) {
+			r.stale = true;
+			return;
+		}
+		if (r.flushLeft < 0) r.flushLeft = tail + kTailFadeBlocks;
+		if (r.flushLeft == 0) {
+			r.flushLeft = -1;
+			r.silent = true;
+			return;
+		}
+		--r.flushLeft;
+		flush = true;
+	} else {
+		r.flushLeft = -1;
 	}
 	if (!out.reflections.ir) return;
 	if (r.stale) {
 		iplReflectionEffectReset(r.fx);
 		r.stale = false;
 	}
-	r.silent = false;
+	if (flush) std::fill(r.in.data[0], r.in.data[0] + kBlock, 0.0f); // (its input was copied and metered before)
+	else r.silent = false;
 	// fade over the last kTailFadeBlocks of the tail (per-sample ramp across the block)
 	const float a0 = std::clamp(1.0f - (float)(r.idle - 1 - tail) / kTailFadeBlocks, 0.0f, 1.0f);
 	const float a1 = std::clamp(1.0f - (float)(r.idle - tail) / kTailFadeBlocks, 0.0f, 1.0f);
@@ -1032,6 +1055,7 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	rp.numChannels = kAmbi;
 	rp.irSize = kIR;
 	iplReflectionEffectApply(r.fx, &rp, &r.in, &g_ambTmp, nullptr);
+	if (flush) return; // (convolved for its state only)
 	const float g0 = wet * a0 * w0, g1 = wet * a1 * w1;
 	for (int c = 0; c < kAmbi; ++c) {
 		float* d = g_amb.data[c];
@@ -1777,6 +1801,7 @@ void ApplyMix(const MixSettings& m) {
 	g_diffuseRtRef = m.diffuseRtRef;
 	g_difSmooth = m.difSmooth;
 	g_eqCont = m.eqCont;
+	g_bankFlush = m.bankFlush;
 	g_srcScale = m.srcScale;
 	g_slotFbGain = m.slotFbGain;
 	g_dfOn = m.dfOn;
@@ -2612,6 +2637,12 @@ void SetWet(float room, float echo) {
 void SetDiffuseRtRef(float s) {
 	CtlCall cc;
 	g_c.mix.diffuseRtRef = std::clamp(s, 0.0f, 10.0f);
+	SendMix();
+}
+
+void SetSlotBankFlush(bool on) {
+	CtlCall cc;
+	g_c.mix.bankFlush = on;
 	SendMix();
 }
 

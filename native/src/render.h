@@ -142,6 +142,12 @@ void SetSourceReverbScale(float k);
 // share a voice whose source reverb slot is not simulated yet hands to the room bus meanwhile: true (default) = no more
 // than the voice's gain at the listener (what Lua sends a voice without a slot), false = the slot send (legacy)
 void SetSlotFallbackGain(bool on);
+// A source slot bank weighted out (its blend weight at 0) while it still rings is flushed: convolved with silence, its output
+// discarded, until its tail is over; weighted in again it still holds its impulse response (pba_native_slot_bank_flush,
+// default on). false: marked stale and reset when weighted in again, as before; Steam Audio's reset also drops the response
+// the effect holds, so a bank back without a new simulation (the listener crossing the anchor radius back and forth) rang
+// with none: silent.
+void SetSlotBankFlush(bool on);
 // latest reverb times at the listener (read by the audio thread from the simulation outputs)
 void RoomReverbTimes(float rt[3]);
 // hybrid tail EQ last applied to the room reverb (3 bands)

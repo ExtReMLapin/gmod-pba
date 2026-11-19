@@ -215,6 +215,10 @@
   "pos0": "hook",
   "why": "native module EQ continuity"
  },
+ "native_slot_bank_flush": {
+  "pos0": "hook",
+  "why": "native module source slot banks"
+ },
  "native_pitch_glide": {
   "pos0": "hook",
   "why": "native module pitch glide"
