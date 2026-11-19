@@ -99,6 +99,10 @@
   "pos0": "hook",
   "why": "schedules far paths over frames (cl_render), outside a direct P.Compute"
  },
+ "far_hold_pace": {
+  "pos0": "hook",
+  "why": "per-frame budget of held sounds' far jobs (cl_slicer), outside a direct P.Compute (pure test review M4)"
+ },
  "far_sliced_cap": {
   "pos0": "hook",
   "why": "per-frame ceiling of the far slicer's budget (cl_slicer), outside a direct P.Compute"

@@ -72,7 +72,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 |---|---|---|---|
 | Map traces of the probe graph and path tightening done in the engine (about 2.5x faster than `util.TraceHull` from Lua; checked against it on every map, off at the first difference) | — | ◐ experimental | C `native_traces` |
 | Third-person and death views: the server hears from where the player's view really is | ✅ | ✅ | S `ear_report` |
-| Far sounds' paths worked out over several frames within a fixed time per frame, also while the listener moves fast | ✅ | ✅ | C `far_sliced`, `far_sliced_ms`, `far_sliced_cap` |
+| Far sounds' paths worked out over several frames within a fixed time per frame, also while the listener moves fast | ✅ | ✅ | C `far_sliced`, `far_sliced_ms`, `far_sliced_cap`, `far_hold_pace` |
 | Cached paths never kept from a world that changed while they were worked out | ✅ | ✅ | C `cache_gen_guard` |
 | Two sounds with no entity close to each other never share a cached path | ✅ | ✅ | C `cache_src_near` |
 | Paths worked out before a door changed state are dropped once the door costs are redone | ✅ | ✅ | C `door_field_invalidate` |

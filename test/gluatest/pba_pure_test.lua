@@ -2922,6 +2922,75 @@ local SUITE = {
 				expect(dumpResult(r)).to.equal(full(list[#list][1]))
 			end)
 		end },
+		{ name = "Far sliced: with pba_far_sliced_cap, a held burst's jobs (pba_burst_hold_ms) keep the pacing up to 4 x far_sliced_ms: ready by their hold's end in full instead of falling to the cheap model (pba_far_hold_pace, review M4)", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				local clock = A.Paths.slice.clock
+				local saved = { A.cfg.far_sliced_cap, A.cfg.far_force_ms, A.cfg.far_sliced_ms, rawget(A.cfg, "far_hold_pace") }
+				local L = Vector(300, 300, 64)
+				PR.fieldsByKey, P.cache = nil, {}
+				P.Compute(list[1][1], L, 75, cfg)
+				local HOLD = 3 / 60 -- (pba_burst_hold_ms 50 at 60 fps: three frames)
+				local B = 0
+				-- the burst, held HOLD each; returns the answers given by the cheap model, the jobs, the most ticks (one
+				-- per slice check) of one frame's SL.Run, and the burst's work in ticks
+				local function burst(pace, cap, budget, force)
+					A.cfg.far_sliced_cap, A.cfg.far_hold_pace = cap, pace
+					A.cfg.far_sliced_ms, A.cfg.far_force_ms = budget * 1000, force * 1000
+					P.cache, SL.jobs = {}, {}
+					local jobs, got = {}, {}
+					for _, pr in ipairs(list) do
+						local j = SL.Defer(pr[1], L, 75, nil, cfg, HOLD)
+						if j then
+							jobs[#jobs + 1] = j
+							local k = #jobs
+							j.onDone = function(res) got[k] = res end
+						end
+					end
+					if B > 0 then SL.est = B * 10 / math.max(#jobs, 1) end -- (the running mean of a held job's work, as learnt)
+					local maxT = 0
+					for _ = 1, 200 do
+						if #SL.jobs == 0 then break end
+						nextFrame()
+						local c0 = clock()
+						SL.Run()
+						maxT = math.max(maxT, clock() - c0 - 1)
+					end
+					local nCheap, w = 0, 0
+					for k, j in ipairs(jobs) do
+						expect(got[k] ~= nil).to.beTrue()
+						if got[k].cheap then nCheap = nCheap + 1 end
+						w = w + j.cpu
+					end
+					return nCheap, #jobs, maxT, w
+				end
+				-- the burst's work (warm: the first run fills what evaluations keep across requests), all in one frame
+				burst(0, 0, 1e6, 0)
+				local _, _, _, W = burst(0, 0, 1e6, 0)
+				local ok, err = pcall(function()
+					-- the hold leaves two frames of pacing (requested in one frame, due two frames later). A budget B of a
+					-- sixth of the work: B a frame holds a third of it, 4 x B all of it. Then a tenth: 4 x B no longer all.
+					local out = {}
+					for _, div in ipairs({ 6, 10 }) do
+						B = math.ceil(W / div)
+						-- control: pba_far_hold_pace 0 (former behaviour): far_sliced_ms a frame, then far_force_ms once
+						-- due: part of the burst gets the cheap model
+						local c0, n0 = burst(0, 1, B, B / 2)
+						expect(n0 >= 5).to.beTrue()
+						expect(c0 >= 1).to.beTrue()
+						-- 1: no frame past 4 x far_sliced_ms (+ a check, three bookkeeping reads a job run, the forced share)
+						local c1, n1, t1 = burst(1, 1, B, B / 2)
+						expect(n1).to.equal(n0)
+						expect(t1 <= 4 * B + B / 2 + 1 + 3 * (n1 + 1)).to.beTrue()
+						if div == 6 then expect(c1).to.equal(0) else expect(c1 < c0).to.beTrue() end
+						out[#out + 1] = string.format("budget W/%d: cheap %d -> %d of %d (frame max %d ticks, 4B = %d)", div, c0, c1, n0, t1, 4 * B)
+					end
+					print("[pba test] held burst, work " .. W .. " ticks: " .. table.concat(out, "; "))
+				end)
+				A.cfg.far_sliced_cap, A.cfg.far_force_ms, A.cfg.far_sliced_ms, A.cfg.far_hold_pace = saved[1], saved[2], saved[3], saved[4]
+				if not ok then error(err, 0) end
+			end)
+		end },
 		{ name = "Far sliced: pba_far_sliced_cap keeps a frame's work on the jobs not yet due within far_sliced_ms whatever the pacing asks; 0 = the pacing raises it; the answers are the synchronous ones either way", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
