@@ -1550,16 +1550,12 @@ function PR.FieldFor(g, L)
 		f = finishField(f, kept)
 		f.seedList = f.seedList or seeds
 	end
-	if f.stateSig == sig then return f end
-	if f then
-		-- a door or portal state changed: the field by length stands (it reads no door: they are paid on the
-		-- route, P.EvalPolyline), only the field with the door costs is redone, in background slices, the old
-		-- one answering meanwhile. It only picks which ways round are tried; every route is costed on the
-		-- doors as they are now. Rebuilt at once, both fields and the link costs were redone at every state
-		-- change: 14 builds in one door swing on pba_tworooms, ~25 ms each on rp_downtown, any door of the map.
-		PR.QueueDoorField(g, f, sig)
-		return f
-	end
+	-- a door or portal state changed: the field by length stands (it reads no door: they are paid on the
+	-- route, P.EvalPolyline), only the field with the door costs is redone, in background slices, the old
+	-- one answering meanwhile. It only picks which ways round are tried; every route is costed on the
+	-- doors as they are now. Rebuilt at once, both fields and the link costs were redone at every state
+	-- change: 14 builds in one door swing on pba_tworooms, ~25 ms each on rp_downtown, any door of the map.
+	if f.stateSig ~= sig then PR.QueueDoorField(g, f, sig) end
 	return f
 end
 
