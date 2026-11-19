@@ -89,6 +89,7 @@ A.CONFIG = {
 
 	-- doors
 	door_closed_db  = { 28, 0, 60, "sv", "Loss of a closed door when its material is unknown (dB)." },
+	probe_air_hop   = { 1, 0, 1, "cl", "Probe routes for a source in the open air that sees no probe (a lift or a vehicle hanging in a void under the floors the probes stand on): it enters the graph through a point of the air it sees, and its routes are tightened from it. Without it such a source had routes only where a gap let it see a probe: they came and went as it moved (tens of dB in one step)." },
 	probe_field_ms  = { 1, 0.1, 10, "cl", "Time per frame (ms) spent keeping the listener's probe field up to date while moving (a full build is ~27 ms on a large map)." },
 	far_sliced      = { 1, 0, 1, "cl", "Far sounds' paths are computed over several frames: sound takes time to arrive (343 m/s, about 0.11 s for 2000 units), so the routes of a far sound are worked out a little each frame and are ready before the sound would reach you; the result is the same, without the frame spikes of new far routes. Near sounds and answers already known are computed at once as before. 0 = every sound computed at once." },
 	far_sliced_ms   = { 1.5, 0.1, 10, "cl", "Time per frame (ms) spent on far sounds' paths (pba_far_sliced). A path due before the next frame is finished at once whatever this budget." },

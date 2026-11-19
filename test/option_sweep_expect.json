@@ -538,5 +538,9 @@
  "early_line_takeover": {
   "pos0": "hook",
   "why": "server and client: a line the engine started before the client was ready handed to the module once it is (sv_relay A.NoteEarly, cl_loops LP.TakeEarly), outside P.Compute; covered by early_line and early_line_map"
+ },
+ "probe_air_hop": {
+  "pos0": "same",
+  "why": "only a source that sees no probe at all (in a void under the platforms) takes the air hop: the sweep scenes stand on floors; covered by skylift_jumps"
  }
 }

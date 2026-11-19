@@ -2040,6 +2040,102 @@ local function altBranches(f, n, L)
 end
 PR.AltBranches = altBranches
 
+-- pba_probe_air_hop: the probes stand on floors (ear height), and a source in the open air away from them (a
+-- skylift pod hanging under its rail in the void below the platforms, d3_citadel_01) saw one only where a gap
+-- let it through: the routes came and went as it moved, -6 dB with them, -40..-80 dB without (the transmission
+-- through the platforms, or a route through their walls) one 25 u step on. Such a source enters the graph
+-- through a point of the open air it sees, from which probes are seen (PR.AirHop): its routes are then joined
+-- through that point and tightened from S (the bend slides onto the real edge it turns round, so the route
+-- follows the source instead of switching on and off with its view of a probe).
+-- Directions tried: the 26 of a cube's faces, edges and corners; distances doubling up to AIR_HOP_FAR.
+local AIR_HOP_DIRS = {}
+for x = -1, 1 do for y = -1, 1 do for z = -1, 1 do
+	if x ~= 0 or y ~= 0 or z ~= 0 then AIR_HOP_DIRS[#AIR_HOP_DIRS + 1] = Vector(x, y, z):GetNormalized() end
+end end end
+local AIR_HOP_STEPS = { 32, 64, 128, 256, 512 }
+-- the hops kept: the cheapest ways out in that many directions (one hop alone switched between two ways out, a
+-- route 10 dB louder one 8 u step and back the next, as its cost estimate swapped them)
+local AIR_HOP_KEEP = 3
+PR.AIR_HOP_FAR = AIR_HOP_STEPS[#AIR_HOP_STEPS]
+-- refinement of a hop's distance along its direction (bisections): the hop, and so the weight of its routes, moves
+-- with the source instead of jumping from one step of AIR_HOP_STEPS to the next
+local AIR_HOP_REFINE = 4
+--- Cheapest way to L from air point Q through a probe it sees (S -> Q -> probe plus the probe's field cost), and
+-- the probes Q sees; nil when it sees none of the listener field f.
+local function hopCost(g, f, Q, h, L, maxn)
+	local st = PR.Visible(g, Q, maxn)
+	local best
+	for _, n in ipairs(st) do
+		local c = fieldCost(f, n.id, L)
+		if c then
+			c = c + h + Q:Distance(n.pos)
+			if not best or c < best then best = c end
+		end
+	end
+	return best, st
+end
+--- The points Q of the open air that S sees (fat trace: the routes through them can be tightened) and from which
+-- probes of the listener field f are seen: per direction the nearest such point (refined between two steps of
+-- AIR_HOP_STEPS), the AIR_HOP_KEEP cheapest (hopCost). Searched up to AIR_HOP_FAR units from S, a hop's weight
+-- fading out over the last half (as the way over a world edge, P.WorldEdge): a way out found farther than the
+-- search reaches fades in instead of appearing at full level (a 512 u hop seeing its first probe: 10 dB in 8 u).
+-- Returns the start probes (nearest first per hop, each probe once, for the cheapest hop that sees it),
+-- hopOf[probe] = its Q and hopW[probe] = its weight (0..1); nil when none.
+function PR.AirHop(g, S, L, f, maxn)
+	if not f then return nil end
+	local cands = {}
+	local far = AIR_HOP_STEPS[#AIR_HOP_STEPS]
+	for di, d in ipairs(AIR_HOP_DIRS) do
+		local lo = 0
+		for _, h in ipairs(AIR_HOP_STEPS) do
+			sliceCheck()
+			local Q = S + d * h
+			if not clearFat(S, Q) then break end -- (farther along a blocked direction: blocked too)
+			local c, st = hopCost(g, f, Q, h, L, maxn)
+			if c then
+				local hi = h
+				for _ = 1, AIR_HOP_REFINE do
+					local mid = (lo + hi) * 0.5
+					local cm, sm = hopCost(g, f, S + d * mid, mid, L, maxn)
+					if cm then hi, c, st = mid, cm, sm else lo = mid end
+				end
+				local w = 1 - math.Clamp((hi - far * 0.5) / (far * 0.5), 0, 1)
+				if w > 0 then cands[#cands + 1] = { c, di, S + d * hi, st, w } end
+				break
+			end
+			lo = h
+		end
+	end
+	if #cands == 0 then return nil end
+	table.sort(cands, function(a, b)
+		if a[1] ~= b[1] then return a[1] < b[1] end
+		return a[2] < b[2]
+	end)
+	local starts, hopOf, hopW = {}, {}, {}
+	for x = 1, math.min(#cands, AIR_HOP_KEEP) do
+		local Q, w = cands[x][3], cands[x][5]
+		for _, n in ipairs(cands[x][4]) do
+			if not hopOf[n] and fieldCost(f, n.id, L) then
+				hopOf[n], hopW[n] = Q, w
+				starts[#starts + 1] = n
+			end
+		end
+	end
+	return starts, hopOf, hopW
+end
+
+--- A route through an air hop (PR.AirHop) of weight w: marked, and its loss raised by the hop's fade (dB).
+local function hopFade(p, w)
+	p.airHop = true
+	w = w or 1
+	if w < 1 then
+		local add = -10 * math.log10(math.max(w, 1e-6))
+		p.lossDb = (p.lossDb or 0) + add
+		if p.midDb then p.midDb = p.midDb + add end
+		p.hopFadeDb = add
+	end
+end
+
 --- The routes of S to L read from the listener field, one per physical route, best first:
 -- the field's routes from the probes S sees (k + 2 nearest seen, each a route down its own tree branch),
 -- joined to S and L (attach: tightened, kept per S and L and door epoch), costed on their real edges
@@ -2063,7 +2159,24 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	if not f then return {} end
 	fieldSeen(f, L)
 	local starts = PR.Visible(g, S, (k or 3) + 2)
+	-- (pba_probe_air_hop) a source that sees no probe: through a point of the open air (PR.AirHop above)
+	local hop, hopW
+	if #starts == 0 and (cfg.probe_air_hop or 1) >= 0.5 then
+		starts, hop, hopW = PR.AirHop(g, S, L, f, (k or 3) + 2)
+		starts = starts or {}
+	end
 	if #starts == 0 then return {} end
+	-- a route's join: from S itself, or (hop) from the air point that sees its start probe n, then S put before it
+	-- and the whole tightened from S (the hop slides onto the edge S's way turns round)
+	local function join(inner, n)
+		local Q = hop and n and hop[n]
+		if not Q then return attach(inner, S, L, nil) end
+		local pulled = attach(inner, Q, L, nil)
+		if not pulled then return nil end
+		local pts = { S }
+		for _, v in ipairs(pulled) do pts[#pts + 1] = Vector(v) end
+		return tighten(pts)
+	end
 	local out = {}
 	-- A route tightened down to the straight line (the world lets a hull through: only a leaf cuts the line)
 	-- is kept, once: it is the way through that doorway, and the doorway's route is the one model of its
@@ -2076,7 +2189,8 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	-- numbers (doors traced again) and dropped by PR.DistinctRoutes after the first (same level, later index:
 	-- P.SameRoute of equal vertices), and a dropped route never decides another's fate: skipped before.
 	local done = {}
-	local guard, guardDone = groupGuard(S, L, cfg, srcEnt)
+	local guard, guardDone
+	if not hop then guard, guardDone = groupGuard(S, L, cfg, srcEnt) end -- (a hop's routes are its own)
 	local evaluated = {}
 	local gs = PR.groupStats
 	-- the shortest ways (f) and the ways round the doors' costs (f.doors, PR.BuildFields), ranked together
@@ -2095,7 +2209,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 				else
 					if guard then gs.own = gs.own + 1 end
 					-- (no join through a field position: every route ends at a seed, which L sees)
-					pulled = attach(inner, S, L, nil)
+					pulled = join(inner, inners.nodes[x])
 				end
 				if pulled and (#pulled >= 3 or (#pulled == 2 and not straight)) and not seenRoute(done, pulled)
 					and not (shared and nearRoute(evaluated, pulled)) then
@@ -2103,6 +2217,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 					straight = straight or #pulled == 2
 					local p = A.Paths.EvalRoute(pulled, cfg)
 					p.probe = true
+					if hop then hopFade(p, hopW[inners.nodes[x]]) end
 					PR.RouteHeardPos(p, pulled, S, L, cfg)
 					out[#out + 1] = p
 				end
@@ -2119,7 +2234,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 			-- a sidetrack along a parallel row of probes tightens to the same way)
 			for _, inner in ipairs(altBranches(f, n, L)) do
 				sliceCheck()
-				local pulled = attach(inner, S, L, nil)
+				local pulled = join(inner, n)
 				if pulled and #pulled >= 3 and not seenRoute(done, pulled) then
 					local same = false
 					for _, q in ipairs(evaluated) do
@@ -2128,6 +2243,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 					if not same then
 						local p = A.Paths.EvalRoute(pulled, cfg)
 						p.probe, p.alt = true, true
+						if hop then hopFade(p, hopW[n]) end
 						PR.RouteHeardPos(p, pulled, S, L, cfg)
 						out[#out + 1] = p
 						break
