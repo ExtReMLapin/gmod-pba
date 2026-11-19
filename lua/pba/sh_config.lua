@@ -413,10 +413,15 @@ end
 -- Defaults that changed after a release: a saved value equal to the OLD default is the old default kept
 -- by the config file, not the player's choice: moved to the new one, once (a cookie remembers it, so a
 -- player who sets the old value again later keeps it). `to`: the default of THAT release when it was not the
--- last one (a chain: A.MigrateRetune then moves that one to today's default).
+-- last one (the chain goes on: native_reverb 0.15 -> 0.4, then A.MigrateRetune 0.4 -> today's default).
 function A.MigrateDefaults()
 	if not (CLIENT and cookie) then return end
 	local MIGRATE = {
+		-- 1.0.x: 0.15 with the send following the direct gain; the send now follows the distance (1.1)
+		{ name = "native_reverb", old = 0.15, to = 0.4, key = "pba_mig_native_reverb_v2" },
+		-- 1.1 dev builds: far grouping shipped with 2 deg and no reuse in time before the bench
+		{ name = "group_angle", old = 2, key = "pba_mig_group_angle_v1" },
+		{ name = "group_time", old = 0, key = "pba_mig_group_time_v1" },
 		-- 1.1: native rendering on by default (the simulated reverb is only heard with it)
 		{ name = "native_render", old = 0, key = "pba_mig_native_render_v1" },
 		-- 2026-11-14: the burst/perf options (measured, docs/PERF_BANC_2026-11-14.md) on by default

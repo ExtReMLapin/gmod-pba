@@ -592,6 +592,24 @@ local SUITE = {
 			A.retuneRan = ranBefore
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Default migration chain: a saved pba_native_reverb of 0.15 (the 1.0 default) moves to 0.4 (the 1.1 default), not to today's default: the retune migration scales it later, on the right DLL", func = function()
+			local G = _G
+			local saved = { cookie = G.cookie, rcc = G.RunConsoleCommand, cv = A.cv.native_reverb }
+			local store, cmds, stored = {}, {}, 0.15
+			G.cookie = {
+				GetNumber = function(k, d) local v = store[k] if v == nil then return d end return tonumber(v) end,
+				GetString = function(k, d) local v = store[k] if v == nil then return d end return v end,
+				Set = function(k, v) store[k] = tostring(v) end,
+			}
+			G.RunConsoleCommand = function(name, val) cmds[#cmds + 1] = name .. " " .. val if name == "pba_native_reverb" then stored = tonumber(val) end end
+			A.cv.native_reverb = { GetFloat = function() return stored end, GetName = function() return "pba_native_reverb" end }
+			local ok, err = pcall(function()
+				A.MigrateDefaults()
+				expect(stored).to.equal(0.4)
+			end)
+			G.cookie, G.RunConsoleCommand, A.cv.native_reverb = saved.cookie, saved.rcc, saved.cv
+			if not ok then error(err, 0) end
+		end },
 		{ name = "EngineGain: 1 near the source, decreasing, level 0 = no attenuation", func = function()
 
 			expect(AC.EngineGain(0, 75) <= 1).to.beTrue()
