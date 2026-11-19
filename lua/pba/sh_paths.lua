@@ -2418,7 +2418,7 @@ local function byLevelThenIndex(a, b)
 	if a.lvl ~= b.lvl then return a.lvl > b.lvl end
 	return a.i < b.i
 end
--- pba_model_soft_cull (continuity review step 2, A9): the paths past the n-th are not cut at their rank but fade
+-- Soft cut (continuity review step 2, A9): the paths past the n-th are not cut at their rank but fade
 -- out over SOFT_CULL_DB under the n-th (their loss raised by -10 log10 w): two routes of nearly equal level swapping
 -- ranks at the cut changed nothing at once, the one dropped took its energy away in one step
 local SOFT_CULL_DB = 6
@@ -2429,16 +2429,14 @@ function P.KeepLoudest(paths, n, sndlvl, cfg)
 	table.sort(idx, byLevelThenIndex)
 	local out = {}
 	for i = 1, n do out[i] = idx[i].p end
-	if A.On(cfg, "model_soft_cull") then
-		local ln = idx[n].lvl
-		for i = n + 1, #idx do
-			local w = 1 - ramp(ln - idx[i].lvl, 0, SOFT_CULL_DB)
-			if w <= 0 then break end
-			local p = idx[i].p
-			p.cullDb = -10 * math.log10(w)
-			p.lossDb = p.lossDb + p.cullDb
-			out[#out + 1] = p
-		end
+	local ln = idx[n].lvl
+	for i = n + 1, #idx do
+		local w = 1 - ramp(ln - idx[i].lvl, 0, SOFT_CULL_DB)
+		if w <= 0 then break end
+		local p = idx[i].p
+		p.cullDb = -10 * math.log10(w)
+		p.lossDb = p.lossDb + p.cullDb
+		out[#out + 1] = p
 	end
 	return out
 end
@@ -2521,7 +2519,7 @@ end
 -- mix, p.rawLossDb stays without it).
 -- direct (optional): straight-line distance source - listener (else the transmission's length or
 -- the paths' own `direct`): the voices together never exceed the free field at that distance.
--- pba_trans_window_soft: past the window's edge the transmission loses TRANS_WINDOW_SLOPE dB more per dB, dropped
+-- Past the window's edge the transmission loses TRANS_WINDOW_SLOPE dB more per dB, dropped
 -- only TRANS_WINDOW_FLOOR dB under the dominant voice (where its highs no longer count)
 local TRANS_WINDOW_SLOPE, TRANS_WINDOW_FLOOR = 3, 60
 -- P.SelectVoices' helpers, module-level (no closures per call: LuaJIT NYI FNEW)
@@ -2595,21 +2593,16 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	table.sort(list, byLevelDesc)
 	local best = list[1] and list[1].level or -math.huge
 	local kept = {}
-	local soft = A.On(cfg, "model_soft_cull")
 	for _, p in ipairs(list) do
-		if not soft then
-			if p.level >= best - cfg.reject_db then kept[#kept + 1] = p end
-		else
-			-- pba_model_soft_cull (A10): faded out over SOFT_CULL_DB past reject_db instead of cut there (its loss,
-			-- raw loss included for the native law, raised by -10 log10 w)
-			local w = 1 - ramp(best - p.level, cfg.reject_db, cfg.reject_db + SOFT_CULL_DB)
-			if w > 0 then
-				if w < 1 then
-					local add = -10 * math.log10(w)
-					p.lossDb, p.mixLossDb, p.level = p.lossDb + add, (p.mixLossDb or p.lossDb) + add, p.level - add
-				end
-				kept[#kept + 1] = p
+		-- soft cut (A10): faded out over SOFT_CULL_DB past reject_db instead of cut there (its loss,
+		-- raw loss included for the native law, raised by -10 log10 w)
+		local w = 1 - ramp(best - p.level, cfg.reject_db, cfg.reject_db + SOFT_CULL_DB)
+		if w > 0 then
+			if w < 1 then
+				local add = -10 * math.log10(w)
+				p.lossDb, p.mixLossDb, p.level = p.lossDb + add, (p.mixLossDb or p.lossDb) + add, p.level - add
 			end
+			kept[#kept + 1] = p
 		end
 	end
 
@@ -2700,11 +2693,11 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		local g = AC.EngineGain(trans.length, sndlvl) * exp((-trans.lossDb / 20) * LN10)
 		local lvl = AC.GainToDb(g)
 		local dom = voices[1] and voices[1].level or -math.huge
-		-- pba_trans_window_soft: faded out past the window's edge instead of cut there: the transmission, often the
+		-- faded out past the window's edge instead of cut there: the transmission, often the
 		-- one voice carrying the highs, took them all away in one step as it crossed the window (pba_demo: one-voice
 		-- low-pass 30.5 -> 40.5 dB at 21 dB under the route)
 		local keep, raw = #voices == 0 or lvl >= dom - cfg.trans_window_db, trans.rawLossDb
-		if #voices > 0 and A.On(cfg, "trans_window_soft") then
+		if #voices > 0 then
 			local over = (dom - cfg.trans_window_db) - lvl
 			if over > 0 then
 				local add = TRANS_WINDOW_SLOPE * over
@@ -2728,24 +2721,20 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		while j >= 1 and voices[j].level < v.level do voices[j + 1] = voices[j] j = j - 1 end
 		voices[j + 1] = v
 	end
-	if A.On(cfg, "model_soft_cull") then
-		-- pba_model_soft_cull (A16): a voice past max_voices gives its energy to the kept voice nearest in direction
-		-- (its gain and raw loss), instead of taking it away: the last voice's level no longer vanishes at once
-		while #voices > cfg.max_voices do
-			local x = table.remove(voices)
-			local dx, best, bd = (x.pos - L):GetNormalized(), nil, -math.huge
-			for _, v in ipairs(voices) do
-				local c = (v.pos - L):GetNormalized():Dot(dx)
-				if c > bd then best, bd = v, c end
-			end
-			if best and (x.gain or 0) > 0 then
-				local g = math.sqrt(best.gain * best.gain + x.gain * x.gain)
-				if best.rawLossDb and best.gain > 0 then best.rawLossDb = best.rawLossDb - 20 * math.log10(g / best.gain) end
-				best.gain, best.level = g, AC.GainToDb(g)
-			end
+	-- soft cut (A16): a voice past max_voices gives its energy to the kept voice nearest in direction
+	-- (its gain and raw loss), instead of taking it away: the last voice's level no longer vanishes at once
+	while #voices > cfg.max_voices do
+		local x = table.remove(voices)
+		local dx, best, bd = (x.pos - L):GetNormalized(), nil, -math.huge
+		for _, v in ipairs(voices) do
+			local c = (v.pos - L):GetNormalized():Dot(dx)
+			if c > bd then best, bd = v, c end
 		end
-	else
-		while #voices > cfg.max_voices do table.remove(voices) end
+		if best and (x.gain or 0) > 0 then
+			local g = math.sqrt(best.gain * best.gain + x.gain * x.gain)
+			if best.rawLossDb and best.gain > 0 then best.rawLossDb = best.rawLossDb - 20 * math.log10(g / best.gain) end
+			best.gain, best.level = g, AC.GainToDb(g)
+		end
 	end
 
 	-- one wavefront: obstacles only take away from the free field. Every route is modelled on its own up
@@ -3487,7 +3476,7 @@ function P.ThroughPath(S, L, best, cfg)
 	local w = exp((-math.max(q.diffDb or q.lossDb or 0, 0) / 10) * LN10)
 	p.entryWall = w
 	p.entryLen = w * S:Distance(best.V) + (1 - w) * math.max(p.length - (q.pos or L):Distance(L), 0)
-	-- its bend (the diffuse model's, pba_bend_final) on the taut route, corners on their edges: the clearance
+	-- its bend (the diffuse model's, selectVoices) on the taut route, corners on their edges: the clearance
 	-- vertices of two copies of one route zigzag differently (diffuse share 0 / 0.42 / 0 in 2 u steps)
 	local taut = { best.V }
 	for _, v in ipairs(q.points or {}) do taut[#taut + 1] = v end
@@ -3517,12 +3506,12 @@ local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emit
 	local c = P.cache[key]
 	local barrier = A.On(cfg, "cache_barrier")
 	if c and now - c.t < cfg.cache_ttl then
-		-- pba_cache_src_near: with no entity (a map's ambient sound, a far emitter the client does not have) the key
+		-- With no entity (a map's ambient sound, a far emitter the client does not have) the key
 		-- cannot tell two emitters of one cell apart: two loops 30 u apart in one 32 u cell took each other's path,
 		-- whichever was evaluated first, in turns (a level flipping about every second with the listener still). The
 		-- cached path serves it only from where the same emitter could be: within reeval_move, as pba_group_time does.
 		local far = false
-		if not emitter and A.On(cfg, "cache_src_near") then
+		if not emitter then
 			local dx, dy, dz = S.x - c.sx, S.y - c.sy, S.z - c.sz
 			far = dx * dx + dy * dy + dz * dz > sq(A.Num(cfg, "reeval_move"))
 		end
@@ -3549,13 +3538,13 @@ end
 -- P.InvalidateCache emptied the cache, one entry per cell pair, level, emitter and line state, for good on a
 -- map whose doors never move
 local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0, region0)
-	-- pba_cache_gen_guard: the world model changed while this evaluation ran (a far sound's job, cl_slicer: a
+	-- The world model changed while this evaluation ran (a far sound's job, cl_slicer: a
 	-- setting, a door state, the probe graph or a door field changed between or inside its slices). Its answer,
 	-- partly on the old inputs, was kept under the NEW generation (read at the store): the job's own restart read
 	-- it back, and the next sounds of that cell or emitter got it for cache_ttl / reeval_max_s. Not kept then.
-	if gen0 and (gen0 ~= P.cacheGen or world0 ~= P.worldGen or field0 ~= (A.Probes and A.Probes.fieldEpoch or 0)) then return end
+	if gen0 ~= P.cacheGen or world0 ~= P.worldGen or field0 ~= (A.Probes and A.Probes.fieldEpoch or 0) then return end
 	-- (an object near the listener swept its region meanwhile, pba_native_moved_local: the same)
-	if region0 and region0 ~= P.regionGen and P.RegionTouched(region0, r) then return end
+	if region0 ~= P.regionGen and P.RegionTouched(region0, r) then return end
 	if now >= (P.cacheSweepT or 0) then
 		P.cacheSweepT = now + CACHE_SWEEP_S
 		local ttl = cfg.cache_ttl
@@ -3896,14 +3885,13 @@ local function throughRoutes(r, S, L, tw, cfg, srcEnt)
 	end
 end
 
--- Stage 11, the voices heard. pba_bend_final: the diffuse model reads the bend of the route as heard (its
+-- Stage 11, the voices heard. The diffuse model reads the bend of the route as heard (its
 -- final points, corners on the real edges), not the bend of the coarse polyline the route was evaluated on
 -- (probe positions, before the corners are refined): that one jumped by 90-120 deg in 8 u while the route did
 -- not change (rp_downtown street walk: diffuse share 0.13 -> 0.47 in one step)
 local function selectVoices(r, S, L, sndlvl, cfg)
-	local bendFinal = A.On(cfg, "bend_final")
 	for _, p in ipairs(r.paths or {}) do
-		if bendFinal and p.points then
+		if p.points then
 			local _, b = P.PathShape(S, p.bendPts or p.points, L)
 			p.bendUse = b
 		else
@@ -3926,9 +3914,8 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	if hit then return hit end
 	-- (the inputs' generation as the evaluation starts: storeResult keeps nothing if it moved on meanwhile)
 	-- (numbers, not a table: no garbage per evaluation)
-	local gen0 = A.On(cfg, "cache_gen_guard") and P.cacheGen or nil
+	local gen0, region0 = P.cacheGen, P.regionGen
 	local world0, field0 = P.worldGen, A.Probes and A.Probes.fieldEpoch or 0
-	local region0 = gen0 and P.regionGen or nil
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
