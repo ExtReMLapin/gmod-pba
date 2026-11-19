@@ -1385,6 +1385,16 @@ local SUITE = {
 			expect(#P.timeMemo).to.equal(1)
 			expect(P.timeMemo[1].r == r2).to.beTrue()
 			expect(P.cacheGen).to.equal(g) -- the far sounds' jobs are not restarted
+			-- the memo's by-emitter index follows P.timeMemo, also when a tool replaces it (tests empty it so)
+			local e1 = {}
+			P.timeMemo = { { t = 0, r = r2, ent = e1 }, { t = 0, r = r1, ent = false } }
+			expect(#P.TimeIndex()[e1]).to.equal(1)
+			expect(#P.TimeIndex()[false]).to.equal(1)
+			P.InvalidateRegion({ 40, 450, 0, 60, 460, 10 }) -- (r1's entry out of both)
+			expect(P.TimeIndex()[false]).to.equal(nil)
+			expect(#P.timeMemo).to.equal(1)
+			P.timeMemo = {}
+			expect(P.TimeIndex()[e1]).to.equal(nil)
 			P.InvalidateCache()
 		end },
 		{ name = "BuildField: a field no longer held gives its tables to the next build, whose costs, hops and roots are those of a build on new tables", func = function()
@@ -1484,6 +1494,13 @@ local SUITE = {
 			expect(P.NativeLacks({ tex = "CONCRETE/CONCRETEWALL001A" }, false)).to.equal(false)
 			expect(P.NativeLacks({ tex = "TOOLS/TOOLSNODRAW" }, false)).to.equal(false) -- hidden faces of real walls: in it
 			expect(P.NativeLacks({}, false)).to.equal(false)
+			-- asked again (kept per texture name): the same answers, a displacement still by nativeDisp
+			expect(P.NativeLacks({ tex = "**displacement**" }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "**displacement**" }, true)).to.equal(false)
+			expect(P.NativeLacks({ tex = "TOOLS/TOOLSSKYBOX" }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "tools/toolsskybox2d" }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "CONCRETE/CONCRETEWALL001A", sky = true }, false)).to.beTrue()
+			expect(P.NativeLacks({ tex = "CONCRETE/CONCRETEWALL001A" }, true)).to.equal(false)
 		end },
 		{ name = "Compute (native): occlusion blended smoothly up to 1; a wall Steam Audio lacks keeps its Lua loss", func = function()
 			local savedWalls, savedGet, savedNative = P.Walls, A.Graph.Get, A.Native

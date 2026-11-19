@@ -1469,23 +1469,37 @@ local probeCache, probeStamp = {}, 0
 -- the high band, 20 s in the mid one, in a hall that rings 1.4 / 5.8 s), and the reverb time of a room does not depend on where
 -- in it it is measured. A sound near the floor is lifted to PROBE_HEIGHT above it, never more than under 45 % of the headroom (a low
 -- ceiling, a table). Cached per 0.6 m cell for 5 s: one source's updates cost no trace.
+-- (the cell's key a number, the cache emptied in place, the two traces' input and output tables and end points reused:
+-- a key string, a table, a Vector and three per new cell before. The end points are S's coordinates minus / plus the
+-- offsets as the Vector operators gave them, in floats: Vector(0, 0, k).z is k rounded to a float, and a float minus
+-- a float is exact in a double, then rounded to the end point's float as the operator did)
+local LIFT_DOWN = Vector(0, 0, PROBE_M * PROBE_HEIGHT).z
+local LIFT_UP = Vector(0, 0, PROBE_M * 2).z
+local liftEnd, liftOut = Vector(), {}
+local liftTr = { start = nil, endpos = liftEnd, mask = MASK_SOLID_BRUSHONLY, output = liftOut }
 function N.ProbeLift(S)
 	if (A.cfg.native_source_long_rt or 1) < 0.5 then return nil end
 	local now = RealTime()
-	if now - probeStamp > 5 then probeCache, probeStamp = {}, now end
-	local key = math.floor(S.x / 32) .. "," .. math.floor(S.y / 32) .. "," .. math.floor(S.z / 32)
+	if now - probeStamp > 5 then
+		for k in pairs(probeCache) do probeCache[k] = nil end
+		probeStamp = now
+	end
+	local key = ((math.floor(S.x / 32) + 4096) * 8192 + (math.floor(S.y / 32) + 4096)) * 8192 + (math.floor(S.z / 32) + 4096)
 	local c = probeCache[key]
 	if c ~= nil then return c or nil end
-	local up = Vector(0, 0, 1)
-	local down = util.TraceLine({ start = S, endpos = S - up * PROBE_M * PROBE_HEIGHT, mask = MASK_SOLID_BRUSHONLY })
+	liftTr.start = S
+	liftEnd:SetUnpacked(S.x, S.y, S.z - LIFT_DOWN)
+	util.TraceLine(liftTr)
 	local lift = false
-	if down.Hit and not down.StartSolid then
-		local h = down.Fraction * PROBE_HEIGHT -- metres above the floor
-		local ceil = util.TraceLine({ start = S, endpos = S + up * PROBE_M * 2, mask = MASK_SOLID_BRUSHONLY })
-		local head = ceil.Hit and ceil.Fraction * 2 or 2
+	if liftOut.Hit and not liftOut.StartSolid then
+		local h = liftOut.Fraction * PROBE_HEIGHT -- metres above the floor
+		liftEnd:SetUnpacked(S.x, S.y, S.z + LIFT_UP)
+		util.TraceLine(liftTr)
+		local head = liftOut.Hit and liftOut.Fraction * 2 or 2
 		local l = math.min(PROBE_HEIGHT - h, 0.45 * head)
 		if l >= 0.05 then lift = l end
 	end
+	liftTr.start = nil
 	probeCache[key] = lift
 	return lift or nil
 end

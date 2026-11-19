@@ -944,13 +944,24 @@ end
 
 --- Probes visible from p (thin segment clear), nearest first: the probes of the columns within `reach`
 -- columns of p's (default 1), at most (reach + 1) spacings above or below it.
+-- Its work tables come from a pool and go back emptied (a far sound's slice may pause inside, sliceCheck, while another
+-- evaluation asks: each call holds its own pair); the order is one comparator made once, reading the distances of the
+-- sort under way (table.sort does not yield). Two tables and a closure per call before.
+local visPool, visDist = {}, nil
+local function byVisDist(a, b)
+	local d = visDist
+	if d[a] ~= d[b] then return d[a] < d[b] end
+	return a.id < b.id
+end
 function PR.Visible(g, p, maxn, reach)
 	if not g.cols then PR.Prepare(g) end
 	local s = g.spacing
 	local r = reach or 1
 	local ci, cj = floor(p.x / s), floor(p.y / s)
 	local zmax = (r + 1) * s
-	local cands, d = {}, {}
+	local w = visPool[#visPool]
+	if w then visPool[#visPool] = nil else w = { {}, {} } end
+	local cands, d = w[1], w[2]
 	local cols, nodes = g.cols, g.nodes
 	for di = -r, r do for dj = -r, r do
 		local list = cols[colKey(ci + di, cj + dj)]
@@ -964,10 +975,9 @@ function PR.Visible(g, p, maxn, reach)
 			end
 		end
 	end end
-	table.sort(cands, function(a, b)
-		if d[a] ~= d[b] then return d[a] < d[b] end
-		return a.id < b.id
-	end)
+	visDist = d
+	table.sort(cands, byVisDist)
+	visDist = nil
 	local out = {}
 	for _, n in ipairs(cands) do
 		sliceCheck()
@@ -976,6 +986,11 @@ function PR.Visible(g, p, maxn, reach)
 			if #out >= (maxn or 3) then break end
 		end
 	end
+	for i = #cands, 1, -1 do
+		d[cands[i]] = nil
+		cands[i] = nil
+	end
+	visPool[#visPool + 1] = w
 	return out
 end
 

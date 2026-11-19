@@ -2919,12 +2919,48 @@ local CACHE_SWEEP_S = 2 -- seconds between two sweeps of the dead results (P.Com
 -- pba_group_time: the last TIME_KEEP results (newest last), and how often one served again
 local TIME_KEEP = 64
 P.timeMemo = P.timeMemo or {}
+-- the same entries by emitter (false: no entity), oldest first: cachedResult reads its emitter's only (it scanned all 64)
+P.timeByEnt = P.timeByEnt or {}
+P.timeEmpty = {}
 P.timeStats = P.timeStats or { reused = 0, computed = 0 }
 
 function P.InvalidateCache()
 	P.cache = {}
 	P.timeMemo = {}
+	P.timeByEnt, P.timeIndexOf = {}, P.timeMemo
 	P.cacheGen = P.cacheGen + 1
+end
+
+--- The by-emitter index of P.timeMemo, rebuilt when P.timeMemo is another table than the one it was made for (a test
+-- or a tool emptying the memo by replacing it).
+function P.TimeIndex()
+	local list = P.timeMemo
+	if P.timeIndexOf ~= list then
+		local idx = {}
+		for _, m in ipairs(list) do
+			if m.ent ~= nil then
+				local s = idx[m.ent]
+				if not s then s = {} idx[m.ent] = s end
+				s[#s + 1] = m
+			end
+		end
+		P.timeByEnt, P.timeIndexOf = idx, list
+	end
+	return P.timeByEnt
+end
+
+-- takes memo entry m out of its emitter's list (in P: this file is at the 200 locals a chunk may have)
+function P.TimeUnlink(m)
+	if m.ent == nil then return end
+	local sub = P.TimeIndex()[m.ent]
+	if not sub then return end
+	for i = 1, #sub do
+		if sub[i] == m then
+			table.remove(sub, i)
+			break
+		end
+	end
+	if #sub == 0 then P.timeByEnt[m.ent] = nil end
 end
 
 -- pba_native_moved_local: an object that moved near the listener (N.SyncDoors) invalidates the region it swept, not the
@@ -2992,7 +3028,7 @@ function P.InvalidateRegion(bx)
 	end
 	local list = P.timeMemo
 	for i = #list, 1, -1 do
-		if resultTouches(list[i].r, bx) then table.remove(list, i) end
+		if resultTouches(list[i].r, bx) then P.TimeUnlink(table.remove(list, i)) end
 	end
 	P.regionGen = P.regionGen + 1
 	local log = P.regionLog
@@ -3167,15 +3203,28 @@ end
 -- are out of both models.
 local NATIVE_SKIP = { "tools/toolsclip", "tools/toolsplayerclip", "tools/toolsnpcclip", "tools/toolstrigger",
 	"tools/toolshint", "tools/toolsskip", "tools/toolsskybox", "tools/toolsfog", "tools/toolsoccluder" }
+-- (per texture name, once: 1 lacking, 2 a displacement, 0 held; a string.lower and nine prefix tests per wall before)
+P.lacksMemo = P.lacksMemo or {}
 function P.NativeLacks(w, nativeDisp)
 	if w.sky then return true end
-	local t = string.lower(w.tex or "")
-	if t == "**studio**" then return true end
-	if t == "**displacement**" then return not nativeDisp end
-	for _, p in ipairs(NATIVE_SKIP) do
-		if string.StartWith(t, p) then return true end
+	local raw = w.tex or ""
+	local k = P.lacksMemo[raw]
+	if not k then
+		local t = string.lower(raw)
+		if t == "**studio**" then
+			k = 1
+		elseif t == "**displacement**" then
+			k = 2
+		else
+			k = 0
+			for _, p in ipairs(NATIVE_SKIP) do
+				if string.StartWith(t, p) then k = 1 break end
+			end
+		end
+		P.lacksMemo[raw] = k
 	end
-	return false
+	if k == 2 then return not nativeDisp end
+	return k == 1
 end
 
 --- Blend of Steam Audio's occlusion o (1 = clear line: the share of the source it sees) with the
@@ -3410,10 +3459,10 @@ local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emit
 	if timeOn then
 		local mv2 = sq(cfg.reeval_move or 8)
 		local maxAge = cfg.reeval_max_s or 1
-		local list = P.timeMemo
+		local list = P.TimeIndex()[emitter] or P.timeEmpty
 		for i = #list, 1, -1 do
 			local m = list[i]
-			if m.ent == emitter and m.gen == P.cacheGen and m.lvl == sndlvl and m.state == lineState and now - m.t <= maxAge
+			if m.gen == P.cacheGen and m.lvl == sndlvl and m.state == lineState and now - m.t <= maxAge
 				and m.S:DistToSqr(S) <= mv2 and m.L:DistToSqr(L) <= mv2
 				and not (barrier and (P.BarrierBetween(S, m.S.x, m.S.y, m.S.z, emitter) or P.BarrierBetween(L, m.L.x, m.L.y, m.L.z, emitter))) then
 				P.timeStats.reused = P.timeStats.reused + 1
@@ -3444,8 +3493,13 @@ local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter,
 	if timeOn then
 		P.timeStats.computed = P.timeStats.computed + 1
 		local list = P.timeMemo
-		if #list >= TIME_KEEP then table.remove(list, 1) end
-		list[#list + 1] = { t = now, r = r, gen = P.cacheGen, lvl = sndlvl, state = lineState, S = Vector(S), L = Vector(L), ent = emitter }
+		if #list >= TIME_KEEP then P.TimeUnlink(table.remove(list, 1)) end
+		local m = { t = now, r = r, gen = P.cacheGen, lvl = sndlvl, state = lineState, S = Vector(S), L = Vector(L), ent = emitter }
+		list[#list + 1] = m
+		local idx = P.TimeIndex()
+		local sub = idx[emitter]
+		if not sub then sub = {} idx[emitter] = sub end
+		sub[#sub + 1] = m
 	end
 end
 
