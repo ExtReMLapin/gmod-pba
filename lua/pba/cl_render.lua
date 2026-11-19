@@ -78,6 +78,31 @@ local function stopNative(id)
 	if fv then fv.dead = true OS.native[id] = nil end
 end
 
+--- (pba_cut_name_newer) True when a newer copy of h's name, which a stop by name would reach too, is registered and
+-- not stopped: a mouth copy on the same speaker and channel (h.mouth), or another copy at a fixed position (all share
+-- the source -1). A deferred channel cut (pba_cut_at_start) stopping an older copy by name then also stopped the new
+-- line's copy of the same name: a repeated line froze its speaker's face, a repeated shot at a fixed position was cut.
+local function newerIn(list, h, now)
+	for i = 1, #list do
+		local x = list[i]
+		if x ~= h and (x.regN or 0) > h.regN and not x.cancelled and x.name == h.name and now <= x.tEnd + EXPIRE_MARGIN then
+			if h.mouth and x.mouth and x.srcChan == h.srcChan then return true end
+			if not h.mouth and not x.mouth and x.pos and not x.a and not x.id and not x.job then return true end
+		end
+	end
+	return false
+end
+local function newerSameName(h)
+	if (A.cfg.cut_name_newer or 1) < 0.5 or not h.regN then return false end
+	local now = RealTime()
+	if h.mouth then
+		local list = A.emitted[h.idx]
+		return list ~= nil and newerIn(list, h, now)
+	end
+	for _, list in pairs(A.emitted) do if newerIn(list, h, now) then return true end end
+	return false
+end
+
 --- Stops one copy, at once or before it starts (an emission still waiting for its propagation delay
 -- is cancelled: a StopSound 0.1 s after a far gunshot must not let the copy start 0.2 s later).
 local function stopCopy(h)
@@ -85,6 +110,7 @@ local function stopCopy(h)
 	h.cancelled = true
 	-- a mouth copy (mouthCopy): the engine's own stop of its name on the speaker's index and channel
 	if h.mouth then
+		if newerSameName(h) then return end -- (its stop by name would end the newer line's mouth copy)
 		A.reemitting = true
 		local e = Entity(h.idx)
 		if IsValid(e) then (A.origCl and A.origCl.StopSound or e.StopSound)(e, h.name)
@@ -107,6 +133,7 @@ local function stopCopy(h)
 		-- a copy at a fixed position: the engine's own stop of that name on the same source and channel
 		-- (EmitSound's index -1). Every fixed-position copy shares that source: an expired one is skipped,
 		-- its stop would cut another source's copy of the same name.
+		if newerSameName(h) then return end -- (a newer copy of that name plays: left to its end rather than cut both)
 		A.EmitAt(h.name, h.pos, -1, CHAN_AUTO, 0, h.lvl, SND_STOP, h.pitch, 0)
 	end
 end
@@ -140,6 +167,8 @@ local function register(idx, h, data)
 	end
 	local list = A.emitted[idx]
 	if not list then list = {} A.emitted[idx] = list end
+	A.regN = (A.regN or 0) + 1
+	h.regN = A.regN -- (registration order: newerSameName)
 	local now = RealTime()
 	for i = #list, 1, -1 do if expired(list[i], now) then table.remove(list, i) end end
 	list[#list + 1] = h
