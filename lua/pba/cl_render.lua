@@ -1600,6 +1600,9 @@ local function soundscapeWave(name)
 	end
 	return scapeWaves[string.lower((string.gsub(A.SoundFile(name), "\\", "/")))] or false
 end
+-- the map's soundscape files read once the map is up (10-45 ms of file reads and pattern matching), not at its first
+-- world sound (a spike in the middle of play)
+A.OnInitPostEntity("pba_scapes", function() soundscapeWave("") end)
 function A.IsSoundscapeRandom(data, pos)
 	if data.Channel ~= CHAN_STATIC or (A.cfg.soundscape_engine or 1) < 0.5 then return false end
 	local e = data.Entity
