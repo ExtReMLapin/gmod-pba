@@ -56,6 +56,25 @@ P.SliceCheck = sliceCheck
 
 -- exact equality of two coordinates, the sign of a zero included (a trace from -0 is not assumed the same)
 local function same(p, q) return p == q and (p ~= 0 or 1 / p == 1 / q) end
+-- In-place helpers and their scratch points, in P (no new local: the file is at Lua's 200 locals):
+-- P.SCR.lerp(out, q, t, k): out = q + (t - q) * k; P.SCR.step(out, q, d, k): out = q + d * k. The very float operations
+-- of the operators (same bits) without their two or three new Vectors (the garbage of the bisections and wall steps
+-- below). Points: wallsOneWay's inside-trace start (wallsIn), next wall-trace start (wallsNext) and exit's base
+-- (wallsHalf); P.CornerPoint's probe point (corner).
+P.SCR = { wallsIn = Vector(), wallsNext = Vector(), wallsHalf = Vector(), corner = Vector() }
+function P.SCR.lerp(out, q, t, k)
+	out:Set(t)
+	out:Sub(q)
+	out:Mul(k)
+	out:Add(q)
+	return out
+end
+function P.SCR.step(out, q, d, k)
+	out:Set(d)
+	out:Mul(k)
+	out:Add(q)
+	return out
+end
 -- table.sort orders, made once: a comparator written inline is a new closure at every call (LuaJIT NYI FNEW)
 local function byFirst(u, v) return u[1] < v[1] end
 -- table.insert(t, at, v) without the library call (its position form is LuaJIT NYI)
@@ -69,8 +88,12 @@ end
 -- scene of the offline bench), and a still source repeats them all. `limit` answers at most, then emptied;
 -- `tag` (optional, per call): what else the answer depends on (the probes' trace backend), the memo emptied
 -- when it changes. Hash of the six numbers, buckets checked exactly; a NaN coordinate is not kept.
+-- The entries live in parallel arrays (entry k: its six numbers, its answer, the next entry of its bucket or false),
+-- reused after each emptying: a table per entry was a quarter of pba's garbage while far sounds were re-evaluated
+-- (a moving listener's segments are new ones: one entry per trace; gm_cozyforestcabin).
 function P.WorldSegMemo(fn, limit)
 	local t, n, gen, TL, TH, tg = {}, 0, nil, nil, nil, nil
+	local e1, e2, e3, e4, e5, e6, er, en = {}, {}, {}, {}, {}, {}, {}, {}
 	return function(a, b, tag)
 		local ul, uh = util.TraceLine, util.TraceHull
 		if gen ~= P.worldGen or TL ~= ul or TH ~= uh or tg ~= tag or n >= limit then
@@ -82,14 +105,15 @@ function P.WorldSegMemo(fn, limit)
 		if h ~= h then return fn(a, b) end
 		local e = t[h]
 		while e do
-			if same(e[1], ax) and same(e[2], ay) and same(e[3], az) and same(e[4], bx) and same(e[5], by) and same(e[6], bz) then
-				return e[7]
+			if same(e1[e], ax) and same(e2[e], ay) and same(e3[e], az) and same(e4[e], bx) and same(e5[e], by) and same(e6[e], bz) then
+				return er[e]
 			end
-			e = e[8]
+			e = en[e]
 		end
 		local r = fn(a, b)
-		t[h] = { ax, ay, az, bx, by, bz, r, t[h] }
 		n = n + 1
+		e1[n], e2[n], e3[n], e4[n], e5[n], e6[n], er[n], en[n] = ax, ay, az, bx, by, bz, r, t[h] or false
+		t[h] = n
 		return r
 	end
 end
@@ -343,6 +367,8 @@ end
 --- Walls crossed by the straight line S -> L, traced from S only (see P.Walls). lisAt: the listener's end of
 -- the line, S or L (pba_listener_object: the object holding it is no wall; the line's other end is the
 -- source's, P.SourceObject).
+-- scratch of wallsOneWay: the inside trace's start, the next wall trace's start, half a step along the line. Each is
+-- read by the trace right after it is set (no slice check between), so another evaluation's use in between is harmless.
 local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 	cfg = cfg or A.cfg
 	local walls, detours = {}, nil
@@ -368,7 +394,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 		local hitEnt = IsValid(tr.Entity) and not tr.Entity:IsWorld() and tr.Entity or nil
 		local inside = false
 		if not hitEnt then
-			insideTr.start, insideTr.endpos = entry + dir * 0.5, L
+			insideTr.start, insideTr.endpos = P.SCR.step(P.SCR.wallsIn, entry, dir, 0.5), L
 			util.TraceLine(insideTr)
 			inside = insideOut
 		end
@@ -390,7 +416,8 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 			if inside.AllSolid or inside.FractionLeftSolid >= 1 then
 				exit = L -- listener inside solid: give up on this wall
 			else
-				exit = (entry + dir * 0.5) + (L - (entry + dir * 0.5)) * inside.FractionLeftSolid
+				local inStart = P.SCR.step(P.SCR.wallsHalf, entry, dir, 0.5)
+				exit = P.SCR.lerp(Vector(), inStart, L, inside.FractionLeftSolid)
 			end
 		else
 			exit = entry -- zero-thickness surface (displacement, model face)
@@ -432,7 +459,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 			prev.thickness = prev.entry:Distance(prev.exit)
 		elseif hitEnt or not P.PassTool(tr) then walls[#walls + 1] = w end
 		if exit == L then break end
-		start = exit + dir * 0.5
+		start = P.SCR.step(P.SCR.wallsNext, exit, dir, 0.5) -- (traced at the top of the next turn, nothing in between)
 	end
 	ignoreLis = nil
 	walls.detours = detours
@@ -1749,6 +1776,10 @@ end
 -- pba_corner_refine 0: the clearance vertices as they are.
 local CORNER_EPS, CORNER_HALVINGS, CORNER_SWEEPS = 0.125, 8, 3
 local cornerClear = detClear
+-- The bisections' probe points built in place (the same float operations as `v + (t - v) * mid` and `q + d * k`,
+-- so the same bits) instead of two or three new Vectors per step: with P.WallsOneWay's, the largest share of
+-- pba's garbage while far sounds were re-evaluated (gm_cozyforestcabin). Filled after each step's slice check and
+-- read only by that step's traces (the memo keeps numbers), so a slice that yields never finds one half-used.
 --- The point the sound bends round between a and b, starting from clearance vertex v (game state: traces).
 -- y: slice checks between its traces (P.RefineCorners' calls only: P.LeafWay calls it while the door
 -- traces' shared tables are live).
@@ -1765,10 +1796,10 @@ function P.CornerPoint(a, v, b, y, cfg)
 		if (hi - lo) * len < CORNER_EPS then break end
 		if y then sliceCheck() end
 		local mid = (lo + hi) * 0.5
-		local q = v + (target - v) * mid
+		local q = P.SCR.lerp(P.SCR.corner, v, target, mid)
 		if cornerClear(a, q) and cornerClear(q, b) then lo = mid else hi = mid end
 	end
-	local q = v + (target - v) * lo
+	local q = P.SCR.lerp(Vector(), v, target, lo)
 	-- The way to the foot stops where one leg meets the edge, not at the edge: a vertex left on its probe in
 	-- the next room (its leg grazed the other jamb with the hull, the tightening left it there) stayed 98 u
 	-- off the edge its other leg grazes, 2.6 dB for an edge giving 0.4 (pba_twodoors). So the
@@ -1793,15 +1824,15 @@ function P.CornerPoint(a, v, b, y, cfg)
 				-- the leg grazes the edge: visibility along such a leg is not monotonic.)
 				if stepFirst and sl >= CORNER_EPS then
 					if y then sliceCheck() end
-					if not cornerClear(other, q + seg * (CORNER_EPS / sl)) then s1 = 0 end
+					if not cornerClear(other, P.SCR.step(P.SCR.corner, q, seg, CORNER_EPS / sl)) then s1 = 0 end
 				end
 				for _ = 1, CORNER_HALVINGS + 4 do
 					if (s1 - s0) * sl < CORNER_EPS then break end
 					if y then sliceCheck() end
 					local mid = (s0 + s1) * 0.5
-					if cornerClear(other, q + seg * mid) then s0 = mid else s1 = mid end
+					if cornerClear(other, P.SCR.step(P.SCR.corner, q, seg, mid)) then s0 = mid else s1 = mid end
 				end
-				if s0 * sl >= CORNER_EPS then q, moved = q + seg * s0, true end
+				if s0 * sl >= CORNER_EPS then q, moved = P.SCR.step(Vector(), q, seg, s0), true end
 			end
 			if not moved then break end
 		end

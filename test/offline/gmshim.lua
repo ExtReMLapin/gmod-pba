@@ -21,11 +21,18 @@ function V:Dot(b) return self.x * b.x + self.y * b.y + self.z * b.z end
 function V:Cross(b) return Vector(self.y * b.z - self.z * b.y, self.z * b.x - self.x * b.z, self.x * b.y - self.y * b.x) end
 function V:LengthSqr() return self:Dot(self) end
 function V:Length() return math.sqrt(self:Dot(self)) end
-function V:Distance(b) return (self - b):Length() end
-function V:DistToSqr(b) return (self - b):LengthSqr() end
+-- (no temporary Vector: as in game, where these make no garbage; the garbage tests count pba's own)
+function V:DistToSqr(b) local x, y, z = self.x - b.x, self.y - b.y, self.z - b.z return x * x + y * y + z * z end
+function V:Distance(b) return math.sqrt(self:DistToSqr(b)) end
 function V:Normalize() local l = self:Length() if l > 0 then self.x, self.y, self.z = self.x / l, self.y / l, self.z / l end end
 function V:GetNormalized() local v = Vector(self) v:Normalize() return v end
 function V:Add(b) self.x, self.y, self.z = self.x + b.x, self.y + b.y, self.z + b.z end
+function V:Sub(b) self.x, self.y, self.z = self.x - b.x, self.y - b.y, self.z - b.z end
+function V:Set(b) self.x, self.y, self.z = b.x, b.y, b.z end
+function V:Mul(k)
+	if type(k) == "number" then self.x, self.y, self.z = self.x * k, self.y * k, self.z * k
+	else self.x, self.y, self.z = self.x * k.x, self.y * k.y, self.z * k.z end
+end
 function V:Div(n) self.x, self.y, self.z = self.x / n, self.y / n, self.z / n end
 function V:WithinAABox(mn, mx)
 	return self.x >= mn.x and self.y >= mn.y and self.z >= mn.z and self.x <= mx.x and self.y <= mx.y and self.z <= mx.z
