@@ -20,6 +20,8 @@ local S = A.Sound
 local LP = A.Loops
 local band = bit.band
 local STOP_LOOPING = SND_STOP_LOOPING or 32
+-- A player whose pba client runs says so (sv_relay A.ClientReady)
+local clientReady = function(ply) return A.ClientReady(ply) end
 
 -- ------------------------------------------------------------------ classify
 
@@ -152,8 +154,6 @@ end
 
 -- ------------------------------------------------------------------ audience
 
--- A player whose pba client runs says so (sv_relay A.ClientReady)
-local clientReady = function(ply) return A.ClientReady(ply) end
 
 -- (fallback: a partial autorefresh may reload this file before sh_core)
 --- Token bucket of one player: `rate` per second, burst one second. `key`: the player field holding
@@ -341,6 +341,9 @@ function S.Audience(snd, ply, scale)
 	local kind = snd.kind
 	-- a followed sound (sv_loops entry): every player in range gets the mirror, the engine cannot resume midway
 	if kind == "mirror" or snd.subs then
+		-- (pba_loops_ready) not before his client runs: a start sent while he joins is lost and he would stay
+		-- subscribed to nothing; once ready, the 0.5 s timer (sv_loops) has him join it as a player entering its range
+		if (A.cfg.loops_ready or 1) >= 0.5 and not clientReady(ply) then return nil end
 		return LP.InRange(snd, ply, scale) and "mirror" or nil
 	end
 	local pos, data = snd.pos, snd.data

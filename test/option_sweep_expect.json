@@ -562,5 +562,9 @@
  "probe_air_hop": {
   "pos0": "same",
   "why": "only a source that sees no probe at all (in a void under the platforms) takes the air hop: the sweep scenes stand on floors; covered by skylift_jumps"
+ },
+ "loops_ready": {
+  "pos0": "hook",
+  "why": "server: who a followed loop's mirror is sent to (sv_sound S.Audience, kind mirror: the player's client ready), outside P.Compute; covered by review_server S1"
  }
 }
