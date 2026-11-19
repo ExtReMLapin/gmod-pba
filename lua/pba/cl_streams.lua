@@ -126,7 +126,7 @@ local function streamSend(ch, r, L, g, pos)
 	if r.nativeId and (not r.srcNext or now >= r.srcNext or r.srcHalted ~= halted) then
 		r.srcNext, r.srcHalted = now + 0.3, halted
 		local law = function(d) return bassGain(ch, d, r) end
-		r.srcBound = N.BindSource(r.nativeId, r.pos, halted and 0 or srcVol(ch, r) * N.SlotSend(law, r.pos:Distance(L)) * A.cfg.native_gain)
+		r.srcBound = N.BindSource(r.nativeId, r.pos, halted and 0 or srcVol(ch, r) * N.SlotSend(law, r.pos:Distance(L)) * A.cfg.native_gain, 1) -- (wet 1: a stream has no sound level, its room send keeps all its reverb)
 	end
 	return N.SlotFadeSend(r, r.srcBound, r.entryG and srcVol(ch, r) * r.entryG * A.cfg.native_gain or 0, g)
 end

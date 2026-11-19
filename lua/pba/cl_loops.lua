@@ -456,7 +456,7 @@ local function applyNative(m, S, L)
 	if dry then m.srcBound = false
 	elseif m.nativeId and (not m.srcNext or now >= m.srcNext) then
 		m.srcNext = now + 0.3
-		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
+		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend, N.LoudWet(m.lvl)) -- (wet: its room-bus cap while the slot waits)
 	end
 	m.appliedVol = m.vol -- (the volume the voice's values below carry: see the quiet shortcut in apply)
 	m.appliedPitch = m.pitch -- (and the pitch: changeNow)
@@ -629,7 +629,7 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	if m.nativeId then
 		N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m)
 		m.srcNext = RealTime() + 0.3
-		m.srcBound = not A.Render.Dry(m.name) and N.BindSource(m.nativeId, S, m.srcSend)
+		m.srcBound = not A.Render.Dry(m.name) and N.BindSource(m.nativeId, S, m.srcSend, N.LoudWet(m.lvl))
 		-- a voice with its slot from birth feeds the room bus only what enters through walls, as a short voice
 		-- (cl_render switchNative / N.PlayVoice): the slot fade starting from "no slot" sent the full gain to the
 		-- listener's room for its first ~0.5 s (Breencast br_welcome05: 0.28 against 0.012; pba_loops_slot_birth)
@@ -1141,7 +1141,7 @@ local function edgeFade(now)
 				-- its source reverb slot's feed at once, not at its 0.3 s rebinding
 				if m.srcBound and N then
 					local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
-					if S then m.srcBound = N.BindSource(m.nativeId, S, m.srcSend) end
+					if S then m.srcBound = N.BindSource(m.nativeId, S, m.srcSend, N.LoudWet(m.lvl)) end
 				end
 				if k >= 1 then m.edgeK, m.edgeT0, m.vol = nil, nil, m.srvVol end
 			end
@@ -1169,7 +1169,7 @@ function LP.FollowNative(L)
 			if m.srcBound and (not m.srcNext or now >= m.srcNext) then
 				m.srcNext = now + 0.3
 				local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
-				if S then m.srcBound = N.BindSource(m.nativeId, S, m.srcSend) end
+				if S then m.srcBound = N.BindSource(m.nativeId, S, m.srcSend, N.LoudWet(m.lvl)) end
 			end
 			local ramp = m.ramp
 			local ent = m.clearPath and IsValid(m.ent) and m.ent or nil
