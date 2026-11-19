@@ -131,6 +131,9 @@ int SrcSlotLive(int live[kSrcSlotsMax], int id = 0);
 void LimitSrcSlots(int n);
 // level of the source reverb slots relative to the room reverb (wet room x k)
 void SetSourceReverbScale(float k);
+// share a voice whose source reverb slot is not simulated yet hands to the room bus meanwhile: true (default) = no more
+// than the voice's gain at the listener (what Lua sends a voice without a slot), false = the slot send (legacy)
+void SetSlotFallbackGain(bool on);
 // latest reverb times at the listener (read by the audio thread from the simulation outputs)
 void RoomReverbTimes(float rt[3]);
 // hybrid tail EQ last applied to the room reverb (3 bands)
