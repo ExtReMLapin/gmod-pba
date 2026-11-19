@@ -578,5 +578,9 @@
  "step_by_name": {
   "pos0": "hook",
   "why": "server: which sounds of a footstep's tick are left out for the stepping player's witnesses (sv_sound stepper), outside P.Compute; covered by review_server S3 and bot_footsteps"
+ },
+ "sentence_ready": {
+  "pos0": "hook",
+  "why": "server: a sentence left to the engine when one listener's client is not ready (sv_sound dispatchBrief), outside P.Compute; covered by review_server S4"
  }
 }

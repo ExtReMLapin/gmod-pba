@@ -169,6 +169,22 @@ cases.S3 = function(opt)
 		step = verdict[STEP], shot = verdict[SHOT] }
 end
 
+-- S4: a sentence cannot be re-emitted to some players only (EmitSentence takes no filter): when one listener is blocked
+-- every listener gets the relay. A player whose client is not ready got it too, and nothing played it for him. The
+-- sentence is now left to the engine for everyone then. A sentence on a can behind the closed door, the host not ready.
+cases.S4 = function(opt)
+	A.SetOverride("sentence_ready", opt)
+	A.SetOverride("sentences", 1)
+	A.PState(ply).ready = false
+	local e = prop(Vector(784, 256, 40))
+	job:sleep(0.3)
+	local i0 = #sent
+	EmitSentence("METROPOLICE_IDLE_CHECK3", e:GetPos(), e:EntIndex(), CHAN_VOICE, 1, 75, 0, 100)
+	local relayed = #to("pba_snd", i0)
+	job:sleep(0.2)
+	return { pass = relayed == 0, relayedToNotReady = relayed }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end
@@ -178,7 +194,7 @@ local ok, res = pcall(fn, CONTROL and 0 or nil)
 unspy()
 st0.ready = wasReady == nil and true or wasReady
 st0.earlyDone, st0.earlyT0, st0.early, st0.off = wasEarlyDone, wasEarlyT0, nil, wasOff
-for _, k in ipairs({ "loops_ready", "early_purge", "stop_both", "step_by_name" }) do A.SetOverride(k, nil) end
+for _, k in ipairs({ "loops_ready", "early_purge", "stop_both", "step_by_name", "sentence_ready", "sentences" }) do A.SetOverride(k, nil) end
 for _, e in ipairs(spawned) do if IsValid(e) then if e:IsPlayer() then e:Kick("pba test") else e:Remove() end end end
 if not ok then return { pass = false, err = tostring(res) } end
 res.case, res.control = CASE, CONTROL

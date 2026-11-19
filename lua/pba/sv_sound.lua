@@ -544,6 +544,12 @@ local function dispatchBrief(snd)
 	-- a sentence cannot be re-emitted to some players only (EmitSentence takes no filter): players
 	-- over budget get the relay anyway (sentences are rare, a few per minute)
 	if snd.sentence then
+		-- (pba_sentence_ready) ... but not to a player whose pba client is not ready: nothing would play it for him.
+		-- Then the engine plays it for everyone, as it would without pba.
+		if (A.cfg.sentence_ready or 1) >= 0.5 then
+			for _, p in ipairs(clear) do if not clientReady(p) then A.stats.untouched = A.stats.untouched + 1 return end end
+			for _, m in ipairs(muffled) do if not clientReady(m.ply) then A.stats.untouched = A.stats.untouched + 1 return end end
+		end
 		for _, m in ipairs(muffled) do blocked[#blocked + 1] = m.ply end
 		muffled = {}
 	end
