@@ -8,13 +8,10 @@
 -- Client lua_job (server half: loops_copy_sync_sv.lua, fires the emission 1 s after it starts), native rendering.
 -- Pass: both copies are module voices (none handed to the engine) and their file start times (the moment of the Play
 -- minus its offset into the file) are within 12 ms (one mix block is 10.7 ms).
--- args.control / PBA_COPYSYNC_CONTROL (the battery's variant): pba_loops_start_sync 0 (the old behaviour): the same measure must then be RED (pass = the bug shows).
 local A = pba
 local N = A.Native
 if not (N and N.render and pba_native and pba_native.Play) then return { pass = nil, err = "native rendering off" } end
 local NAME = "vo/breencast/br_welcome05.wav"
-local control = (job.args and job.args.control) or PBA_COPYSYNC_CONTROL
-A.SetOverride("loops_start_sync", control and 0 or nil)
 -- the file decoded first: a copy waiting for its decode starts when it ends, which is not what this measures
 job:wait(function() return (N.EnsureSound(NAME)) end, 15)
 local plays = {}
@@ -27,7 +24,6 @@ end
 job:wait(function() return #plays >= 2 end, 8)
 job:sleep(0.5)
 pba_native.Play = orig
-A.SetOverride("loops_start_sync", nil)
 local patches = 0
 for _, m in pairs(A.Loops.mirrors) do if m.name == NAME and (m.patch or m.handBack) then patches = patches + 1 end end
 local res = { n = #plays, plays = plays, enginePatches = patches }
@@ -46,5 +42,5 @@ local none = A.Loops.SyncOffset({ once = true, name = NAME, pitch = 100 }, now)
 A.Loops.emissions["pba_test|1"] = nil
 res.offset = off
 ok = ok and off ~= nil and math.abs(off - 0.2) < 0.001 and none == nil
-res.pass = control and not ok or (not control and ok)
+res.pass = ok
 return res

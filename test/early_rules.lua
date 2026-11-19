@@ -6,13 +6,11 @@
 --  2. dry: a "#" line behind a wall is re-emitted muffled for an unready player WITHOUT its "#" (sv_sound reemitMuffled, ev
 --     under its volume). Muting the engine copy sent SND_CHANGE_VOL to the "#" name: no such sound, the engine started a
 --     new one and the copy stayed audible under the module's voice. Pass: the mute is sent to the name without "#".
--- pre: `local CONTROL = true` runs with pba_early_line_rules 0: passes when both come back as before.
 local A = pba
 local N = A.Native
 if not (N and N.render) then return { pass = false, err = "native renderer not running" } end
 local LP = A.Loops
 local LINE = "vo/trainyard/al_thisday.wav"
-A.SetOverride("early_line_rules", CONTROL and 0 or 1)
 local res = { checks = {} }
 local names = {}
 local meta = FindMetaTable("Entity")
@@ -52,13 +50,8 @@ local ok, err = pcall(function()
 end)
 meta.EmitSound, EmitSound = origEnt, origGlobal
 A.SetOverride("native_all", nil)
-A.SetOverride("early_line_rules", nil)
 if not ok then return { pass = false, err = tostring(err) } end
 res.fails = {}
 for k, okc in SortedPairs(res.checks) do if not okc then res.fails[#res.fails + 1] = k end end
 res.pass = #res.fails == 0
-if CONTROL then
-	res.controlRed = not res.pass
-	res.pass = res.clearWhy == "taken" and res.dryWhy == "taken" and names[1] == "#" .. LINE
-end
 return res

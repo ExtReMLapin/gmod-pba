@@ -1,5 +1,5 @@
 -- Replaced silent line (part 4, client lua_job): the safety net (pba_silent_handback) must not hand back a line
--- a newer line on the same entity and channel replaced (pba_handback_channel): no handback of ba_ohshit03, no
+-- a newer line on the same entity and channel replaced (handback_channel): no handback of ba_ohshit03, no
 -- engine emission of it, and the replacing line is not handed back either (rendered normally).
 job:sleep(1)
 if pba.testOrigProcess then pba.Process = pba.testOrigProcess pba.testOrigProcess = nil end

@@ -8,7 +8,6 @@
 -- Client lua_job (server half: loops_copy_sync_short_sv.lua, fires the emission 1 s after it starts), native rendering.
 -- Pass: both copies are module voices and the moments their files' second 0 fell (the Play's time and delay, less its
 -- offset) are within 12 ms (one mix block is 10.7 ms).
--- args.control / PBA_COPYSYNC_CONTROL (the battery's variant): pba_loops_start_sync 0 (the old behaviour): the same measure must then be RED (pass = the bug shows).
 local A = pba
 local N = A.Native
 if not (N and N.render and pba_native and pba_native.Play) then return { pass = nil, err = "native rendering off" } end
@@ -16,8 +15,6 @@ if not (N and N.render and pba_native and pba_native.Play) then return { pass = 
 -- EmitSentence on both speakers), which takes the same path as a line (A.Process, emitVoice)
 local SENT = PBA_COPYSYNC_SENTENCE
 local NAME = SENT and "!METROPOLICE_IDLE_CHECK3" or "vo/breencast/br_welcome02.wav"
-local control = (job.args and job.args.control) or PBA_COPYSYNC_CONTROL
-A.SetOverride("loops_start_sync", control and 0 or nil)
 -- the first evaluation of the emission costs 3 ms, over the frame's budget (pba_burst_budget_ms 2: a cold evaluation, as
 -- after a map load, costs 5-45 ms): the twin is held in the slicer; and the slicer's pass of this frame is already over
 -- when it is held (the scheduler runs before the sound is processed: the twin starts a frame later, 33-110 ms). The
@@ -60,7 +57,6 @@ end
 job:wait(function() return #plays >= 2 end, 8)
 job:sleep(0.3)
 pba_native.Play = orig
-A.SetOverride("loops_start_sync", nil)
 P.Evaluate, SL.Defer, SL.Run, A.Process = evalOrig, deferOrig, runOrig, procOrig
 local patches = 0
 for _, m in pairs(A.Loops.mirrors) do if m.name == NAME and (m.patch or m.handBack) then patches = patches + 1 end end
@@ -83,5 +79,5 @@ local none = A.CopySync.Offset(nil, now, NAME, 100, 0.25)
 A.Loops.emissions["pba_test|s"] = nil
 res.offset = off
 ok = ok and off ~= nil and math.abs(off - 0.2) < 0.001 and capped == nil and none == nil
-res.pass = control and not ok or (not control and ok)
+res.pass = ok
 return res

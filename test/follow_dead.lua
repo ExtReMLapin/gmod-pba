@@ -2,15 +2,13 @@
 -- on, player in room A; review risk "FollowNative ignores Update's return"). LP.FollowNative glides a mirror's voice
 -- every frame and dropped pba_native.Update's answer: a voice the module ended (its voice cap, a module stop) kept its
 -- id until the mirror's next evaluation, which a still scene may not bring (reeval_adaptive): a long line's mirror
--- stayed "playing" a dead voice, and its early copy muted (pba_early_release) or its handback waited.
+-- stayed "playing" a dead voice, and its early copy muted (early release) or its handback waited.
 -- Pass: after the voice is stopped in the module, one follower pass with a gliding ramp clears m.nativeId.
--- pre: `local CONTROL = true` runs with pba_loops_follow_dead 0: passes when the id is kept (the old behaviour).
 local A = pba
 local N = A.Native
 if not (N and N.render) then return { pass = false, err = "native renderer not running" } end
 local LP = A.Loops
 local NAME = "ambient/machines/spin_loop.wav"
-A.SetOverride("loops_follow_dead", CONTROL and 0 or 1)
 local e = ClientsideModel("models/hunter/blocks/cube025x025x025.mdl", RENDERGROUP_OTHER)
 e:SetNoDraw(true)
 e:SetPos(Vector(784, 256, 40))
@@ -33,14 +31,9 @@ local ok, err = pcall(function()
 	res.checks.cleared = m.nativeId == nil
 	p:Stop()
 end)
-A.SetOverride("loops_follow_dead", nil)
 if IsValid(e) then e:Remove() end
 if not ok then return { pass = false, err = tostring(err) } end
 res.fails = {}
 for k, okc in SortedPairs(res.checks) do if not okc then res.fails[#res.fails + 1] = k end end
 res.pass = #res.fails == 0
-if CONTROL then
-	res.controlRed = not res.pass
-	res.pass = res.checks.mirrorNative and res.idAfter ~= nil or false
-end
 return res

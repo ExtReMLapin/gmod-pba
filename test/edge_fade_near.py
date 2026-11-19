@@ -5,11 +5,10 @@ that way: a spawn, a teleport or a noclip next to a loud machine also started it
 pba_tworooms: a server loop (ambient/machines/spin_loop.wav, level 55: a 500 u radius) on a prop in room B, the host in
 room A (530 u: out of range). The host is then moved 100 u from it (in range, joined midway). Pass: the client's mirror
 of the loop takes no fade (no edge factor) and its voice's first gain is within 2 dB of its gain 1.5 s later; a join at
-the edge (450 u, over 0.8 of the radius) still fades. --control (pba_loops_edge_fade_near 0): pass = the near join fades.
-Usage: python -I test/edge_fade_near.py <mcp.py> [--control]"""
+the edge (450 u, over 0.8 of the radius) still fades.
+Usage: python -I test/edge_fade_near.py <mcp.py>"""
 import json, os, subprocess, sys, time
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-CONTROL = "--control" in sys.argv
 MCP = args[0]
 
 
@@ -79,15 +78,11 @@ hook.Remove("SetupPlayerVisibility", "pba_edge_near") local p = player.GetHumans
     return r
 
 
-call("console_exec", {"realm": "client", "cmd": "pba_loops_edge_fade_near %d" % (0 if CONTROL else 1)})
 res = {"near": run(684), "edge": run(350)}
 near, edge = res["near"], res["edge"]
 faded_near = near.get("edge") or (near.get("firstDb") is not None and near["firstDb"] < -2)
 edge_fades = edge.get("mirror") and (edge.get("edge") or (edge.get("firstDb") is not None and edge["firstDb"] < -20))
-if CONTROL:
-    ok = near.get("mirror") and faded_near
-else:
-    ok = near.get("mirror") and not faded_near and edge_fades
+ok = near.get("mirror") and not faded_near and edge_fades
 res["pass"] = bool(ok)
 print(json.dumps(res))
 sys.exit(0 if ok else 1)

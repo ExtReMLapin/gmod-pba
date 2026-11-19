@@ -5,11 +5,10 @@ the closed door says vo/trainyard/al_thisday.wav, 2.67 s, the host marked not re
 has the line, its voice ends early (stopped in the module, as its voice cap reaping it or a module stop would): nothing
 plays the line any more but the muted engine copy, which stayed muted to its end (silence for the rest of the line).
 Pass: 0.6 s after the voice ended, the engine channel of the line on the citizen is audible again (vol > 0) and the
-mirror is over. --control (pba_early_release 0): pass = the channel still muted (the old behaviour).
-Usage: python -I test/early_release.py <mcp.py> [--control]"""
+mirror is over.
+Usage: python -I test/early_release.py <mcp.py>"""
 import json, os, re, subprocess, sys, time
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-CONTROL = "--control" in sys.argv
 MCP = args[0]
 LINE = "vo/trainyard/al_thisday.wav"
 KEY = "al_thisday"
@@ -54,7 +53,6 @@ def dump(idx, tag):
 if lua("client", "local N = pba.Native return N ~= nil and N.render == true and pba_native ~= nil") is not True:
     print(json.dumps({"pass": False, "err": "needs native rendering"}))
     sys.exit(1)
-call("console_exec", {"realm": "client", "cmd": "pba_early_release %d" % (0 if CONTROL else 1)})
 idx = lua("server", """if game.GetMap() ~= "pba_tworooms" then return -1 end
 local d = ents.FindByName("door1")[1] if IsValid(d) then d:Fire("Close") end
 local p = player.GetHumans()[1] p:SetPos(Vector(256, 256, 1)) p:SetEyeAngles(Angle(0, 0, 0))
@@ -87,10 +85,7 @@ finally:
     lua("server", "if IsValid(PBA_ER_NPC) then PBA_ER_NPC:Remove() end local p = player.GetHumans()[1] pba.PState(p).ready = true return true")
     lua("client", "PBA_ER_M = nil return true")
 audible = any(v > 0 for v in res["after"])
-if CONTROL:
-    ok = res.get("taken") is True and len(res["after"]) >= 1 and not audible
-else:
-    ok = res.get("taken") is True and audible and res.get("mirrorOver") is True
+ok = res.get("taken") is True and audible and res.get("mirrorOver") is True
 res["pass"] = bool(ok)
 print(json.dumps(res))
 sys.exit(0 if ok else 1)
