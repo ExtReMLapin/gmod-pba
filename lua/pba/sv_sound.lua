@@ -267,13 +267,22 @@ end
 -- who see him generate the footstep on their own client. PlayerFootstep runs right before that
 -- emission: the stepping player is noted for this tick, and the players whose PVS holds him are left
 -- out (relaying to them too doubled every step).
-hook.Add("PlayerFootstep", "pba_step", function(ply)
+-- The footstep itself, by its name (pba_step_by_name): his gunshot or pain cry in the same tick is not one, and was left
+-- out for every witness too (nothing played it for them: ~1 shot in 20 while running).
+hook.Add("PlayerFootstep", "pba_step", function(ply, _, _, snd)
 	A.stepPly, A.stepTick = ply, engine.TickCount()
+	A.stepFiles = isstring(snd) and snd ~= "" and A.StopFiles(snd) or nil
 end)
 
 local function stepper(data)
 	local e = data.Entity
-	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then return e end
+	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then
+		if (A.cfg.step_by_name or 1) >= 0.5 then
+			local f = A.stepFiles
+			if not f or not (A.StopReaches(f, data.SoundName) or A.StopReaches(f, data.OriginalSoundName)) then return nil end
+		end
+		return e
+	end
 end
 
 --- True when entity e's sound, made during `predicted`'s command, is one his client predicts itself: the

@@ -138,6 +138,37 @@ cases.M5 = function(opt)
 	return { pass = relayed == 1 and rel == 1 and unrel == 1, relayed = relayed, cutReliable = rel, cutUnreliable = unrel }
 end
 
+-- S3: the footstep a player's witnesses generate themselves is left out for them (PlayerFootstep), but only the
+-- footstep: his gunshot in the same tick was left out too (marked by player and tick only), and nothing played it for them.
+-- A bot steps and fires in one tick next to the host: the host's verdict on each.
+cases.S3 = function(opt)
+	A.SetOverride("step_by_name", opt)
+	local bot = player.CreateNextBot("pba_rs_step")
+	if not IsValid(bot) then return { pass = false, err = "no bot" } end
+	spawned[#spawned + 1] = bot
+	job:sleep(0.3)
+	bot:SetPos(Vector(400, 300, 0))
+	job:sleep(0.3)
+	local STEP, SHOT = "player/footsteps/concrete1.wav", "weapons/pistol/pistol_fire2.wav"
+	local verdict = {}
+	local aud = A.Sound.Audience
+	A.Sound.Audience = function(snd, p, ...)
+		local v = aud(snd, p, ...)
+		local d = snd.data
+		if p == ply and d and d.Entity == bot then verdict[d.SoundName] = tostring(v) end
+		return v
+	end
+	local ok, err = pcall(function()
+		hook.Run("PlayerFootstep", bot, bot:GetPos(), 0, STEP, 1)
+		bot:EmitSound(STEP, 75, 100, 1, CHAN_BODY)
+		bot:EmitSound(SHOT, 75, 100, 1, CHAN_WEAPON)
+	end)
+	A.Sound.Audience = aud
+	if not ok then return { pass = false, err = tostring(err) } end
+	return { pass = verdict[STEP] == "nil" and verdict[SHOT] ~= nil and verdict[SHOT] ~= "nil",
+		step = verdict[STEP], shot = verdict[SHOT] }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end
@@ -147,8 +178,8 @@ local ok, res = pcall(fn, CONTROL and 0 or nil)
 unspy()
 st0.ready = wasReady == nil and true or wasReady
 st0.earlyDone, st0.earlyT0, st0.early, st0.off = wasEarlyDone, wasEarlyT0, nil, wasOff
-for _, k in ipairs({ "loops_ready", "early_purge", "stop_both" }) do A.SetOverride(k, nil) end
-for _, e in ipairs(spawned) do if IsValid(e) then e:Remove() end end
+for _, k in ipairs({ "loops_ready", "early_purge", "stop_both", "step_by_name" }) do A.SetOverride(k, nil) end
+for _, e in ipairs(spawned) do if IsValid(e) then if e:IsPlayer() then e:Kick("pba test") else e:Remove() end end end
 if not ok then return { pass = false, err = tostring(res) } end
 res.case, res.control = CASE, CONTROL
 if CONTROL then res.pass = not res.pass end

@@ -574,5 +574,9 @@
  "stop_both": {
   "pos0": "hook",
   "why": "server: an explicit stop or a channel cut sent on both network streams to the players relayed a copy in the last second (sv_relay A.RelayStop, A.CutChannel), outside P.Compute; covered by stop_order apart and review_server M5"
+ },
+ "step_by_name": {
+  "pos0": "hook",
+  "why": "server: which sounds of a footstep's tick are left out for the stepping player's witnesses (sv_sound stepper), outside P.Compute; covered by review_server S3 and bot_footsteps"
  }
 }

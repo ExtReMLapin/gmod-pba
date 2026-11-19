@@ -51,6 +51,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | A loop already playing when you join (an ambience, a machine near the spawn) | ✅ | ✅ joined once your client is ready, as when you walk into its range | S `loops_ready` |
 | A line stopped or cut off while you join (a cancelled scene, the speaker interrupted) | ✅ | ✅ not handed to the module once you are ready | S `early_purge` |
 | A sound restarted a tick or two later (two outputs of a map, a client reading several ticks per packet) plays once, as in the engine | ✅ | ✅ | S `stop_both` |
+| Another player shooting while running (MP): his shot heard by those who see him, only his footstep left to their own client | ✅ | ✅ | S `step_by_name` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering
