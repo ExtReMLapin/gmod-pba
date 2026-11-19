@@ -40,9 +40,9 @@ SL.Run = function()
 		for i, j in ipairs(before) do
 			pre[i] = string.format("left=%.0fms cpu=%.1fms restarts=%d segs=%d d=%.0f canWait=%s", (j.deadline - nowR) * 1000, j.cpu * 1000, j.restarts, j.segs, j.S:Distance(j.L), tostring(j.canWait))
 		end
-		worst = { pre = pre, restarts = SL.stats.restarts - r0, ms = ms, needMs = (SL.need or 0) * 1000, estMs = SL.est * 1000, jobs = #SL.jobs }
+		worst = { pre = pre, restarts = SL.stats.restarts - r0, ms = ms, needMs = (SL.needHold or 0) * 1000, estMs = SL.est * 1000, jobs = #SL.jobs }
 	end
-	maxNeed = math.max(maxNeed, (SL.need or 0) * 1000)
+	maxNeed = math.max(maxNeed, (SL.needHold or 0) * 1000)
 	return r
 end
 local lastT = SysTime()

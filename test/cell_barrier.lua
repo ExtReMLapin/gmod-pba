@@ -56,10 +56,12 @@ local center = LocalPlayer():GetPos()
 local Lis = center + Vector(0, 0, 64)
 local bursts, clean = {}, {}
 local function lineClear(p, q) local t = util.TraceLine({ start = p, endpos = q, mask = MASK_SOLID }) return not (t.Hit and t.Fraction < 1) end
-while #bursts < 400 do
+local tries = 0
+while #bursts < 400 and tries < 20000 do -- (bounded: a map with no open cell near the player would freeze the game)
+	tries = tries + 1
 	local o = center + Vector((r() - 0.5) * 3000, (r() - 0.5) * 3000, (r() - 0.5) * 300)
 	o = Vector(math.floor(o.x / 32) * 32 + 16, math.floor(o.y / 32) * 32 + 16, math.floor(o.z / 32) * 32 + 16) -- (a cell's centre: the jitter stays in the cell)
-	if util.PointContents(o) == 0 then
+	if bit.band(util.PointContents(o), MASK_SOLID) == 0 then -- (open air reads 0x100 on gm_construct, not 0)
 		local b = {}
 		for k = 1, 5 do
 			local d = (k < 5) and 16 or 20
@@ -67,7 +69,7 @@ while #bursts < 400 do
 		end
 		bursts[#bursts + 1] = b
 		local ok = true
-		for k = 1, 5 do ok = ok and util.PointContents(b[k]) == 0 and (k == 1 or lineClear(b[1], b[k])) end
+		for k = 1, 5 do ok = ok and bit.band(util.PointContents(b[k]), MASK_SOLID) == 0 and (k == 1 or lineClear(b[1], b[k])) end
 		if ok then clean[#clean + 1] = b end
 	end
 end
