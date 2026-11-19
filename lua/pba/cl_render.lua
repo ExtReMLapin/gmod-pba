@@ -27,10 +27,6 @@ local function activeCount(now)
 	return n
 end
 
---- True once this frame's path-search budget is spent (cheaper fallback for the rest): the one budget of
--- every sound kind (cl_sched.lua).
-function A.FrameBudgetExceeded() return A.Sched.BudgetExceeded() end
-
 --- Azimuth of `pos` seen from L with view yaw, degrees, positive = to the RIGHT.
 function A.Azimuth(L, viewYaw, pos)
 	local d = pos - L

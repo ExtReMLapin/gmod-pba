@@ -3489,13 +3489,16 @@ local SUITE = {
 		{ name = "Compute: the answer is the field's whatever the frame budget, never provisional, and the first field is built at once", func = function()
 			withProbeRooms({ { 16, 64, 112 } }, nil, { native_traces = 0 }, function(g)
 				local PR = A.Probes
-				local savedWalls, savedBudget, savedGet = P.Walls, A.FrameBudgetExceeded, A.Graph.Get
+				-- (the one frame budget: A.Sched.BudgetExceeded, cl_sched; no scheduler offline: one made for the case)
+				local savedWalls, savedSched, savedGet = P.Walls, A.Sched, A.Graph.Get
+				local savedBudget = savedSched and savedSched.BudgetExceeded
 				local over = false
 				P.Walls = function(a, b)
 					local e, x = a + (b - a) * 0.45, a + (b - a) * 0.55
 					return { { t = 0.45, entry = e, exit = x, thickness = 16, mat = MAT_CONCRETE, surf = "concrete" } }
 				end
-				A.FrameBudgetExceeded = function() return over end
+				A.Sched = savedSched or {}
+				A.Sched.BudgetExceeded = function() return over end
 				A.Graph.Get = function() return nil end -- no area graph: the field needs none
 				local cfg = setmetatable({ probes = 1, probe_dist = 1e6, path_props = 0, water = 0 }, { __index = CFG })
 				local ok, err = pcall(function()
@@ -3512,7 +3515,8 @@ local SUITE = {
 					expect(near(r2.paths[1].lossDb, r1.paths[1].lossDb, 1e-9) and near(r2.paths[1].length, r1.paths[1].length, 1e-9)).to.beTrue()
 					expect(r2.legBlocked == nil and r2.viaProbes == true).to.beTrue()
 				end)
-				P.Walls, A.FrameBudgetExceeded, A.Graph.Get = savedWalls, savedBudget, savedGet
+				A.Sched.BudgetExceeded = savedBudget
+				P.Walls, A.Sched, A.Graph.Get = savedWalls, savedSched, savedGet
 				P.InvalidateCache()
 				if not ok then error(err, 0) end
 			end)
