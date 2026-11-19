@@ -286,53 +286,47 @@ end
 -- running ramp and the last evaluation scaled by new / old volume, the route kept (the forced re-evaluation
 -- follows at the voice's next turn). Before, the change waited for that turn (half an update_interval at least,
 -- then a ramp over one interval): a dropship's engine fade stayed +8..11 dB over its law meanwhile (d3_c17_10b).
-local function volumeNow(m)
-	if not m.nativeId or (A.cfg.native_vol_now or 1) < 0.5 then return end
-	local old, new = m.appliedVol, m.vol
-	if not (old and new) or old == new or old <= 1e-6 then return end
-	local k = new / old
-	m.appliedVol = new
-	local e = m.lastEval
-	if e then e.gain, e.send = e.gain * k, e.send * k end
-	if m.roomSend then m.roomSend = m.roomSend * k end
-	if m.srcSend then m.srcSend = m.srcSend * k end
-	local ramp = m.ramp
-	local gain, el, em, eh, pos, pitch
-	if ramp and ramp.to then
-		ramp.from[1], ramp.to[1] = ramp.from[1] * k, ramp.to[1] * k
-		gain, el, em, eh, pos, pitch = A.Paths.RampAt(ramp, RealTime(), A.ListenerPos())
-	elseif e then
-		gain, el, em, eh, pos, pitch = e.gain, e.el, e.em, e.eh, e.pos, e.pitch
+-- A pitch change (SND_CHANGE_PITCH: a vehicle's revs, an ambient_generic's Pitch input or LFO, a patch's
+-- ChangePitch) the same way (pba_native_pitch_now): the voice's pitch (Doppler included) scaled by new / old, the
+-- running ramp and the last evaluation with it, the route kept. Before, the change waited for the voice's next
+-- turn (up to update_interval) and then glided over one more interval (audit B-6), with a path re-evaluation
+-- forced for a pitch that is not the path's business.
+-- Both in one module Update (m.sentFrame: the frame it was sent, LP.FollowNative sends nothing more then): a change
+-- of both sent the voice the new gain with the old pitch, then again with the new pitch, and the frame's follower a
+-- third time (review C0). Returns true when the voice took a pitch change.
+local function changeNow(m)
+	if not m.nativeId then return false end
+	local kv, kp = 1, 1
+	if (A.cfg.native_vol_now or 1) >= 0.5 then
+		local old, new = m.appliedVol, m.vol
+		if old and new and old ~= new and old > 1e-6 then kv = new / old m.appliedVol = new end
 	end
-	if not (gain and pos) then return end
-	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, m.roomSend) then m.nativeId = nil end
-end
-
---- A pitch change of a mirror's sound (SND_CHANGE_PITCH: a vehicle's revs, an ambient_generic's Pitch input or
--- LFO, a patch's ChangePitch) reaches its native voice at once (pba_native_pitch_now), as the engine's channel
--- takes it at the tick: the voice's pitch (Doppler included) scaled by new / old, the running ramp and the last
--- evaluation with it, the route kept. Before, the change waited for the voice's next turn (up to update_interval)
--- and then glided over one more interval (audit B-6), with a path re-evaluation forced for a pitch that is not
--- the path's business. Returns true when the voice took the change.
-local function pitchNow(m)
-	if not m.nativeId or (A.cfg.native_pitch_now or 1) < 0.5 then return false end
-	local old, new = m.appliedPitch, m.pitch
-	if not (old and new) or old == new or old <= 1e-6 then return false end
-	local k = new / old
-	m.appliedPitch = new
+	local pitched = false
+	if (A.cfg.native_pitch_now or 1) >= 0.5 then
+		local old, new = m.appliedPitch, m.pitch
+		if old and new and old ~= new and old > 1e-6 then kp = new / old m.appliedPitch = new pitched = true end
+	end
+	if kv == 1 and kp == 1 then return false end
 	local e = m.lastEval
-	if e then e.pitch = new end
+	if e then
+		e.gain, e.send = e.gain * kv, e.send * kv
+		if pitched then e.pitch = m.pitch end
+	end
+	if m.roomSend then m.roomSend = m.roomSend * kv end
+	if m.srcSend then m.srcSend = m.srcSend * kv end
 	local ramp = m.ramp
 	local gain, el, em, eh, pos, pitch
 	if ramp and ramp.to then
-		ramp.from[5], ramp.to[5] = ramp.from[5] * k, ramp.to[5] * k
+		ramp.from[1], ramp.to[1] = ramp.from[1] * kv, ramp.to[1] * kv
+		ramp.from[5], ramp.to[5] = ramp.from[5] * kp, ramp.to[5] * kp
 		gain, el, em, eh, pos, pitch = A.Paths.RampAt(ramp, RealTime(), A.ListenerPos())
 	elseif e then
 		gain, el, em, eh, pos, pitch = e.gain, e.el, e.em, e.eh, e.pos, e.pitch
 	end
 	if not (gain and pos) then return false end
 	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, m.roomSend) then m.nativeId = nil end
-	return true
+	m.sentFrame = FrameNumber()
+	return pitched
 end
 
 -- a mirror's far evaluation is ready (cl_slicer): applied at once
@@ -451,7 +445,7 @@ local function applyNative(m, S, L)
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
 	end
 	m.appliedVol = m.vol -- (the volume the voice's values below carry: see the quiet shortcut in apply)
-	m.appliedPitch = m.pitch -- (and the pitch: pitchNow)
+	m.appliedPitch = m.pitch -- (and the pitch: changeNow)
 	gain = gain * m.vol * A.cfg.native_gain
 	local send = N.SlotFadeSend(m, m.srcBound, (trans or 0) * m.vol * A.cfg.native_gain, gain)
 	send = send * N.LoudWet(m.lvl) -- (a loud loop stays dry, as in the engine)
@@ -826,8 +820,7 @@ function LP.HandleClient(data)
 			A.reemitting = false
 		end
 		local vol0 = m.appliedVol
-		volumeNow(m)
-		local pitched = pitchNow(m)
+		local pitched = changeNow(m)
 		-- (the route) at its next turn: a volume change reads differently at the quiet threshold; a pitch change
 		-- the voice has taken is not the path's business
 		if m.nativeId and m.reeval and not (pitched and m.appliedVol == m.vol and vol0 == m.vol) then m.reeval.force = true end
@@ -928,14 +921,13 @@ function LP.StopAll()
 end
 
 --- A volume / pitch change reaching mirror m (the server's update, full or compact): its native voice takes it at
--- once (volumeNow, pitchNow), an engine patch is moved to it.
+-- once (changeNow), an engine patch is moved to it.
 local function updateMirror(m, once, vol, pitch)
 	m.pitch = pitch
 	LP.SetVolume(m, vol)
 	if m.nativeId then
 		local vol0 = m.appliedVol
-		volumeNow(m)
-		local pitched = pitchNow(m)
+		local pitched = changeNow(m)
 		if m.reeval and not (pitched and m.appliedVol == m.vol and vol0 == m.vol) then m.reeval.force = true end
 		return -- applied at the next tick
 	end
@@ -1084,7 +1076,7 @@ local function edgeFade(now)
 				local k = T > 0 and math.Clamp((now - m.edgeT0) / T, LP.EDGE_FLOOR, 1) or 1
 				m.edgeK = k
 				m.vol = (m.srvVol or 1) * k
-				volumeNow(m) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
+				changeNow(m) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
 				-- its source reverb slot's feed at once, not at its 0.3 s rebinding
 				if m.srcBound and N then
 					local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
@@ -1128,7 +1120,8 @@ function LP.FollowNative(L)
 				end
 				N.ApplyStereo(m.nativeId, m.name, d, ent, S, L, m)
 			end
-			if ramp and ramp.pending then
+			-- (not when a volume / pitch change sent this frame's values already: changeNow)
+			if ramp and ramp.pending and (ent or m.sentFrame ~= FrameNumber()) then
 				local g, el, em, eh, pos, pitch = P.RampAt(ramp, now, L)
 				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch) -- sends: kept from the last evaluation
 			end
