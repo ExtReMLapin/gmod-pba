@@ -2067,6 +2067,11 @@ function N.SyncDoors()
 	-- long (the first always enters); the others enter at the next syncs, which the calm hold then does not wait for
 	local addMs = A.cfg.native_props_add_ms or 3
 	local addSpent, addCut = 0, false
+	-- pba_native_props_rank_keep: once a ranking found more props than the cap, the props entering before the next one are
+	-- its winners only (the fill below put in whichever came first in ents.GetAll(), losers included, which the next
+	-- ranking took out again: props in and out every 2 s with nothing moving, a DynamicAdd and a commit each time)
+	if not wantProps then N.propWinners = nil end
+	local winners = (A.cfg.native_props_rank_keep or 1) >= 0.5 and N.propWinners or nil
 	local rerank = wantProps and not hold and now >= (N.propRankT or 0)
 	if rerank then N.propRankT = now + PROP_RANK_S end
 	local cands = rerank and {} or nil
@@ -2168,7 +2173,7 @@ function N.SyncDoors()
 			else
 				if d then
 					seen[id] = true
-				elseif nProps < cap and not hold then
+				elseif nProps < cap and not hold and not (winners and not winners[id]) then
 					if addMs > 0 and addSpent >= addMs then
 						addCut = true -- (this sync's share is spent: at the next one)
 					else
@@ -2196,8 +2201,11 @@ function N.SyncDoors()
 	end
 	-- ranking: the `cap` most relevant props are in the scene, the others out (swapped). Outs first, so
 	-- the scene never holds more than `cap` props.
+	if cands and #cands <= cap then N.propWinners = nil end -- (every candidate fits: no ranking to keep)
 	if cands and #cands > cap then
 		table.sort(cands, function(a, b) return a.s > b.s end)
+		N.propWinners = {}
+		for i = 1, cap do N.propWinners[cands[i].id] = true end
 		for i = cap + 1, #cands do
 			local c = cands[i]
 			local d = N.doors[c.id]

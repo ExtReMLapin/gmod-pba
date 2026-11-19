@@ -1392,6 +1392,7 @@ steps = [
     ("prewarm_npc_weapons", prewarm_npc_weapons),
     ("native_props_calm", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_calm_setup.lua"), lambda: job("client", "native_props_calm.lua", 60))),
     ("native_props_add", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_add_setup.lua"), lambda: job("client", "native_props_add.lua", 60))),
+    ("native_props_churn", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_add_setup.lua"), lambda: job("client", "native_props_churn.lua", 90))),
     ("detour_cap", lambda: seq(lambda: load(TW), lambda: job("server", "detour_cap_setup.lua"), lambda: job("client", "detour_cap.lua", 60))),
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                     lambda: job("client", "native_features.lua"))),
