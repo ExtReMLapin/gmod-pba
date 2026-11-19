@@ -643,6 +643,8 @@ function N.ApplySettings()
 	if pba_native.SetEqContinuous then pba_native.SetEqContinuous((A.cfg.native_eq_continuous or 1) >= 0.5) end
 	-- a source slot bank the crossfade left is flushed, not reset (module of 2026-11-19+; an older one resets it)
 	if pba_native.SetSlotBankFlush then pba_native.SetSlotBankFlush((A.cfg.native_slot_bank_flush or 1) >= 0.5) end
+	-- source reverb slots simulated in groups, their new responses spread over blocks (module of 2026-11-19+; an older one runs all at once)
+	if pba_native.SetSlotGroup then pba_native.SetSlotGroup(math.floor((A.cfg.native_slot_group or 4) + 0.5)) end
 	local k = N.wetScale or 1
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,

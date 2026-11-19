@@ -33,6 +33,7 @@
 
 #include "../src/prof.h"
 #include "../src/render.h"
+#include "../src/stagger.h"
 
 // ------------------------------------------------------------------------------------------------ options
 struct Opt {
@@ -41,6 +42,7 @@ struct Opt {
 	int rt = 1, mmcss = 0, burn = 0, sampler = 1, updates = 120, panning = 0, pitchvar = 1, eqfrac = 50, hq = 1;
 	int prio = 2; // audio thread priority: 2 = THREAD_PRIORITY_HIGHEST (miniaudio's default), 0 normal, 15 time critical
 	int simprio = 0; // priority of every non-audio thread of the bench (0 normal, -1 below normal...): set after start
+	int group = 0;    // source slots simulated in groups of this many (stagger.h; 0: all in one run)
 	int loadonly = 0; // 1: the sound decode costs only, then exit
 	int micro = 0;   // 1: micro-benchmarks of single effects (cost per apply of each variant), then exit
 	double secs = 8;
@@ -58,7 +60,7 @@ static void ParseArgs(int argc, char** argv) {
 		I("banks", O.banks); I("echoes", O.echoes); I("room", O.room); I("refl", O.refl); I("simthreads", O.simthreads);
 		I("rays", O.rays); I("bounces", O.bounces); I("rev", O.rev); I("props", O.props); I("still", O.still); I("rt", O.rt);
 		I("mmcss", O.mmcss); I("burn", O.burn); I("sampler", O.sampler); I("updates", O.updates); I("panning", O.panning);
-		I("pitchvar", O.pitchvar); I("eqfrac", O.eqfrac); I("hq", O.hq); I("prio", O.prio); I("simprio", O.simprio); I("micro", O.micro); I("loadonly", O.loadonly);
+		I("pitchvar", O.pitchvar); I("eqfrac", O.eqfrac); I("hq", O.hq); I("prio", O.prio); I("simprio", O.simprio); I("micro", O.micro); I("loadonly", O.loadonly); I("group", O.group);
 		if (k == "secs") O.secs = std::atof(v.c_str());
 		if (k == "scene") O.scene = v;
 	}
@@ -451,7 +453,7 @@ static IPLVector3 SlotPos(int k) { return {-4.5f + (float)(k % 4) * 3.0f, -1.0f,
 static IPLVector3 EchoPos(int k) { return {-3.0f + 2.0f * k, 0.5f, 3.5f}; }
 
 // ------------------------------------------------------------------------------------------------ reflection thread
-struct ReflStats { Dist mainMs, mainCpu, slotMs, slotCpu, revMs, revCpu; int passes = 0; };
+struct ReflStats { Dist mainMs, mainCpu, slotMs, slotSimMs, slotCpu, slotAge, revMs, revCpu; int passes = 0; };
 static ReflStats RS;
 static std::atomic<bool> g_reflRun{false};
 static int g_slotGen[render::kSrcSlotsMax] = {};
@@ -481,24 +483,33 @@ static void ReflectionLoop() {
 			for (int k = 0; k < O.echoes; ++k) render::PublishSimulated(k, 1);
 		}
 		// source slots: the active ones, in the current bank (both banks with banks=2: a crossfade in progress)
+		// (group > 0: in groups of that many, stagger.h, as pba_native's RunSrcSlots with pba_native_slot_group)
 		if (O.slots > 0) {
 			const double a = NowS();
 			const uint64_t c = ThreadCycles();
-			Shared(S.slot, lis, O.rays, O.bounces, render::kIRSeconds, 1);
-			for (int k = 0; k < render::kSrcSlotsMax; ++k) {
-				SetIn(S.src[k], SlotPos(k), k < O.slots && (O.banks == 2 || bank == 0));
-				if (k < render::kSrcBankB) SetIn(S.srcB[k], SlotPos(k), k < O.slots && (O.banks == 2 || bank == 1));
-			}
-			iplSimulatorRunReflections(S.slot);
+			double simMs = 0;
+			stagger::Run(O.slots, O.group, 12.0, [&](int first, int count) {
+				const double g0 = NowS();
+				Shared(S.slot, lis, O.rays, O.bounces, render::kIRSeconds, 1);
+				for (int k = 0; k < render::kSrcSlotsMax; ++k) {
+					const bool in = k >= first && k < first + count;
+					SetIn(S.src[k], SlotPos(k), in && (O.banks == 2 || bank == 0));
+					if (k < render::kSrcBankB) SetIn(S.srcB[k], SlotPos(k), in && (O.banks == 2 || bank == 1));
+				}
+				iplSimulatorRunReflections(S.slot);
+				simMs += (NowS() - g0) * 1000;
+				for (int k = first; k < first + count; ++k) {
+					render::PublishSrcBank(k, 0);
+					if (k < render::kSrcBankB) render::PublishSrcBank(k, 1);
+					render::PublishSimulated(render::kEchoSlots + k, g_slotGen[k] = std::max(g_slotGen[k], 1));
+					if (O.banks == 2) render::SetSrcBlend(k, 0.5f, 0.5f, pass == 0);
+					else render::SetSrcBlend(k, 1.0f, 0.0f, pass == 0);
+					RS.slotAge.add((NowS() - t0) * 1000); // listener read -> this slot's new response
+				}
+			});
 			RS.slotMs.add((NowS() - a) * 1000);
+			RS.slotSimMs.add(simMs);
 			RS.slotCpu.add(TscMs(ThreadCycles() - c));
-			for (int k = 0; k < O.slots; ++k) {
-				render::PublishSrcBank(k, 0);
-				if (k < render::kSrcBankB) render::PublishSrcBank(k, 1);
-				render::PublishSimulated(render::kEchoSlots + k, g_slotGen[k] = std::max(g_slotGen[k], 1));
-				if (O.banks == 2) render::SetSrcBlend(k, 0.5f, 0.5f, pass == 0);
-				else render::SetSrcBlend(k, 1.0f, 0.0f, pass == 0);
-			}
 		}
 		if (O.rev) {
 			const double a = NowS();
@@ -907,7 +918,7 @@ int main(int argc, char** argv) {
 	if (O.refl) refl = std::thread(ReflectionLoop);
 
 	// ---- audio thread
-	struct Blk { double wall, cpu; uint64_t st[render::prof::Count]; uint64_t apply, getOut, reset; int nApply, nReset; };
+	struct Blk { double wall, cpu; uint64_t st[render::prof::Count]; uint64_t apply, getOut, reset; int nApply, nReset, nNewSrc, nNewAll; };
 	std::vector<Blk> blocks;
 	blocks.reserve(200000);
 	std::atomic<bool> audioRun{true};
@@ -954,6 +965,7 @@ int main(int argc, char** argv) {
 			k.reset = render::prof::g_reset;
 			k.nApply = render::prof::g_nApply;
 			k.nReset = render::prof::g_nReset;
+			render::NewResponseStats(&k.nNewSrc, &k.nNewAll); // this block's (read after each block)
 			if (blocks.size() < blocks.capacity()) blocks.push_back(k);
 		}
 		if (av) AvRevertMmThreadCharacteristics(av);
@@ -1062,6 +1074,22 @@ int main(int argc, char** argv) {
 		std::printf("[sim] passes %d | main (room+%d echoes) wall avg %.1f p95 %.1f max %.1f ms, caller cpu %.1f | slots (%d x banks %d) wall avg %.1f p95 %.1f max %.1f, caller cpu %.1f | rev (512 x 1024, 2.5 s) wall avg %.1f max %.1f, caller cpu %.1f\n",
 		            RS.passes, O.echoes, RS.mainMs.avg(), RS.mainMs.pct(95), RS.mainMs.max(), RS.mainCpu.avg(), O.slots, O.banks, RS.slotMs.avg(),
 		            RS.slotMs.pct(95), RS.slotMs.max(), RS.slotCpu.avg(), RS.revMs.avg(), RS.revMs.max(), RS.revCpu.avg());
+	if (O.refl && O.slots > 0) {
+		int mSrc = 0, mAll = 0, over4 = 0, withNew = 0;
+		for (size_t i = skip; i < blocks.size(); ++i) {
+			mSrc = std::max(mSrc, blocks[i].nNewSrc);
+			mAll = std::max(mAll, blocks[i].nNewAll);
+			over4 += blocks[i].nNewSrc > 4;
+			withNew += blocks[i].nNewSrc > 0;
+		}
+		Dist cw; // cpu of the blocks with new slot responses
+		for (size_t i = skip; i < blocks.size(); ++i)
+			if (blocks[i].nNewSrc > 0) cw.add(blocks[i].cpu);
+		std::printf("[slots] group %d: pass sim time avg %.1f ms (wall with gaps %.1f) | response age at publish (listener read -> slot) avg %.1f p95 %.1f max %.1f ms\n",
+		            O.group, RS.slotSimMs.avg(), RS.slotMs.avg(), RS.slotAge.avg(), RS.slotAge.pct(95), RS.slotAge.max());
+		std::printf("[slots] new responses per block: most slots %d, all %d; blocks with new slot responses %d (cpu avg %.3f max %.3f ms), with more than 4: %d\n",
+		            mSrc, mAll, withNew, cw.v.empty() ? 0.0 : cw.avg(), cw.v.empty() ? 0.0 : cw.max(), over4);
+	}
 	std::printf("[game] SetListener avg %.1f us max %.1f | Update per voice avg %.2f us p99 %.2f max %.1f | PlayEcho avg %.1f us max %.1f\n", lisd.avg(),
 	            lisd.max(), upd.avg(), upd.pct(99), upd.max(), playd.avg(), playd.max());
 	if (O.sampler) sampler::StopAndReport();

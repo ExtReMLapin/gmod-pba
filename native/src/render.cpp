@@ -251,6 +251,10 @@ struct Reflection {
 	// what its last convolved block used: the response's EQ (hybrid tail level per band) and delay (debug, SrcSlotStats)
 	std::atomic<float> eqUsed[3] = {0, 0, 0};
 	std::atomic<int> delayUsed{0};
+	// responses published for it (PublishSimulated / PublishSrcBank, simulation thread) and the count its last block saw:
+	// a new one is crossfaded in by the effect at its next block (NewResponseStats)
+	std::atomic<uint32_t> pubs{0};
+	uint32_t pubsSeen = 0;
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -892,6 +896,9 @@ void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpa
 	iplAmbisonicsDecodeEffectApply(fx, &dp, in, out);
 }
 
+int g_blkNew = 0; // responses that arrived this block (audio thread)
+std::atomic<int> g_newMaxSrc{0}, g_newMaxAll{0}; // the most in one block since NewResponseStats last read them
+
 // Applies one reflection effect (if simulated) and adds its ambisonic output to g_amb.
 // Simulation outputs are only ever read here, on the audio thread (single consumer).
 // minTail: floor of the tail length (the room's for echo and source slots: their own reverb time
@@ -908,6 +915,10 @@ void DecodeBus(IPLAmbisonicsDecodeEffect fx, DfState& st, const IPLCoordinateSpa
 // wOut: the W (omni) channel of what was added, accumulated there (per-slot level meter).
 void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTail = 0, float w0 = 1, float w1 = 1,
                      float* wOut = nullptr) {
+	if (const uint32_t pc = r.pubs.load(std::memory_order_relaxed); pc != r.pubsSeen) {
+		r.pubsSeen = pc;
+		++g_blkNew;
+	}
 	if (r.fed) r.idle = 0;
 	else if (r.idle < (1 << 20)) r.idle++;
 	r.fed = false;
@@ -1595,11 +1606,13 @@ void RenderBlock() {
 	}
 	PROF_LAP(Capture);
 	// reflections -> ambisonic bus -> decode
+	g_blkNew = 0;
 	ApplyReflection(g_room, g_wetRoom, g_roomRt);
 	PROF_LAP(Room);
 	// echo and source slots: their own tail, never shorter than the room's (see ApplyReflection)
 	for (auto& e : g_echo) ApplyReflection(e, g_wetEcho, nullptr, g_room.tailBlocks);
 	PROF_LAP(Echo);
+	const int newBefore = g_blkNew;
 	{
 		// source slots: both banks fed the slot's input, weighted by the blend (ramped per block)
 		const float wet = g_wetRoom * g_srcScale;
@@ -1630,6 +1643,8 @@ void RenderBlock() {
 		}
 		AddTo(g_srcESec, (double)kBlock / kRate);
 	}
+	if (g_blkNew - newBefore > g_newMaxSrc.load(std::memory_order_relaxed)) g_newMaxSrc.store(g_blkNew - newBefore, std::memory_order_relaxed);
+	if (g_blkNew > g_newMaxAll.load(std::memory_order_relaxed)) g_newMaxAll.store(g_blkNew, std::memory_order_relaxed);
 	PROF_LAP(SrcIn);
 	if (g_decode) {
 		DecodeBus(g_decode, g_dfState, lis, &g_amb, &g_ambOut, g_outMode, g_dfOn);
@@ -2678,7 +2693,16 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IP
 		while (g_cbEpoch.load(std::memory_order_acquire) == e) std::this_thread::yield();
 }
 
+void NewResponseStats(int* maxSrc, int* maxAll) {
+	if (maxSrc) *maxSrc = g_newMaxSrc.exchange(0);
+	if (maxAll) *maxAll = g_newMaxAll.exchange(0);
+}
+
 void PublishSrcBank(int k, int bank) {
+	if (k >= 0 && k < kSrcSlotsMax) {
+		if (bank == 0) g_src[k].pubs.fetch_add(1, std::memory_order_relaxed);
+		else if (k < kSrcBankB) g_srcB[k].pubs.fetch_add(1, std::memory_order_relaxed);
+	}
 	// bank 0's g_src[k].simGen is the slot's generation (PublishSimulated); bank 1 only needs "simulated"
 	if (bank == 1 && k >= 0 && k < kSrcBankB) g_srcB[k].simGen = 1;
 }
@@ -2795,9 +2819,10 @@ void RoomReverbTimes(float rt[3]) {
 }
 
 void PublishSimulated(int slot, int gen) {
-	if (slot < 0) g_room.simGen = gen;
-	else if (slot < kEchoSlots) g_echo[slot].simGen = gen;
-	else if (slot < kEchoSlots + kSrcSlotsMax) g_src[slot - kEchoSlots].simGen = gen;
+	Reflection* r = slot < 0 ? &g_room : slot < kEchoSlots ? &g_echo[slot] : slot < kEchoSlots + kSrcSlotsMax ? &g_src[slot - kEchoSlots] : nullptr;
+	if (!r) return;
+	r->simGen = gen;
+	r->pubs.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
