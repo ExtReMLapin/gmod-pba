@@ -295,8 +295,9 @@ IPLAudioBuffer g_monoP{}, g_stereoP{};
 IPLAmbisonicsDecodeEffect g_decode = nullptr;
 Reflection g_room;                 // reverb at the listener, fed by every voice (send bus = g_room.in)
 Reflection g_echo[kEchoSlots];     // per-source reflections
-Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax), bank 0
-Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same input as g_src[k])
+// source reverb slots (shared by position, see kSrcSlotsMax): g_src[k][0] bank 0, whose input the voices feed;
+// g_src[k][1] bank 1 (same input, copied)
+Reflection g_src[kSrcSlotsMax][2];
 // Blend of each slot's two banks: the slots are simulated from a listener ANCHOR that moves only when
 // the listener walks away from it, and the previous anchor's response is kept in the other bank and
 // crossfaded into the new one (pba_native.cpp, RunSrcSlots). Convolution is linear in the impulse
@@ -1106,7 +1107,7 @@ void RenderBlock() {
 	for (int c = 0; c < kAmbi; ++c) std::fill(g_amb.data[c], g_amb.data[c] + kBlock, 0.0f);
 	std::fill(g_room.in.data[0], g_room.in.data[0] + kBlock, 0.0f);
 	for (auto& e : g_echo) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
-	for (auto& e : g_src) std::fill(e.in.data[0], e.in.data[0] + kBlock, 0.0f);
+	for (auto& e : g_src) std::fill(e[0].in.data[0], e[0].in.data[0] + kBlock, 0.0f);
 	const IPLCoordinateSpace3 lis = ListenerSpace();
 	PROF_LAP(Clear);
 
@@ -1339,8 +1340,8 @@ void RenderBlock() {
 		// is simulated; until then its share goes to the room bus (no silence gap, no response of
 		// another place)
 		Reflection* srcBus = nullptr;
-		const bool srcBound = v.srcSlot >= 0 && v.srcSlot < kSrcSlotsMax && g_src[v.srcSlot].fx;
-		if (srcBound && g_src[v.srcSlot].simGen.load() >= v.srcGen) srcBus = &g_src[v.srcSlot];
+		const bool srcBound = v.srcSlot >= 0 && v.srcSlot < kSrcSlotsMax && g_src[v.srcSlot][0].fx;
+		if (srcBound && g_src[v.srcSlot][0].simGen.load() >= v.srcGen) srcBus = &g_src[v.srcSlot][0];
 		const int srcTo = srcBus ? v.srcSlot : -1;
 		const float q1 = srcBus ? v.srcSend : 0;
 		const float q0 = v.srcSendCur < 0 ? q1 : v.srcSendCur;
@@ -1366,9 +1367,9 @@ void RenderBlock() {
 		// contains (boosted, a radio down a winding corridor fed its own room up to x2.5 too loud).
 		auto feedSrc = [&](int k, float a0, float a1) {
 			if (k < 0 || (a0 <= 0 && a1 <= 0)) return;
-			float* d = g_src[k].in.data[0];
+			float* d = g_src[k][0].in.data[0];
 			for (int i = 0; i < kBlock; ++i) d[i] += m[i] * (a0 + (a1 - a0) * (float)i / kBlock);
-			g_src[k].fed = true;
+			g_src[k][0].fed = true;
 		};
 		if (v.srcFedSlot == srcTo) feedSrc(srcTo, q0, q1);
 		else {
@@ -1591,7 +1592,7 @@ void RenderBlock() {
 		float* s = cap->src.get() + capAt;
 		std::fill(s, s + kBlock, 0.0f);
 		for (auto& e : g_src)
-			for (int i = 0; i < kBlock; ++i) s[i] += e.in.data[0][i];
+			for (int i = 0; i < kBlock; ++i) s[i] += e[0].in.data[0][i];
 	}
 	PROF_LAP(Capture);
 	// reflections -> ambisonic bus -> decode
@@ -1611,20 +1612,19 @@ void RenderBlock() {
 			const float p0 = w[0], p1 = w[1];
 			for (int b = 0; b < 2; ++b)
 				w[b] = t[b] > w[b] ? std::min(t[b], w[b] + kSrcBlendStep) : std::max(t[b], w[b] - kSrcBlendStep);
-			if (k < kSrcBankB) {
-				std::memcpy(g_srcB[k].in.data[0], g_src[k].in.data[0], kBlock * sizeof(float));
-				g_srcB[k].fed = g_src[k].fed; // before ApplyReflection clears it
-			}
+			Reflection* bank = g_src[k];
+			std::memcpy(bank[1].in.data[0], bank[0].in.data[0], kBlock * sizeof(float));
+			bank[1].fed = bank[0].fed; // before ApplyReflection clears it
 			{
 				double ei = 0;
-				for (int i = 0; i < kBlock; ++i) ei += (double)g_src[k].in.data[0][i] * g_src[k].in.data[0][i];
+				for (int i = 0; i < kBlock; ++i) ei += (double)bank[0].in.data[0][i] * bank[0].in.data[0][i];
 				AddTo(g_srcInE[k], ei);
 			}
 			std::fill(g_slotW.begin(), g_slotW.end(), 0.0f);
 			PROF_LAP(SrcIn);
-			ApplyReflection(g_src[k], wet, nullptr, g_room.tailBlocks, p0, w[0], g_slotW.data());
+			ApplyReflection(bank[0], wet, nullptr, g_room.tailBlocks, p0, w[0], g_slotW.data());
 			PROF_LAP(SrcA);
-			if (k < kSrcBankB) ApplyReflection(g_srcB[k], wet, nullptr, g_room.tailBlocks, p1, w[1], g_slotW.data());
+			ApplyReflection(bank[1], wet, nullptr, g_room.tailBlocks, p1, w[1], g_slotW.data());
 			PROF_LAP(SrcB);
 			double e = 0;
 			for (int i = 0; i < kBlock; ++i) e += (double)g_slotW[i] * g_slotW[i];
@@ -2425,10 +2425,9 @@ static std::string StartImpl(IPLContext ctx, const void* sofa, size_t sofaSize, 
 	if (!CreateReflection(g_room, as)) return "reflection effect creation failed";
 	for (auto& e : g_echo)
 		if (!CreateReflection(e, as)) return "reflection effect creation failed";
-	for (auto& e : g_src)
-		if (!CreateReflection(e, as)) return "reflection effect creation failed";
-	for (auto& e : g_srcB)
-		if (!CreateReflection(e, as)) return "reflection effect creation failed";
+	for (int b = 0; b < 2; ++b)
+		for (auto& e : g_src)
+			if (!CreateReflection(e[b], as)) return "reflection effect creation failed";
 	{
 		IPLAmbisonicsDecodeEffectSettings ds{};
 		ds.speakerLayout = Stereo();
@@ -2533,8 +2532,8 @@ void Stop() {
 	g_pathPool.clear();
 	ReleaseReflection(g_room);
 	for (auto& e : g_echo) ReleaseReflection(e);
-	for (auto& e : g_src) ReleaseReflection(e);
-	for (auto& e : g_srcB) ReleaseReflection(e);
+	for (int b = 0; b < 2; ++b)
+		for (auto& e : g_src) ReleaseReflection(e[b]);
 	if (g_decode) iplAmbisonicsDecodeEffectRelease(&g_decode);
 	if (g_hrtf) {
 		for (IPLAudioBuffer* b : {&g_mono, &g_mono2, &g_stereo, &g_amb, &g_ambTmp, &g_ambOut, &g_monoP, &g_stereoP, &g_mono3, &g_mono4, &g_stereo2})
@@ -2590,12 +2589,12 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IP
 	// new simulator: the slots restart at generation 1; bindings of the previous one are dropped
 	// (their generations would never be reached again)
 	for (int k = 0; k < kSrcSlotsMax; ++k) {
-		g_src[k].simGen = 0;
-		g_src[k].src.store((srcs && k < nSrc) ? srcs[k] : nullptr, std::memory_order_release);
+		g_src[k][0].simGen = 0;
+		g_src[k][0].src.store((srcs && k < nSrc) ? srcs[k] : nullptr, std::memory_order_release);
 	}
-	for (int k = 0; k < kSrcBankB; ++k) {
-		g_srcB[k].simGen = 0;
-		g_srcB[k].src.store((srcsB && k < nSrcB) ? srcsB[k] : nullptr, std::memory_order_release);
+	for (int k = 0; k < kSrcSlotsMax; ++k) {
+		g_src[k][1].simGen = 0;
+		g_src[k][1].src.store((srcsB && k < nSrcB) ? srcsB[k] : nullptr, std::memory_order_release);
 	}
 	{
 		CtlCall cc;
@@ -2634,19 +2633,17 @@ void NewResponseStats(int* maxSrc, int* maxAll) {
 }
 
 void PublishSrcBank(int k, int bank) {
-	if (k >= 0 && k < kSrcSlotsMax) {
-		if (bank == 0) g_src[k].pubs.fetch_add(1, std::memory_order_relaxed);
-		else if (k < kSrcBankB) g_srcB[k].pubs.fetch_add(1, std::memory_order_relaxed);
-	}
-	// bank 0's g_src[k].simGen is the slot's generation (PublishSimulated); bank 1 only needs "simulated"
-	if (bank == 1 && k >= 0 && k < kSrcBankB) g_srcB[k].simGen = 1;
+	if (k < 0 || k >= kSrcSlotsMax || (bank != 0 && bank != 1)) return;
+	g_src[k][bank].pubs.fetch_add(1, std::memory_order_relaxed);
+	// bank 0's simGen is the slot's generation (PublishSimulated); bank 1 only needs "simulated"
+	if (bank == 1) g_src[k][1].simGen = 1;
 }
 
 void SetSrcBlend(int k, float w0, float w1, bool snap) {
 	if (k < 0 || k >= kSrcSlotsMax) return;
 	CtlCall cc;
 	g_c.srcT[k][0] = std::clamp(w0, 0.0f, 1.0f);
-	g_c.srcT[k][1] = k < kSrcBankB ? std::clamp(w1, 0.0f, 1.0f) : 0.0f;
+	g_c.srcT[k][1] = std::clamp(w1, 0.0f, 1.0f);
 	SendBlend(k, snap);
 }
 
@@ -2655,8 +2652,7 @@ void SetSrcBlend(int k, float w0, float w1, bool snap) {
 bool SrcBankSilent(int bank) {
 	const AudioPub p = g_pub.Read();
 	std::lock_guard<std::mutex> lk(g_ctlMtx);
-	// slots beyond kSrcBankB have bank 0 only and never take part in a swap
-	for (int k = 0; k < kSrcBankB; ++k)
+	for (int k = 0; k < kSrcSlotsMax; ++k)
 		if (p.srcW[k][bank] > 0 || g_c.srcT[k][bank] > 0 || g_c.blendDirty[k] || p.applied < g_c.raiseSeq[k][bank]) return false;
 	return true;
 }
@@ -2672,9 +2668,9 @@ void SrcSlotStates(SrcSlotState* out, double* seconds) {
 		out[k].energy = g_srcE[k].exchange(0);
 		out[k].inEnergy = g_srcInE[k].exchange(0);
 		for (int b = 0; b < 2; ++b) {
-			const Reflection* r = b == 0 ? &g_src[k] : (k < kSrcBankB ? &g_srcB[k] : nullptr);
-			for (int q = 0; q < 3; ++q) out[k].eq[b][q] = r ? r->eqUsed[q].load() : 0.0f;
-			out[k].delay[b] = r ? r->delayUsed.load() : 0;
+			const Reflection& r = g_src[k][b];
+			for (int q = 0; q < 3; ++q) out[k].eq[b][q] = r.eqUsed[q].load();
+			out[k].delay[b] = r.delayUsed.load();
 		}
 	}
 	const double s = g_srcESec.exchange(0);
@@ -2696,7 +2692,7 @@ bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend, float fbWet) {
 		}
 		return t != nullptr && slot < 0;
 	}
-	if (!t || !g_src[slot].fx) return false;
+	if (!t || !g_src[slot][0].fx) return false;
 	// a new binding waits for gen (the slot's generation at bind time): a slot already simulated
 	// at that place has simGen >= gen and is fed at once; one moved (or just taken) waits, the
 	// voice keeping its room send meanwhile. The other voices of the slot keep theirs: they go on
@@ -2745,7 +2741,7 @@ void RoomReverbTimes(float rt[3]) {
 }
 
 void PublishSimulated(int slot, int gen) {
-	Reflection* r = slot < 0 ? &g_room : slot < kEchoSlots ? &g_echo[slot] : slot < kEchoSlots + kSrcSlotsMax ? &g_src[slot - kEchoSlots] : nullptr;
+	Reflection* r = slot < 0 ? &g_room : slot < kEchoSlots ? &g_echo[slot] : slot < kEchoSlots + kSrcSlotsMax ? &g_src[slot - kEchoSlots][0] : nullptr;
 	if (!r) return;
 	r->simGen = gen;
 	r->pubs.fetch_add(1, std::memory_order_relaxed);
@@ -3584,8 +3580,7 @@ Reflection* SlotReflection(int slot, bool bankB) {
 	if (slot >= 0 && slot < kEchoSlots) return bankB ? nullptr : &g_echo[slot];
 	const int k = slot - kEchoSlots;
 	if (k < 0 || k >= kSrcSlotsMax) return nullptr;
-	if (!bankB) return &g_src[k];
-	return k < kSrcBankB ? &g_srcB[k] : nullptr;
+	return &g_src[k][bankB ? 1 : 0];
 }
 } // namespace
 
@@ -3596,8 +3591,7 @@ void SetSlotReverbTimes(int slot, const float* rt) {
 
 void ClearSlotReverbTimes() {
 	for (auto& e : g_echo) e.rtLongOn = false;
-	for (auto& s : g_src) s.rtLongOn = false;
-	for (auto& s : g_srcB) s.rtLongOn = false;
+	for (auto& s : g_src) s[0].rtLongOn = s[1].rtLongOn = false;
 }
 
 bool SlotReverbTimes(int slot, float used[3], float mainRt[3], bool* longOn) {

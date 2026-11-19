@@ -272,7 +272,7 @@ std::atomic<int> g_echoBusy{0}, g_slotPasses{0};
 //    listener is an anchor moved only when the real listener is more than g_srcAccumR away from it
 //    (or the scene changed): Steam Audio keeps averaging every pass made while the listener walks
 //    around the anchor (dozens instead of a few), and the level no longer changes with each step.
-//  - Each slot has two reflection sources (banks, render::kSrcBankB): when the anchor moves, the
+//  - Each slot has two reflection sources (banks): when the anchor moves, the
 //    bank holding the previous anchor's average stays and is crossfaded into the new one by pass
 //    count (the new average takes over within g_srcAccumK passes): a re-anchor is a glide between
 //    two averages, not a jump to a single pass. The bank to reuse is first faded out (<= 0.2 s).
@@ -280,7 +280,7 @@ std::atomic<int> g_echoBusy{0}, g_slotPasses{0};
 // convolution per slot while its banks crossfade. The response is the anchor's (<= g_srcAccumR off),
 // never invented: where no ray reaches the source room the average stays 0.
 IPLSimulator g_slotSim = nullptr;
-IPLSource g_srcSlotB[render::kSrcBankB] = {}; // bank 1 (bank 0 is g_srcSlot[k].src)
+IPLSource g_srcSlotB[render::kSrcSlotsMax] = {}; // bank 1 (bank 0 is g_srcSlot[k].src)
 std::atomic<float> g_srcAccumR{1.5f}; // m; <= 0: off (simulated at the listener, every move restarts)
 std::atomic<int> g_srcAccumK{8};      // passes for a new anchor's average to take over
 // Slots simulated per run (stagger.h, SetSlotGroup, pba_native_slot_group): a run hands each of its slots a new impulse
@@ -293,7 +293,7 @@ constexpr double kSlotGroupGapMs = 12.0; // > one audio block (512 / 48 kHz = 10
 struct SrcAccum {
 	IPLCoordinateSpace3 anchor{};
 	bool anchored = false;
-	int cur = 0;           // bank simulated now (slots >= kSrcBankB: always 0)
+	int cur = 0;           // bank simulated now
 	int anchorScene = -1;  // scene version when the anchor was set
 	bool retiring = false; // the anchor must move; waiting for the other bank to fade out
 	IPLVector3 lastRunLis{};
@@ -470,10 +470,8 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 	SrcAccum& A = g_acc;
 	const float R = g_srcAccumR.load();
 	const bool accum = R > 0;
-	auto bankOf = [&](int k) { return k < render::kSrcBankB ? A.cur : 0; };
-	auto srcOf = [&](int b, int k) -> IPLSource {
-		return b == 0 ? g_srcSlot[k].src : (k < render::kSrcBankB ? g_srcSlotB[k] : nullptr);
-	};
+	auto bankOf = [&](int) { return A.cur; };
+	auto srcOf = [&](int b, int k) -> IPLSource { return b == 0 ? g_srcSlot[k].src : g_srcSlotB[k]; };
 	auto powOf = [&](int b, int k) { return A.pow[b][k] == 0 ? 1.0f : A.pow[b][k]; };
 	// slots are simulated at genPos, not pos: a source drifting within kSrcNear keeps its average
 	// (pos follows the binder at every refresh; a moved source restarts Steam Audio's average)
@@ -496,7 +494,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 			// out is taken over at once (its other slots keep their response until they run again)
 			if (render::SrcBankSilent(o) || waiting) {
 				// the other bank is silent: it starts a fresh average at the new anchor, the current one
-				// becomes the partner it crossfades from. Slots beyond kSrcBankB restart in place.
+				// becomes the partner it crossfades from.
 				A.cur = o;
 				A.anchor = lis;
 				A.anchorScene = sceneVer;
@@ -505,7 +503,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 					const int b = bankOf(k);
 					A.n[b][k] = 0;
 					A.reset[b][k] = true;
-					if (k < render::kSrcBankB) A.has[b][k] = false;
+					A.has[b][k] = false;
 				}
 				g_srcSwaps++;
 			} else {
@@ -558,7 +556,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 		bool ready[render::kSrcSlotsMax] = {};
 		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 			const int c = bankOf(k), o = 1 - c;
-			if (A.retiring && k < render::kSrcBankB) {
+			if (A.retiring) {
 				// fade the bank to reuse out; the current one alone meanwhile, if it holds this place's
 				// response (else silent until its run: it may still hold an older anchor's or place's)
 				const float wc = samePlace(c, k) ? 1.0f : 0.0f;
@@ -566,7 +564,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 				ready[k] = wc > 0;
 				continue;
 			}
-			const bool hasO = accum && k < render::kSrcBankB && samePlace(o, k) && A.n[o][k] > 0;
+			const bool hasO = accum && samePlace(o, k) && A.n[o][k] > 0;
 			const int nc = samePlace(c, k) ? A.n[c][k] : 0;
 			// nothing simulated here yet: unchanged (the weights left there may point at a bank since restarted)
 			if (nc == 0 && !hasO) continue;
@@ -1159,12 +1157,12 @@ bool EnsureSimulator() {
 		}
 		// source reverb slots: their own simulator (listener anchor, see g_slotSim), same settings
 		IPLSource ss[render::kSrcSlotsMax] = {};
-		IPLSource sb[render::kSrcBankB] = {};
+		IPLSource sb[render::kSrcSlotsMax] = {};
 		g_acc = SrcAccum{};
 		{
 			IPLSimulationSettings ssim = sim;
 			ssim.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
-			ssim.maxNumSources = render::kSrcSlotsMax + render::kSrcBankB;
+			ssim.maxNumSources = 2 * render::kSrcSlotsMax;
 			if (iplSimulatorCreate(g_ctx, &ssim, &g_slotSim) == IPL_STATUS_SUCCESS) iplSimulatorSetScene(g_slotSim, g_scene);
 			else g_slotSim = nullptr;
 		}
@@ -1180,13 +1178,11 @@ bool EnsureSimulator() {
 			if (!g_slotSim) continue;
 			if (iplSourceCreate(g_slotSim, &rs, &g_srcSlot[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlot[k].src, g_slotSim);
 			ss[k] = g_srcSlot[k].src;
-			if (k < render::kSrcBankB) {
-				if (iplSourceCreate(g_slotSim, &rs, &g_srcSlotB[k]) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlotB[k], g_slotSim);
-				sb[k] = g_srcSlotB[k];
-			}
+			if (iplSourceCreate(g_slotSim, &rs, &g_srcSlotB[k]) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlotB[k], g_slotSim);
+			sb[k] = g_srcSlotB[k];
 		}
 		if (g_slotSim) iplSimulatorCommit(g_slotSim);
-		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots, ss, render::kSrcSlotsMax, sb, render::kSrcBankB);
+		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots, ss, render::kSrcSlotsMax, sb, render::kSrcSlotsMax);
 	}
 	iplSimulatorCommit(g_sim);
 	// long-window parametric simulator for the room reverb time (see g_revSim)
@@ -2824,7 +2820,7 @@ LUA_FUNCTION(SrcSlotStats) {
 	int row = 0;
 	for (int k = 0; k < std::min(g_srcPool.load(), render::kSrcSlotsMax); ++k) {
 		if (gen[k] == 0) continue;
-		const int c = k < render::kSrcBankB ? cur : 0, o = 1 - c;
+		const int c = cur, o = 1 - c;
 		LUA->PushNumber(++row);
 		LUA->CreateTable();
 		auto num = [&](const char* f, double v) {
@@ -2838,7 +2834,7 @@ LUA_FUNCTION(SrcSlotStats) {
 		LUA->SetField(-2, "active");
 		num("bank", c);
 		num("n", g_srcStatN[k][c].load());
-		num("nOld", k < render::kSrcBankB ? g_srcStatN[k][o].load() : 0);
+		num("nOld", g_srcStatN[k][o].load());
 		num("w", st[k].w[c]);
 		num("wOld", st[k].w[o]);
 		num("target", st[k].target[c]);

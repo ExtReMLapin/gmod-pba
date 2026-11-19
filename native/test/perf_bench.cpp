@@ -300,7 +300,7 @@ struct Sim {
 	IPLStaticMesh mesh = nullptr;
 	IPLInstancedMesh inst = nullptr;
 	IPLSimulator main = nullptr, slot = nullptr, rev = nullptr;
-	IPLSource room = nullptr, echo[render::kEchoSlots] = {}, src[render::kSrcSlotsMax] = {}, srcB[render::kSrcBankB] = {}, revSrc = nullptr;
+	IPLSource room = nullptr, echo[render::kEchoSlots] = {}, src[render::kSrcSlotsMax] = {}, srcB[render::kSrcSlotsMax] = {}, revSrc = nullptr;
 	int tris = 0;
 	IPLSceneType type = IPL_SCENETYPE_DEFAULT;
 };
@@ -387,16 +387,14 @@ static bool BuildSims() {
 	}
 	iplSimulatorCommit(S.main);
 	IPLSimulationSettings ssim = sim;
-	ssim.maxNumSources = render::kSrcSlotsMax + render::kSrcBankB;
+	ssim.maxNumSources = 2 * render::kSrcSlotsMax;
 	if (iplSimulatorCreate(S.ctx, &ssim, &S.slot) != IPL_STATUS_SUCCESS) return false;
 	iplSimulatorSetScene(S.slot, S.root);
 	for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 		iplSourceCreate(S.slot, &rs, &S.src[k]);
 		iplSourceAdd(S.src[k], S.slot);
-		if (k < render::kSrcBankB) {
-			iplSourceCreate(S.slot, &rs, &S.srcB[k]);
-			iplSourceAdd(S.srcB[k], S.slot);
-		}
+		iplSourceCreate(S.slot, &rs, &S.srcB[k]);
+		iplSourceAdd(S.srcB[k], S.slot);
 	}
 	iplSimulatorCommit(S.slot);
 	IPLSimulationSettings rv = sim;
@@ -410,7 +408,7 @@ static bool BuildSims() {
 	iplSourceCreate(S.rev, &rs, &S.revSrc);
 	iplSourceAdd(S.revSrc, S.rev);
 	iplSimulatorCommit(S.rev);
-	render::SetReflectionSources(S.room, S.echo, render::kEchoSlots, S.src, render::kSrcSlotsMax, S.srcB, render::kSrcBankB);
+	render::SetReflectionSources(S.room, S.echo, render::kEchoSlots, S.src, render::kSrcSlotsMax, S.srcB, render::kSrcSlotsMax);
 	return true;
 }
 
@@ -494,13 +492,13 @@ static void ReflectionLoop() {
 				for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 					const bool in = k >= first && k < first + count;
 					SetIn(S.src[k], SlotPos(k), in && (O.banks == 2 || bank == 0));
-					if (k < render::kSrcBankB) SetIn(S.srcB[k], SlotPos(k), in && (O.banks == 2 || bank == 1));
+					SetIn(S.srcB[k], SlotPos(k), in && (O.banks == 2 || bank == 1));
 				}
 				iplSimulatorRunReflections(S.slot);
 				simMs += (NowS() - g0) * 1000;
 				for (int k = first; k < first + count; ++k) {
 					render::PublishSrcBank(k, 0);
-					if (k < render::kSrcBankB) render::PublishSrcBank(k, 1);
+					render::PublishSrcBank(k, 1);
 					render::PublishSimulated(render::kEchoSlots + k, g_slotGen[k] = std::max(g_slotGen[k], 1));
 					if (O.banks == 2) render::SetSrcBlend(k, 0.5f, 0.5f, pass == 0);
 					else render::SetSrcBlend(k, 1.0f, 0.0f, pass == 0);
@@ -831,7 +829,7 @@ int main(int argc, char** argv) {
 		Shared(S.slot, lis, O.rays, O.bounces, render::kIRSeconds, 1);
 		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 			SetIn(S.src[k], SlotPos(k), k < O.slots);
-			if (k < render::kSrcBankB) SetIn(S.srcB[k], SlotPos(k), k < O.slots && O.banks == 2);
+			SetIn(S.srcB[k], SlotPos(k), k < O.slots && O.banks == 2);
 		}
 		iplSimulatorRunReflections(S.slot);
 		std::printf("[sim] first pass: main (room + %d echoes) %.1f ms, slots (%d x %d banks) %.1f ms\n", O.echoes, (b - a) * 1000, O.slots,

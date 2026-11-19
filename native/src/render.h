@@ -23,10 +23,9 @@ constexpr int kEchoSlots = 4;      // reflection sources simulated per source (l
 // response each) and their simulated sources were made for nothing.
 constexpr int kSrcSlotsDefault = 16; // active pool by default (pba_native g_srcPool)
 constexpr int kSrcSlotsMax = kSrcSlotsDefault;
-// the first kSrcBankB slots have a second reflection source and effect (bank 1): the response of the
-// previous listener anchor, crossfaded into the new one (see RunSrcSlots in pba_native.cpp). Slots
-// beyond it have one bank (each bank costs ~2.5 MB of impulse response buffers in Steam Audio)
-constexpr int kSrcBankB = 16;
+// every slot has a second reflection source and effect (bank 1): the response of the previous listener anchor,
+// crossfaded into the new one (see RunSrcSlots in pba_native.cpp; each bank costs ~2.5 MB of impulse response buffers
+// in Steam Audio)
 constexpr float kIRSeconds = 0.5f; // convolution part of the impulse response (parametric tail beyond)
 
 struct VoiceParams {
@@ -104,7 +103,7 @@ void SetPaused(bool paused);
 // reflection sources owned by the simulator (nullptr to detach before releasing them): returns once no block can read
 // the previous ones any more (it waits for the end of the audio callback in flight, if one is: at most one render);
 // srcs: the source reverb slots' sources (kSrcSlotsMax)
-// srcsB: bank 1 of the first kSrcBankB source slots (nullptr: none)
+// srcsB: bank 1 of the source slots (nullptr: none)
 void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IPLSource* srcs = nullptr, int nSrc = 0,
                           const IPLSource* srcsB = nullptr, int nSrcB = 0);
 // bank `bank` (0 or 1) of source slot k now holds a simulated response
@@ -113,7 +112,7 @@ void PublishSrcBank(int k, int bank);
 // towards them over ~0.2 s. snap: a weight that rises jumps there at once (the slot's first response
 // at a new place: there is nothing to crossfade from); falling weights always ramp (no cut tail)
 void SetSrcBlend(int k, float w0, float w1, bool snap);
-// no slot below kSrcBankB renders bank `bank` any more (weights and targets 0): it can be simulated elsewhere
+// no slot renders bank `bank` any more (weights and targets 0): it can be simulated elsewhere
 bool SrcBankSilent(int bank);
 struct SrcSlotState {
 	float w[2] = {0, 0};      // current weights of the two banks
