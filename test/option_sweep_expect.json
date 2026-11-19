@@ -427,6 +427,10 @@
   "pos0": "same",
   "why": "the result cache across a floor or a wall: cold positions have nothing cached and the sweep scenes put no two sources of one cell either side of a solid (test cell_barrier)"
  },
+ "door_field_invalidate": {
+  "pos0": "same",
+  "why": "drops cached paths when a background door field is swapped in (cl_probes PR.AdvanceDoorFields), outside a single P.Compute (pure test review P5)"
+ },
  "cache_src_near": {
   "pos0": "same",
   "why": "two sources with no entity in one 32 u cell more than reeval_move apart, within cache_ttl: the sweep evaluates one position at a time (pure test review P2)"

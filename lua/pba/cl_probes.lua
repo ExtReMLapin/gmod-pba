@@ -1458,6 +1458,10 @@ function PR.AdvanceDoorFields()
 		-- a far sound's evaluation paused in a slice may hold the old one (cl_slicer: restarted)
 		PR.fieldEpoch = (PR.fieldEpoch or 0) + 1
 		PR.doorFieldJob = nil
+		-- pba_door_field_invalidate: the paths worked out on the old field (a door just closed: still the way through
+		-- it) were kept for cache_ttl, and a loop re-evaluated at the door's change kept them for reeval_max_s (its
+		-- state's generation unchanged): the closed door still heard through for 1-2 s, then the switch
+		if (A.cfg.door_field_invalidate or 1) >= 0.5 then A.Paths.InvalidateCache() end
 	end
 end
 hook.Add("Think", "pba_probes_door_field", function() PR.AdvanceDoorFields() end)

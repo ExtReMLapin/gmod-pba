@@ -2516,14 +2516,40 @@ local SUITE = {
 					-- the door-cost part is redone in background slices (PR.AdvanceDoorFields), the old one answering
 					-- meanwhile; the field by length is kept (it reads no door)
 					expect(f2.doors ~= nil).to.beTrue()
-					local cur = PR.current
-					PR.current = g
-					for _ = 1, 1000 do
-						PR.AdvanceDoorFields()
-						if not PR.doorFieldJob and #((PR.doorFieldQueue or {}).list or {}) == 0 then break end
+					-- a path cached (and a loop's re-evaluation stamped) while the old door field answers (review P5)
+					-- (a cell's path kept as P.Compute keeps it, and a loop's last re-evaluation)
+					local cfgC = setmetatable({ cache_ttl = 10 }, { __index = A.cfg })
+					local function swapField()
+						local kept = { t = RealTime(), r = {}, sx = S.x, sy = S.y, sz = S.z, lx = L.x, ly = L.y, lz = L.z }
+						P.cache.swapTest = kept
+						local loop = {}
+						expect(P.ReevalDue(loop, S, L, 1000, cfgC)).to.beTrue()
+						local cur = PR.current
+						PR.current = g
+						for _ = 1, 1000 do
+							PR.AdvanceDoorFields()
+							if not PR.doorFieldJob and #((PR.doorFieldQueue or {}).list or {}) == 0 then break end
+						end
+						PR.current = cur
+						-- the field swapped in the background (pba_door_field_invalidate): the cached path and the loop's
+						-- values were worked out on the old one: neither stands (was: up to cache_ttl / reeval_max_s more)
+						return P.cache.swapTest ~= kept, P.ReevalDue(loop, S, L, 1000.2, cfgC)
 					end
-					PR.current = cur
+					local fresh, reeval = swapField()
+					expect(fresh).to.beTrue()
+					expect(reeval).to.beTrue()
 					expect(f2.stateSig ~= nil and f2.doors == nil).to.beTrue()
+					-- control: pba_door_field_invalidate 0 (former behaviour): both stand after the swap
+					A.Doors.byEnt[9990].frac = 0
+					PR.doorList = nil
+					expect(PR.FieldFor(g, L) == f2 and f2.stateSig ~= PR.StateSig(g)).to.beTrue() -- (queued again)
+					local savedOpt = rawget(A.cfg, "door_field_invalidate")
+					A.cfg.door_field_invalidate = 0
+					fresh, reeval = swapField()
+					A.cfg.door_field_invalidate = savedOpt
+					expect(fresh).to.equal(false)
+					expect(reeval).to.equal(false)
+					expect(f2.doors ~= nil).to.beTrue() -- (it did swap: the closed door's field again)
 					A.Doors.byEnt[9990].frac = 0.5
 					expect(PR.StateSig(g) ~= f2.stateSig).to.beTrue()
 				end)
