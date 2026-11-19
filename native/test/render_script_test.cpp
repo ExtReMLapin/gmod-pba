@@ -6,7 +6,11 @@
 // The hashes are the reference to compare a change of the renderer's plumbing against: the same script on the code
 // before and after must print the same OUTPUT and ANSWERS hashes (one run per process: some state, the under-water
 // filter's, outlives Stop / Start).
-// Usage: pba_render_script_test [--expect <OUTPUT> <ANSWERS>] [--dump out.f32] (raw interleaved float32).
+// Settings modes (--mode=<m>): "default" leaves every setting at the renderer's own default; "lua" sets what the addon's Lua
+// sends (pba_native_limit_pre 1, pba_native_pitch_glide 30...) with a blend below 1; "alt" turns every switchable setting the
+// other way (smoothing, continuous EQ, bank flush, slot fallback, diffuse-field EQ off, linear reading, legacy clip, own
+// limiter tuning). "lua" and "alt" also play a captured stream (fades, underrun, close) and move pitches (glide).
+// Usage: pba_render_script_test [--mode=default|lua|alt] [--expect <OUTPUT> <ANSWERS>] [--dump out.f32] (raw interleaved float32).
 // Pass: the script is heard; with --expect, both hashes equal the given ones.
 // Built with -DPBA_TESTS=ON (target pba_render_script_test).
 #include <phonon.h>
@@ -16,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -65,9 +70,40 @@ struct Run {
 	std::vector<float> pcm;
 };
 
-static Run Script(IPLContext ctx) {
+enum class Mode { Default, Lua, Alt };
+
+// the settings of a mode, before the start (the renderer keeps them across Start)
+static void Settings(Mode mode) {
+	if (mode == Mode::Lua) {
+		render::SetMixQuality(1, true, true);
+		render::SetPitchGlide(30);
+		render::SetHrtfBlend(0.8f);
+		render::SetStreamFade(5);
+		render::SetDiffuseSmooth(true);
+		render::SetEqContinuous(true);
+		render::SetSlotBankFlush(true);
+		render::SetSlotFallbackGain(true);
+		render::SetCapCompareNew(true);
+	} else if (mode == Mode::Alt) {
+		render::SetMixQuality(0, false, false);
+		render::SetPitchGlide(80);
+		render::SetHrtfBlend(0.3f);
+		render::SetStreamFade(0);
+		render::SetDiffuseSmooth(false);
+		render::SetEqContinuous(false);
+		render::SetSlotBankFlush(false);
+		render::SetSlotFallbackGain(false);
+		render::SetCapCompareNew(false);
+		render::SetDiffuseFieldEq(false);
+		render::SetLimiterTuning(3, 120, 1.5f);
+	}
+}
+
+static Run Script(IPLContext ctx, Mode mode) {
 	Run r;
 	Hash ho, ha;
+	Settings(mode);
+	const bool pre = mode == Mode::Lua; // the output stage's place (SetMixQuality premaster) the mode keeps
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return r; }
 	std::vector<float> buf(2000 * 2);
 	auto pull = [&](unsigned frames) {
@@ -194,6 +230,47 @@ static Run Script(IPLContext ctx) {
 	for (int k = 0; k < 30; ++k) pull(512);
 	render::Counters(&e1, &e2, &pu);
 	ans(e1);
+	if (mode != Mode::Default) {
+		// a captured stream (22.05 kHz): primed, an underrun, its return, a pitch change (glide), closed and drained
+		auto sb = std::make_shared<StreamBuf>(1 << 16);
+		sb->rate = 22050;
+		std::vector<float> chunk(4000);
+		uint32_t seed = 7;
+		auto feed = [&](int n) {
+			for (int i = 0; i < n; ++i) {
+				seed = seed * 1664525u + 1013904223u;
+				chunk[i] = 0.3f * (float)std::sin(0.05 * (double)(sb->w.load() + i)) + ((int)(seed >> 16) - 32768) / 600000.0f;
+			}
+			sb->Write(chunk.data(), (size_t)n);
+		};
+		feed(4000);
+		int vs = render::PlayStream(sb, P(-1, -2, 0.3f));
+		idv(vs);
+		for (int k = 0; k < 4; ++k) pull(512);
+		feed(1500);
+		for (int k = 0; k < 6; ++k) pull(512); // runs dry
+		feed(4000);
+		feed(4000);
+		render::VoiceParams pq = P(-1, -2, 0.3f);
+		pq.pitch = 130;
+		ans(render::Update(vs, pq));
+		for (int k = 0; k < 5; ++k) pull(512);
+		sb->closed = true;
+		for (int k = 0; k < 8; ++k) pull(512);
+		ans(render::Update(vs, pq));
+		// pitch steps on a sound voice (glide)
+		render::VoiceParams pg = P(1, -1, 0.3f);
+		int vg = render::Play("loop", pg, true);
+		idv(vg);
+		pull(512);
+		for (int k = 0; k < 6; ++k) {
+			pg.pitch = k % 2 ? 80.0f : 125.0f;
+			ans(render::Update(vg, pg));
+			pull(300 + 97 * k);
+		}
+		render::StopVoice(vg);
+		pull(512);
+	}
 	// stop: a rendered voice fades, a just-played one never sounds, then a Play / Update / Stop in one go
 	render::StopVoice(v2);
 	int v12 = render::Play("a", P(1, -1, 0.5f), false);
@@ -211,11 +288,11 @@ static Run Script(IPLContext ctx) {
 	render::SetOutputMode(1);
 	pull(1200);
 	render::SetOutputMode(0);
-	render::SetMixQuality(0, true, false);
+	render::SetMixQuality(0, true, pre);
 	pull(700);
-	render::SetMixQuality(2, false, true);
+	render::SetMixQuality(2, false, !pre);
 	pull(700);
-	render::SetMixQuality(1, true, false);
+	render::SetMixQuality(1, mode != Mode::Alt, pre);
 	render::SetDiffuseSend(2.0f);
 	render::SetDiffuseRtRef(0);
 	render::SetSourceReverbScale(2.0f);
@@ -278,7 +355,14 @@ int main(int argc, char** argv) {
 	cs.version = STEAMAUDIO_VERSION;
 	IPLContext ctx = nullptr;
 	if (iplContextCreate(&cs, &ctx) != IPL_STATUS_SUCCESS) { std::printf("FAIL context\n"); return 1; }
-	const Run r = Script(ctx);
+	Mode mode = Mode::Default;
+	for (int i = 1; i < argc; ++i) {
+		const std::string a = argv[i];
+		if (a == "--mode=lua") mode = Mode::Lua;
+		else if (a == "--mode=alt") mode = Mode::Alt;
+		else if (a == "--mode=default") mode = Mode::Default;
+	}
+	const Run r = Script(ctx, mode);
 	std::printf("OUTPUT  %016llx (%zu samples)\nANSWERS %016llx\n", (unsigned long long)r.out, r.pcm.size(), (unsigned long long)r.answers);
 	std::printf("METERS ");
 	for (double m : r.meters) std::printf(" %.12g", m);
