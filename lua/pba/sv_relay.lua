@@ -83,12 +83,12 @@ function A.NoteEarly(data, secs, ply, ev, blocked)
 		blocked = blocked and true or false }
 	A.stats.earlyNoted = (A.stats.earlyNoted or 0) + 1
 end
---- (pba_early_purge) The kept lines the engine no longer plays: entity idx's `name` (every name when nil / "") on chan
+--- The kept lines the engine no longer plays: entity idx's `name` (every name when nil / "") on chan
 -- (any when nil) stopped, or replaced on its channel. keep: the replacing sound (its own entry, noted in this tick,
 -- stays). A line left in the list after its stop was handed to the player's module once he was ready (a ghost line;
 -- replaced on its channel: two lines over each other).
 function A.PurgeEarly(idx, name, chan, keep)
-	if A.Num(A.cfg, "early_purge") < 0.5 or idx <= 0 then return end
+	if idx <= 0 then return end
 	local files = name and name ~= "" and A.StopFiles(name) or nil
 	local tick = engine.TickCount()
 	for _, p in ipairs(player.GetHumans()) do
@@ -316,7 +316,7 @@ local function sendStop(idx, name, chan, plys, unreliable, st)
 	net.Send(plys)
 end
 
--- (pba_stop_both) A copy relayed a few ticks before its stop can ride in the same packet as the stop: a client at a low
+-- A copy relayed a few ticks before its stop can ride in the same packet as the stop: a client at a low
 -- frame rate or cl_updaterate reads several ticks per packet, and reads a packet's reliable messages before its unreliable
 -- ones, so a reliable stop found nothing yet and the copy played to its end (two ticks apart on d3_citadel_01's pods: two
 -- module voices). To a player relayed a copy of the entity in the last STOP_BOTH_S seconds the stop goes on both streams:
@@ -325,9 +325,9 @@ end
 local STOP_BOTH_S = 1
 
 --- Adds player p, relayed a copy at time t, to the list `recent` of the stop's second (unreliable) stream when
--- pba_stop_both is on (`both`) and that copy is at most STOP_BOTH_S old; returns the list (nil while empty).
-local function noteRecent(recent, both, now, t, p)
-	if both and now - t <= STOP_BOTH_S then
+-- that copy is at most STOP_BOTH_S old; returns the list (nil while empty).
+local function noteRecent(recent, now, t, p)
+	if now - t <= STOP_BOTH_S then
 		recent = recent or {}
 		recent[#recent + 1] = p
 	end
@@ -337,7 +337,7 @@ end
 --- The engine stopped `name` on entity e (chan: only that channel's copies; nil, any): clients that got
 -- relayed copies stop theirs. except: players left out (set).
 -- A player relayed a copy of that entity in this very tick gets the stop on the unreliable stream, behind that
--- copy (pba_stop_order): the client reads a packet's reliable messages before its unreliable ones, so a reliable stop
+-- copy: the client reads a packet's reliable messages before its unreliable ones, so a reliable stop
 -- would find nothing yet (a non-looped ambient_generic fired twice in one tick: stop, play, stop, play; both plays kept).
 function A.RelayStop(e, name, chan, except)
 	local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
@@ -345,19 +345,17 @@ function A.RelayStop(e, name, chan, except)
 	local r = idx > 0 and A.recentTo[idx]
 	if not r then return end
 	local plys, now = {}, CurTime()
-	local inOrder = A.On(A.cfg, "stop_order")
-	local both = A.On(A.cfg, "stop_both")
 	local behind -- (the players relayed a copy of e in this tick)
-	local recent -- (pba_stop_both: those relayed one in the last STOP_BOTH_S: the stop goes on both streams)
+	local recent -- (those relayed one in the last STOP_BOTH_S: the stop goes on both streams)
 	for p, t in pairs(r) do
 		if IsValid(p) and now - t < 30 then
 			if not (except and except[p]) then
-				if inOrder and t == now then
+				if t == now then
 					behind = behind or {}
 					behind[#behind + 1] = p
 				else
 					plys[#plys + 1] = p
-					recent = noteRecent(recent, both, now, t, p)
+					recent = noteRecent(recent, now, t, p)
 				end
 			end
 		else
@@ -405,15 +403,14 @@ function A.CutChannel(data, idx, chan)
 	local keep = {}
 	for _, p in ipairs(A.relayedTo or {}) do keep[p] = true end
 	local plys, now = {}, CurTime()
-	local both = A.On(A.cfg, "stop_both")
-	local recent -- (pba_stop_both: the cut on both streams)
+	local recent -- (the cut on both streams)
 	for p, t in pairs(held) do
 		if not keep[p] then
 			held[p] = nil
 			-- (a copy is never longer than max_duration; 30 s as for recentTo)
 			if IsValid(p) and now - t < 30 then
 				plys[#plys + 1] = p
-				recent = noteRecent(recent, both, now, t, p)
+				recent = noteRecent(recent, now, t, p)
 			end
 		end
 	end
