@@ -141,7 +141,8 @@ function P.Result()
 	}
 	if pba_native and pba_native.Stats and P.nat0 then
 		local s = pba_native.Stats()
-		res.native = { audioMaxMs = r3(s.audioMaxMs or 0), reflMs = r3(s.reflMs or 0), reflRuns = (s.reflRuns or 0) - (P.nat0.reflRuns or 0),
+		res.native = { audioMaxMs = r3(s.audioMaxMs or 0), audioMaxCpuMs = s.audioMaxCpuMs and r3(s.audioMaxCpuMs) or nil,
+			audioMaxAgoS = s.audioMaxAgoS and r3(s.audioMaxAgoS) or nil, reflMs = r3(s.reflMs or 0), reflRuns = (s.reflRuns or 0) - (P.nat0.reflRuns or 0),
 			echoBusy = (s.echoBusy or 0) - (P.nat0.echoBusy or 0), echoDropped = (s.echoDropped or 0) - (P.nat0.echoDropped or 0),
 			slotPasses = (s.slotPasses or 0) - (P.nat0.slotPasses or 0), soundsLoaded = (s.sounds or 0) - (P.nat0.sounds or 0) }
 	end

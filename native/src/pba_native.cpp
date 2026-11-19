@@ -2582,11 +2582,15 @@ LUA_FUNCTION(SetLimits) {
 	return 0;
 }
 
-// Stats() -> table: reflection thread and audio thread load, reverb times, HRTF
+// Stats() -> table: reflection thread and audio thread load, reverb times, HRTF. The audio thread's load covers the time since
+// the previous Stats call (audioWindowS): audioAvgMs / audioMaxMs (wall time per 512-sample block, budget 10.7 ms), with
+// audioMaxCpuMs the thread's own CPU time over the largest block (close to audioMaxMs: work; much less: preempted or
+// waiting), audioCpuMaxMs the largest CPU time of any block and audioMaxAgoS how long ago the largest block ended
 LUA_FUNCTION(Stats) {
-	double avg = 0, mx = 0;
-	int blocks = 0;
-	render::Load(&avg, &mx, &blocks);
+	render::LoadStats ls;
+	render::LoadEx(&ls);
+	const double avg = ls.avgMs, mx = ls.maxMs;
+	const int blocks = ls.blocks;
 	float rt[3];
 	{
 		std::lock_guard<std::mutex> lk(g_stageMtx);
@@ -2599,6 +2603,14 @@ LUA_FUNCTION(Stats) {
 	LUA->SetField(-2, "audioMaxMs");
 	LUA->PushNumber(blocks);
 	LUA->SetField(-2, "audioBlocks");
+	LUA->PushNumber(ls.maxCpuMs);
+	LUA->SetField(-2, "audioMaxCpuMs");
+	LUA->PushNumber(ls.cpuMaxMs);
+	LUA->SetField(-2, "audioCpuMaxMs");
+	LUA->PushNumber(ls.maxAgoS);
+	LUA->SetField(-2, "audioMaxAgoS");
+	LUA->PushNumber(ls.windowS);
+	LUA->SetField(-2, "audioWindowS");
 	LUA->PushNumber(render::CapRefused()); // new voices the cap left out (pba_native_cap_new)
 	LUA->SetField(-2, "capRefused");
 	LUA->PushNumber(g_reflMs.load());

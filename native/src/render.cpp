@@ -59,6 +59,12 @@
 #include "render.h"
 
 #include <xmmintrin.h>
+#ifdef _WIN32
+#include <intrin.h>
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -432,8 +438,45 @@ std::atomic<double> g_energyL{0}, g_energyR{0};           // SetListener
 std::atomic<double> g_dbgIn{0}, g_dbgL{0}, g_dbgR{0};     // Debug
 std::atomic<int> g_dbgVoices{0};
 std::atomic<double> g_xc[kMaxLag * 2 + 1];                // L/R cross-correlation of the mix (ITD meter, Debug)
-std::atomic<double> g_loadSum{0}, g_loadMax{0};           // Load
+std::atomic<double> g_loadSum{0}, g_loadMax{0};           // (former Load meters, kept zero; see LoadWin)
 std::atomic<int> g_loadN{0};
+//  - the audio thread's load since the last read (LoadEx): a window kept by the audio thread and published whole after
+//    each block; a read asks for a new window (g_loadReq), which the audio thread starts at its next block
+struct LoadWin {
+	double sumMs = 0;      // wall time of the blocks
+	double maxMs = 0;      // the largest block's wall time
+	double maxCpuMs = 0;   // the thread's CPU time over that block
+	double cpuMaxMs = 0;   // the largest CPU time of any block
+	double maxAt = 0;      // when the largest block ended (steady clock, s)
+	int blocks = 0;
+	uint64_t req = 0;      // the read request this window started from
+};
+std::atomic<uint64_t> g_loadReq{0};
+std::atomic<double> g_loadReadAt{0}; // when the previous read was (steady clock, s)
+LoadWin g_loadWin; // audio thread
+//  test hook (PBA_LOAD_TEST_HOOK): busy work or a sleep added to the next block
+std::atomic<double> g_testBusyMs{0}, g_testSleepMs{0};
+inline double SteadyS() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+// the calling thread's CPU time, in a unit whose ratio to ThreadClockWall's is the share of the time it ran
+#ifdef _WIN32
+inline uint64_t ThreadClockCpu() {
+	ULONG64 c = 0;
+	QueryThreadCycleTime(GetCurrentThread(), &c); // cycles of the time stamp counter spent by this thread (user + kernel)
+	return c;
+}
+inline uint64_t ThreadClockWall() { return __rdtsc(); } // the same counter, all the time
+#else
+inline uint64_t ThreadClockCpu() {
+	timespec t{};
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+	return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+inline uint64_t ThreadClockWall() {
+	timespec t{};
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+#endif
 std::atomic<double> g_srcE[kSrcSlotsMax];   // W-channel energy of each slot's wet output (SrcSlotStates)
 std::atomic<double> g_srcInE[kSrcSlotsMax]; // energy of each slot's mono input (SrcSlotStates)
 std::atomic<double> g_srcESec{0};
@@ -501,6 +544,7 @@ public:
 	}
 };
 Published<AudioPub> g_pub;
+Published<LoadWin> g_loadPub; // the audio thread's load window (LoadEx)
 //  - per voice record: what became of the voice the control side put there (Control::Drain reads them)
 std::atomic<int> g_endedId[kMaxVoices];        // id of the voice that ended in that record (one-shot over, faded out...)
 std::atomic<uint64_t> g_pathIdle[kMaxVoices];  // its path effect faded out under this control version (Voice::ctlSeq)
@@ -1084,6 +1128,15 @@ inline bool ClaimStart(int rec, int id) {
 // Renders one block of kBlock stereo frames into g_mix (audio thread, the commands of the block already applied).
 void RenderBlock() {
 	const auto t0 = std::chrono::steady_clock::now();
+	const uint64_t cpu0 = ThreadClockCpu(), wall0 = ThreadClockWall();
+#ifdef PBA_LOAD_TEST_HOOK
+	if (const double b = g_testBusyMs.exchange(0); b > 0) {
+		const auto until = t0 + std::chrono::microseconds((long long)(b * 1000));
+		volatile double sink = 0;
+		while (std::chrono::steady_clock::now() < until) sink = sink + 1;
+	}
+	if (const double s = g_testSleepMs.exchange(0); s > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(s * 1000)));
+#endif
 	double dbgIn = 0, dbgL = 0, dbgR = 0; // debug meters of this block (published at its end)
 	int dbgVoices = 0;
 	std::fill(g_mix.begin(), g_mix.end(), 0.0f);
@@ -1665,9 +1718,25 @@ void RenderBlock() {
 		cap->frames.store(capAt + kBlock, std::memory_order_release);
 	}
 	const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-	AddTo(g_loadSum, ms);
-	MaxTo(g_loadMax, ms);
-	g_loadN.fetch_add(1, std::memory_order_relaxed);
+	// the share of the block's wall time the thread actually ran (its CPU time over the same clock): a slow block with
+	// little CPU time was preempted or waited (a page fault served by the kernel counts as the thread's time)
+	const uint64_t dCpu = ThreadClockCpu() - cpu0, dWall = ThreadClockWall() - wall0;
+	const double cpuMs = dWall > 0 ? ms * std::min(1.0, (double)dCpu / (double)dWall) : ms;
+	LoadWin& lw = g_loadWin;
+	const uint64_t req = g_loadReq.load(std::memory_order_acquire);
+	if (req != lw.req) {
+		lw = LoadWin{};
+		lw.req = req;
+	}
+	lw.sumMs += ms;
+	lw.blocks++;
+	if (ms > lw.maxMs) {
+		lw.maxMs = ms;
+		lw.maxCpuMs = cpuMs;
+		lw.maxAt = SteadyS();
+	}
+	lw.cpuMaxMs = std::max(lw.cpuMaxMs, cpuMs);
+	g_loadPub.Write(lw);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -2333,6 +2402,10 @@ static void ResetThreadState() {
 	for (auto& x : g_xc) x.store(0);
 	g_dbgVoices.store(0);
 	g_loadN.store(0);
+	g_loadWin = LoadWin{};
+	g_loadWin.req = g_loadReq.load();
+	g_loadPub.Write(g_loadWin);
+	g_loadReadAt = SteadyS(); // (the first read's window starts here)
 	g_fifo.clear();
 	g_fifo.reserve(kBlock * 2); // (the callback then reuses it: no allocation there)
 	g_fifoPos = 0;
@@ -2753,13 +2826,38 @@ void Debug(IPLVector3* lis, IPLVector3* ahead, IPLVector3* lastDir) {
 	*lastDir = g_pub.Read().lastDir;
 }
 
-void Load(double* avgMs, double* maxMs, int* blocks) {
-	const int n = g_loadN.exchange(0);
-	const double sum = g_loadSum.exchange(0);
-	*avgMs = n ? sum / n : 0;
-	*maxMs = g_loadMax.exchange(0);
-	*blocks = n;
+void LoadEx(LoadStats* out) {
+	*out = LoadStats{};
+	const LoadWin w = g_loadPub.Read();
+	const uint64_t req = g_loadReq.load(std::memory_order_acquire);
+	const double now = SteadyS();
+	const double prev = g_loadReadAt.exchange(now);
+	out->windowS = prev > 0 ? now - prev : 0;
+	// the window published started from the latest request: it is the one since the previous read (else no block was
+	// rendered since the previous read took it: nothing)
+	if (w.req == req && w.blocks > 0) {
+		out->blocks = w.blocks;
+		out->avgMs = w.sumMs / w.blocks;
+		out->maxMs = w.maxMs;
+		out->maxCpuMs = w.maxCpuMs;
+		out->cpuMaxMs = w.cpuMaxMs;
+		out->maxAgoS = now - w.maxAt;
+	}
+	g_loadReq.fetch_add(1, std::memory_order_acq_rel); // the next block starts a new window
 }
+void Load(double* avgMs, double* maxMs, int* blocks) {
+	LoadStats s;
+	LoadEx(&s);
+	*avgMs = s.avgMs;
+	*maxMs = s.maxMs;
+	*blocks = s.blocks;
+}
+#ifdef PBA_LOAD_TEST_HOOK
+void TestBlockExtra(double busyMs, double sleepMs) {
+	g_testBusyMs = busyMs;
+	g_testSleepMs = sleepMs;
+}
+#endif
 
 void SetDiffuseFieldEq(bool on) {
 	CtlCall cc;

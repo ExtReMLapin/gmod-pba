@@ -269,6 +269,17 @@ void StopVoice(int id);
 int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, double* eL, double* eR);
 // audio thread load: average and max milliseconds per 512-sample block since the last call
 void Load(double* avgMs, double* maxMs, int* blocks);
+// The same window, told whole (pba_native.Stats): the largest block's wall time, the thread's own CPU time over that block (a
+// slow block with little CPU time was preempted or waited; with most of it, it was work), the largest CPU time of any block,
+// how long ago the largest block ended and how long the window is (since the previous read). Both reads start a new window.
+struct LoadStats {
+	double avgMs = 0, maxMs = 0, maxCpuMs = 0, cpuMaxMs = 0, maxAgoS = 0, windowS = 0;
+	int blocks = 0;
+};
+void LoadEx(LoadStats* out);
+#ifdef PBA_LOAD_TEST_HOOK
+void TestBlockExtra(double busyMs, double sleepMs); // tests: busy work or a sleep added to the next block
+#endif
 
 // Radius (m) within which a source reverb slot keeps the response simulated at one place: `base` near
 // the listener, `frac` of the source - listener distance far away (frac <= 0: base alone).
