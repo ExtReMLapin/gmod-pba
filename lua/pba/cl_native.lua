@@ -333,10 +333,13 @@ function N.Retune()
 	return r
 end
 
+-- N.err while the server forbids the module (pba_allow_native 0): the 0.5 s timer below starts it again once allowed
+local SERVER_OFF = "disabled by the server (pba_allow_native 0)"
+
 function N.Start()
 	N.ready, N.pathsReady, N.err, N.outdated = false, false, nil, nil
 	if A.Num(A.cfg, "native") < 0.5 then return end
-	if A.Num(A.cfg, "allow_native") < 0.5 then N.err = "disabled by the server (pba_allow_native 0)" return end
+	if A.Num(A.cfg, "allow_native") < 0.5 then N.err = SERVER_OFF return end
 	local problem = N.InstallProblem(jit.arch, function(p) return file.Exists(p, "GAME") end)
 	if problem then N.err = problem return end
 	if not pba_native then
@@ -2540,10 +2543,10 @@ timer.Create("pba_native_reverb", 0.5, 0, function()
 	if A.Num(A.cfg, "allow_native") < 0.5 and (N.ready or N.building) then
 		N.StopRender()
 		N.building, N.ready, N.pathsReady = nil, false, false
-		N.err = "disabled by the server (pba_allow_native 0)"
+		N.err = SERVER_OFF
 		if A.Paths then A.Paths.InvalidateCache() end
 	elseif A.On(A.cfg, "allow_native") and not N.ready and not N.building
-		and N.err == "disabled by the server (pba_allow_native 0)" then
+		and N.err == SERVER_OFF then
 		N.Start()
 	end
 	local want = N.render and A.Num(A.cfg, "native_echo") > 0 and A.Enabled() or false
