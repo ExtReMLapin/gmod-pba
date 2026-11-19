@@ -41,6 +41,7 @@ struct Opt {
 	int rt = 1, mmcss = 0, burn = 0, sampler = 1, updates = 120, panning = 0, pitchvar = 1, eqfrac = 50, hq = 1;
 	int prio = 2; // audio thread priority: 2 = THREAD_PRIORITY_HIGHEST (miniaudio's default), 0 normal, 15 time critical
 	int simprio = 0; // priority of every non-audio thread of the bench (0 normal, -1 below normal...): set after start
+	int loadonly = 0; // 1: the sound decode costs only, then exit
 	int micro = 0;   // 1: micro-benchmarks of single effects (cost per apply of each variant), then exit
 	double secs = 8;
 	std::string scene = "room";
@@ -57,7 +58,7 @@ static void ParseArgs(int argc, char** argv) {
 		I("banks", O.banks); I("echoes", O.echoes); I("room", O.room); I("refl", O.refl); I("simthreads", O.simthreads);
 		I("rays", O.rays); I("bounces", O.bounces); I("rev", O.rev); I("props", O.props); I("still", O.still); I("rt", O.rt);
 		I("mmcss", O.mmcss); I("burn", O.burn); I("sampler", O.sampler); I("updates", O.updates); I("panning", O.panning);
-		I("pitchvar", O.pitchvar); I("eqfrac", O.eqfrac); I("hq", O.hq); I("prio", O.prio); I("simprio", O.simprio); I("micro", O.micro);
+		I("pitchvar", O.pitchvar); I("eqfrac", O.eqfrac); I("hq", O.hq); I("prio", O.prio); I("simprio", O.simprio); I("micro", O.micro); I("loadonly", O.loadonly);
 		if (k == "secs") O.secs = std::atof(v.c_str());
 		if (k == "scene") O.scene = v;
 	}
@@ -777,19 +778,30 @@ int main(int argc, char** argv) {
 	render::SetMixQuality(1, O.hq != 0);
 	render::SetOutputMode(O.panning ? 1 : 0);
 
-	// ---- sound decode cost (main thread in the module: LoadSound; long files go through LoadSoundAsync)
+	// ---- sound decode cost (main thread in the module: LoadSound; long files go through LoadSoundAsync): the first
+	// load of a rate pair builds its resampler kernel (kept after it), "best" is the lowest of 3 more (thread CPU)
 	{
 		struct L { const char* name; int frames, ch, rate; };
-		const L ls[] = {{"short22", 22050 / 2, 1, 22050}, {"mono44", 44100 * 3, 1, 44100}, {"st44", 44100 * 3, 2, 44100},
-		                {"mono48", 48000 * 3, 1, 48000}, {"long44", 44100 * 30, 2, 44100}};
+		const L ls[] = {{"short22", 22050 / 2, 1, 22050}, {"line22", 22050 * 16, 1, 22050}, {"mono44", 44100 * 3, 1, 44100},
+		                {"line44", 44100 * 8, 1, 44100}, {"st44", 44100 * 3, 2, 44100}, {"mono48", 48000 * 3, 1, 48000},
+		                {"long44", 44100 * 30, 2, 44100}};
+		int li = 0;
 		for (auto& l : ls) {
 			const std::string w = Wav(l.frames, l.ch, l.rate, 11, 220);
-			double secs = 0;
-			const double a = NowS();
-			render::LoadSound(l.name, w.data(), w.size(), &secs);
-			std::printf("[load] %-8s %5.2f s %d ch %5d Hz: %.2f ms (%.2f ms per second of sound)\n", l.name, secs, l.ch, l.rate,
-			            (NowS() - a) * 1000, (NowS() - a) * 1000 / secs);
+			const double mb = w.size() / (1024.0 * 1024.0);
+			double secs = 0, first = 0, best = 1e30;
+			for (int r = 0; r < 4; ++r) {
+				const std::string nm = r == 0 ? std::string(l.name) : std::string(l.name) + "#" + std::to_string(li++); // (the voices play the first)
+				const uint64_t c0 = ThreadCycles();
+				render::LoadSound(nm, w.data(), w.size(), &secs);
+				const double ms = TscMs(ThreadCycles() - c0);
+				if (r == 0) first = ms;
+				else best = std::min(best, ms);
+			}
+			std::printf("[load] %-8s %5.2f s %d ch %5d Hz %6.3f MB: first %.2f ms, best %.2f ms (%.1f ms per MB)\n", l.name, secs, l.ch, l.rate, mb,
+			            first, best, best / mb);
 		}
+		if (O.loadonly) return 0;
 	}
 
 	if (!BuildScene()) { std::printf("FAIL scene\n"); return 1; }

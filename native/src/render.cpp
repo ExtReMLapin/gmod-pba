@@ -58,6 +58,7 @@
 
 #include "render.h"
 #include "prof.h"
+#include "sinc.h"
 
 #include <xmmintrin.h>
 #ifdef _WIN32
@@ -87,81 +88,7 @@
 
 namespace render {
 
-// Fractional-position reader: a sound's 48 kHz copy read at a position between two samples, which is what a voice at
-// another pitch (or Doppler) does at every output sample, and what a sentence word at its own pitch does. Linear
-// interpolation (what this was) mirrors the band of the file above the reading rate / 2 back into the sound at about
-// -30 to -45 dB (a 11.025 kHz file at pitch 95: images at -48 dB, at pitch 80 on a 22.05 kHz one: -32 dB) and loses
-// 1 dB at 10 kHz; here a Kaiser-windowed sinc, 2 x 16 taps, cutoff 0.455 x the output rate, 1024 phases (nearest),
-// every phase normalised to a gain of exactly 1 at DC: flat within 0.1 dB up to 14 kHz, images >= 80 dB down (the
-// worst case, a tone at 14 kHz, -87 dB; 18 kHz -60 dB), timing error 1 / 2048 sample (-64 dB at 10 kHz). The edges
-// repeat the first / last sample; a loop reads the samples on the other side of its wrap point (InterpFold).
-constexpr int kIntHalf = 16, kIntTaps = 2 * kIntHalf, kIntPhases = 1024;
-static double BesselI0(double x) {
-	double sum = 1, term = 1;
-	const double q = x * x / 4;
-	for (int k = 1; k < 60; ++k) {
-		term *= q / ((double)k * k);
-		sum += term;
-		if (term < 1e-14 * sum) break;
-	}
-	return sum;
-}
-struct InterpTable {
-	float k[kIntPhases][kIntTaps];
-	InterpTable() {
-		const double wc = 0.455, beta = 9.0, i0b = BesselI0(beta), pi = 3.14159265358979323846;
-		for (int ph = 0; ph < kIntPhases; ++ph) {
-			const double f = (double)ph / kIntPhases; // position of the output sample after the sample `k`
-			double tmp[kIntTaps], sum = 0;
-			for (int t = 0; t < kIntTaps; ++t) {
-				const double d = (double)(t - (kIntHalf - 1)) - f; // tap t is sample k - (half - 1) + t
-				const double x = 2 * wc * d;
-				const double sinc = std::fabs(x) < 1e-9 ? 1.0 : std::sin(pi * x) / (pi * x);
-				const double u = d / kIntHalf;
-				const double w = std::fabs(u) >= 1 ? 0.0 : BesselI0(beta * std::sqrt(1 - u * u)) / i0b;
-				tmp[t] = sinc * w;
-				sum += tmp[t];
-			}
-			for (int t = 0; t < kIntTaps; ++t) k[ph][t] = (float)(tmp[t] / sum);
-		}
-	}
-};
-static const InterpTable& InterpT() {
-	static const InterpTable t; // built at the first use (Start touches it: never on the audio thread)
-	return t;
-}
-// where a position falls: the sample before it and the phase row
-struct InterpAt {
-	const float* row;
-	long k;
-};
-static inline InterpAt InterpLocate(double pos) {
-	long k = (long)pos;
-	int ph = (int)((pos - (double)k) * kIntPhases + 0.5);
-	if (ph >= kIntPhases) { ph = 0; ++k; }
-	return {InterpT().k[ph], k};
-}
-// the loop a read may wrap through: samples from `start` to n - 1 repeat (n - 1 is `start` again, as the mixer's wrap
-// has it); `wrapped`: the read is past the first wrap, so the samples before `start` are the loop's tail
-struct InterpLoop {
-	bool loop = false, wrapped = false;
-	long start = 0, period = 1;
-};
-static inline float InterpRead(const float* x, long n, const InterpAt& at, const InterpLoop& lp) {
-	const long base = at.k - (kIntHalf - 1);
-	const float* row = at.row;
-	float acc = 0;
-	if (base >= (lp.loop && lp.wrapped ? lp.start : 0) && base + kIntTaps <= n - 1) {
-		for (int t = 0; t < kIntTaps; ++t) acc += row[t] * x[base + t];
-		return acc;
-	}
-	for (int t = 0; t < kIntTaps; ++t) {
-		long j = base + t;
-		if (lp.loop && (j >= n - 1 || (lp.wrapped && j < lp.start))) j = lp.start + (((j - lp.start) % lp.period) + lp.period) % lp.period;
-		acc += row[t] * x[std::clamp(j, 0L, n - 1)];
-	}
-	return acc;
-}
+// Fractional-position reader (InterpRead) and the decode-time resampler: sinc.h
 
 namespace {
 
@@ -1297,8 +1224,7 @@ void RenderBlock() {
 						const size_t i0 = (size_t)(base & b.mask);
 						float acc = 0;
 						if (!closed && i0 + kIntTaps <= ringSize) { // the taps do not cross the ring's end
-							const float* d = &b.data[i0];
-							for (int t = 0; t < kIntTaps; ++t) acc += row[t] * d[t];
+							acc = sinc::Dot(row, &b.data[i0], kIntTaps);
 						} else {
 							for (int t = 0; t < kIntTaps; ++t) {
 								uint64_t j = base + (uint64_t)t;
@@ -3295,59 +3221,13 @@ static std::string FixWavFmt(const void* data, size_t size) {
 // at 14 kHz), the images of the 44.1 kHz band above 22 kHz held ~80 dB down (linear: ~ -25 dB at 10 kHz). The
 // kernel is tabulated per fractional phase (exact for rational ratios up to 8192 phases, nearest phase beyond),
 // every phase normalised to a gain of exactly 1 at DC. No delay: output sample m is the signal at m / rout. The
-// edges repeat the first / last sample.
+// edges repeat the first / last sample. sinc.h: the kernel is built once per rate pair and kept, the dot product is SSE.
 static void ResampleSinc(const float* in, size_t n, uint32_t rin, uint32_t rout, std::vector<float>& out) {
-	out.clear();
-	if (n == 0) return;
-	if (rin == rout) {
+	if (n == 0 || rin == rout) {
 		out.assign(in, in + n);
 		return;
 	}
-	const uint64_t gdiv = std::gcd((uint64_t)rin, (uint64_t)rout);
-	const uint64_t inG = rin / gdiv, outG = rout / gdiv; // out sample m sits at source position m * inG / outG
-	const int phases = (int)std::min<uint64_t>(outG, 8192);
-	const double wc = 0.465 * std::min(1.0, (double)rout / (double)rin); // cutoff, cycles per source sample
-	const int half = std::clamp((int)std::ceil(32.0 * 0.465 / wc), 32, 256);
-	const int taps = 2 * half;
-	const double beta = 8.5, i0b = BesselI0(beta), pi = 3.14159265358979323846;
-	std::vector<float> table((size_t)phases * taps);
-	std::vector<double> tmp((size_t)taps);
-	for (int ph = 0; ph < phases; ++ph) {
-		const double f = (double)ph / phases; // source sample position of the output sample, fractional part
-		double sum = 0;
-		for (int t = 0; t < taps; ++t) {
-			const double d = (double)(t - (half - 1)) - f; // tap i = ip + t - (half-1): distance to the position
-			const double x = 2 * wc * d;
-			const double sinc = std::fabs(x) < 1e-9 ? 1.0 : std::sin(pi * x) / (pi * x);
-			const double u = d / half;
-			const double w = std::fabs(u) >= 1 ? 0.0 : BesselI0(beta * std::sqrt(1 - u * u)) / i0b;
-			tmp[t] = sinc * w;
-			sum += tmp[t];
-		}
-		for (int t = 0; t < taps; ++t) table[(size_t)ph * taps + t] = (float)(tmp[t] / sum);
-	}
-	// padded input: `half` repeated samples at each end
-	std::vector<float> pad(n + 2 * (size_t)half);
-	std::fill(pad.begin(), pad.begin() + half, in[0]);
-	std::copy(in, in + n, pad.begin() + half);
-	std::fill(pad.begin() + half + n, pad.end(), in[n - 1]);
-	const uint64_t outN = (uint64_t)n * rout / rin;
-	out.resize((size_t)outN);
-	for (uint64_t m = 0; m < outN; ++m) {
-		const uint64_t num = m * inG;
-		size_t ip = (size_t)(num / outG);
-		int ph;
-		if ((uint64_t)phases == outG) ph = (int)(num % outG);
-		else {
-			ph = (int)(((num % outG) * phases + outG / 2) / outG);
-			if (ph >= phases) { ph = 0; ++ip; }
-		}
-		const float* k = &table[(size_t)ph * taps];
-		const float* x = &pad[ip + 1]; // pad index of source sample (ip - (half-1)) is ip + 1
-		float acc = 0;
-		for (int t = 0; t < taps; ++t) acc += k[t] * x[t];
-		out[(size_t)m] = acc;
-	}
+	sinc::Resample(in, n, rin, rout, out, *sinc::ResampleKernelFor(rin, rout));
 }
 
 std::string LoadSound(const std::string& name, const void* data, size_t size, double* seconds, double* loopStart, bool* stereo) {
