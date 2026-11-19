@@ -714,7 +714,9 @@ end
 
 --- Values a voice of rec is driven to for target t (P.FollowAssign): gain, 3 EQ bands, position,
 -- pitch. Engine copies: the volume the engine needs at that position (its own distance law applies).
-local function targetValues(rec, fv, t, L)
+-- first: fv stands for the record's first voice (switchNative's stand-in, NATIVE_FV: the speech floor kept).
+local function targetValues(rec, fv, t, L, first)
+	first = first or fv == rec.voices[1]
 	if fv.id then
 		local N = A.Native
 		-- Doppler of a moving source or listener, as loops and clear voices (N.UpdateFollowers) have it
@@ -725,13 +727,13 @@ local function targetValues(rec, fv, t, L)
 		el, em, eh, pitch = A.Render.Tail(el, em, eh, rec.pitch, spk, rec.S, rec.ent, L)
 		local g = rec.vol * N.PhysPath(t.gain, t.len, rec.lvl, t.rawLossDb) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim)
 		-- a speaking face's loudest voice keeps its floor while followed (pba_speech_floor_db)
-		if rec.speech and fv == rec.voices[1] then g = math.max(g, speechFloorAt(rec.vol, rec.S, L, rec.lvl)) end
+		if rec.speech and first then g = math.max(g, speechFloorAt(rec.vol, rec.S, L, rec.lvl)) end
 		return g * A.cfg.native_gain, el, em, eh, t.pos, pitch
 	end
 	local pos = A.DistVariantPos(rec.name, t.pos, L, rec.S)
 	local d = pos:Distance(L)
 	local vol = rec.vol * t.gain / AC.EngineGain(math.max(d, 1), rec.lvl)
-	if rec.speech and fv == rec.voices[1] then vol = math.max(vol, speechFloorAt(rec.vol, rec.S, L, rec.lvl) / AC.EngineGain(math.max(d, 1), rec.lvl)) end
+	if rec.speech and first then vol = math.max(vol, speechFloorAt(rec.vol, rec.S, L, rec.lvl) / AC.EngineGain(math.max(d, 1), rec.lvl)) end
 	return math.min(vol, 1), 1, 1, 1, pos, rec.pitch
 end
 
@@ -777,7 +779,9 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	local N = A.Native
 	local ok, n = N.EnsureSound(rec.name)
 	if not ok then return false end -- not decoded yet (a large file): tried again at the next evaluation
-	local g, el, em, eh, pos, pitch = targetValues(rec, NATIVE_FV, t, L)
+	-- (pba_speech_floor_switch) the stand-in is the record's first voice when fv is: a line on a face keeps its speech
+	-- floor across the switch (before, the stand-in was never the first voice: -17..-29 dB until the next evaluation)
+	local g, el, em, eh, pos, pitch = targetValues(rec, NATIVE_FV, t, L, (A.cfg.speech_floor_switch or 1) >= 0.5 and fv == rec.voices[1])
 	-- what has been heard of it so far (the module's offset is playback time at the voice's pitch)
 	local offset = math.max(now - fv.t0, 0)
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and t.sh or nil

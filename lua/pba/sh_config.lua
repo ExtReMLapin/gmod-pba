@@ -126,6 +126,7 @@ A.CONFIG = {
 	-- level of detail
 	lod_dist        = { 6000, 500, 30000, "sv", "Beyond this distance sounds are left untouched." },
 	speech_floor_db = { -20, -80, 0, "cl", "A line on a face (an NPC speaking) is never rendered quieter than this (dB) under the engine's clear level for it: dialogue stays heard through walls. Without it Alyx's lines behind a lab wall (d1_trainstation_05) were -37 dB under, and in Light mode got no sound at all (the engine plays nothing that quiet). -80 = off." },
+	speech_floor_switch = { 1, 0, 1, "cl", "A line on a face keeps its speech floor when its engine copy is handed to the native module mid-line. 0: the module voice started at its path's level, up to 30 dB under the floor, until the next evaluation (old behaviour)." },
 	quiet_db        = { -40, -100, 0, "cl", "Sounds the engine would play quieter than this (dB, clear line, their volume included) get no path search: one-shots are left to the engine, loops keep their last values. -100 = off." },
 	probe_dist      = { 3000, 0, 30000, "sv", "Beyond this distance no probe path search (transmission only)." },
 	native          = { 1, 0, 1, "cl", "Use the native Steam Audio backend when gmcl_pba is installed." },
