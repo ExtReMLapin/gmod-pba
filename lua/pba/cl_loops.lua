@@ -549,6 +549,21 @@ local function earlyEngineVolume(m, vol)
 	A.reemitting = false
 end
 
+--- (pba_early_release) An early line's mirror that ends on its own before its line (its module voice gone early: the
+-- module's voice cap, a module stop) gives the line back to its engine copy, muted until then: before, that copy stayed
+-- muted to its end and the rest of the line was silent (review C7). Not for a true stop (OP_STOP, the channel rule,
+-- stopsound: stopMirror, the engine stops its copy too: a volume change would start it again), nor once the entity is
+-- gone or the line is about over.
+function LP.EarlyRelease(m)
+	local e = m.early
+	if not (e and e.muted) or (A.cfg.early_release or 1) < 0.5 then return end
+	-- (an entity the client saw and lost was removed; one never seen here, out of its view, is the engine copy's by index)
+	if RealTime() >= e.tEnd - 0.25 or (m.seen and not IsValid(m.ent)) then return end
+	earlyEngineVolume(m, e.ev)
+	e.muted = nil
+	A.stats.earlyReleased = (A.stats.earlyReleased or 0) + 1
+end
+
 function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	local N = A.Native
 	if m.once and m.started then m.done = true return end -- a long one-shot that ended
@@ -1146,6 +1161,7 @@ local function step(key, m)
 	-- a client loop whose patch was collected (the engine stops its sound then, without any event)
 	if m.src and not m.src[1] then m.done = true end
 	if m.done then
+		if m.early then LP.EarlyRelease(m) end -- (ended before its line: the engine copy heard again)
 		-- a client patch's one-shot that played to its end: a later volume / pitch change restarts it (engine), taken again
 		if m.client and m.once and m.src and m.src[1] and IsValid(m.ent) then LP.finished[m.src[1]] = true end
 		stopMirror(m)
