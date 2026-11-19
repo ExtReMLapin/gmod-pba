@@ -11,6 +11,7 @@
 -- The energy mix of several voices into one (N.MixVoices), the sends (N.BindSource, N.SlotFadeSend, N.EntrySend)
 -- and the stereo (N.ApplyStereo) are cl_native's, called by every owner.
 local A = pba
+if A.JitFile then A.JitFile("cl_renders") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local R = A.Render or {}
 A.Render = R
 

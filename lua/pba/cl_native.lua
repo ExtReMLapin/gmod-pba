@@ -10,6 +10,7 @@
 -- Without the module, nothing changes: the Lua model runs as before.
 
 local A = pba
+if A.JitFile then A.JitFile("cl_native") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local N = A.Native or {}
 A.Native = N
 
@@ -543,7 +544,7 @@ N.failed = N.failed or {}
 
 local tanh = math.tanh
 --- x of the Kurze-Anderson law (A = 20 log10(x / tanh x), x = sqrt(2 pi N)) giving a loss of `db` dB.
-local function kaX(db)
+local function kaXSolve(db)
 	local G = 10 ^ (db / 20)
 	if G <= 1.0000001 then return 0 end
 	-- x / tanh x rises from 1 (x = 0) and lies between x and x + 1: bisection on [G - 1, G]
@@ -554,7 +555,21 @@ local function kaX(db)
 	end
 	return (lo + hi) * 0.5
 end
+-- Memo of kaX per loss value (exact: the same db gives the same x; 40 tanh per solve, 3 bands per voice update).
+-- Losses repeat (thresholds, cached paths, followed voices); the table is emptied when it grows past KAX_MAX.
+local kaxMemo, kaxN, KAX_MAX = {}, 0, 4096
+local function kaX(db)
+	local x = kaxMemo[db]
+	if x then return x end
+	x = kaXSolve(db)
+	if db == db then -- (a NaN key cannot be stored)
+		if kaxN >= KAX_MAX then kaxMemo, kaxN = {}, 0 end
+		kaxMemo[db], kaxN = x, kaxN + 1
+	end
+	return x
+end
 N.KaX = kaX
+N.KaXSolve = kaXSolve
 
 --- Loss (dB at diff_freq) behind a voice's low-pass: its continuous loss lpDb (sh_paths: path.lpDb) when it
 -- explains the level; a level set by a discrete cause (closed leaf, wall material, masking object, cap) or
@@ -573,6 +588,16 @@ function N.LowpassDb(lp, lpDb, cfg)
 	return T
 end
 
+-- gain of band b (1 low, 2 mid, 3 high) for the Kurze-Anderson x0 (a0 = x0 / tanh x0) at diff_freq f0
+local function tiltBand(b, x0, a0, f0)
+	local lo, hi = N.BAND_EDGE[b - 1] or 0, N.BAND_EDGE[b] or math.huge
+	local f = N.BAND_HZ[b]
+	if f0 >= lo and f0 < hi then f = f0 end -- the band the gain is expressed in
+	if f <= f0 then return 1 end
+	local x = x0 * math.sqrt(f / f0)
+	return math.max(a0 * tanh(x) / x, 1e-3)
+end
+
 --- EQ (low, mid, high) of a loss of `db` dB at diff_freq, relative to that frequency (see above).
 function N.TiltEQ(db, cfg)
 	cfg = cfg or A.cfg
@@ -582,19 +607,7 @@ function N.TiltEQ(db, cfg)
 	if x0 <= 0 then return 1, 1, 1 end
 	local f0 = cfg.diff_freq or 500
 	local a0 = x0 / tanh(x0) -- = 10^(db/20)
-	local out = {}
-	for b = 1, 3 do
-		local lo, hi = N.BAND_EDGE[b - 1] or 0, N.BAND_EDGE[b] or math.huge
-		local f = N.BAND_HZ[b]
-		if f0 >= lo and f0 < hi then f = f0 end -- the band the gain is expressed in
-		if f <= f0 then
-			out[b] = 1
-		else
-			local x = x0 * math.sqrt(f / f0)
-			out[b] = math.max(a0 * tanh(x) / x, 1e-3)
-		end
-	end
-	return out[1], out[2], out[3]
+	return tiltBand(1, x0, a0, f0), tiltBand(2, x0, a0, f0), tiltBand(3, x0, a0, f0)
 end
 
 --- EQ of a voice's low-pass: level lp, continuous loss lpDb when known (N.LowpassDb).
@@ -1237,6 +1250,7 @@ N.DIR_MAX = 0.5
 --- Dipole directivity of a weapon emission towards L (1 in front, 1 - 2w behind, floor 0.05); 1 for any
 -- other sound. chan: the sound's channel; aim: the aim taken when the sound was emitted (a shot does not
 -- swing round when the shooter turns while its tail plays); without it, the aim now.
+local dirD = Vector() -- work vector
 function N.Directivity(ent, L, chan, aim)
 	local w = math.min(A.cfg.native_dir or 0, N.DIR_MAX)
 	if w <= 0 or not L then return 1 end
@@ -1244,7 +1258,10 @@ function N.Directivity(ent, L, chan, aim)
 	if not owner then return 1 end
 	-- the listener's own shots (pba_native_own: centered on him): he is the shooter, not behind the muzzle
 	if LocalPlayer and owner == LocalPlayer() and A.NativeOwn and A.NativeOwn() and A.HearsFromSelf(owner) then return 1 end
-	local d = (L - owner:EyePos()):GetNormalized()
+	local d = dirD
+	d:Set(L)
+	d:Sub(owner:EyePos())
+	d:Normalize()
 	return math.max((1 - w) + w * (aim or now):Dot(d), 0.05)
 end
 
@@ -1345,7 +1362,19 @@ end
 -- came out 14 dB weaker at 5 m with this one).
 function N.PhysStream(d) return N.REF_UNITS / math.max(d or 0, N.REF_UNITS) end
 --- The full version's law of a sound of level lvl (clipped at full scale), as a function of distance.
-function N.Law(lvl) return function(d) return math.min(spread(lvl, d), 1) end end
+-- one law per level, made once (a closure per call before: a few per sound); the law reads its settings when called
+local lawMemo, lawN = {}, 0
+function N.Law(lvl)
+	local k = lvl or false
+	local f = lawMemo[k]
+	if f then return f end
+	f = function(d) return math.min(spread(lvl, d), 1) end
+	if k == k then -- (a NaN level is not kept)
+		if lawN >= 1024 then lawMemo, lawN = {}, 0 end
+		lawMemo[k], lawN = f, lawN + 1
+	end
+	return f
+end
 --- Source slot send for a law at the source-listener distance d: the source's power (its level at 1 m
 -- before any clipping, power1m, default law(1 m)), but never more than the clipped direct x d / 1 m: equal
 -- for an unclipped 1/r law; a loud source clipped at full scale near gets a reverb that grows as its direct
@@ -1614,9 +1643,12 @@ end
 -- Doppler shift between a moving source and listener: f' = f (c + vL.u) / (c - vS.u), u = unit
 -- vector source -> listener, c = 343 m/s in units. Clamped to half / double pitch.
 local SPEED_UNITS = 343 / 0.01905
+local dopU = Vector() -- work vector (the per-frame path makes no Vector of its own: N.Doppler, N.Directivity)
 function N.Doppler(S, vS, L, vL)
 	if (A.cfg.native_doppler or 0) < 0.5 then return 1 end
-	local u = L - S
+	local u = dopU
+	u:Set(L)
+	u:Sub(S)
 	local d = u:Length()
 	if d < 1 then return 1 end
 	u:Mul(1 / d)
@@ -1642,6 +1674,12 @@ function N.ListenerVelocity()
 		return (IsValid(p) and p or veh):GetVelocity()
 	end
 	return ply:GetVelocity()
+end
+--- N.ListenerVelocity read once per frame by the module's listener hook (pba_native_listener) for the voices that
+-- follow their entity in that hook (N.UpdateFollowers, LP.FollowNative): one read instead of one per pass.
+function N.FrameListenerVelocity()
+	if N.vlFrame == FrameNumber() and N.vlFrameVal then return N.vlFrameVal end
+	return N.ListenerVelocity()
 end
 
 -- voices bound to an entity (clear line): position and distance law updated every frame
@@ -1675,14 +1713,14 @@ function N.StopAllVoices()
 	table.Empty(N.follow)
 end
 function N.UpdateFollowers(L)
-	local vL = N.ListenerVelocity()
+	local vL = N.FrameListenerVelocity()
 	for id, f in pairs(N.follow) do
 		local e = f.ent
 		if not IsValid(e) then
 			-- the entity is gone: the engine plays its sound to the end where it was, so do we
 			N.follow[id] = nil
 		else
-			local S = A.SoundPos({ Entity = e, Channel = f.chan })
+			local S = A.EntSoundPos(e, f.chan)
 			local d = S:Distance(L)
 			local g = f.vol * N.PhysClear(f.lvl, d) * N.Directivity(e, L, f.chan, f.aim or nil) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)
@@ -2384,18 +2422,23 @@ function N.UpdatePause()
 end
 hook.Add("PreRender", "pba_native_pause", function() N.UpdatePause() end)
 
+local cvMuteLoseFocus
 hook.Add("Think", "pba_native_listener", function()
 	if not N.render or not N.Busy() then return end
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
-	local ang = ply:EyeAngles()
 	local master = N.MasterVolume()
-	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
+	if not system.HasFocus() then
+		cvMuteLoseFocus = cvMuteLoseFocus or GetConVar("snd_mute_losefocus")
+		if cvMuteLoseFocus:GetBool() then master = 0 end
+	end
 	local eL, eR
 	local L, vang = A.ListenerPos()
 	if not L then return end
-	ang = vang or ang
+	local ang = vang or ply:EyeAngles()
 	N.live, eL, eR = pba_native.SetListener(L, ang:Forward(), ang:Up(), master)
+	-- the listener's velocity, once for this frame's followers (N.FrameListenerVelocity)
+	N.vlFrame, N.vlFrameVal = FrameNumber(), N.ListenerVelocity()
 	-- what follows its entity every frame (clear voices, native mirrors): the scheduler's frame pass
 	if A.Sched then A.Sched.Frame(L) else N.UpdateFollowers(L) end
 	-- head under water: the engine applies its own water DSP to the sounds it plays; same for ours

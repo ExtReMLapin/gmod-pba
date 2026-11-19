@@ -4,6 +4,7 @@
 -- polygon, volume-weighted origin); see THIRD_PARTY.md. Re-implemented, not copied.
 
 local A = pba
+if A.JitFile then A.JitFile("sh_paths") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local P = {}
 A.Paths = P
 

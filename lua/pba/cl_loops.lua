@@ -4,6 +4,7 @@
 -- per loop, attached to its entity. With a clear line the mirror equals the original.
 
 local A = pba
+if A.JitFile then A.JitFile("cl_loops") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 A.Loops = A.Loops or {}
 local LP = A.Loops
 LP.mirrors = LP.mirrors or {}
@@ -1161,7 +1162,7 @@ function LP.FollowNative(L)
 	LP.StartDecoded()
 	if not N or not N.Doppler then return end
 	local P, now = A.Paths, RealTime()
-	local vL = N.ListenerVelocity()
+	local vL = N.FrameListenerVelocity and N.FrameListenerVelocity() or N.ListenerVelocity()
 	for _, m in pairs(LP.mirrors) do
 		if m.nativeId and not m.done then
 			-- keep its source reverb slot (pba_native.SourceReflect needs a call at least every 0.5 s)

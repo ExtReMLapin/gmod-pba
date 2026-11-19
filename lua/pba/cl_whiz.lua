@@ -2,6 +2,7 @@
 -- pba_native_whiz the module plays the whizz and the engine's own is stopped.
 -- Copyright (C) 2026 pba contributors. Licensed under the GNU GPL v3 or later (see LICENSE).
 local A = pba
+if A.JitFile then A.JitFile("cl_whiz") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local W = A.Whiz
 
 local MUTE_S = 0.2 -- how long the engine's whizz is stopped after one of ours (it may start a frame after the message)

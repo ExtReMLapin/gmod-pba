@@ -3,6 +3,7 @@
 -- Engine facts (gain formula, presets) were measured in game; see THIRD_PARTY.md for sources.
 
 local A = pba
+if A.JitFile then A.JitFile("sh_acoustics") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local AC = {}
 A.AC = AC
 

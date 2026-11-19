@@ -2,6 +2,7 @@
 -- replicates per-portal openness (0..1) and closed-door loss to the clients.
 
 local A = pba
+if A.JitFile then A.JitFile("sh_doors") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local D = {}
 local exp, LN10 = math.exp, math.log(10) -- 10 ^ x, the same compiled or interpreted (sh_paths, #61)
 A.Doors = D

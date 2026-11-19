@@ -24,6 +24,7 @@
 -- plus its propagation delay as before when pba_delay is on.
 
 local A = pba
+if A.JitFile then A.JitFile("cl_slicer") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local SL = A.Slicer or {}
 A.Slicer = SL
 
@@ -259,8 +260,12 @@ function SL.Defer(S, L, sndlvl, srcEnt, cfg, holdS)
 	st.deferred = (st.deferred or 0) + 1
 	SL.seq = SL.seq + 1
 	local now = RealTime()
+	-- every field a job gets later is named here (nil until then): the table is made at its final size, it does not
+	-- grow (and get its hash part reallocated) twice during its first slice
 	local j = { S = Vector(S), L = Vector(L), lvl = sndlvl, ent = srcEnt, cfg = cfg, tReq = now, deadline = now + reach,
-		seq = SL.seq, segs = 0, restarts = 0, cpu = 0, holdFor = held and holdS or nil }
+		seq = SL.seq, segs = 0, restarts = 0, cpu = 0, holdFor = held and holdS or nil,
+		co = nil, hold = nil, fresh = nil, in1 = nil, in2 = nil, in3 = nil, in4 = nil, in5 = nil, in6 = nil, in7 = nil, in8 = nil,
+		r = nil, finished = nil, stale = nil, err = nil, cancelled = nil, canWait = nil, heldReady = nil, heldOwner = nil, onDone = nil }
 	newCo(j)
 	snap(j) -- (its inputs as of now: its first slice, later, is its start)
 	SL.jobs[#SL.jobs + 1] = j

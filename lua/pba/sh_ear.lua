@@ -19,6 +19,7 @@
 -- the next report. A report sent before the client learned of the jump arrives after it (a few frames, a trip): it
 -- carries the position the client then believed (his own), and is refused when that is nearer the place left.
 local A = pba
+if A.JitFile then A.JitFile("sh_ear") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 
 local NET = "pba_ear"
 local REPORT_AT, WITHDRAW_AT = 16, 8 -- u between the rendered view and the model: report / withdraw (hysteresis)

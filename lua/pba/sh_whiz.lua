@@ -14,6 +14,7 @@
 -- The server sees the bullets (GM:EntityFireBullets, NPCs' included): sv_whiz.lua finds the near misses and
 -- tells the client, cl_whiz.lua plays them through the module (pba_native_whiz).
 local A = pba
+if A.JitFile then A.JitFile("sh_whiz") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 A.Whiz = A.Whiz or {}
 local W = A.Whiz
 

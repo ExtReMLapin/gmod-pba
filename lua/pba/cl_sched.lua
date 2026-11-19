@@ -9,6 +9,7 @@
 --  * one Think hook running each owner's tick in a fixed order, and one per-frame pass (A.Sched.Frame,
 --    called by the module's listener hook once the listener is set) moving what follows its entity.
 local A = pba
+if A.JitFile then A.JitFile("cl_sched") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local SC = A.Sched or {}
 A.Sched = SC
 

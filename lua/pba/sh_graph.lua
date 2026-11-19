@@ -2,6 +2,7 @@
 -- Built lazily per map, on both realms (the server only needs the portal <-> door links).
 
 local A = pba
+if A.JitFile then A.JitFile("sh_graph") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local G = {}
 A.Graph = G
 

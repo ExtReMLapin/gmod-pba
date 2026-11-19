@@ -970,5 +970,67 @@ return {
 			_G.pba_native, N.render = saved, savedRender
 			if not ok then error(err, 0) end
 		end },
+		{ name = "The Kurze-Anderson x of a loss (N.KaX), kept per dB value, is the solve's exact number, and the band EQ (N.TiltEQ) made without a table gives the same gains", func = function()
+			-- the reference solve, written here (bisection of x / tanh x = 10^(db/20) on [G - 1, G], 40 steps)
+			local function solve(dbv)
+				local G = 10 ^ (dbv / 20)
+				if G <= 1.0000001 then return 0 end
+				local lo, hi = math.max(G - 1, 0), G
+				for _ = 1, 40 do
+					local mid = (lo + hi) * 0.5
+					if mid / math.tanh(mid) < G then lo = mid else hi = mid end
+				end
+				return (lo + hi) * 0.5
+			end
+			for pass = 1, 2 do -- the second pass reads the memo
+				for _, dbv in ipairs({ 0, 0.5, 1e-9, 3, 6.02, 16, 16.000000001, 40, 120, 200 }) do
+					expect(N.KaX(dbv) == solve(dbv)).to.beTrue()
+				end
+			end
+			expect(N.KaX(0 / 0) ~= N.KaX(0 / 0) or N.KaX(0 / 0) == solve(0 / 0)).to.beTrue() -- (a NaN loss: not kept, no error)
+			-- the band EQ against the former table-filling code, written here
+			local function tilt(dbv, f0)
+				local x0 = solve(math.min(dbv, 200))
+				if x0 <= 0 then return 1, 1, 1 end
+				local a0, out = x0 / math.tanh(x0), {}
+				for b = 1, 3 do
+					local lo, hi = N.BAND_EDGE[b - 1] or 0, N.BAND_EDGE[b] or math.huge
+					local f = N.BAND_HZ[b]
+					if f0 >= lo and f0 < hi then f = f0 end
+					if f <= f0 then out[b] = 1 else local x = x0 * math.sqrt(f / f0) out[b] = math.max(a0 * math.tanh(x) / x, 1e-3) end
+				end
+				return out[1], out[2], out[3]
+			end
+			for _, f0 in ipairs({ 500, 1000, 3000 }) do
+				withCfg({ diff_freq = f0 }, function()
+					for _, dbv in ipairs({ 0.5, 3, 16, 40, 300 }) do
+						local l, m, h = N.TiltEQ(dbv)
+						local rl, rm, rh = tilt(dbv, f0)
+						expect(l == rl and m == rm and h == rh).to.beTrue()
+					end
+				end)
+			end
+			-- the gain: a loss already solved is not solved again (a lookup, not 40 tanh)
+			local clock = SysTime or os.clock
+			local reps = 20000
+			local t0 = clock()
+			for _ = 1, reps do N.KaX(17.25) end
+			local tMemo = clock() - t0
+			t0 = clock()
+			for _ = 1, reps do solve(17.25) end
+			local tSolve = clock() - t0
+			print(string.format("[pba test] kaX of a known loss: %.3f us per call, a solve %.3f us", tMemo / reps * 1e6, tSolve / reps * 1e6))
+			expect(tMemo < tSolve * 0.3).to.beTrue()
+		end },
+		{ name = "One distance law per level (N.Law: made once, the same function each time; a closure per call before), with the clear line's gains", func = function()
+			-- one law per level, the same function each time, and the same gains as the clear-line law
+			expect(N.Law(75) == N.Law(75)).to.beTrue()
+			expect(N.Law(75) ~= N.Law(90)).to.beTrue()
+			withCfg(BASE, function()
+				for _, lvl in ipairs({ 60, 75, 90, 140 }) do
+					for _, d in ipairs({ 1, 52.49, 500, 4000 }) do expect(N.Law(lvl)(d) == N.PhysClear(lvl, d)).to.beTrue() end
+				end
+			end)
+		end },
 	},
 }

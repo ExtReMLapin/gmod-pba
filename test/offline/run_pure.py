@@ -199,6 +199,54 @@ for k, v in srcs.items():
 print("%s static: the end-of-file rule in one place (expected %s, found %s)"
       % ("PASS" if end_seen == END_KNOWN else "FAIL", END_KNOWN, end_seen))
 
+# Offline lock: pba_lua_interp. A file listed in A.JIT_INTERP (sh_config.lua) runs interpreted, all its functions,
+# while pba_lua_interp is 1 (its hot loops are patched to their interpreter-only form once hot, as jit.off makes them),
+# and compiled again at 0 (the loop then gets a trace, as a plain function's does). Probe: a chunk that calls
+# A.JitFile like a pba file, against two reference loops (one jit.off, one jit.on), all run hot.
+interp_code = r"""
+local ju, band = require("jit.util"), bit.band
+local A = pba
+-- the loop's backward jump: found while the function is fresh (FORL, its D a backward offset), read again once hot
+local function loopPc(fn)
+	for pc = 1, 64 do
+		local ins = ju.funcbc(fn, pc)
+		if not ins then return nil end
+		local d = math.floor(ins / 65536)
+		if d >= 32768 - 64 and d < 32768 then return pc end
+	end
+end
+local function opAt(fn, pc) return pc and band(ju.funcbc(fn, pc), 0xff) end
+local function plain() local s = 0 for i = 1, 200 do s = s + i end return s end
+local function off() local s = 0 for i = 1, 200 do s = s + i end return s end
+jit.off(off)
+A.JIT_INTERP = A.JIT_INTERP or {}
+A.JIT_INTERP.__probe = true
+local f = assert(loadstring('local A = pba if A.JitFile then A.JitFile("__probe") end return function() local s = 0 for i = 1, 200 do s = s + i end return s end'))()
+local function hot(fn) for _ = 1, 400 do fn() end end
+local pcPlain, pcOff, pcF = loopPc(plain), loopPc(off), loopPc(f)
+local saved = A.cfg.lua_interp
+A.cfg.lua_interp = 1
+if A.JitApplyAll then A.JitApplyAll() end
+hot(plain) hot(off) hot(f)
+local onOp, offOp, fOn = opAt(plain, pcPlain), opAt(off, pcOff), opAt(f, pcF)
+A.cfg.lua_interp = 0
+if A.JitApplyAll then A.JitApplyAll() end
+hot(plain) hot(f)
+local fOff = opAt(f, pcF)
+A.cfg.lua_interp = saved
+A.JIT_INTERP.__probe = nil
+if A.jitChunks then A.jitChunks.__probe = nil end
+if A.JitApplyAll then A.JitApplyAll() end
+local listed = {}
+for k in pairs(A.JIT_INTERP or {}) do listed[#listed + 1] = k end
+table.sort(listed)
+return tostring(onOp) .. " " .. tostring(offOp) .. " " .. tostring(fOn) .. " " .. tostring(fOff), (onOp ~= offOp and fOn == offOp and fOff == onOp) and "true" or "false", table.concat(listed, ",")
+"""
+ops, ok_interp, listed = L.execute(interp_code)
+INTERP_KNOWN = "cl_mix,cl_native,cl_render,cl_renders,cl_sched,sh_acoustics,sh_bsp,sh_core,sh_doors,sh_graph,sh_paths"
+print("%s offline: pba_lua_interp runs a listed file interpreted at 1, compiled at 0 (loop ops compiled/off/probe at 1/probe at 0: %s); list %s"
+      % ("PASS" if ok_interp == "true" and listed == INTERP_KNOWN else "FAIL", ops, listed))
+
 # The native helpers (cl_native.lua: distance law, sends, directivity, EQ) and their suite. Loaded last:
 # the suite above runs without pba.Native, as before.
 L.execute("timer.Remove = timer.Remove or function() end")

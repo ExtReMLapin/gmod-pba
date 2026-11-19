@@ -15,6 +15,7 @@
 -- owners' values and the original methods.
 
 local A = pba
+if A.JitFile then A.JitFile("cl_streams") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local AC = A.AC
 local ST = A.Streams or {}
 A.Streams = ST

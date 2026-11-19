@@ -4,6 +4,7 @@
 -- blue = portal paths, white spheres = voices, red = transmission. pba_debug 2 adds dB labels.
 
 local A = pba
+if A.JitFile then A.JitFile("cl_debug") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 
 --- The overlay shows where sounds come from through walls (a wallhack): only when the server
 -- allows it (pba_allow_debug), for admins, in single player, or on the demo map.

@@ -4,6 +4,7 @@
 -- the server (net "pba_snd").
 
 local A = pba
+if A.JitFile then A.JitFile("cl_render") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local AC = A.AC
 local NET = "pba_snd"
 
@@ -924,7 +925,7 @@ end
 function evaluate(rec, now, L)
 	local P = A.Paths
 	local ent = IsValid(rec.ent) and rec.ent or nil
-	if ent then rec.S = A.SoundPos({ Entity = ent, Channel = rec.chan }) end
+	if ent then rec.S = A.EntSoundPos(ent, rec.chan) end
 	local S = rec.S
 	-- a far sound's evaluation may run in slices (cl_slicer): its voices keep their course until it is ready
 	-- a file already muffled by water (a deep explosion's): no water surface wall on top (P.WaterWall)
@@ -970,7 +971,7 @@ end
 -- and N.UpdateFollowers do), the running ramp ending on it.
 local function followClear(rec, L)
 	if not rec.clearPath or not IsValid(rec.ent) then return end
-	local S = A.SoundPos({ Entity = rec.ent, Channel = rec.chan })
+	local S = A.EntSoundPos(rec.ent, rec.chan)
 	if S:DistToSqr(rec.S) < 1 then return end
 	rec.S = S
 	local d = S:Distance(L)
@@ -1121,7 +1122,7 @@ function OS.Tick()
 				if fv.late and not fv.dead then lateCheck(rec, fv, now, L) end
 			end
 			if now >= rec.tNext then
-				local S = IsValid(rec.ent) and A.SoundPos({ Entity = rec.ent, Channel = rec.chan }) or rec.S
+				local S = IsValid(rec.ent) and A.EntSoundPos(rec.ent, rec.chan) or rec.S
 				if A.Sched.Due(rec, S, L, now, rec.tEnd) then
 					rec.tNext = now + followInterval()
 					evaluate(rec, now, L)
@@ -1599,6 +1600,9 @@ local function soundscapeWave(name)
 	end
 	return scapeWaves[string.lower((string.gsub(A.SoundFile(name), "\\", "/")))] or false
 end
+-- the map's soundscape files read once the map is up (10-45 ms of file reads and pattern matching), not at its first
+-- world sound (a spike in the middle of play)
+A.OnInitPostEntity("pba_scapes", function() soundscapeWave("") end)
 function A.IsSoundscapeRandom(data, pos)
 	if data.Channel ~= CHAN_STATIC or (A.cfg.soundscape_engine or 1) < 0.5 then return false end
 	local e = data.Entity
@@ -1688,7 +1692,7 @@ A.AddHook("EntityEmitSound", (A.WithChannelRule or function(f) return f end)(fun
 	-- (pba_native_own: the module plays it like any other sound, its source slot reflects it)
 	local engineOwn = own and not (A.NativeOwn and A.NativeOwn())
 	-- (a predicted sound carries the engine's position, his origin: centered on him instead, A.SoundPos)
-	if own and not engineOwn then pos = A.SoundPos({ Entity = ply }) or pos end
+	if own and not engineOwn then pos = A.EntSoundPos(ply) or pos end
 	if A.Native and A.Native.render and A.Enabled() then A.Native.Echo(data, pos, engineOwn, own) end
 	if engineOwn then
 		if A.Mix then A.Mix.NoteSound({ SoundName = data.SoundName, Pos = pos, SoundLevel = data.SoundLevel, Volume = data.Volume,
@@ -1826,7 +1830,7 @@ net.Receive(NET, function()
 		local lp = LocalPlayer()
 		if IsValid(lp) and data.EntIndex == lp:EntIndex() and A.HearsFromSelf(lp) and A.NativeOwn and A.NativeOwn() then
 			data.Entity = lp
-			data.Pos = A.SoundPos({ Entity = lp })
+			data.Pos = A.EntSoundPos(lp)
 		end
 	end
 	A.stats.relayedIn = A.stats.relayedIn + 1

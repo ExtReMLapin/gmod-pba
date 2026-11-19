@@ -25,6 +25,7 @@
 -- loops reach the client without their channel: the channel rules (NPC_Looping, Vehicles_Looping) do not
 -- match them.
 local A = pba
+if A.JitFile then A.JitFile("cl_mix") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local M = A.Mix or {}
 A.Mix = M
 
@@ -109,6 +110,7 @@ function M.Load()
 	M.data = M.Parse(file.Read(M.FILE, "GAME") or "")
 	M.cache = {}
 	M.ver = (M.ver or 0) + 1
+	if M.Recount then M.Recount() end
 	return M.data
 end
 
@@ -240,16 +242,8 @@ function M.Tick(now)
 	end
 	for i = #h, n + 1, -1 do h[i] = nil end
 	-- a module voice of a ducked group playing (a loop mirror: not a noted sound) lets the ducks move too
-	if not anyDucked then
-		for _, v in pairs(M.voice) do
-			-- (a voice tracked without groups, the listener's own sound played with none: nothing to duck)
-			for _, name in ipairs(v.g and v.g.names or {}) do
-				local r = data.info[name]
-				if r and r.ducked then anyDucked = true break end
-			end
-			if anyDucked then break end
-		end
-	end
+	-- (M.nDucked: the tracked voices with a ducked group, counted as they come and go, M.Track / M.Untrack)
+	if not anyDucked and (M.nDucked or 0) > 0 then anyDucked = true end
 	if not anyDucked then return end
 	local changed = false
 	local attack = math.max(cvAttack and cvAttack:GetFloat() or 0.5, 0.01)
@@ -303,6 +297,42 @@ end)
 M.voice = M.voice or {}
 M.lastPlay = M.lastPlay or {}
 
+--- True when groups g hold a ducked group (a voice tracked without groups, the listener's own sound played with
+-- none: nothing to duck).
+local function hasDucked(g)
+	if not g then return false end
+	local data = M.data or M.Load()
+	for _, name in ipairs(g.names) do
+		local r = data.info[name]
+		if r and r.ducked then return true end
+	end
+	return false
+end
+--- Tracks module voice id with entry v ({ g, own, t }): the ducker's count of playing ducked voices follows (its period
+-- reads the count, it no longer walks the voices: 852 tracked in a fight, most of them ended one-shots).
+function M.Track(id, v)
+	local old = M.voice[id]
+	if old and old.dk then M.nDucked = M.nDucked - 1 end
+	v.dk = hasDucked(v.g) or nil
+	if v.dk then M.nDucked = (M.nDucked or 0) + 1 end
+	M.voice[id] = v
+end
+function M.Untrack(id)
+	local v = M.voice[id]
+	if not v then return end
+	if v.dk then M.nDucked = M.nDucked - 1 end
+	M.voice[id] = nil
+end
+--- Recounts the tracked voices with a ducked group (the mix rules read again, an autorefresh).
+function M.Recount()
+	local n = 0
+	for _, v in pairs(M.voice) do
+		v.dk = hasDucked(v.g) or nil
+		if v.dk then n = n + 1 end
+	end
+	M.nDucked = n
+end
+
 --- pba_native.Play for a sound of groups g (same arguments after g): the wrapped Play below scales it.
 function M.Play(g, ...)
 	M.pending = g
@@ -331,7 +361,7 @@ function M.Wrap()
 			if roomSend then roomSend = roomSend * k end
 		end
 		local id = play(n, pos, gain, l, m, h, pitch, loop, delay, sh, diffuse, roomSend, offset, protect, pausable, own)
-		if (g or own) and id and id > 0 then M.voice[id] = { g = g, own = own and true or nil, t = RealTime() } end
+		if (g or own) and id and id > 0 then M.Track(id, { g = g, own = own and true or nil, t = RealTime() }) end
 		local lp = M.lastPlay -- (what the module was given: tests)
 		lp.id, lp.gain = id, gain
 		return id
@@ -345,7 +375,7 @@ function M.Wrap()
 			if send then send = send * k end
 		end
 		local ok = update(id, pos, gain, l, m, h, pitch, diffuse, send, sh)
-		if not ok and v then M.voice[id] = nil end
+		if not ok and v then M.Untrack(id) end
 		return ok
 	end
 	if reflect then
@@ -357,7 +387,7 @@ function M.Wrap()
 	end
 	if stop then
 		pba_native.StopVoice = function(id, ...)
-			M.voice[id] = nil
+			M.Untrack(id)
 			return stop(id, ...)
 		end
 	end
@@ -366,5 +396,6 @@ if pba_native then M.Wrap() end
 -- voices never updated (short one-shots) are forgotten after a while
 timer.Create("pba_mix_gc", 10, 0, function()
 	local now = RealTime()
-	for id, v in pairs(M.voice) do if now - v.t > 30 then M.voice[id] = nil end end
+	for id, v in pairs(M.voice) do if now - v.t > 30 then M.Untrack(id) end end
 end)
+M.Recount()
