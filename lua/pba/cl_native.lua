@@ -467,11 +467,9 @@ function N.LoadBake(nProbes)
 	return true
 end
 
-function N.Bake()
-	-- probe positions: pba's own probe graph (inside the playable volume), thinned until
-	-- there are at most pba_native_max_probes of them (large open maps)
-	local pr = A.Probes and A.Probes.current
-	if not pr then N.err = "probe graph not ready" return end
+-- The module's probe positions: pba's own probe graph (inside the playable volume), thinned until there are at most
+-- pba_native_max_probes of them (large open maps). -> the points, their influence radius (paths and reverb bakes).
+local function probePoints(pr)
 	local step = math.max(math.Round(A.cfg.native_probe_spacing / pr.spacing), 1)
 	local pts
 	repeat
@@ -481,12 +479,19 @@ function N.Bake()
 		end
 		step = step + 1
 	until #pts <= A.cfg.native_max_probes or step > 64
+	return pts, pr.spacing * (step - 1) * 0.75
+end
+
+function N.Bake()
+	local pr = A.Probes and A.Probes.current
+	if not pr then N.err = "probe graph not ready" return end
+	local pts, radius = probePoints(pr)
 	N.probes = #pts
 	if N.LoadBake(#pts) then return end
 	local t0 = SysTime()
 	N.pathsReady = false
 	N.fromCache = false
-	local ok, err = pcall(pba_native.BakePaths, pts, pr.spacing * (step - 1) * 0.75)
+	local ok, err = pcall(pba_native.BakePaths, pts, radius)
 	if not ok then N.err = err return end
 	N.probes = #pts
 	-- the bake runs on a worker thread: poll it
@@ -2476,17 +2481,9 @@ function N.WantReverbBake()
 		local pr = A.Probes and A.Probes.current
 		if not (pr and N.ready) then return end
 		timer.Remove("pba_native_revbake")
-		local step = math.max(math.Round(A.cfg.native_probe_spacing / pr.spacing), 1)
-		local pts
-		repeat
-			pts = {}
-			for _, n in ipairs(pr.nodes) do
-				if n.i % step == 0 and n.j % step == 0 then pts[#pts + 1] = n.pos end
-			end
-			step = step + 1
-		until #pts <= A.cfg.native_max_probes or step > 64
+		local pts, radius = probePoints(pr)
 		local t0 = SysTime()
-		local ok, err = pcall(pba_native.BakeReverb, pts, pr.spacing * (step - 1) * 0.75)
+		local ok, err = pcall(pba_native.BakeReverb, pts, radius)
 		if not ok then MsgN("[PBA] reverb bake: ", err) return end
 		N.revBake = "baking"
 		timer.Create("pba_native_revbakepoll", 0.5, 0, function()
