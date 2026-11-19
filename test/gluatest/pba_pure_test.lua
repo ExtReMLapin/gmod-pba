@@ -2452,6 +2452,50 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
+		{ name = "StateSig: the same door states give the same signature whatever order pairs() walks them in (a door table rehashed or a door gone and back: link costs and door fields redone for nothing, far jobs restarted; pba_state_sig_sorted, review P6)", func = function()
+			local PR = A.Probes
+			local savedDoors, savedList, savedEpoch = A.Doors, PR.doorList, PR.doorEpoch
+			local ok, err = pcall(function()
+				PR.doorList = { fixed = true, list = {}, sig = "" } -- (no door boxes listed: the epoch stays)
+				local function order(t) local o = {} for k in pairs(t) do o[#o + 1] = k end return table.concat(o, ",") end
+				-- two tables of the same door states, built in different orders, walked by pairs() differently
+				local a, b
+				for base = 1, 400 do
+					local keys = {}
+					for i = 1, 6 do keys[i] = base + i * 64 end
+					a, b = {}, {}
+					for i = 1, #keys do a[keys[i]] = { frac = (i % 3) / 2, closedDb = 20 + i } end
+					for i = #keys, 1, -1 do b[keys[i]] = { frac = (i % 3) / 2, closedDb = 20 + i } end
+					b[9999] = { frac = 0 }
+					b[9999] = nil
+					if order(a) ~= order(b) then break end
+				end
+				expect(order(a) ~= order(b)).to.beTrue() -- (the premise: two walks)
+				local function sig(t)
+					local list = {}
+					for idx in pairs(t) do list[#list + 1] = idx end
+					table.sort(list)
+					A.Doors = { byEnt = t, entIdx = list }
+					return PR.StateSig({})
+				end
+				expect(sig(a)).to.equal(sig(b))
+				-- a state that does change still changes it
+				local s0 = sig(a)
+				local k = next(a)
+				local f0 = a[k].frac
+				a[k].frac = f0 < 0.5 and 1 or 0
+				expect(sig(a) ~= s0).to.beTrue()
+				a[k].frac = f0
+				-- control: pba_state_sig_sorted 0 (former behaviour): the walk's order is in the signature
+				local saved = rawget(A.cfg, "state_sig_sorted")
+				A.cfg.state_sig_sorted = 0
+				local sa, sb = sig(a), sig(b)
+				A.cfg.state_sig_sorted = saved
+				expect(sa ~= sb).to.beTrue()
+			end)
+			A.Doors, PR.doorList, PR.doorEpoch = savedDoors, savedList, savedEpoch
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Field links pay their doors: a shut door on the short way sends the field round by the open doorway, and back once opened", func = function()
 			withProbeRooms({ { 16, 64, 112 }, { 400, 448, 112 } }, nil, { native_traces = 0 }, function(g)
 				local PR = A.Probes

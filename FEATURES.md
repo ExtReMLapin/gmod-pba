@@ -76,6 +76,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Cached paths never kept from a world that changed while they were worked out | ✅ | ✅ | C `cache_gen_guard` |
 | Two sounds with no entity close to each other never share a cached path | ✅ | ✅ | C `cache_src_near` |
 | Paths worked out before a door changed state are dropped once the door costs are redone | ✅ | ✅ | C `door_field_invalidate` |
+| Door costs redone only when a door or portal state really changed | ✅ | ✅ | C `state_sig_sorted` |
 | `pba_enable 0` = exact vanilla (A/B) | ✅ | ✅ | S `enable` |
 | Menus (player, admin, Steam Audio) | ✅ | ✅ | — |
 | The server can forbid the native module (fairness in competitive play) | — | ✅ | S `allow_native` |

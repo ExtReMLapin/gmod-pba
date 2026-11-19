@@ -1150,14 +1150,36 @@ end
 
 --- A number that changes with any door or portal state the link costs read (and with the door boxes,
 -- PR.doorEpoch): the field remembers the one it was built with and is rebuilt when it differs.
+local sigDoorIdx = {} -- (scratch: the door indexes in order when sh_doors has no sorted list)
 function PR.StateSig(g)
 	doorLeaves()
 	local acc = PR.doorEpoch
 	local function mix(v) acc = (acc * 31 + v) % 2147483647 end
 	local D = A.Doors
 	if D and D.byEnt then
-		for idx, st in pairs(D.byEnt) do
-			mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0)
+		if (A.cfg.state_sig_sorted or 1) >= 0.5 then
+			-- pba_state_sig_sorted: the doors in index order. The mix is not commutative, and pairs() walks the same
+			-- states in another order once the table was rehashed (a door gone and back, one more door then one less):
+			-- the signature changed with no state changed, and the link costs, the door fields and the far jobs were
+			-- all redone for nothing.
+			local list = D.entIdx
+			if not list then
+				list = sigDoorIdx
+				local n = 0
+				for idx in pairs(D.byEnt) do n = n + 1 list[n] = idx end
+				for i = #list, n + 1, -1 do list[i] = nil end
+				table.sort(list)
+			end
+			local byEnt = D.byEnt
+			for i = 1, #list do
+				local idx = list[i]
+				local st = byEnt[idx]
+				if st then mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0) end
+			end
+		else
+			for idx, st in pairs(D.byEnt) do
+				mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0)
+			end
 		end
 	end
 	local ag = g.area

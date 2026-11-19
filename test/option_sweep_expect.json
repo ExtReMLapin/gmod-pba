@@ -427,6 +427,10 @@
   "pos0": "same",
   "why": "the result cache across a floor or a wall: cold positions have nothing cached and the sweep scenes put no two sources of one cell either side of a solid (test cell_barrier)"
  },
+ "state_sig_sorted": {
+  "pos0": "same",
+  "why": "only when the door table's walk order changes with the same states (cl_probes PR.StateSig): the field is rebuilt for nothing, same paths (pure test review P6)"
+ },
  "door_field_invalidate": {
   "pos0": "same",
   "why": "drops cached paths when a background door field is swapped in (cl_probes PR.AdvanceDoorFields), outside a single P.Compute (pure test review P5)"
