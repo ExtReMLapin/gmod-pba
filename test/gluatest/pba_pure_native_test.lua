@@ -1022,5 +1022,15 @@ return {
 			print(string.format("[pba test] kaX of a known loss: %.3f us per call, a solve %.3f us", tMemo / reps * 1e6, tSolve / reps * 1e6))
 			expect(tMemo < tSolve * 0.3).to.beTrue()
 		end },
+		{ name = "One distance law per level (N.Law: made once, the same function each time; a closure per call before), with the clear line's gains", func = function()
+			-- one law per level, the same function each time, and the same gains as the clear-line law
+			expect(N.Law(75) == N.Law(75)).to.beTrue()
+			expect(N.Law(75) ~= N.Law(90)).to.beTrue()
+			withCfg(BASE, function()
+				for _, lvl in ipairs({ 60, 75, 90, 140 }) do
+					for _, d in ipairs({ 1, 52.49, 500, 4000 }) do expect(N.Law(lvl)(d) == N.PhysClear(lvl, d)).to.beTrue() end
+				end
+			end)
+		end },
 	},
 }

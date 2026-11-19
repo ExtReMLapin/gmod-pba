@@ -1359,7 +1359,19 @@ end
 -- came out 14 dB weaker at 5 m with this one).
 function N.PhysStream(d) return N.REF_UNITS / math.max(d or 0, N.REF_UNITS) end
 --- The full version's law of a sound of level lvl (clipped at full scale), as a function of distance.
-function N.Law(lvl) return function(d) return math.min(spread(lvl, d), 1) end end
+-- one law per level, made once (a closure per call before: a few per sound); the law reads its settings when called
+local lawMemo, lawN = {}, 0
+function N.Law(lvl)
+	local k = lvl or false
+	local f = lawMemo[k]
+	if f then return f end
+	f = function(d) return math.min(spread(lvl, d), 1) end
+	if k == k then -- (a NaN level is not kept)
+		if lawN >= 1024 then lawMemo, lawN = {}, 0 end
+		lawMemo[k], lawN = f, lawN + 1
+	end
+	return f
+end
 --- Source slot send for a law at the source-listener distance d: the source's power (its level at 1 m
 -- before any clipping, power1m, default law(1 m)), but never more than the clipped direct x d / 1 m: equal
 -- for an unclipped 1/r law; a loud source clipped at full scale near gets a reverb that grows as its direct
