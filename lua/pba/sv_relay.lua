@@ -79,9 +79,30 @@ function A.NoteEarly(data, secs, ply, ev, blocked)
 	local e = data.Entity
 	list[#list + 1] = { name = data.SoundName, idx = e:EntIndex(), chan = data.Channel, lvl = data.SoundLevel or 75,
 		pitch = data.Pitch or 100, vol = data.Volume or 1, ev = ev, flags = data.Flags or 0, dsp = data.DSP or 0,
-		pos = A.SoundPos(data) or e:WorldSpaceCenter(), face = A.OnFace(e, data.Channel) or false, t = now, secs = secs,
+		pos = A.SoundPos(data) or e:WorldSpaceCenter(), face = A.OnFace(e, data.Channel) or false, t = now, secs = secs, tick = engine.TickCount(),
 		blocked = blocked and true or false }
 	A.stats.earlyNoted = (A.stats.earlyNoted or 0) + 1
+end
+--- (pba_early_purge) The kept lines the engine no longer plays: entity idx's `name` (every name when nil / "") on chan
+-- (any when nil) stopped, or replaced on its channel. keep: the replacing sound (its own entry, noted in this tick,
+-- stays). A line left in the list after its stop was handed to the player's module once he was ready (a ghost line;
+-- replaced on its channel: two lines over each other).
+function A.PurgeEarly(idx, name, chan, keep)
+	if (A.cfg.early_purge or 1) < 0.5 or idx <= 0 then return end
+	local files = name and name ~= "" and A.StopFiles(name) or nil
+	local tick = engine.TickCount()
+	for _, p in ipairs(player.GetHumans()) do
+		local list = A.PState(p).early
+		if list then
+			for i = #list, 1, -1 do
+				local x = list[i]
+				if x.idx == idx and (not chan or x.chan == chan) and (not files or A.StopReaches(files, x.name))
+					and not (keep and x.name == keep.SoundName and x.tick == tick) then
+					table.remove(list, i)
+				end
+			end
+		end
+	end
 end
 -- his client's rendering is settled: the lines kept for him (still playing), how long each has played; the window shuts
 net.Receive("pba_early", function(_, ply)
@@ -298,6 +319,14 @@ local function sendStop(idx, name, chan, plys, unreliable)
 	net.Send(plys)
 end
 
+-- (pba_stop_both) A copy relayed a few ticks before its stop can ride in the same packet as the stop: a client at a low
+-- frame rate or cl_updaterate reads several ticks per packet, and reads a packet's reliable messages before its unreliable
+-- ones, so a reliable stop found nothing yet and the copy played to its end (two ticks apart on d3_citadel_01's pods: two
+-- module voices). To a player relayed a copy of the entity in the last STOP_BOTH_S seconds the stop goes on both streams:
+-- the reliable one cannot be lost, the unreliable one is read behind the copy (and if that packet is lost, so is the copy
+-- it carried). A second stop of a stopped sound does nothing. Same for the channel rule's cut (A.CutChannel).
+local STOP_BOTH_S = 1
+
 --- The engine stopped `name` on entity e (chan: only that channel's copies; nil, any): clients that got
 -- relayed copies stop theirs. except: players left out (set).
 -- A player relayed a copy of that entity in this very tick gets the stop on the unreliable stream, behind that
@@ -305,11 +334,14 @@ end
 -- would find nothing yet (a non-looped ambient_generic fired twice in one tick: stop, play, stop, play; both plays kept).
 function A.RelayStop(e, name, chan, except)
 	local idx = IsValid(e) and not e:IsWorld() and e:EntIndex() or 0
+	A.PurgeEarly(idx, name, chan)
 	local r = idx > 0 and A.recentTo[idx]
 	if not r then return end
 	local plys, now = {}, CurTime()
 	local inOrder = (A.cfg.stop_order or 1) >= 0.5
+	local both = (A.cfg.stop_both or 1) >= 0.5
 	local behind -- (the players relayed a copy of e in this tick)
+	local recent -- (pba_stop_both: those relayed one in the last STOP_BOTH_S: the stop goes on both streams)
 	for p, t in pairs(r) do
 		if IsValid(p) and now - t < 30 then
 			if not (except and except[p]) then
@@ -318,6 +350,10 @@ function A.RelayStop(e, name, chan, except)
 					behind[#behind + 1] = p
 				else
 					plys[#plys + 1] = p
+					if both and now - t <= STOP_BOTH_S then
+						recent = recent or {}
+						recent[#recent + 1] = p
+					end
 				end
 			end
 		else
@@ -327,6 +363,7 @@ function A.RelayStop(e, name, chan, except)
 	if behind then sendStop(idx, name, chan, behind, true) end
 	if #plys == 0 then return end
 	sendStop(idx, name, chan, plys, false)
+	if recent then sendStop(idx, name, chan, recent, true) end
 end
 
 -- Players holding relayed copies per entity and replacing channel (A.recentChan): the channel rule reaches
@@ -357,29 +394,42 @@ end
 -- still waiting for their own stamp, which a stop on arrival cut before they began (pba_cut_at_start, cl_render).
 function A.CutChannel(data, idx, chan)
 	if A.Loops and A.Loops.CutChannel then A.Loops.CutChannel(idx, chan, data.SoundName) end
+	A.PurgeEarly(idx, nil, chan, data)
 	local rc = A.recentChan[idx]
 	local held = rc and rc[chan]
 	if not held then return end
 	local keep = {}
 	for _, p in ipairs(A.relayedTo or {}) do keep[p] = true end
 	local plys, now = {}, CurTime()
+	local both = (A.cfg.stop_both or 1) >= 0.5
+	local recent -- (pba_stop_both: the cut on both streams)
 	for p, t in pairs(held) do
 		if not keep[p] then
 			held[p] = nil
 			-- (a copy is never longer than max_duration; 30 s as for recentTo)
-			if IsValid(p) and now - t < 30 then plys[#plys + 1] = p end
+			if IsValid(p) and now - t < 30 then
+				plys[#plys + 1] = p
+				if both and now - t <= STOP_BOTH_S then
+					recent = recent or {}
+					recent[#recent + 1] = p
+				end
+			end
 		end
 	end
 	if next(held) == nil then rc[chan] = nil end
 	if #plys == 0 then return end
-	net.Start("pba_snd_stop")
-	net.WriteUInt(idx, 16)
-	net.WriteInt(chan, 10)
-	net.WriteUInt(0, 8) -- every name
 	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
-	net.WriteBool(st ~= 0)
-	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
-	net.Send(plys)
+	local function cut(to, unreliable)
+		net.Start("pba_snd_stop", unreliable)
+		net.WriteUInt(idx, 16)
+		net.WriteInt(chan, 10)
+		net.WriteUInt(0, 8) -- every name
+		net.WriteBool(st ~= 0)
+		if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
+		net.Send(to)
+	end
+	cut(plys, false)
+	if recent then cut(recent, true) end
 	A.stats.chanCuts = (A.stats.chanCuts or 0) + 1
 end
 
@@ -508,5 +558,6 @@ end)
 -- removal, on entity NULL); the relayed copies do the same. Loops are stopped by pba.Loops.
 hook.Add("EntityRemoved", "pba_relay_removed", function(e)
 	local idx = e:EntIndex()
-	if idx > 0 then A.recentTo[idx] = nil A.recentChan[idx] = nil end
+	-- (its brief sounds too: a new entity taking the index must not see its first change of one of those names dropped)
+	if idx > 0 then A.recentTo[idx] = nil A.recentChan[idx] = nil A.recentBrief[idx] = nil end
 end)

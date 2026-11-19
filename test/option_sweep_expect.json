@@ -562,5 +562,41 @@
  "probe_air_hop": {
   "pos0": "same",
   "why": "only a source that sees no probe at all (in a void under the platforms) takes the air hop: the sweep scenes stand on floors; covered by skylift_jumps"
+ },
+ "loops_ready": {
+  "pos0": "hook",
+  "why": "server: who a followed loop's mirror is sent to (sv_sound S.Audience, kind mirror: the player's client ready), outside P.Compute; covered by review_server S1"
+ },
+ "early_purge": {
+  "pos0": "hook",
+  "why": "server: the lines an early window keeps dropped at their stop or channel cut (sv_relay A.PurgeEarly), outside P.Compute; covered by review_server M2"
+ },
+ "stop_both": {
+  "pos0": "hook",
+  "why": "server: an explicit stop or a channel cut sent on both network streams to the players relayed a copy in the last second (sv_relay A.RelayStop, A.CutChannel), outside P.Compute; covered by stop_order apart and review_server M5"
+ },
+ "step_by_name": {
+  "pos0": "hook",
+  "why": "server: which sounds of a footstep's tick are left out for the stepping player's witnesses (sv_sound stepper), outside P.Compute; covered by review_server S3 and bot_footsteps"
+ },
+ "sentence_ready": {
+  "pos0": "hook",
+  "why": "server: a sentence left to the engine when one listener's client is not ready (sv_sound dispatchBrief), outside P.Compute; covered by review_server S4"
+ },
+ "own_ready": {
+  "pos0": "hook",
+  "why": "server: a player's own sound relayed to his module only once his client is ready (sv_sound S.Audience), outside P.Compute; covered by review_server S5"
+ },
+ "loops_join_pos": {
+  "pos0": "hook",
+  "why": "server: the position a joined loop's START carries (sv_loops send, the source's current one), outside P.Compute; covered by review_server S6"
+ },
+ "loops_cut_chan": {
+  "pos0": "hook",
+  "why": "server: which loops a channel cut stops (sv_loops LP.CutChannel, that channel only), outside P.Compute; covered by review_server S9"
+ },
+ "loops_world_pos": {
+  "pos0": "hook",
+  "why": "server: the key of a loop followed on the world (sv_sound loopStage, its place added), outside P.Compute; covered by review_server S10"
  }
 }

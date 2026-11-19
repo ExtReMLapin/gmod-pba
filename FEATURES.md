@@ -48,6 +48,15 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | A line spoken while you join (a map's first scene, before PBA's client is ready) | the engine's, to its end | ✅ the rest of the line handed to the module once ready, from the point reached (the engine copy muted, the mouth still moves) | S `early_line_takeover` |
 | A sound restarted twice in one tick (a non-looped `ambient_generic` fired twice by a map's outputs: d3_citadel_01's skylift pods) plays once, as in the engine | ✅ | ✅ | S `stop_order` |
 | A loop you come within range of while it plays (a car driving into the radius the server follows it in) | ◐ started at once (the engine's law is near silent at that radius) | ✅ faded in over a second, not started at its whole level | C `loops_edge_fade` |
+| A loop already playing when you join (an ambience, a machine near the spawn) | ✅ | ✅ joined once your client is ready, as when you walk into its range | S `loops_ready` |
+| A line stopped or cut off while you join (a cancelled scene, the speaker interrupted) | ✅ | ✅ not handed to the module once you are ready | S `early_purge` |
+| A sound restarted a tick or two later (two outputs of a map, a client reading several ticks per packet) plays once, as in the engine | ✅ | ✅ | S `stop_both` |
+| Another player shooting while running (MP): his shot heard by those who see him, only his footstep left to their own client | ✅ | ✅ | S `step_by_name` |
+| A sentence (Combine radio) while a player joins | ✅ | ✅ left to the engine for everyone until his client runs (no relay he cannot play) | S `sentence_ready` |
+| Your own sounds while your client loads (a map change, with the module rendering your own sounds) | ✅ | ✅ the engine plays them on you until the client runs | S `own_ready` |
+| A moving loop you come within range of (a car, a helicopter out of view) | ✅ | ✅ starts where its source is, not where it started | S `loops_join_pos` |
+| A new sound on a channel cuts only the loops of that channel (one loop played on two channels of an entity) | ✅ | ✅ | S `loops_cut_chan` |
+| Two loops of one sound played on the world at two places (a map or an addon) | ✅ | ✅ both followed, each at its place | S `loops_world_pos` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering

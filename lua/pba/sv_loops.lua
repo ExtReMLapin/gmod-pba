@@ -60,8 +60,12 @@ local function send(op, l, plys, join)
 	if op ~= OP_STOP then
 		net.WriteUInt(l.id or 0, 16) -- (the compact updates' handle)
 		net.WriteString(l.name)
+		-- (pba_loops_join_pos) where its source is now: a moving source (a car, a helicopter) has left its start position,
+		-- and a player joining it out of his PVS has no entity to follow (its offset from the entity kept)
+		local pos = l.pos
+		if l.pos0 and (A.cfg.loops_join_pos or 1) >= 0.5 and IsValid(l.ent) then pos = l.pos + (l.ent:WorldSpaceCenter() - l.pos0) end
 		-- the common body (sh_core A.WriteSound, as pba_snd's): the speaker flag, SoundTime and face bit with it
-		A.WriteSound({ pos = l.pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
+		A.WriteSound({ pos = pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
 			flags = l.speaker and (SND_SPEAKER or 64) or 0, dsp = l.dsp, idx = l.idx, st = l.st, face = l.face })
 		net.WriteBool(l.once or false)
 		net.WriteBool(join == true)
@@ -437,9 +441,8 @@ function LP.MouthStart(l, data)
 		for _, p in ipairs(player.GetHumans()) do if not A.PState(p).lipsyncOff then rf:AddPlayer(p) end end
 		if rf:GetCount() == 0 then return end
 	end
-	A.reemitting = true
-	e:EmitSound(data.SoundName, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch, 0, 0, rf)
-	A.reemitting = false
+	-- (A.Emit: under pcall, so a failure cannot leave A.reemitting set and every later sound untouched)
+	A.Emit(e.EmitSound, e, data.SoundName, data.SoundLevel or 75, data.Pitch or 100, MOUTH_VOL, ch, 0, 0, rf)
 	l.mouth = true
 	A.stats.mouthLong = (A.stats.mouthLong or 0) + 1
 end
@@ -450,16 +453,15 @@ function LP.MouthStop(l)
 	l.mouth = nil
 	-- the engine's StopSound, not sv_relay's detour: that one relays a stop and calls LP.Stop again, from
 	-- inside LP.Stop (OP_STOP sent twice)
-	A.reemitting = true
-	A.orig.EntStopSound(l.ent, l.name)
-	A.reemitting = false
+	A.Emit(A.orig.EntStopSound, l.ent, l.name)
 end
 
 --- The channel rule (sv_relay A.CutChannel): a new sound `name` on entity idx's replacing channel cuts the long
 -- lines and loops followed there under another name (the engine replaces them; a capped one is over).
 function LP.CutChannel(idx, chan, name)
 	for _, x in pairs(LP.active) do
-		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name) end
+		-- (pba_loops_cut_chan: that channel's only; the same name on another channel of the entity plays on)
+		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name, (A.cfg.loops_cut_chan or 1) >= 0.5 and chan or nil) end
 	end
 	for k, x in pairs(LP.capped) do
 		if x.idx == idx and x.chan == chan and x.name ~= name then LP.capped[k] = nil end
@@ -543,6 +545,7 @@ function LP.Take(data, snd)
 			l.dsp = cv and cv:GetInt() or 0
 		end
 		l.pos = data.Pos or (IsValid(e) and e:WorldSpaceCenter()) or Vector()
+		l.pos0 = IsValid(e) and not e:IsWorld() and e:WorldSpaceCenter() or nil -- (its entity then: send() follows it)
 		l.st, l.face = data.SoundTime, A.OnFace(e, data.Channel) or nil -- (net body only, unused by the mirror yet)
 		-- a long line started again (same key): it plays from its top again, so it ends later
 		if l.once and not fresh then
