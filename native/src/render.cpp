@@ -265,6 +265,7 @@ struct Voice : VoiceCtl {
 	// jumping from one spatialisation to the other mid-sound. -1: not rendered yet
 	float pathMixCur = -1;
 	float sendCur = -1;
+	bool eqUsed = false; // its direct EQ has been applied (SetEqContinuous: then at every block after)
 	float difCur = -1; // diffuse share (room-scaled) at the end of the last block (SetDiffuseSmooth); -1: not rendered yet
 	// srcSendCur is the level fed into srcFedSlot during the last block. Unbinding or rebinding fades the old
 	// slot's input to 0 over one block from there (a radio whose slot was dropped stopped feeding it in one step:
@@ -370,6 +371,7 @@ float g_diffuseSend = 1.5f;
 // over this reference (s): 1 at and above it (a room: unchanged), 0 with no tail. 0 = always 1 (former).
 float g_diffuseRtRef = 1.0f;
 bool g_difSmooth = true; // SetDiffuseSmooth: the diffuse share ramped over the block (Voice::difCur)
+bool g_eqCont = true;    // SetEqContinuous: a voice's direct EQ, once used, is applied every block (Voice::eqUsed)
 Reflection g_echo[kEchoSlots];     // per-source reflections
 Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax), bank 0
 Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same input as g_src[k])
@@ -531,6 +533,7 @@ struct MixSettings {
 	float wetRoom = 0, wetEcho = 0;
 	float diffuseSend = 1.5f, diffuseRtRef = 1.0f;
 	bool difSmooth = true; // SetDiffuseSmooth
+	bool eqCont = true;    // SetEqContinuous
 	float srcScale = 1;
 	bool slotFbGain = true; // SetSlotFallbackGain
 	float limFastMs = 6.0f, limSlowMs = 50.0f, limSlowK = 3.0f;
@@ -1425,7 +1428,11 @@ void RenderBlock() {
 			// EQ first (linear), then the gain and send ramps: one EQ pass serves both the direct
 			// path and the send (same level and EQ as gain-then-EQ)
 			IPLAudioBuffer* bin_in = &g_mono;
-			if (v.eq[0] < 0.999f || v.eq[1] < 0.999f || v.eq[2] < 0.999f) {
+			// skipped while every band is ~1 (no filtering to do); with g_eqCont a voice that has used it keeps it at every
+			// block (at 1 the filters pass the signal and their state follows it): resumed after a skip, the effect started
+			// from the state and gain of its last use, possibly seconds old, a transient (-4 dB of error in that block)
+			if (v.eq[0] < 0.999f || v.eq[1] < 0.999f || v.eq[2] < 0.999f || (g_eqCont && v.eqUsed)) {
+				v.eqUsed = true;
 				IPLDirectEffectParams dp{};
 				dp.flags = IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION; // used as the 3-band EQ
 				dp.airAbsorption[0] = v.eq[0];
@@ -1698,6 +1705,7 @@ void ApplyMix(const MixSettings& m) {
 	g_diffuseSend = m.diffuseSend;
 	g_diffuseRtRef = m.diffuseRtRef;
 	g_difSmooth = m.difSmooth;
+	g_eqCont = m.eqCont;
 	g_srcScale = m.srcScale;
 	g_slotFbGain = m.slotFbGain;
 	g_dfOn = m.dfOn;
@@ -2514,6 +2522,12 @@ void SetWet(float room, float echo) {
 void SetDiffuseRtRef(float s) {
 	CtlCall cc;
 	g_c.mix.diffuseRtRef = std::clamp(s, 0.0f, 10.0f);
+	SendMix();
+}
+
+void SetEqContinuous(bool on) {
+	CtlCall cc;
+	g_c.mix.eqCont = on;
 	SendMix();
 }
 

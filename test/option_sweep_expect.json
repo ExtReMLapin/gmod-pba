@@ -211,6 +211,10 @@
   "pos0": "hook",
   "why": "native module voice cap ranking"
  },
+ "native_eq_continuous": {
+  "pos0": "hook",
+  "why": "native module EQ continuity"
+ },
  "native_pitch_glide": {
   "pos0": "hook",
   "why": "native module pitch glide"

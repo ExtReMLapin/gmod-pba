@@ -92,6 +92,10 @@ void SetDiffuseRtRef(float s);
 // and the HRTF's spatial blend (pba_native_diffuse_smooth, default on). false: the new share for the whole block at once
 // (an Update from 0 to 0.85 dropped the direct sound by 8 dB in one sample: a click), as before.
 void SetDiffuseSmooth(bool on);
+// A voice's direct EQ, once applied, is applied at every block after it, even with every band at 1 (pba_native_eq_continuous,
+// default on): the filters' state follows the signal. false: skipped while every band is >= 0.999 and resumed with the state
+// and gain of its last use, possibly seconds old (a transient), as before.
+void SetEqContinuous(bool on);
 // listener under water: low-pass on the whole native mix (0 = dry, 1 = fully under water)
 void SetUnderwater(float amount);
 // game paused (single player menu): the voices started with VoiceParams::pausable freeze where they are

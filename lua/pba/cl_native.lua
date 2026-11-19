@@ -639,6 +639,8 @@ function N.ApplySettings()
 	if pba_native.SetDiffuseSmooth then pba_native.SetDiffuseSmooth((A.cfg.native_diffuse_smooth or 1) >= 0.5) end
 	-- at the voice cap, a new voice is ranked with the playing ones (module of 2026-11-19+; an older one always makes room)
 	if pba_native.SetCapCompareNew then pba_native.SetCapCompareNew((A.cfg.native_cap_new or 1) >= 0.5) end
+	-- a voice's direct EQ, once used, is applied at every block (module of 2026-11-19+; an older one skips it at 1)
+	if pba_native.SetEqContinuous then pba_native.SetEqContinuous((A.cfg.native_eq_continuous or 1) >= 0.5) end
 	local k = N.wetScale or 1
 	local wr, we = N.WetLevels()
 	pba_native.SetReflections(wetLevel(wr, k), wetLevel(we, k), A.cfg.native_rays,
