@@ -829,22 +829,17 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	if A.Mix and not rec.mixG then rec.mixG = A.Mix.GroupsOf(rec.name, rec.ent, rec.chan, rec.lvl) end
 	local protect = N.ProtectLine(rec.chan)
 	local pausable = N.PauseFlag(rec.flags)
-	local id = A.Mix and A.Mix.Play(rec.mixG, n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset, protect, pausable)
-		or pba_native.Play(n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset, protect, pausable)
-	if not id or id <= 0 then
+	local id = N.StartVoice(rec.mixG, rec.name, n, pos, g, el, em, eh, pitch, false, 0, sh, t.diffuse or 0, roomSend, offset, protect, pausable)
+	if not id then
 		fv.switchFails = (fv.switchFails or 0) + 1
 		return false
 	end
-	A.NoteRendered(rec.name, g)
 	-- reverb as at emission (emitVoice / N.PlayVoice): the dominant voice feeds its source slot unless a
 	-- loud sound is already echoed; without a slot, a voice that is not a transmission feeds the room
 	local echoed = A.Num(A.cfg, "native_all") < 0.5 and rec.lvl >= A.Num(A.cfg, "native_echo_lvl")
-	local bound = false
-	if dominant and not echoed and not dry and rec.S then
-		local srcSend = rec.vol * N.PhysSrcSend(rec.lvl, rec.S:Distance(L)) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain
-		bound = N.BindSource(id, rec.S, srcSend, N.LoudWet(rec.lvl)) -- (wet: its room-bus cap while the slot waits)
-	end
-	if not bound and roomSend <= 0 and not dry then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g * N.LoudWet(rec.lvl)) end
+	local bind = dominant and not echoed and not dry and rec.S
+	local srcSend = bind and rec.vol * N.PhysSrcSend(rec.lvl, rec.S:Distance(L)) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain or nil
+	N.BindOrRoom(id, bind and rec.S or nil, srcSend, N.LoudWet(rec.lvl), roomSend > 0 or dry, pos, g, el, em, eh, pitch)
 	fv.stSel, fv.stW = nil, nil
 	if rec.S then N.ApplyStereo(id, rec.name, t.len or rec.S:Distance(L), rec.dirEnt, rec.S, L, fv) end
 	-- the engine copy stops once the module has it (stopCopy without cancelling the handle)
