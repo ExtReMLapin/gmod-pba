@@ -2646,6 +2646,37 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
+		{ name = "Cheap: its transmission is P.Compute's (one model of the walls on the straight line: bundle, module occlusion, leaf fade), only the routes round them are left out (pba_cheap_same_trans, review P4)", func = function()
+			withSlicedRooms(function(cfg, list)
+				cfg.far_sliced = 0
+				local function diffs()
+					local n, worst = 0, 0
+					for _, pr in ipairs(list) do
+						P.InvalidateCache()
+						local full = P.Compute(pr[1], pr[2], 75, cfg)
+						if full.trans and not full.leafByPortal then
+							local c = P.Cheap(pr[1], pr[2], 75, cfg)
+							expect(c.trans ~= nil).to.beTrue()
+							n = n + 1
+							for _, k in ipairs({ "rawLossDb", "lossDb", "midDb", "lpDb" }) do
+								worst = math.max(worst, math.abs((c.trans[k] or 0) - (full.trans[k] or 0)))
+							end
+						end
+					end
+					return n, worst
+				end
+				local saved = cfg.cheap_same_trans
+				cfg.cheap_same_trans = 0
+				local n0, w0 = diffs()
+				cfg.cheap_same_trans = 1
+				local n1, w1 = diffs()
+				cfg.cheap_same_trans = saved
+				print(string.format("[pba test] cheap vs full transmission over %d pairs: worst %.2f dB (option 0) -> %.2f dB", n1, w0, w1))
+				expect(n1 >= 3).to.beTrue()
+				expect(w0 > 0.5).to.beTrue() -- control: two models
+				expect(w1 < 1e-9).to.beTrue()
+			end)
+		end },
 		{ name = "Group: off, or every source nearer than group_min_dist, gives the per-sound routes bit for bit", func = function()
 			withSlicedRooms(function(cfg, list)
 				local PR = A.Probes

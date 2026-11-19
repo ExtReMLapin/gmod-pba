@@ -99,6 +99,10 @@
   "pos0": "hook",
   "why": "schedules far paths over frames (cl_render), outside a direct P.Compute"
  },
+ "cheap_same_trans": {
+  "pos0": "hook",
+  "why": "P.Cheap only (bursts past their budget, far jobs past far_force_ms), not a direct P.Compute (pure test review P4)"
+ },
  "far_hold_pace": {
   "pos0": "hook",
   "why": "per-frame budget of held sounds' far jobs (cl_slicer), outside a direct P.Compute (pure test review M4)"

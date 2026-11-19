@@ -77,6 +77,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Two sounds with no entity close to each other never share a cached path | ✅ | ✅ | C `cache_src_near` |
 | Paths worked out before a door changed state are dropped once the door costs are redone | ✅ | ✅ | C `door_field_invalidate` |
 | Door costs redone only when a door or portal state really changed | ✅ | ✅ | C `state_sig_sorted` |
+| A new sound's quick evaluation (bursts) uses the same wall model as the full one | ✅ | ✅ | C `cheap_same_trans` |
 | `pba_enable 0` = exact vanilla (A/B) | ✅ | ✅ | S `enable` |
 | Menus (player, admin, Steam Audio) | ✅ | ✅ | — |
 | The server can forbid the native module (fairness in competitive play) | — | ✅ | S `allow_native` |

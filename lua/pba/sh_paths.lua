@@ -3029,6 +3029,17 @@ function P.Cheap(S, L, sndlvl, cfg, srcEnt)
 		return r
 	end
 	r.clear, r.paths = false, {}
+	-- pba_cheap_same_trans: the walls' transmission of P.Compute itself (its stage: the bundle of lines or the
+	-- module's occlusion, the leaf fade), the routes round them left out. The raw sum of the walls was another
+	-- model: a sound switching between the cheap and the full evaluation (a burst, a forced far job) jumped
+	-- between the two (a car behind a building: -49 / -74 dB in turns).
+	if (cfg.cheap_same_trans or 1) >= 0.5 and P.TransmissionStage then
+		local worldBlocked = P.LineBlockers(walls, cfg)
+		P.TransmissionStage(r, S, L, walls, walls, cfg, srcEnt, worldBlocked)
+		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
+		r.shadowDb = P.ShadowOf(r.voices, nil)
+		return r
+	end
 	local loss, lp, mid, tilt = P.EvalWalls(walls, cfg)
 	local last = walls[#walls]
 	local dir = (L - S):GetNormalized()
@@ -3509,6 +3520,8 @@ local function transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked)
 	if (cfg.trans_tilt or 0) >= 0.5 then r.trans.lpDb = tilt end
 	if worldBlocked and (cfg.trans_leaf_fade or 0) >= 0.5 then leafFade(r, S, L, walls, cfg, srcEnt) end
 end
+
+P.TransmissionStage, P.LineBlockers = transmission, lineBlockers -- (P.Cheap: the same transmission model)
 
 -- Stage 6, experimental: Steam Audio baked pathing replaces the probe graph
 local function nativePath(r, S, L, cfg)
