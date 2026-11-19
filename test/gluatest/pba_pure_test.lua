@@ -2308,7 +2308,6 @@ local SUITE = {
 			local S, L = Vector(-2633.84, 299.1, 60), Vector(-3776, 224, 60)
 			local xs = { -3640, -3112, -2936 }
 			local perms = { { 1, 2, 3 }, { 1, 3, 2 }, { 2, 1, 3 }, { 2, 3, 1 }, { 3, 1, 2 }, { 3, 2, 1 } }
-			local cfg = setmetatable({ route_pos_straight = 1 }, { __index = CFG })
 			local seen = {}
 			for trial = 1, 20 do
 				local doors = {}
@@ -2320,8 +2319,8 @@ local SUITE = {
 				local leaves = {}
 				for _, k in ipairs(perms[(trial - 1) % 6 + 1]) do leaves[doors[k]] = true end
 				local bent = PR.RouteHeardPos({ edgePos = Vector(S), leaves = leaves },
-					{ S, Vector(-2934.87, 274.8, 43.82), Vector(-3121.75, 275.25, 40), Vector(-3520, 320, 48), L }, S, L, cfg)
-				local straight = PR.RouteHeardPos({ pos = Vector(S), leaves = leaves }, { S, L }, S, L, cfg)
+					{ S, Vector(-2934.87, 274.8, 43.82), Vector(-3121.75, 275.25, 40), Vector(-3520, 320, 48), L }, S, L)
+				local straight = PR.RouteHeardPos({ pos = Vector(S), leaves = leaves }, { S, L }, S, L)
 				seen[#seen + 1] = { bent.pos, straight.pos }
 			end
 			for _, s in ipairs(seen) do
@@ -2562,7 +2561,7 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "StateSig: the same door states give the same signature whatever order pairs() walks them in (a door table rehashed or a door gone and back: link costs and door fields redone for nothing, far jobs restarted; pba_state_sig_sorted, review P6)", func = function()
+		{ name = "StateSig: the same door states give the same signature whatever order pairs() walks them in (a door table rehashed or a door gone and back: link costs and door fields redone for nothing, far jobs restarted; review P6)", func = function()
 			local PR = A.Probes
 			local savedDoors, savedList, savedEpoch = A.Doors, PR.doorList, PR.doorEpoch
 			local ok, err = pcall(function()
@@ -2596,12 +2595,6 @@ local SUITE = {
 				a[k].frac = f0 < 0.5 and 1 or 0
 				expect(sig(a) ~= s0).to.beTrue()
 				a[k].frac = f0
-				-- control: pba_state_sig_sorted 0 (former behaviour): the walk's order is in the signature
-				local saved = rawget(A.cfg, "state_sig_sorted")
-				A.cfg.state_sig_sorted = 0
-				local sa, sb = sig(a), sig(b)
-				A.cfg.state_sig_sorted = saved
-				expect(sa ~= sb).to.beTrue()
 			end)
 			A.Doors, PR.doorList, PR.doorEpoch = savedDoors, savedList, savedEpoch
 			if not ok then error(err, 0) end
@@ -2685,7 +2678,7 @@ local SUITE = {
 							if not PR.doorFieldJob and #((PR.doorFieldQueue or {}).list or {}) == 0 then break end
 						end
 						PR.current = cur
-						-- the field swapped in the background (pba_door_field_invalidate): the cached path and the loop's
+						-- the field swapped in the background: the cached path and the loop's
 						-- values were worked out on the old one: neither stands (was: up to cache_ttl / reeval_max_s more)
 						return P.cache.swapTest ~= kept, P.ReevalDue(loop, S, L, 1000.2, cfgC)
 					end
@@ -2693,17 +2686,6 @@ local SUITE = {
 					expect(fresh).to.beTrue()
 					expect(reeval).to.beTrue()
 					expect(f2.stateSig ~= nil and f2.doors == nil).to.beTrue()
-					-- control: pba_door_field_invalidate 0 (former behaviour): both stand after the swap
-					A.Doors.byEnt[9990].frac = 0
-					PR.doorList = nil
-					expect(PR.FieldFor(g, L) == f2 and f2.stateSig ~= PR.StateSig(g)).to.beTrue() -- (queued again)
-					local savedOpt = rawget(A.cfg, "door_field_invalidate")
-					A.cfg.door_field_invalidate = 0
-					fresh, reeval = swapField()
-					A.cfg.door_field_invalidate = savedOpt
-					expect(fresh).to.equal(false)
-					expect(reeval).to.equal(false)
-					expect(f2.doors ~= nil).to.beTrue() -- (it did swap: the closed door's field again)
 					A.Doors.byEnt[9990].frac = 0.5
 					expect(PR.StateSig(g) ~= f2.stateSig).to.beTrue()
 				end)
