@@ -272,7 +272,7 @@ std::atomic<int> g_echoBusy{0}, g_slotPasses{0};
 //    listener is an anchor moved only when the real listener is more than g_srcAccumR away from it
 //    (or the scene changed): Steam Audio keeps averaging every pass made while the listener walks
 //    around the anchor (dozens instead of a few), and the level no longer changes with each step.
-//  - Each slot has two reflection sources (banks, render::kSrcBankB): when the anchor moves, the
+//  - Each slot has two reflection sources (banks): when the anchor moves, the
 //    bank holding the previous anchor's average stays and is crossfaded into the new one by pass
 //    count (the new average takes over within g_srcAccumK passes): a re-anchor is a glide between
 //    two averages, not a jump to a single pass. The bank to reuse is first faded out (<= 0.2 s).
@@ -280,7 +280,7 @@ std::atomic<int> g_echoBusy{0}, g_slotPasses{0};
 // convolution per slot while its banks crossfade. The response is the anchor's (<= g_srcAccumR off),
 // never invented: where no ray reaches the source room the average stays 0.
 IPLSimulator g_slotSim = nullptr;
-IPLSource g_srcSlotB[render::kSrcBankB] = {}; // bank 1 (bank 0 is g_srcSlot[k].src)
+IPLSource g_srcSlotB[render::kSrcSlotsMax] = {}; // bank 1 (bank 0 is g_srcSlot[k].src)
 std::atomic<float> g_srcAccumR{1.5f}; // m; <= 0: off (simulated at the listener, every move restarts)
 std::atomic<int> g_srcAccumK{8};      // passes for a new anchor's average to take over
 // Slots simulated per run (stagger.h, SetSlotGroup, pba_native_slot_group): a run hands each of its slots a new impulse
@@ -293,7 +293,7 @@ constexpr double kSlotGroupGapMs = 12.0; // > one audio block (512 / 48 kHz = 10
 struct SrcAccum {
 	IPLCoordinateSpace3 anchor{};
 	bool anchored = false;
-	int cur = 0;           // bank simulated now (slots >= kSrcBankB: always 0)
+	int cur = 0;           // bank simulated now
 	int anchorScene = -1;  // scene version when the anchor was set
 	bool retiring = false; // the anchor must move; waiting for the other bank to fade out
 	IPLVector3 lastRunLis{};
@@ -470,10 +470,8 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 	SrcAccum& A = g_acc;
 	const float R = g_srcAccumR.load();
 	const bool accum = R > 0;
-	auto bankOf = [&](int k) { return k < render::kSrcBankB ? A.cur : 0; };
-	auto srcOf = [&](int b, int k) -> IPLSource {
-		return b == 0 ? g_srcSlot[k].src : (k < render::kSrcBankB ? g_srcSlotB[k] : nullptr);
-	};
+	auto bankOf = [&](int) { return A.cur; };
+	auto srcOf = [&](int b, int k) -> IPLSource { return b == 0 ? g_srcSlot[k].src : g_srcSlotB[k]; };
 	auto powOf = [&](int b, int k) { return A.pow[b][k] == 0 ? 1.0f : A.pow[b][k]; };
 	// slots are simulated at genPos, not pos: a source drifting within kSrcNear keeps its average
 	// (pos follows the binder at every refresh; a moved source restarts Steam Audio's average)
@@ -496,7 +494,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 			// out is taken over at once (its other slots keep their response until they run again)
 			if (render::SrcBankSilent(o) || waiting) {
 				// the other bank is silent: it starts a fresh average at the new anchor, the current one
-				// becomes the partner it crossfades from. Slots beyond kSrcBankB restart in place.
+				// becomes the partner it crossfades from.
 				A.cur = o;
 				A.anchor = lis;
 				A.anchorScene = sceneVer;
@@ -505,7 +503,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 					const int b = bankOf(k);
 					A.n[b][k] = 0;
 					A.reset[b][k] = true;
-					if (k < render::kSrcBankB) A.has[b][k] = false;
+					A.has[b][k] = false;
 				}
 				g_srcSwaps++;
 			} else {
@@ -558,7 +556,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 		bool ready[render::kSrcSlotsMax] = {};
 		for (int k = 0; k < render::kSrcSlotsMax; ++k) {
 			const int c = bankOf(k), o = 1 - c;
-			if (A.retiring && k < render::kSrcBankB) {
+			if (A.retiring) {
 				// fade the bank to reuse out; the current one alone meanwhile, if it holds this place's
 				// response (else silent until its run: it may still hold an older anchor's or place's)
 				const float wc = samePlace(c, k) ? 1.0f : 0.0f;
@@ -566,7 +564,7 @@ bool RunSrcSlots(const IPLCoordinateSpace3& lis, bool pendingOnly) {
 				ready[k] = wc > 0;
 				continue;
 			}
-			const bool hasO = accum && k < render::kSrcBankB && samePlace(o, k) && A.n[o][k] > 0;
+			const bool hasO = accum && samePlace(o, k) && A.n[o][k] > 0;
 			const int nc = samePlace(c, k) ? A.n[c][k] : 0;
 			// nothing simulated here yet: unchanged (the weights left there may point at a bank since restarted)
 			if (nc == 0 && !hasO) continue;
@@ -1159,12 +1157,12 @@ bool EnsureSimulator() {
 		}
 		// source reverb slots: their own simulator (listener anchor, see g_slotSim), same settings
 		IPLSource ss[render::kSrcSlotsMax] = {};
-		IPLSource sb[render::kSrcBankB] = {};
+		IPLSource sb[render::kSrcSlotsMax] = {};
 		g_acc = SrcAccum{};
 		{
 			IPLSimulationSettings ssim = sim;
 			ssim.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
-			ssim.maxNumSources = render::kSrcSlotsMax + render::kSrcBankB;
+			ssim.maxNumSources = 2 * render::kSrcSlotsMax;
 			if (iplSimulatorCreate(g_ctx, &ssim, &g_slotSim) == IPL_STATUS_SUCCESS) iplSimulatorSetScene(g_slotSim, g_scene);
 			else g_slotSim = nullptr;
 		}
@@ -1180,13 +1178,11 @@ bool EnsureSimulator() {
 			if (!g_slotSim) continue;
 			if (iplSourceCreate(g_slotSim, &rs, &g_srcSlot[k].src) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlot[k].src, g_slotSim);
 			ss[k] = g_srcSlot[k].src;
-			if (k < render::kSrcBankB) {
-				if (iplSourceCreate(g_slotSim, &rs, &g_srcSlotB[k]) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlotB[k], g_slotSim);
-				sb[k] = g_srcSlotB[k];
-			}
+			if (iplSourceCreate(g_slotSim, &rs, &g_srcSlotB[k]) == IPL_STATUS_SUCCESS) iplSourceAdd(g_srcSlotB[k], g_slotSim);
+			sb[k] = g_srcSlotB[k];
 		}
 		if (g_slotSim) iplSimulatorCommit(g_slotSim);
-		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots, ss, render::kSrcSlotsMax, sb, render::kSrcBankB);
+		render::SetReflectionSources(g_reverbSource, es, render::kEchoSlots, ss, render::kSrcSlotsMax, sb, render::kSrcSlotsMax);
 	}
 	iplSimulatorCommit(g_sim);
 	// long-window parametric simulator for the room reverb time (see g_revSim)
@@ -2564,8 +2560,8 @@ LUA_FUNCTION(SetHrtfBlend) {
 	return 0;
 }
 
-// SetPitchGlide(ms): time constant with which a voice's reading speed approaches the pitch last given to Update (0 = off,
-// the default: the speed of the last pitch from the next block on). Smooths the staircase of one Doppler value per frame.
+// SetPitchGlide(ms): time constant with which a voice's reading speed approaches the pitch last given to Update (default 30;
+// 0 = off: the speed of the last pitch from the next block on). Smooths the staircase of one Doppler value per frame.
 LUA_FUNCTION(SetPitchGlide) {
 	render::SetPitchGlide((float)LUA->CheckNumber(1));
 	return 0;
@@ -2824,7 +2820,7 @@ LUA_FUNCTION(SrcSlotStats) {
 	int row = 0;
 	for (int k = 0; k < std::min(g_srcPool.load(), render::kSrcSlotsMax); ++k) {
 		if (gen[k] == 0) continue;
-		const int c = k < render::kSrcBankB ? cur : 0, o = 1 - c;
+		const int c = cur, o = 1 - c;
 		LUA->PushNumber(++row);
 		LUA->CreateTable();
 		auto num = [&](const char* f, double v) {
@@ -2838,7 +2834,7 @@ LUA_FUNCTION(SrcSlotStats) {
 		LUA->SetField(-2, "active");
 		num("bank", c);
 		num("n", g_srcStatN[k][c].load());
-		num("nOld", k < render::kSrcBankB ? g_srcStatN[k][o].load() : 0);
+		num("nOld", g_srcStatN[k][o].load());
 		num("w", st[k].w[c]);
 		num("wOld", st[k].w[o]);
 		num("target", st[k].target[c]);
@@ -2950,13 +2946,13 @@ LUA_FUNCTION(CaptureState) {
 // SetMixQuality(limiterMode, hqResample [, premaster]) -> limiterMode, hqResample: limiterMode 1 (default) = a lookahead peak
 // limiter, transparent below 0.98; 0 = the legacy soft clip from 0.8; 2 = hard clip at full scale (the engine's
 // int16 mix). hqResample (default true): the windowed-sinc 48 kHz resampler of the sounds decoded from now on
-// instead of the linear one. premaster (default false): the limiter / clip acts before the master volume, as the
+// instead of the linear one. premaster (default true): the limiter / clip acts before the master volume, as the
 // engine's mix does (a loud sound clips at full scale whatever the volume), not after it. Absent in older modules
 // (Lua: nil, nothing pushed); an older module ignores the third argument.
 LUA_FUNCTION(SetMixQuality) {
 	const int lim = LUA->IsType(1, Type::Number) ? (int)LUA->GetNumber(1) : render::OutputMode();
 	const bool hq = LUA->IsType(2, Type::Bool) ? LUA->GetBool(2) : (LUA->IsType(2, Type::Number) ? LUA->GetNumber(2) >= 0.5 : true);
-	render::SetMixQuality(lim, hq, LUA->IsType(3, Type::Bool) ? LUA->GetBool(3) : false);
+	render::SetMixQuality(lim, hq, LUA->IsType(3, Type::Bool) ? LUA->GetBool(3) : true);
 	LUA->PushNumber(render::OutputMode());
 	LUA->PushBool(hq);
 	return 2;
@@ -3108,145 +3104,36 @@ void JoinBakeThread() {
 
 void RegisterTrace(GarrysMod::Lua::ILuaBase* LUA); // trace.cpp: pba_native.trace (engine traces)
 
+// the functions of the pba_native table, each under its own name
+#define PBA_FN(f) {#f, f}
+static const struct {
+	const char* name;
+	GarrysMod::Lua::CFunc fn;
+} kApi[] = {
+	PBA_FN(Version), PBA_FN(ModuleVersion), PBA_FN(PhononLevel), PBA_FN(Init), PBA_FN(LoadWorld), PBA_FN(Direct),
+	PBA_FN(BakePaths), PBA_FN(Paths), PBA_FN(BakeStatus), PBA_FN(RoomReverb), PBA_FN(Shutdown), PBA_FN(SetSimOptions),
+	PBA_FN(BakeReverb), PBA_FN(ReverbBakeStatus), PBA_FN(AudioStart), PBA_FN(AudioStop), PBA_FN(HasSound),
+	PBA_FN(LoadSound), PBA_FN(SetVoiceStereo), PBA_FN(Play), PBA_FN(Update), PBA_FN(StopVoice), PBA_FN(SetListener),
+	PBA_FN(RelDir), PBA_FN(TestBinaural), PBA_FN(RenderDebug), PBA_FN(SavePaths), PBA_FN(LoadPaths), PBA_FN(Echo),
+	PBA_FN(SourceReflect), PBA_FN(SetSourceLongRt), PBA_FN(SlotReverbTimes), PBA_FN(SetSourceSlots),
+	PBA_FN(SetSourceReverbScale), PBA_FN(SetSlotFallback), PBA_FN(SrcSlotStats), PBA_FN(SetSourceAccum),
+	PBA_FN(SetSourceNear), PBA_FN(SetMixQuality), PBA_FN(SetStreamFade), PBA_FN(CaptureStart), PBA_FN(CaptureStop),
+	PBA_FN(CaptureState), PBA_FN(SetOutputMode), PBA_FN(SetHrtfBlend), PBA_FN(SetPitchGlide), PBA_FN(SetSlotBankFlush),
+	PBA_FN(SetSlotGroup), PBA_FN(SetEqContinuous), PBA_FN(SetCapCompareNew), PBA_FN(SetDiffuseSmooth),
+	PBA_FN(SetReflections), PBA_FN(SetLimits), PBA_FN(Stats), PBA_FN(DynamicAdd), PBA_FN(DynamicMove),
+	PBA_FN(DynamicRemove), PBA_FN(DynamicCommit), PBA_FN(LoadSoundAsync), PBA_FN(LoadSentence), PBA_FN(SoundPending),
+	PBA_FN(SetUnderwater), PBA_FN(StreamFilter), PBA_FN(StreamCollect), PBA_FN(SetPaused), PBA_FN(StreamInfo),
+	PBA_FN(StreamCapture), PBA_FN(PlayStream),
+};
+#undef PBA_FN
+
 GMOD_MODULE_OPEN() {
 	LUA->PushSpecial(SPECIAL_GLOB);
 	LUA->CreateTable();
-	LUA->PushCFunction(Version);
-	LUA->SetField(-2, "Version");
-	LUA->PushCFunction(ModuleVersion);
-	LUA->SetField(-2, "ModuleVersion");
-	LUA->PushCFunction(PhononLevel);
-	LUA->SetField(-2, "PhononLevel");
-	LUA->PushCFunction(Init);
-	LUA->SetField(-2, "Init");
-	LUA->PushCFunction(LoadWorld);
-	LUA->SetField(-2, "LoadWorld");
-	LUA->PushCFunction(Direct);
-	LUA->SetField(-2, "Direct");
-	LUA->PushCFunction(BakePaths);
-	LUA->SetField(-2, "BakePaths");
-	LUA->PushCFunction(Paths);
-	LUA->SetField(-2, "Paths");
-	LUA->PushCFunction(BakeStatus);
-	LUA->SetField(-2, "BakeStatus");
-	LUA->PushCFunction(RoomReverb);
-	LUA->SetField(-2, "RoomReverb");
-	LUA->PushCFunction(Shutdown);
-	LUA->SetField(-2, "Shutdown");
-	LUA->PushCFunction(SetSimOptions);
-	LUA->SetField(-2, "SetSimOptions");
-	LUA->PushCFunction(BakeReverb);
-	LUA->SetField(-2, "BakeReverb");
-	LUA->PushCFunction(ReverbBakeStatus);
-	LUA->SetField(-2, "ReverbBakeStatus");
-	LUA->PushCFunction(AudioStart);
-	LUA->SetField(-2, "AudioStart");
-	LUA->PushCFunction(AudioStop);
-	LUA->SetField(-2, "AudioStop");
-	LUA->PushCFunction(HasSound);
-	LUA->SetField(-2, "HasSound");
-	LUA->PushCFunction(LoadSound);
-	LUA->SetField(-2, "LoadSound");
-	LUA->PushCFunction(SetVoiceStereo);
-	LUA->SetField(-2, "SetVoiceStereo");
-	LUA->PushCFunction(Play);
-	LUA->SetField(-2, "Play");
-	LUA->PushCFunction(Update);
-	LUA->SetField(-2, "Update");
-	LUA->PushCFunction(StopVoice);
-	LUA->SetField(-2, "StopVoice");
-	LUA->PushCFunction(SetListener);
-	LUA->SetField(-2, "SetListener");
-	LUA->PushCFunction(RelDir);
-	LUA->SetField(-2, "RelDir");
-	LUA->PushCFunction(TestBinaural);
-	LUA->SetField(-2, "TestBinaural");
-	LUA->PushCFunction(RenderDebug);
-	LUA->SetField(-2, "RenderDebug");
-	LUA->PushCFunction(SavePaths);
-	LUA->SetField(-2, "SavePaths");
-	LUA->PushCFunction(LoadPaths);
-	LUA->SetField(-2, "LoadPaths");
-	LUA->PushCFunction(Echo);
-	LUA->SetField(-2, "Echo");
-	LUA->PushCFunction(SourceReflect);
-	LUA->SetField(-2, "SourceReflect");
-	LUA->PushCFunction(SetSourceLongRt);
-	LUA->SetField(-2, "SetSourceLongRt");
-	LUA->PushCFunction(SlotReverbTimes);
-	LUA->SetField(-2, "SlotReverbTimes");
-	LUA->PushCFunction(SetSourceSlots);
-	LUA->SetField(-2, "SetSourceSlots");
-	LUA->PushCFunction(SetSourceReverbScale);
-	LUA->SetField(-2, "SetSourceReverbScale");
-	LUA->PushCFunction(SetSlotFallback);
-	LUA->SetField(-2, "SetSlotFallback");
-	LUA->PushCFunction(SrcSlotStats);
-	LUA->SetField(-2, "SrcSlotStats");
-	LUA->PushCFunction(SetSourceAccum);
-	LUA->SetField(-2, "SetSourceAccum");
-	LUA->PushCFunction(SetSourceNear);
-	LUA->SetField(-2, "SetSourceNear");
-	LUA->PushCFunction(SetMixQuality);
-	LUA->SetField(-2, "SetMixQuality");
-	LUA->PushCFunction(SetStreamFade);
-	LUA->SetField(-2, "SetStreamFade");
-	LUA->PushCFunction(CaptureStart);
-	LUA->SetField(-2, "CaptureStart");
-	LUA->PushCFunction(CaptureStop);
-	LUA->SetField(-2, "CaptureStop");
-	LUA->PushCFunction(CaptureState);
-	LUA->SetField(-2, "CaptureState");
-	LUA->PushCFunction(SetOutputMode);
-	LUA->SetField(-2, "SetOutputMode");
-	LUA->PushCFunction(SetHrtfBlend);
-	LUA->SetField(-2, "SetHrtfBlend");
-	LUA->PushCFunction(SetPitchGlide);
-	LUA->SetField(-2, "SetPitchGlide");
-	LUA->PushCFunction(SetSlotBankFlush);
-	LUA->SetField(-2, "SetSlotBankFlush");
-	LUA->PushCFunction(SetSlotGroup);
-	LUA->SetField(-2, "SetSlotGroup");
-	LUA->PushCFunction(SetEqContinuous);
-	LUA->SetField(-2, "SetEqContinuous");
-	LUA->PushCFunction(SetCapCompareNew);
-	LUA->SetField(-2, "SetCapCompareNew");
-	LUA->PushCFunction(SetDiffuseSmooth);
-	LUA->SetField(-2, "SetDiffuseSmooth");
-	LUA->PushCFunction(SetReflections);
-	LUA->SetField(-2, "SetReflections");
-	LUA->PushCFunction(SetLimits);
-	LUA->SetField(-2, "SetLimits");
-	LUA->PushCFunction(Stats);
-	LUA->SetField(-2, "Stats");
-	LUA->PushCFunction(DynamicAdd);
-	LUA->SetField(-2, "DynamicAdd");
-	LUA->PushCFunction(DynamicMove);
-	LUA->SetField(-2, "DynamicMove");
-	LUA->PushCFunction(DynamicRemove);
-	LUA->SetField(-2, "DynamicRemove");
-	LUA->PushCFunction(DynamicCommit);
-	LUA->SetField(-2, "DynamicCommit");
-	LUA->PushCFunction(LoadSoundAsync);
-	LUA->SetField(-2, "LoadSoundAsync");
-	LUA->PushCFunction(LoadSentence);
-	LUA->SetField(-2, "LoadSentence");
-	LUA->PushCFunction(SoundPending);
-	LUA->SetField(-2, "SoundPending");
-	LUA->PushCFunction(SetUnderwater);
-	LUA->SetField(-2, "SetUnderwater");
-	LUA->PushCFunction(StreamFilter);
-	LUA->SetField(-2, "StreamFilter");
-	LUA->PushCFunction(StreamCollect);
-	LUA->SetField(-2, "StreamCollect");
-	LUA->PushCFunction(SetPaused);
-	LUA->SetField(-2, "SetPaused");
-	LUA->PushCFunction(StreamInfo);
-	LUA->SetField(-2, "StreamInfo");
-	LUA->PushCFunction(StreamCapture);
-	LUA->SetField(-2, "StreamCapture");
-	LUA->PushCFunction(PlayStream);
-	LUA->SetField(-2, "PlayStream");
+	for (const auto& f : kApi) {
+		LUA->PushCFunction(f.fn);
+		LUA->SetField(-2, f.name);
+	}
 	RegisterTrace(LUA);
 	// capabilities of this build, so that Lua can use a feature only when the installed DLL has it (an
 	// older DLL silently ignores extra arguments: a start offset would replay a sound from its start)

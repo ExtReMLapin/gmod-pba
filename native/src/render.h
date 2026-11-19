@@ -23,10 +23,9 @@ constexpr int kEchoSlots = 4;      // reflection sources simulated per source (l
 // response each) and their simulated sources were made for nothing.
 constexpr int kSrcSlotsDefault = 16; // active pool by default (pba_native g_srcPool)
 constexpr int kSrcSlotsMax = kSrcSlotsDefault;
-// the first kSrcBankB slots have a second reflection source and effect (bank 1): the response of the
-// previous listener anchor, crossfaded into the new one (see RunSrcSlots in pba_native.cpp). Slots
-// beyond it have one bank (each bank costs ~2.5 MB of impulse response buffers in Steam Audio)
-constexpr int kSrcBankB = 16;
+// every slot has a second reflection source and effect (bank 1): the response of the previous listener anchor,
+// crossfaded into the new one (see RunSrcSlots in pba_native.cpp; each bank costs ~2.5 MB of impulse response buffers
+// in Steam Audio)
 constexpr float kIRSeconds = 0.5f; // convolution part of the impulse response (parametric tail beyond)
 
 struct VoiceParams {
@@ -81,8 +80,8 @@ void SetOutputMode(int mode); // 0 headphones (binaural), 1 speakers (panning)
 // back in: the timbre of a source in front or behind comes closer to the file's, the direction gets blurrier.
 void SetHrtfBlend(float blend);
 // Time constant (ms) with which a voice's reading speed approaches the pitch last given to Update (Doppler of a fly-by:
-// one value per game frame was a staircase of pitch steps, 16 cents at 30 updates a second). 0 = off, the default: the
-// reading speed is the last pitch from the start of the next block, as before.
+// one value per game frame was a staircase of pitch steps, 16 cents at 30 updates a second). Default 30 (pba_native_pitch_glide).
+// 0 = off: the reading speed is the last pitch from the start of the next block, as before.
 void SetPitchGlide(float ms);
 void SetWet(float room, float echo);
 // extra room-reverb send of diffuse voices (see VoiceParams::diffuse)
@@ -104,7 +103,7 @@ void SetPaused(bool paused);
 // reflection sources owned by the simulator (nullptr to detach before releasing them): returns once no block can read
 // the previous ones any more (it waits for the end of the audio callback in flight, if one is: at most one render);
 // srcs: the source reverb slots' sources (kSrcSlotsMax)
-// srcsB: bank 1 of the first kSrcBankB source slots (nullptr: none)
+// srcsB: bank 1 of the source slots (nullptr: none)
 void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IPLSource* srcs = nullptr, int nSrc = 0,
                           const IPLSource* srcsB = nullptr, int nSrcB = 0);
 // bank `bank` (0 or 1) of source slot k now holds a simulated response
@@ -113,7 +112,7 @@ void PublishSrcBank(int k, int bank);
 // towards them over ~0.2 s. snap: a weight that rises jumps there at once (the slot's first response
 // at a new place: there is nothing to crossfade from); falling weights always ramp (no cut tail)
 void SetSrcBlend(int k, float w0, float w1, bool snap);
-// no slot below kSrcBankB renders bank `bank` any more (weights and targets 0): it can be simulated elsewhere
+// no slot renders bank `bank` any more (weights and targets 0): it can be simulated elsewhere
 bool SrcBankSilent(int bank);
 struct SrcSlotState {
 	float w[2] = {0, 0};      // current weights of the two banks
@@ -216,8 +215,9 @@ float OutputClip(float x); // the legacy output soft clip (master volume 1)
 //              images) instead of miniaudio's linear interpolation (-1 dB at 10 kHz, images); the same sinc reads a
 //              captured stream (PlayStream) at its own rate, live;
 //  premaster   the output stage (limiter / clip) acts BEFORE the master volume, as the engine's int16 mix does (its
-//              loud sounds clip at full scale whatever the volume); false: after it, so at a low volume it never acts.
-void SetMixQuality(int limiterMode, bool hqResample, bool premaster = false);
+//              loud sounds clip at full scale whatever the volume; pba_native_limit_pre, default on); false: after it,
+//              so at a low volume it never acts.
+void SetMixQuality(int limiterMode, bool hqResample, bool premaster = true);
 // Fade of a captured stream's edges (pba_native_stream_fade, default 5 ms; 0 = none): a stream voice fades in when it
 // starts or comes back from an underrun, and fades out over the last `ms` of buffered data before it runs dry (or
 // ends), so that the cut / the return is not a step of the waveform (a click).
