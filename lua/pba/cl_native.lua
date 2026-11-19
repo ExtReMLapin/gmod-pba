@@ -1254,7 +1254,7 @@ function N.Directivity(ent, L, chan, aim)
 	local owner, now = N.WeaponAim(ent, chan)
 	if not owner then return 1 end
 	-- the listener's own shots (pba_native_own: centered on him): he is the shooter, not behind the muzzle
-	if LocalPlayer and owner == LocalPlayer() and A.NativeOwn and A.NativeOwn() and A.HearsFromSelf(owner) then return 1 end
+	if A.NativeOwn and A.NativeOwn() and A.IsListenerOwn(ent, chan) then return 1 end
 	local d = dirD
 	d:Set(L)
 	d:Sub(owner:EyePos())
@@ -1564,11 +1564,7 @@ end
 -- coloured and softened them (the module's Play flag `own`; a module without it ignores it). nil otherwise.
 function N.OwnDirect(ent, chan)
 	if A.Num(A.cfg, "native_own_direct") < 0.5 or not (A.NativeOwn and A.NativeOwn()) or not IsValid(ent) then return nil end
-	local lp = LocalPlayer()
-	if not IsValid(lp) or not A.HearsFromSelf(lp) then return nil end -- (through a camera his sounds are spatialised like anybody's)
-	if ent == lp then return true end
-	local _, owner = A.ShotWeapon(ent, chan)
-	return owner == lp or nil
+	return A.IsListenerOwn(ent, chan) or nil -- (through a camera his sounds are spatialised like anybody's)
 end
 
 local OWN_STREAM_IN, OWN_STREAM_OUT = 4, 16 -- units: a stream joins the listener's own within 4, leaves them beyond 16
