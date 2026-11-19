@@ -38,6 +38,7 @@ SL.FIRST_SHARE = 0.5
 -- rate (their expected remaining work over the frames left), so that a job is not left to its deadline and
 -- finished there in one go. Expected work: a running mean of the held jobs' total time (SL.est, seconds).
 SL.EST0, SL.EST_RATE = 0.004, 0.2
+SL.HOLD_PACE = 4 -- pba_far_hold_pace: held sounds' jobs may raise a frame's budget to this many far_sliced_ms
 SL.est = SL.est or SL.EST0
 SL.jobs = SL.jobs or {}
 SL.forcedSpent = SL.forcedSpent or 0 -- (time spent this frame finishing due jobs: pba_far_force_ms)
@@ -79,7 +80,7 @@ local function budgetLeft(first)
 			st.frames, st.sumFrameMs = st.frames + 1, st.sumFrameMs + SL.spent * 1000
 			st.maxFrameMs = math.max(st.maxFrameMs, SL.spent * 1000)
 		end
-		SL.frame, SL.spent, SL.spentFirst, SL.need, SL.forcedSpent = fr, 0, 0, 0, 0
+		SL.frame, SL.spent, SL.spentFirst, SL.need, SL.forcedSpent, SL.needHold = fr, 0, 0, 0, 0, 0
 	end
 	local b = (A.cfg.far_sliced_ms or 1.5) / 1000
 	if first then return math.max(math.min(b * SL.FIRST_SHARE - SL.spentFirst, b - SL.spent), 0) end
@@ -91,7 +92,16 @@ local function budgetLeft(first)
 	-- more garbage (d3_breen_01, noclip at 1500 u/s: test/far_slicer_budget.py). A job that does not finish in its
 	-- slices now reaches its deadline, where far_force_ms finishes it a little each frame and a playing sound keeps
 	-- its previous answer meanwhile, as before.
-	if (A.cfg.far_sliced_cap or 1) >= 0.5 then return math.max(b - (SL.spent - SL.forcedSpent), 0) end
+	if (A.cfg.far_sliced_cap or 1) >= 0.5 then
+		-- pba_far_hold_pace: the jobs of held sounds (pba_burst_hold_ms: a burst's impacts, held a few frames so as to
+		-- start at their full level) keep the pacing, up to HOLD_PACE x far_sliced_ms. Capped at far_sliced_ms, a
+		-- burst's jobs reached the end of their hold with a fraction of their work done and, past far_force_ms, got
+		-- the cheap model (26-36 dB under their level behind an open doorway). Their number is a burst's, not a
+		-- moving listener's far evaluations, and the ceiling stays bounded.
+		local c = b
+		if (A.cfg.far_hold_pace or 1) >= 0.5 then c = math.max(b, math.min(SL.needHold or 0, SL.HOLD_PACE * b)) end
+		return math.max(c - (SL.spent - SL.forcedSpent), 0)
+	end
 	return math.max(math.max(b, SL.need) - SL.spent, 0)
 end
 
@@ -278,14 +288,16 @@ function SL.Run()
 	table.sort(jobs, byDeadline)
 	-- pacing: what the jobs need this frame to finish by their deadlines evenly (a job past its expected
 	-- work still counts a quarter of it)
-	local need, est = 0, SL.est
+	local need, needHold, est = 0, 0, SL.est
 	for _, j in ipairs(jobs) do
 		if not j.cancelled then
-			need = need + math.max(est - j.cpu, est * 0.25) / math.max((j.deadline - now) / ft, 1)
+			local x = math.max(est - j.cpu, est * 0.25) / math.max((j.deadline - now) / ft, 1)
+			need = need + x
+			if j.holdFor then needHold = needHold + x end -- (pba_far_hold_pace)
 		end
 	end
 	budgetLeft()
-	SL.need = need
+	SL.need, SL.needHold = need, needHold
 	local forceB = (A.cfg.far_force_ms or 2) / 1000
 	local i = 1
 	while i <= #jobs do

@@ -3029,6 +3029,17 @@ function P.Cheap(S, L, sndlvl, cfg, srcEnt)
 		return r
 	end
 	r.clear, r.paths = false, {}
+	-- pba_cheap_same_trans: the walls' transmission of P.Compute itself (its stage: the bundle of lines or the
+	-- module's occlusion, the leaf fade), the routes round them left out. The raw sum of the walls was another
+	-- model: a sound switching between the cheap and the full evaluation (a burst, a forced far job) jumped
+	-- between the two (a car behind a building: -49 / -74 dB in turns).
+	if (cfg.cheap_same_trans or 1) >= 0.5 and P.TransmissionStage then
+		local worldBlocked = P.LineBlockers(walls, cfg)
+		P.TransmissionStage(r, S, L, walls, walls, cfg, srcEnt, worldBlocked)
+		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
+		r.shadowDb = P.ShadowOf(r.voices, nil)
+		return r
+	end
 	local loss, lp, mid, tilt = P.EvalWalls(walls, cfg)
 	local last = walls[#walls]
 	local dir = (L - S):GetNormalized()
@@ -3280,8 +3291,17 @@ local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emit
 	local c = P.cache[key]
 	local barrier = (cfg.cache_barrier or 1) >= 0.5
 	if c and now - c.t < cfg.cache_ttl then
+		-- pba_cache_src_near: with no entity (a map's ambient sound, a far emitter the client does not have) the key
+		-- cannot tell two emitters of one cell apart: two loops 30 u apart in one 32 u cell took each other's path,
+		-- whichever was evaluated first, in turns (a level flipping about every second with the listener still). The
+		-- cached path serves it only from where the same emitter could be: within reeval_move, as pba_group_time does.
+		local far = false
+		if not emitter and (cfg.cache_src_near or 1) >= 0.5 then
+			local dx, dy, dz = S.x - c.sx, S.y - c.sy, S.z - c.sz
+			far = dx * dx + dy * dy + dz * dz > sq(cfg.reeval_move or 8)
+		end
 		-- (the result of a cell-mate with a floor or a wall between: not this one's)
-		if not (barrier and (P.BarrierBetween(S, c.sx, c.sy, c.sz, emitter) or P.BarrierBetween(L, c.lx, c.ly, c.lz, emitter))) then return c.r end
+		if not far and not (barrier and (P.BarrierBetween(S, c.sx, c.sy, c.sz, emitter) or P.BarrierBetween(L, c.lx, c.ly, c.lz, emitter))) then return c.r end
 	end
 	if timeOn then
 		local mv2 = sq(cfg.reeval_move or 8)
@@ -3302,7 +3322,12 @@ end
 -- Stage 1b, the result kept: dead entries swept (older than cache_ttl: never served again); only
 -- P.InvalidateCache emptied the cache, one entry per cell pair, level, emitter and line state, for good on a
 -- map whose doors never move
-local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L)
+local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0)
+	-- pba_cache_gen_guard: the world model changed while this evaluation ran (a far sound's job, cl_slicer: a
+	-- setting, a door state, the probe graph or a door field changed between or inside its slices). Its answer,
+	-- partly on the old inputs, was kept under the NEW generation (read at the store): the job's own restart read
+	-- it back, and the next sounds of that cell or emitter got it for cache_ttl / reeval_max_s. Not kept then.
+	if gen0 and (gen0 ~= P.cacheGen or world0 ~= P.worldGen or field0 ~= (A.Probes and A.Probes.fieldEpoch or 0)) then return end
 	if now >= (P.cacheSweepT or 0) then
 		P.cacheSweepT = now + CACHE_SWEEP_S
 		local ttl = cfg.cache_ttl
@@ -3496,6 +3521,8 @@ local function transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked)
 	if worldBlocked and (cfg.trans_leaf_fade or 0) >= 0.5 then leafFade(r, S, L, walls, cfg, srcEnt) end
 end
 
+P.TransmissionStage, P.LineBlockers = transmission, lineBlockers -- (P.Cheap: the same transmission model)
+
 -- Stage 6, experimental: Steam Audio baked pathing replaces the probe graph
 local function nativePath(r, S, L, cfg)
 	local np = A.Native.Path(S, L)
@@ -3671,6 +3698,10 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	local emitter = IsValid(srcEnt) and srcEnt or false
 	local hit = cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emitter)
 	if hit then return hit end
+	-- (the inputs' generation as the evaluation starts: storeResult keeps nothing if it moved on meanwhile)
+	-- (numbers, not a table: no garbage per evaluation)
+	local gen0 = (cfg.cache_gen_guard or 1) >= 0.5 and P.cacheGen or nil
+	local world0, field0 = P.worldGen, A.Probes and A.Probes.fieldEpoch or 0
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
@@ -3703,6 +3734,6 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		end
 		selectVoices(r, S, L, sndlvl, cfg)
 	end
-	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L)
+	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0)
 	return r
 end

@@ -99,6 +99,14 @@
   "pos0": "hook",
   "why": "schedules far paths over frames (cl_render), outside a direct P.Compute"
  },
+ "cheap_same_trans": {
+  "pos0": "hook",
+  "why": "P.Cheap only (bursts past their budget, far jobs past far_force_ms), not a direct P.Compute (pure test review P4)"
+ },
+ "far_hold_pace": {
+  "pos0": "hook",
+  "why": "per-frame budget of held sounds' far jobs (cl_slicer), outside a direct P.Compute (pure test review M4)"
+ },
  "far_sliced_cap": {
   "pos0": "hook",
   "why": "per-frame ceiling of the far slicer's budget (cl_slicer), outside a direct P.Compute"
@@ -426,6 +434,22 @@
  "cache_barrier": {
   "pos0": "same",
   "why": "the result cache across a floor or a wall: cold positions have nothing cached and the sweep scenes put no two sources of one cell either side of a solid (test cell_barrier)"
+ },
+ "state_sig_sorted": {
+  "pos0": "same",
+  "why": "only when the door table's walk order changes with the same states (cl_probes PR.StateSig): the field is rebuilt for nothing, same paths (pure test review P6)"
+ },
+ "door_field_invalidate": {
+  "pos0": "same",
+  "why": "drops cached paths when a background door field is swapped in (cl_probes PR.AdvanceDoorFields), outside a single P.Compute (pure test review P5)"
+ },
+ "cache_src_near": {
+  "pos0": "same",
+  "why": "two sources with no entity in one 32 u cell more than reeval_move apart, within cache_ttl: the sweep evaluates one position at a time (pure test review P2)"
+ },
+ "cache_gen_guard": {
+  "pos0": "same",
+  "why": "a result kept while the world model changed under its evaluation (far sounds' slices): the sweep's evaluations are synchronous with nothing changing during them (pure test review P1)"
  },
  "gc_idle_step": {
   "pos0": "hook",

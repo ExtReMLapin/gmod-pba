@@ -281,9 +281,16 @@ if mode == "dumpsliced" or mode == "slicebench" then
 	local clock = PYCLOCK or os.clock
 	local tick, frame, rt = 0, 0, 1000
 	if bench then SysTime = clock else SysTime = function() tick = tick + 1 return tick end end
+	-- the slices' clock is P.slice.clock, captured when sh_paths.lua loaded (the shim's os.clock): swapping the
+	-- global alone left the slices on real seconds, so a budget of n "checks" was n seconds and every job ended
+	-- in its first slice (held 0): compare_sliced proved nothing about interleaving
+	P.slice.clock = SysTime
 	FrameNumber = function() return frame end
 	RealTime = function() return rt end
 	A.cfg.far_sliced, A.cfg.cache_ttl = 1, 0 -- (no cached answer across schedule entries: as `dump`, which empties P.cache)
+	-- dumpsliced: a due job is finished whatever it takes (far_force_ms 0), not handed the cheap model past a forced
+	-- share counted on the clock (by design not the synchronous answer; in real ms it was not even deterministic)
+	if not bench then A.cfg.far_force_ms = 0 end
 	if bench and BUDGET == 0 then A.cfg.far_sliced = 0 end -- (slicebench budget 0: the slicer off, the frames as today)
 	A.cfg.far_sliced_ms = atomic and 1e-9 or bench and (BUDGET or 1.5) or (BUDGET or 3) * 1000
 	SL.MARGIN_FRAMES = atomic and -1e6 or bench and 2 or 0 -- (dumpsliced: more far sounds, d > 300 u sliced)

@@ -1150,14 +1150,36 @@ end
 
 --- A number that changes with any door or portal state the link costs read (and with the door boxes,
 -- PR.doorEpoch): the field remembers the one it was built with and is rebuilt when it differs.
+local sigDoorIdx = {} -- (scratch: the door indexes in order when sh_doors has no sorted list)
 function PR.StateSig(g)
 	doorLeaves()
 	local acc = PR.doorEpoch
 	local function mix(v) acc = (acc * 31 + v) % 2147483647 end
 	local D = A.Doors
 	if D and D.byEnt then
-		for idx, st in pairs(D.byEnt) do
-			mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0)
+		if (A.cfg.state_sig_sorted or 1) >= 0.5 then
+			-- pba_state_sig_sorted: the doors in index order. The mix is not commutative, and pairs() walks the same
+			-- states in another order once the table was rehashed (a door gone and back, one more door then one less):
+			-- the signature changed with no state changed, and the link costs, the door fields and the far jobs were
+			-- all redone for nothing.
+			local list = D.entIdx
+			if not list then
+				list = sigDoorIdx
+				local n = 0
+				for idx in pairs(D.byEnt) do n = n + 1 list[n] = idx end
+				for i = #list, n + 1, -1 do list[i] = nil end
+				table.sort(list)
+			end
+			local byEnt = D.byEnt
+			for i = 1, #list do
+				local idx = list[i]
+				local st = byEnt[idx]
+				if st then mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0) end
+			end
+		else
+			for idx, st in pairs(D.byEnt) do
+				mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0)
+			end
 		end
 	end
 	local ag = g.area
@@ -1458,6 +1480,10 @@ function PR.AdvanceDoorFields()
 		-- a far sound's evaluation paused in a slice may hold the old one (cl_slicer: restarted)
 		PR.fieldEpoch = (PR.fieldEpoch or 0) + 1
 		PR.doorFieldJob = nil
+		-- pba_door_field_invalidate: the paths worked out on the old field (a door just closed: still the way through
+		-- it) were kept for cache_ttl, and a loop re-evaluated at the door's change kept them for reeval_max_s (its
+		-- state's generation unchanged): the closed door still heard through for 1-2 s, then the switch
+		if (A.cfg.door_field_invalidate or 1) >= 0.5 then A.Paths.InvalidateCache() end
 	end
 end
 hook.Add("Think", "pba_probes_door_field", function() PR.AdvanceDoorFields() end)
@@ -2113,8 +2139,26 @@ end
 -- search reaches fades in instead of appearing at full level (a 512 u hop seeing its first probe: 10 dB in 8 u).
 -- Returns the start probes (nearest first per hop, each probe once, for the cheapest hop that sees it),
 -- hopOf[probe] = its Q and hopW[probe] = its weight (0..1); nil when none.
+-- A source with no way out (a loop in a sealed cavity, a source in the air no probe is seen from) searched again at
+-- every evaluation: 26 directions x up to 5 steps of fat traces and probe lookups each time (review M9). Its last
+-- AIR_HOP_MISS_KEEP misses are kept on the field (they die with it), by exact S, L, maxn, world and trace backend.
+local AIR_HOP_MISS_KEEP = 16
+local function airHopMissed(f, S, L, maxn)
+	local miss = f.airMiss
+	if not miss then return false end
+	local sx, sy, sz, lx, ly, lz = S.x, S.y, S.z, L.x, L.y, L.z
+	local wg, nt = A.Paths.worldGen, nativeTraces() or false
+	for i = 1, #miss do
+		local m = miss[i]
+		if m[1] == sx and m[2] == sy and m[3] == sz and m[4] == lx and m[5] == ly and m[6] == lz and m[7] == maxn
+			and m[8] == wg and m[9] == nt then return true end
+	end
+	return false
+end
 function PR.AirHop(g, S, L, f, maxn)
 	if not f then return nil end
+	if airHopMissed(f, S, L, maxn) then return nil end
+	local wg0, nt0 = A.Paths.worldGen, nativeTraces() or false
 	local cands = {}
 	local far = AIR_HOP_STEPS[#AIR_HOP_STEPS]
 	for di, d in ipairs(AIR_HOP_DIRS) do
@@ -2138,7 +2182,19 @@ function PR.AirHop(g, S, L, f, maxn)
 			lo = h
 		end
 	end
-	if #cands == 0 then return nil end
+	if #cands == 0 then
+		-- (kept only when the world did not change while it ran: a far sound's slices)
+		if wg0 == A.Paths.worldGen and nt0 == (nativeTraces() or false) then
+			local miss = f.airMiss or {}
+			f.airMiss = miss
+			local k = (miss.n or 0) % AIR_HOP_MISS_KEEP + 1
+			miss.n = k
+			local m = miss[k] or {}
+			miss[k] = m
+			m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9] = S.x, S.y, S.z, L.x, L.y, L.z, maxn, wg0, nt0
+		end
+		return nil
+	end
 	table.sort(cands, function(a, b)
 		if a[1] ~= b[1] then return a[1] < b[1] end
 		return a[2] < b[2]

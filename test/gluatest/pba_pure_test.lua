@@ -1549,6 +1549,47 @@ local SUITE = {
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
 		end },
+		{ name = "Compute cache: two sources with no entity in one 32 u cell are two emitters: one does not get the other's path unless it stands within reeval_move of it (pba_cache_src_near, review P2)", func = function()
+			-- a concrete wall x 100..110 ending at y = 16 between the listener and both sources (line state "w" for both)
+			local mn, mx = Vector(100, -200, -100), Vector(110, 16, 100)
+			local savedWalls, savedTrace, savedGet = P.Walls, util.TraceLine, A.Graph.Get
+			P.Walls = function(a, b)
+				local t0, t1 = segBox(a, b, mn, mx)
+				if not t0 then return {} end
+				local e, x = a + (b - a) * t0, a + (b - a) * t1
+				return { { t = t0, entry = e, exit = x, thickness = e:Distance(x), mat = MAT_CONCRETE, surf = "concrete" } }
+			end
+			util.TraceLine = function(t)
+				local out = traceOut(t)
+				local f = segBox(t.start, t.endpos, mn, mx)
+				out.Hit, out.Fraction, out.StartSolid, out.Entity = f ~= nil, f or 1, false, nil
+				return out
+			end
+			A.Graph.Get = function() return nil end
+			local cfg = setmetatable({ probes = 0, path_props = 0, cache_ttl = 10 }, { __index = CFG })
+			local ok, err = pcall(function()
+				local L, Sa, Sb, Sn = Vector(0, -40, 0), Vector(194, -60, 0), Vector(222, -36, 20), Vector(198, -55, 3)
+				expect(P.CacheKey(Sa, L, 75, nil, cfg)).to.equal(P.CacheKey(Sb, L, 75, nil, cfg)) -- (one key: the bug's premise)
+				P.InvalidateCache()
+				local ownB = P.Compute(Sb, L, 75, cfg)
+				P.InvalidateCache()
+				local a = P.Compute(Sa, L, 75, cfg)
+				local b = P.Compute(Sb, L, 75, cfg)
+				expect(rawequal(a, b)).to.equal(false)
+				expect(b.S == Sb).to.beTrue()
+				expect(dumpResult(b)).to.equal(dumpResult(ownB))
+				-- the same emitter a little further (within reeval_move, 8 u): still one computation
+				expect(rawequal(P.Compute(Sn, L, 75, cfg), a)).to.beTrue()
+				-- control: pba_cache_src_near 0 (former behaviour): b gets a's path
+				cfg.cache_src_near = 0
+				P.InvalidateCache()
+				a = P.Compute(Sa, L, 75, cfg)
+				expect(rawequal(P.Compute(Sb, L, 75, cfg), a)).to.beTrue()
+			end)
+			P.Walls, util.TraceLine, A.Graph.Get = savedWalls, savedTrace, savedGet
+			P.InvalidateCache()
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Compute cache: entries past cache_ttl are swept (it grew without limit on a map whose doors never move)", func = function()
 			local savedWalls, savedGet, savedRT = P.Walls, A.Graph.Get, _G.RealTime
 			P.Walls = function() return {} end
@@ -2040,11 +2081,19 @@ local SUITE = {
 			local savedCo = P.slice.co
 			P.slice.co = true -- as in a slice (not the running coroutine: no yield)
 			for _ = 1, 50 do P.DetourDelta(S, L, mins, maxs, valid, true) end
+			-- measured interpreted (review R2): LuaJIT's own trace objects, recorded, aborted and flushed while the loop
+			-- ran, live in the same heap and were counted as the calls' garbage: 3 to over 64 bytes per call from one
+			-- run to the next (the flake, 1 run in 4). The interpreter allocates all the compiled code would (the
+			-- compiler only sinks some away): an upper bound, the same every run (0 bytes offline). In game the suite
+			-- runs under lua_job's debug hook, interpreted already.
+			local jitOn = jit and jit.status()
+			if jit then jit.off() jit.flush() end
 			collectgarbage("stop")
 			local k0 = collectgarbage("count")
 			for _ = 1, 200 do P.DetourDelta(S, L, mins, maxs, valid, true) end
 			local k1 = collectgarbage("count")
 			collectgarbage("restart")
+			if jitOn then jit.on() end
 			P.slice.co = savedCo
 			expect((k1 - k0) * 1024 / 200 < 64).to.beTrue()
 		end },
@@ -2411,6 +2460,50 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
+		{ name = "StateSig: the same door states give the same signature whatever order pairs() walks them in (a door table rehashed or a door gone and back: link costs and door fields redone for nothing, far jobs restarted; pba_state_sig_sorted, review P6)", func = function()
+			local PR = A.Probes
+			local savedDoors, savedList, savedEpoch = A.Doors, PR.doorList, PR.doorEpoch
+			local ok, err = pcall(function()
+				PR.doorList = { fixed = true, list = {}, sig = "" } -- (no door boxes listed: the epoch stays)
+				local function order(t) local o = {} for k in pairs(t) do o[#o + 1] = k end return table.concat(o, ",") end
+				-- two tables of the same door states, built in different orders, walked by pairs() differently
+				local a, b
+				for base = 1, 400 do
+					local keys = {}
+					for i = 1, 6 do keys[i] = base + i * 64 end
+					a, b = {}, {}
+					for i = 1, #keys do a[keys[i]] = { frac = (i % 3) / 2, closedDb = 20 + i } end
+					for i = #keys, 1, -1 do b[keys[i]] = { frac = (i % 3) / 2, closedDb = 20 + i } end
+					b[9999] = { frac = 0 }
+					b[9999] = nil
+					if order(a) ~= order(b) then break end
+				end
+				expect(order(a) ~= order(b)).to.beTrue() -- (the premise: two walks)
+				local function sig(t)
+					local list = {}
+					for idx in pairs(t) do list[#list + 1] = idx end
+					table.sort(list)
+					A.Doors = { byEnt = t, entIdx = list }
+					return PR.StateSig({})
+				end
+				expect(sig(a)).to.equal(sig(b))
+				-- a state that does change still changes it
+				local s0 = sig(a)
+				local k = next(a)
+				local f0 = a[k].frac
+				a[k].frac = f0 < 0.5 and 1 or 0
+				expect(sig(a) ~= s0).to.beTrue()
+				a[k].frac = f0
+				-- control: pba_state_sig_sorted 0 (former behaviour): the walk's order is in the signature
+				local saved = rawget(A.cfg, "state_sig_sorted")
+				A.cfg.state_sig_sorted = 0
+				local sa, sb = sig(a), sig(b)
+				A.cfg.state_sig_sorted = saved
+				expect(sa ~= sb).to.beTrue()
+			end)
+			A.Doors, PR.doorList, PR.doorEpoch = savedDoors, savedList, savedEpoch
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Field links pay their doors: a shut door on the short way sends the field round by the open doorway, and back once opened", func = function()
 			withProbeRooms({ { 16, 64, 112 }, { 400, 448, 112 } }, nil, { native_traces = 0 }, function(g)
 				local PR = A.Probes
@@ -2475,19 +2568,113 @@ local SUITE = {
 					-- the door-cost part is redone in background slices (PR.AdvanceDoorFields), the old one answering
 					-- meanwhile; the field by length is kept (it reads no door)
 					expect(f2.doors ~= nil).to.beTrue()
-					local cur = PR.current
-					PR.current = g
-					for _ = 1, 1000 do
-						PR.AdvanceDoorFields()
-						if not PR.doorFieldJob and #((PR.doorFieldQueue or {}).list or {}) == 0 then break end
+					-- a path cached (and a loop's re-evaluation stamped) while the old door field answers (review P5)
+					-- (a cell's path kept as P.Compute keeps it, and a loop's last re-evaluation)
+					local cfgC = setmetatable({ cache_ttl = 10 }, { __index = A.cfg })
+					local function swapField()
+						local kept = { t = RealTime(), r = {}, sx = S.x, sy = S.y, sz = S.z, lx = L.x, ly = L.y, lz = L.z }
+						P.cache.swapTest = kept
+						local loop = {}
+						expect(P.ReevalDue(loop, S, L, 1000, cfgC)).to.beTrue()
+						local cur = PR.current
+						PR.current = g
+						for _ = 1, 1000 do
+							PR.AdvanceDoorFields()
+							if not PR.doorFieldJob and #((PR.doorFieldQueue or {}).list or {}) == 0 then break end
+						end
+						PR.current = cur
+						-- the field swapped in the background (pba_door_field_invalidate): the cached path and the loop's
+						-- values were worked out on the old one: neither stands (was: up to cache_ttl / reeval_max_s more)
+						return P.cache.swapTest ~= kept, P.ReevalDue(loop, S, L, 1000.2, cfgC)
 					end
-					PR.current = cur
+					local fresh, reeval = swapField()
+					expect(fresh).to.beTrue()
+					expect(reeval).to.beTrue()
 					expect(f2.stateSig ~= nil and f2.doors == nil).to.beTrue()
+					-- control: pba_door_field_invalidate 0 (former behaviour): both stand after the swap
+					A.Doors.byEnt[9990].frac = 0
+					PR.doorList = nil
+					expect(PR.FieldFor(g, L) == f2 and f2.stateSig ~= PR.StateSig(g)).to.beTrue() -- (queued again)
+					local savedOpt = rawget(A.cfg, "door_field_invalidate")
+					A.cfg.door_field_invalidate = 0
+					fresh, reeval = swapField()
+					A.cfg.door_field_invalidate = savedOpt
+					expect(fresh).to.equal(false)
+					expect(reeval).to.equal(false)
+					expect(f2.doors ~= nil).to.beTrue() -- (it did swap: the closed door's field again)
 					A.Doors.byEnt[9990].frac = 0.5
 					expect(PR.StateSig(g) ~= f2.stateSig).to.beTrue()
 				end)
 				_G.ents, A.Doors, PR.doorList = savedEnts, savedDoors, savedList
 				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "AirHop: a source in the air that finds no way out is not searched again (26 directions x 5 steps of fat traces and probe lookups at every evaluation of a loop) while it, the listener, its field and the world stay the same (review M9)", func = function()
+			withSlicedRooms(function(cfg, list)
+				local PR = A.Probes
+				local g = PR.current
+				local L = Vector(300, 300, 64)
+				PR.fieldsByKey = nil
+				local f = PR.FieldFor(g, L)
+				expect(f ~= nil).to.beTrue()
+				local S = Vector(800, 250, 100)
+				-- no probe seen from anywhere the search goes: no way out (the probes' lookups counted)
+				local vis, n = PR.Visible, 0
+				PR.Visible = function() n = n + 1 return {} end
+				local ok, err = pcall(function()
+					local function calls(Sx, Lx, fx)
+						n = 0
+						local r = PR.AirHop(g, Sx, Lx, fx, 5)
+						expect(r).to.beNil()
+						return n
+					end
+					local first = calls(S, L, f)
+					expect(first > 20).to.beTrue() -- (the search ran: the room's air seen in many directions)
+					expect(calls(S, L, f)).to.equal(0) -- the same answer, kept
+					-- anything it depends on moved: searched again
+					expect(calls(S + Vector(1, 0, 0), L, f) > 0).to.beTrue()
+					expect(calls(S, L + Vector(0, 1, 0), f) > 0).to.beTrue()
+					local f2 = {} -- (another field: a rebuilt one of the same seeds)
+					for k, v in pairs(f) do if k ~= "airMiss" then f2[k] = v end end
+					expect(calls(S, L, f2) > 0).to.beTrue()
+					expect(calls(S, L, f)).to.equal(0)
+					P.ForgetWorld()
+					expect(calls(S, L, f) > 0).to.beTrue()
+					print("[pba test] AirHop with no way out: " .. first .. " probe lookups per evaluation -> 0 once known")
+				end)
+				PR.Visible = vis
+				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "Cheap: its transmission is P.Compute's (one model of the walls on the straight line: bundle, module occlusion, leaf fade), only the routes round them are left out (pba_cheap_same_trans, review P4)", func = function()
+			withSlicedRooms(function(cfg, list)
+				cfg.far_sliced = 0
+				local function diffs()
+					local n, worst = 0, 0
+					for _, pr in ipairs(list) do
+						P.InvalidateCache()
+						local full = P.Compute(pr[1], pr[2], 75, cfg)
+						if full.trans and not full.leafByPortal then
+							local c = P.Cheap(pr[1], pr[2], 75, cfg)
+							expect(c.trans ~= nil).to.beTrue()
+							n = n + 1
+							for _, k in ipairs({ "rawLossDb", "lossDb", "midDb", "lpDb" }) do
+								worst = math.max(worst, math.abs((c.trans[k] or 0) - (full.trans[k] or 0)))
+							end
+						end
+					end
+					return n, worst
+				end
+				local saved = cfg.cheap_same_trans
+				cfg.cheap_same_trans = 0
+				local n0, w0 = diffs()
+				cfg.cheap_same_trans = 1
+				local n1, w1 = diffs()
+				cfg.cheap_same_trans = saved
+				print(string.format("[pba test] cheap vs full transmission over %d pairs: worst %.2f dB (option 0) -> %.2f dB", n1, w0, w1))
+				expect(n1 >= 3).to.beTrue()
+				expect(w0 > 0.5).to.beTrue() -- control: two models
+				expect(w1 < 1e-9).to.beTrue()
 			end)
 		end },
 		{ name = "Group: off, or every source nearer than group_min_dist, gives the per-sound routes bit for bit", func = function()
@@ -2811,6 +2998,75 @@ local SUITE = {
 				expect(dumpResult(r)).to.equal(full(list[#list][1]))
 			end)
 		end },
+		{ name = "Far sliced: with pba_far_sliced_cap, a held burst's jobs (pba_burst_hold_ms) keep the pacing up to 4 x far_sliced_ms: ready by their hold's end in full instead of falling to the cheap model (pba_far_hold_pace, review M4)", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				local clock = A.Paths.slice.clock
+				local saved = { A.cfg.far_sliced_cap, A.cfg.far_force_ms, A.cfg.far_sliced_ms, rawget(A.cfg, "far_hold_pace") }
+				local L = Vector(300, 300, 64)
+				PR.fieldsByKey, P.cache = nil, {}
+				P.Compute(list[1][1], L, 75, cfg)
+				local HOLD = 3 / 60 -- (pba_burst_hold_ms 50 at 60 fps: three frames)
+				local B = 0
+				-- the burst, held HOLD each; returns the answers given by the cheap model, the jobs, the most ticks (one
+				-- per slice check) of one frame's SL.Run, and the burst's work in ticks
+				local function burst(pace, cap, budget, force)
+					A.cfg.far_sliced_cap, A.cfg.far_hold_pace = cap, pace
+					A.cfg.far_sliced_ms, A.cfg.far_force_ms = budget * 1000, force * 1000
+					P.cache, SL.jobs = {}, {}
+					local jobs, got = {}, {}
+					for _, pr in ipairs(list) do
+						local j = SL.Defer(pr[1], L, 75, nil, cfg, HOLD)
+						if j then
+							jobs[#jobs + 1] = j
+							local k = #jobs
+							j.onDone = function(res) got[k] = res end
+						end
+					end
+					if B > 0 then SL.est = B * 10 / math.max(#jobs, 1) end -- (the running mean of a held job's work, as learnt)
+					local maxT = 0
+					for _ = 1, 200 do
+						if #SL.jobs == 0 then break end
+						nextFrame()
+						local c0 = clock()
+						SL.Run()
+						maxT = math.max(maxT, clock() - c0 - 1)
+					end
+					local nCheap, w = 0, 0
+					for k, j in ipairs(jobs) do
+						expect(got[k] ~= nil).to.beTrue()
+						if got[k].cheap then nCheap = nCheap + 1 end
+						w = w + j.cpu
+					end
+					return nCheap, #jobs, maxT, w
+				end
+				-- the burst's work (warm: the first run fills what evaluations keep across requests), all in one frame
+				burst(0, 0, 1e6, 0)
+				local _, _, _, W = burst(0, 0, 1e6, 0)
+				local ok, err = pcall(function()
+					-- the hold leaves two frames of pacing (requested in one frame, due two frames later). A budget B of a
+					-- sixth of the work: B a frame holds a third of it, 4 x B all of it. Then a tenth: 4 x B no longer all.
+					local out = {}
+					for _, div in ipairs({ 6, 10 }) do
+						B = math.ceil(W / div)
+						-- control: pba_far_hold_pace 0 (former behaviour): far_sliced_ms a frame, then far_force_ms once
+						-- due: part of the burst gets the cheap model
+						local c0, n0 = burst(0, 1, B, B / 2)
+						expect(n0 >= 5).to.beTrue()
+						expect(c0 >= 1).to.beTrue()
+						-- 1: no frame past 4 x far_sliced_ms (+ a check, three bookkeeping reads a job run, the forced share)
+						local c1, n1, t1 = burst(1, 1, B, B / 2)
+						expect(n1).to.equal(n0)
+						expect(t1 <= 4 * B + B / 2 + 1 + 3 * (n1 + 1)).to.beTrue()
+						if div == 6 then expect(c1).to.equal(0) else expect(c1 < c0).to.beTrue() end
+						out[#out + 1] = string.format("budget W/%d: cheap %d -> %d of %d (frame max %d ticks, 4B = %d)", div, c0, c1, n0, t1, 4 * B)
+					end
+					print("[pba test] held burst, work " .. W .. " ticks: " .. table.concat(out, "; "))
+				end)
+				A.cfg.far_sliced_cap, A.cfg.far_force_ms, A.cfg.far_sliced_ms, A.cfg.far_hold_pace = saved[1], saved[2], saved[3], saved[4]
+				if not ok then error(err, 0) end
+			end)
+		end },
 		{ name = "Far sliced: pba_far_sliced_cap keeps a frame's work on the jobs not yet due within far_sliced_ms whatever the pacing asks; 0 = the pacing raises it; the answers are the synchronous ones either way", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
@@ -2918,6 +3174,99 @@ local SUITE = {
 					expect(dumpResult(got)).to.equal(after)
 				end)
 				cfg.trans_scale = saved
+				if not ok then error(err, 0) end
+			end)
+		end },
+		{ name = "Far sliced: a job whose inputs change in its last slice, or past its restart cap, leaves no result under the new cache generation: its restart and the next sounds get the new answer (pba_cache_gen_guard, review P1)", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				A.cfg.far_sliced_ms = 4000
+				local saved, sv = cfg.trans_scale, P.SelectVoices
+				local ok, err = pcall(function()
+					local pr
+					for _, p in ipairs(list) do
+						P.InvalidateCache()
+						PR.fieldsByKey = nil
+						local r = P.Compute(p[1], p[2], 75, cfg)
+						if r.trans and r.trans.lossDb > 1 then pr = p break end
+					end
+					expect(pr ~= nil).to.beTrue()
+					local function fresh(scale)
+						cfg.trans_scale = scale
+						P.InvalidateCache()
+						PR.fieldsByKey = nil
+						return dumpResult(P.Compute(pr[1], pr[2], 75, cfg))
+					end
+					local function finish(job)
+						local got
+						job.deadline = math.huge
+						job.onDone = function(res) got = res end
+						for _ = 1, 100000 do
+							if got then break end
+							nextFrame()
+							SL.Run()
+						end
+						return got
+					end
+					local function start()
+						cfg.trans_scale = saved
+						P.InvalidateCache()
+						PR.fieldsByKey = nil
+						local _, job = SL.Compute(pr[1], pr[2], 75, nil, cfg)
+						expect(job ~= nil).to.beTrue()
+						return job
+					end
+					local before, after = fresh(saved), fresh(2)
+					expect(after ~= before).to.beTrue()
+					-- the 32 u cell cache, then the repeated-sound memo (pba_group_time)
+					-- (a) the setting changes inside the job's last slice (at its voices, the evaluation's end): the answer its
+					-- restart gives
+					local function lastSlice()
+						local job = start()
+						local armed = true
+						P.SelectVoices = function(...)
+							if armed and A.Paths.slice.co then
+								armed = false
+								cfg.trans_scale = 2
+								P.InvalidateCache()
+							end
+							return sv(...)
+						end
+						local got = finish(job)
+						P.SelectVoices = sv
+						expect(armed).to.equal(false)
+						return dumpResult(got)
+					end
+					-- (b) the setting changes while it is paused past its restart cap: it ends on its last start's inputs
+					-- (by design); whether its answer was kept (in the cell cache or the repeated-sound memo)
+					local function pastCap()
+						local job = start()
+						job.restarts = SL.GEN_RESTARTS
+						cfg.trans_scale = 2
+						P.InvalidateCache()
+						expect(finish(job) ~= nil).to.beTrue()
+						return next(P.cache) ~= nil or #P.timeMemo > 0
+					end
+					-- the 32 u cell cache, then the repeated-sound memo (pba_group_time)
+					for _, mode in ipairs({ { 10, 0 }, { 0, 1 } }) do
+						cfg.cache_ttl, cfg.group_time = mode[1], mode[2]
+						expect(lastSlice()).to.equal(after)
+						expect(dumpResult(P.Compute(pr[1], pr[2], 75, cfg))).to.equal(after)
+						expect(pastCap()).to.equal(false)
+						expect(dumpResult(P.Compute(pr[1], pr[2], 75, cfg))).to.equal(after)
+					end
+					-- control: pba_cache_gen_guard 0 (former behaviour): the restart reads the stale answer back, and the
+					-- answer past the cap is kept
+					cfg.cache_gen_guard = 0
+					cfg.cache_ttl, cfg.group_time = 10, 0
+					expect(lastSlice()).to.equal(before)
+					expect(pastCap()).to.equal(true)
+					cfg.cache_ttl, cfg.group_time = 0, 1
+					expect(pastCap()).to.equal(true)
+				end)
+				P.SelectVoices = sv
+				cfg.trans_scale = saved
+				cfg.cache_ttl, cfg.group_time, cfg.cache_gen_guard = 0, 0, nil
 				if not ok then error(err, 0) end
 			end)
 		end },
