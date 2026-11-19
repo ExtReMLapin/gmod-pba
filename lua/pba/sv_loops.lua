@@ -21,7 +21,7 @@ LP.released = LP.released or {} -- loops handed back to the engine while pba is 
 LP.capped = LP.capped or {}
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
--- (pba_loops_net_compact) the volume and pitch of a mirror the player already holds, by its id: ~7 bytes instead of
+-- the volume and pitch of a mirror the player already holds, by its id: ~7 bytes instead of
 -- the key and name strings and the whole body (audit B-14)
 local OP_COMPACT = 3
 local RESYNC = 2 -- a full update at least this often per player: a client that lost its mirror gets it back
@@ -76,7 +76,7 @@ end
 --- A volume / pitch update of mirror l to `plys`: compact (id, volume, pitch) for the players who got a full copy
 -- of it less than RESYNC seconds ago, the full update for the others (a first message, or the periodic resync).
 local function sendUpdate(l, plys)
-	if A.Num(A.cfg, "loops_net_compact") < 0.5 or not l.id or not l.fullT then return send(OP_UPDATE, l, plys) end
+	if not l.id or not l.fullT then return send(OP_UPDATE, l, plys) end
 	local now = RealTime()
 	local full, compact = {}, {}
 	for _, p in ipairs(plys) do
