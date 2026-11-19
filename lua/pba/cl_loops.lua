@@ -1148,6 +1148,13 @@ local function edgeFade(now)
 	end
 end
 
+--- (pba_loops_follow_dead) The follower's Update found m's voice gone (the module ended it): the mirror forgets it, as an
+-- evaluation's Update does (its once_gone / handback / early release then follow). Before, the answer was dropped and a
+-- still scene kept a dead id until an evaluation came.
+local function followDead(m, alive)
+	if not alive and (A.cfg.loops_follow_dead or 1) >= 0.5 then m.nativeId = nil end
+end
+
 function LP.FollowNative(L)
 	local N = A.Native
 	edgeFade(RealTime())
@@ -1176,14 +1183,14 @@ function LP.FollowNative(L)
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
 					-- clear sight: nothing through walls; the reverb is the slot's (no slot: the room at the gain)
-					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, (m.srcBound or A.Render.Dry(m.name)) and 0 or g * N.LoudWet(m.lvl))
+					followDead(m, pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, (m.srcBound or A.Render.Dry(m.name)) and 0 or g * N.LoudWet(m.lvl)))
 				end
-				N.ApplyStereo(m.nativeId, m.name, d, ent, S, L, m)
+				if m.nativeId then N.ApplyStereo(m.nativeId, m.name, d, ent, S, L, m) end
 			end
 			-- (not when a volume / pitch change sent this frame's values already: changeNow)
 			if ramp and ramp.pending and (ent or m.sentFrame ~= FrameNumber()) then
 				local g, el, em, eh, pos, pitch = P.RampAt(ramp, now, L)
-				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch) -- sends: kept from the last evaluation
+				followDead(m, pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch)) -- sends: kept from the last evaluation
 			end
 		end
 	end

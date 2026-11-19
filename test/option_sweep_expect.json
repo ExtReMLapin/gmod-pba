@@ -602,5 +602,9 @@
  "early_line_rules": {
   "pos0": "hook",
   "why": "early line takeover: clear sight with native_all 0, engine copy's own name (render), outside P.Compute: test early_rules"
+ },
+ "loops_follow_dead": {
+  "pos0": "hook",
+  "why": "a mirror's dead native voice noticed by the per-frame follower (render), outside P.Compute: test follow_dead"
  }
 }
