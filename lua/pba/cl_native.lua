@@ -1235,6 +1235,7 @@ N.DIR_MAX = 0.5
 --- Dipole directivity of a weapon emission towards L (1 in front, 1 - 2w behind, floor 0.05); 1 for any
 -- other sound. chan: the sound's channel; aim: the aim taken when the sound was emitted (a shot does not
 -- swing round when the shooter turns while its tail plays); without it, the aim now.
+local dirD = Vector() -- work vector
 function N.Directivity(ent, L, chan, aim)
 	local w = math.min(A.cfg.native_dir or 0, N.DIR_MAX)
 	if w <= 0 or not L then return 1 end
@@ -1242,7 +1243,10 @@ function N.Directivity(ent, L, chan, aim)
 	if not owner then return 1 end
 	-- the listener's own shots (pba_native_own: centered on him): he is the shooter, not behind the muzzle
 	if LocalPlayer and owner == LocalPlayer() and A.NativeOwn and A.NativeOwn() and A.HearsFromSelf(owner) then return 1 end
-	local d = (L - owner:EyePos()):GetNormalized()
+	local d = dirD
+	d:Set(L)
+	d:Sub(owner:EyePos())
+	d:Normalize()
 	return math.max((1 - w) + w * (aim or now):Dot(d), 0.05)
 end
 
@@ -1598,9 +1602,12 @@ end
 -- Doppler shift between a moving source and listener: f' = f (c + vL.u) / (c - vS.u), u = unit
 -- vector source -> listener, c = 343 m/s in units. Clamped to half / double pitch.
 local SPEED_UNITS = 343 / 0.01905
+local dopU = Vector() -- work vector (the per-frame path makes no Vector of its own: N.Doppler, N.Directivity)
 function N.Doppler(S, vS, L, vL)
 	if (A.cfg.native_doppler or 0) < 0.5 then return 1 end
-	local u = L - S
+	local u = dopU
+	u:Set(L)
+	u:Sub(S)
 	local d = u:Length()
 	if d < 1 then return 1 end
 	u:Mul(1 / d)
@@ -1626,6 +1633,12 @@ function N.ListenerVelocity()
 		return (IsValid(p) and p or veh):GetVelocity()
 	end
 	return ply:GetVelocity()
+end
+--- N.ListenerVelocity read once per frame by the module's listener hook (pba_native_listener) for the voices that
+-- follow their entity in that hook (N.UpdateFollowers, LP.FollowNative): one read instead of one per pass.
+function N.FrameListenerVelocity()
+	if N.vlFrame == FrameNumber() and N.vlFrameVal then return N.vlFrameVal end
+	return N.ListenerVelocity()
 end
 
 -- voices bound to an entity (clear line): position and distance law updated every frame
@@ -1659,7 +1672,7 @@ function N.StopAllVoices()
 	table.Empty(N.follow)
 end
 function N.UpdateFollowers(L)
-	local vL = N.ListenerVelocity()
+	local vL = N.FrameListenerVelocity()
 	for id, f in pairs(N.follow) do
 		local e = f.ent
 		if not IsValid(e) then
@@ -2284,18 +2297,23 @@ function N.UpdatePause()
 end
 hook.Add("PreRender", "pba_native_pause", function() N.UpdatePause() end)
 
+local cvMuteLoseFocus
 hook.Add("Think", "pba_native_listener", function()
 	if not N.render or not N.Busy() then return end
 	local ply = LocalPlayer()
 	if not IsValid(ply) then return end
-	local ang = ply:EyeAngles()
 	local master = N.MasterVolume()
-	if not system.HasFocus() and GetConVar("snd_mute_losefocus"):GetBool() then master = 0 end
+	if not system.HasFocus() then
+		cvMuteLoseFocus = cvMuteLoseFocus or GetConVar("snd_mute_losefocus")
+		if cvMuteLoseFocus:GetBool() then master = 0 end
+	end
 	local eL, eR
 	local L, vang = A.ListenerPos()
 	if not L then return end
-	ang = vang or ang
+	local ang = vang or ply:EyeAngles()
 	N.live, eL, eR = pba_native.SetListener(L, ang:Forward(), ang:Up(), master)
+	-- the listener's velocity, once for this frame's followers (N.FrameListenerVelocity)
+	N.vlFrame, N.vlFrameVal = FrameNumber(), N.ListenerVelocity()
 	-- what follows its entity every frame (clear voices, native mirrors): the scheduler's frame pass
 	if A.Sched then A.Sched.Frame(L) else N.UpdateFollowers(L) end
 	-- head under water: the engine applies its own water DSP to the sounds it plays; same for ours
