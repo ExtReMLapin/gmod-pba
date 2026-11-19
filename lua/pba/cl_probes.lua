@@ -213,6 +213,11 @@ local function setNativeSegs(segs)
 end
 -- (re-checked on the next map: a new client Lua state)
 PR.SetNativeSegs = setNativeSegs -- (the offline bench's graph, built outside PR.Start)
+-- The probe code's trace functions, picked at each trace (pba_native_traces, pba_native_trace_nums and the
+-- check can change; util.Trace* read at the call, as a pure test stubs them): the module's, as numbers or
+-- as tables, once checked on this map, else the engine's.
+local function lineFn() return nativeTraces() and (numsOn() and ntLineN or ntLine) or util.TraceLine end
+local function hullFn() return nativeTraces() and (numsOn() and ntHullN or ntHull) or util.TraceHull end
 
 -- A hit on an invisible tool brush (A.Paths.PassTool: toolsblockbullets...) is no obstacle: the trace
 -- goes on from where it leaves the brush (a few hops at most).
@@ -239,7 +244,7 @@ end
 local function upThroughDisp(a, b) return a.z < b.z - 1 and A.Paths.HasDisplacements and A.Paths.HasDisplacements() end
 
 local function clearSeg(a, b)
-	local TL = nativeTraces() and (numsOn() and ntLineN or ntLine) or util.TraceLine
+	local TL = lineFn()
 	segTr.start, segTr.endpos = a, b
 	TL(segTr)
 	if segOut.Hit and not passThrough(segTr, segOut, TL, b) then return false end
@@ -266,7 +271,7 @@ local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = LINK_MASK, filter = wor
 -- World only: the graph's routes (PR.Pull at search time, cached for the session) must not depend on
 -- whether a door is open.
 local function clearFatWorld(a, b)
-	local TH = nativeTraces() and (numsOn() and ntHullN or ntHull) or util.TraceHull
+	local TH = hullFn()
 	fatTr.start, fatTr.endpos = a, b
 	TH(fatTr)
 	if fatOut.Hit and not passThrough(fatTr, fatOut, TH, b) then return false end
@@ -338,7 +343,7 @@ end
 local bOut = {}
 local bTr = { mask = LINK_MASK, filter = worldOnly, output = bOut }
 local function buildLine(a, b, mask)
-	local TL = nativeTraces() and (numsOn() and ntLineN or ntLine) or util.TraceLine
+	local TL = lineFn()
 	bTr.start, bTr.endpos, bTr.mask = a, b, mask or LINK_MASK
 	return TL(bTr)
 end
