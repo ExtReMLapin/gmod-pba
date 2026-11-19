@@ -572,6 +572,7 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 		if keep then g = math.max(g, 0.001 * KEEP_GAIN) end
 		if g < 0.001 then
 			if A.IsSentence(data.SoundName) then A.Sentences.Note(data.SoundName, false, "inaudible") end
+			if A.NoteSilent then A.NoteSilent(data.SoundName) end -- (inaudible by the model: not a silent line to hand back)
 			return false
 		end
 		local delay = math.max(voiceDelay(v, L) - (waited or 0), 0)
@@ -609,7 +610,10 @@ local function emitVoice(data, v, L, src, copies, slot, life, ukey, follow, idx,
 	if floor then vol = math.max(vol, floor / AC.EngineGain(math.max(d, 1), lvl)) end
 	if keep then vol = math.max(vol, 0.01 * KEEP_GAIN) end
 	vol = math.min(vol, 1)
-	if vol < 0.01 then return false end
+	if vol < 0.01 then
+		if A.NoteSilent then A.NoteSilent(data.SoundName) end -- (inaudible by the model: not a silent line to hand back)
+		return false
+	end
 	local tunnel = heldTunnel(idx and (idx .. ":" .. (slot or 1)), v.diffuse, RealTime())
 	local dsp = presetFor(v.lp, tunnel)
 	-- the sound's own preset (a radio or speaker effect) is part of the sound: kept, muffled by volume

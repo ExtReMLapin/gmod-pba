@@ -40,6 +40,13 @@ local function isSpeech(key, t0)
 	if c and c >= t0 - SPEECH_CAP_S then return true end
 	return string.sub(key, 1, 3) == "vo/"
 end
+--- A voice of `name` the model made inaudible (cl_render emitVoice: under the emission thresholds, the walls' loss):
+-- silent on purpose, so the safety net leaves it silent (pba_handback_quiet). Before, a line on a voice channel behind
+-- enough walls was rendered by nothing, then handed to the engine, which played it clear through them (review C5).
+A.silentT = A.silentT or {} -- file key -> RealTime() a voice of it was dropped as inaudible
+function A.NoteSilent(name)
+	if name then A.silentT[lineKey(name)] = RealTime() end
+end
 --- A rendering of `name` at linear gain / volume `g` (module voice, engine emission, mirror patch).
 function A.NoteRendered(name, g)
 	if name and (g or 1) > AUDIBLE then A.renderedT[lineKey(name)] = RealTime() end
@@ -90,6 +97,8 @@ function A.WatchLine(name, lag, why, handback, idx, chan, busy)
 		end
 		local t = A.renderedT[key]
 		if t and t >= t0 - 0.05 then return end
+		local q = A.silentT[key]
+		if q and q >= t0 - 0.05 and (A.cfg.handback_quiet or 1) >= 0.5 then return end -- (inaudible on purpose)
 		if (A.cfg.silent_handback or 1) < 0.5 or not isSpeech(key, t0) then return end
 		local ok = handback()
 		if ok == false then return end -- (stopped meanwhile: nothing to give back)
