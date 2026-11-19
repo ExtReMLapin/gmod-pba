@@ -270,6 +270,24 @@ static Run Script(IPLContext ctx, Mode mode) {
 		}
 		render::StopVoice(vg);
 		pull(512);
+		// loud: the output stage acts (limiter, then the legacy clip and the hard clip), at a low master volume too
+		render::VoiceParams pl = P(0.5f, -1, 20.0f);
+		int vl = render::Play("a", pl, false);
+		idv(vl);
+		for (int k = 0; k < 6; ++k) pull(512);
+		render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 0.2f, &eL, &eR);
+		for (int k = 0; k < 4; ++k) pull(512);
+		meter(render::LimiterMinGain());
+		render::SetMixQuality(0, mode != Mode::Alt, pre);
+		pull(1024);
+		render::SetMixQuality(2, mode != Mode::Alt, pre);
+		pull(1024);
+		render::SetMixQuality(1, mode != Mode::Alt, !pre);
+		pull(1024);
+		render::SetMixQuality(1, mode != Mode::Alt, pre);
+		render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 0.7f, &eL, &eR);
+		render::StopVoice(vl);
+		pull(1024);
 	}
 	// stop: a rendered voice fades, a just-played one never sounds, then a Play / Update / Stop in one go
 	render::StopVoice(v2);
