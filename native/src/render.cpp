@@ -1041,8 +1041,16 @@ struct Limiter {
 	float dFast = 0, dAvg = 0, dHold = 0; // release state: fast deficit, slow average and slow peak hold of the lookahead deficit
 	float gain = 1.0f;               // current gain
 	float minGain = 1.0f;            // lowest gain applied since the last reset (diagnostics, tests)
+	float cf = 0, as = 0, cs = 0, slowK = 0; // release coefficients per frame (Tune)
 	Limiter() { std::fill(req, req + kLimLook + 1, 1.0f); }
 	void Reset() { *this = Limiter(); }
+	// the release coefficients of the settings in force: constant over a block, worked out once for it
+	void Tune(const MixSettings& m) {
+		cf = std::exp(-1.0f / (m.limFastMs * 0.001f * (float)kRate));
+		as = 1.0f - std::exp(-1.0f / (m.limSlowMs * 0.001f * (float)kRate));
+		cs = std::exp(-1.0f / (m.limSlowMs * 0.001f * (float)kRate));
+		slowK = m.limSlowK;
+	}
 	// one frame in, the frame kLimLook ago out
 	void Process(float inL, float inR, float& outL, float& outR) {
 		if (!std::isfinite(inL)) inL = 0;
@@ -1067,13 +1075,10 @@ struct Limiter {
 		}
 		// kept as deficits: near 1 a float gain stops moving (the step is below its resolution)
 		const float dInst = 1.0f - g;
-		const float cf = std::exp(-1.0f / (g_set.limFastMs * 0.001f * (float)kRate));
-		const float as = 1.0f - std::exp(-1.0f / (g_set.limSlowMs * 0.001f * (float)kRate));
-		const float cs = std::exp(-1.0f / (g_set.limSlowMs * 0.001f * (float)kRate));
 		dFast = std::max(dInst, dFast * cf);
 		dAvg += (dInst - dAvg) * as;
 		dHold = std::max(dInst, dHold * cs);
-		float d = std::max(dFast, std::min(g_set.limSlowK * dAvg, dHold));
+		float d = std::max(dFast, std::min(slowK * dAvg, dHold));
 		if (d < 1e-6f) { d = 0; dFast = 0; if (dAvg < 1e-6f) dAvg = 0; if (dHold < 1e-6f) dHold = 0; }
 		gain = 1.0f - d;
 		minGain = std::min(minGain, gain);
@@ -1687,6 +1692,7 @@ void RenderBlock() {
 	const float stageIn = pre ? 1.0f : g_master;
 	const float stageOut = pre ? g_master : 1.0f;
 	if (mode == 1) {
+		g_limiter.Tune(g_set);
 		for (int i = 0; i < kBlock; ++i) {
 			g_limiter.Process(g_mix[i * 2] * stageIn, g_mix[i * 2 + 1] * stageIn, g_mix[i * 2], g_mix[i * 2 + 1]);
 			g_mix[i * 2] *= stageOut;
