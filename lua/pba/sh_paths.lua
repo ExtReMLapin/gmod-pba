@@ -685,11 +685,14 @@ end
 
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
 -- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
-function P.Walls(S, L, maxWalls, srcEnt, lazy, cfg)
-	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy, L, cfg)
+-- noLis: L is not where a listener stands (a point the caller made up: P.BundleLine's bend), so an object L lies
+-- inside is not the listener's own (pba_listener_object) but a wall the line ends in
+function P.Walls(S, L, maxWalls, srcEnt, lazy, cfg, noLis)
+	local lisAt = (not noLis) and L or nil
+	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 	-- a trace crosses a displacement only going up through it (its face looks up): from below
 	if #w >= (maxWalls or 6) or S.z >= L.z or not mapHasDisplacements() then return addWater(w, S, L, cfg) end
-	local r = wallsOneWay(L, S, maxWalls, srcEnt, true, L, cfg)
+	local r = wallsOneWay(L, S, maxWalls, srcEnt, true, lisAt, cfg)
 	if #r <= #w then return addWater(w, S, L, cfg) end
 	-- reversed: ordered from S, entry and exit swapped
 	local out = { detours = r.detours }
@@ -2177,17 +2180,54 @@ function P.KeepNativeWorldWall(w, nativeDisp) return not w.ent and not w.water a
 -- tilt (optional): the centre line's muffling (P.EvalWalls' 4th); returned 4th as the bundle's, each line's weighted
 -- by its energy like the loss (pba_trans_tilt: a wall entering the line moved the muffling by a whole wall's at once
 -- where the loss moved by fifths)
-function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
-	if (cfg.trans_bundle or 0) < 0.5 then return loss, lp, mid, tilt end
+--- The four bend points of the bundle's offset lines (the midpoint of S-L moved across the line by the first
+-- Fresnel zone's radius there, at most pba_trans_bundle_r), or nil when that radius is under half a unit.
+function P.BundleMids(S, L, cfg)
 	local d = S:Distance(L)
 	local lambda = 343 / (cfg.diff_freq or 1000) / 0.01905 -- units
 	local r = math.min(cfg.trans_bundle_r or 24, 0.5 * math.sqrt(lambda * d))
-	if r < 0.5 then return loss, lp, mid, tilt end
+	if r < 0.5 then return nil end
 	local dir = (L - S):GetNormalized()
 	local u = dir:Cross(math.abs(dir.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0))
 	u:Normalize()
 	local v = dir:Cross(u)
 	local M = (S + L) * 0.5
+	return { M + u * r, M + u * -r, M + v * r, M + v * -r }
+end
+--- The walls one offset line S -> m -> L of the bundle pays (keep(w, karg) picks the world walls; door leaves are
+-- always in): traced from each end towards its bend m.
+-- pba_trans_bundle_mid_leaf: m is a point of the bundle, not a listener, so a leaf that m lies in is not dropped as
+-- the listener's own object (pba_listener_object: both halves ended inside the shut leaf of a doorway beside the
+-- wall the centre cuts, the line counted as open air, and the bundle's mean gave 10 log10(5) = 7.0 dB through a
+-- shut door and 17 u of concrete: pba_twodoors, door_sweep_real's closed slide, 25.7 -> 6.9 -> 24.6 dB in 2 u
+-- steps); and a leaf is paid once per line (its loss is the leaf's, whatever the chord: P.EvalWalls), not once
+-- per half nor once per re-hit of the traces restarting inside it. World walls keep their chord on both halves.
+function P.BundleLine(S, L, m, srcEnt, cfg, keep, karg)
+	local sel = {}
+	local fix = (cfg.trans_bundle_mid_leaf or 1) >= 0.5
+	local seen
+	for h = 1, 2 do
+		local half = P.Walls(h == 1 and S or L, m, cfg.trans_max_walls, srcEnt, true, cfg, fix)
+		for _, w in ipairs(half) do
+			if bundleDoor(w) then
+				if not fix then
+					sel[#sel + 1] = w
+				elseif not (seen and seen[w.ent]) then
+					seen = seen or {}
+					seen[w.ent] = true
+					sel[#sel + 1] = w
+				end
+			elseif keep(w, karg) then
+				sel[#sel + 1] = w
+			end
+		end
+	end
+	return sel
+end
+function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
+	if (cfg.trans_bundle or 0) < 0.5 then return loss, lp, mid, tilt end
+	local mids = P.BundleMids(S, L, cfg)
+	if not mids then return loss, lp, mid, tilt end
 	-- door leaves count on every line of the bundle: an offset line through a shut doorway beside the wall
 	-- the centre cuts was paid nothing (door_sweep closed: 12.0 -> 6.2 dB in 2 u). The caller pays the
 	-- centre's leaves itself, so they are taken off the mean again.
@@ -2197,11 +2237,8 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
 	if #cDoors > 0 then dl, _, dm, dt = P.EvalWalls(cDoors, cfg, true, true) end
 	local gl, gm, n = exp((-(loss + dl) / 10) * LN10), exp((-(mid + dm) / 10) * LN10), 1
 	local gt = gl * ((tilt or 0) + dt)
-	for _, o in ipairs({ u * r, u * -r, v * r, v * -r }) do
-		local m, sel = M + o, {}
-		for _, half in ipairs({ P.Walls(S, m, cfg.trans_max_walls, srcEnt, true, cfg), P.Walls(L, m, cfg.trans_max_walls, srcEnt, true, cfg) }) do
-			for _, w in ipairs(half) do if keep(w, karg) or bundleDoor(w) then sel[#sel + 1] = w end end
-		end
+	for _, m in ipairs(mids) do
+		local sel = P.BundleLine(S, L, m, srcEnt, cfg, keep, karg)
 		local l2, _, m2, t2 = 0, 0, 0, 0
 		if #sel > 0 then l2, _, m2, t2 = P.EvalWalls(sel, cfg, true, true) end
 		local e2 = exp((-l2 / 10) * LN10)
