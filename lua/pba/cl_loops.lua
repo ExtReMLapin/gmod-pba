@@ -4,6 +4,7 @@
 -- per loop, attached to its entity. With a clear line the mirror equals the original.
 
 local A = pba
+if A.JitFile then A.JitFile("cl_loops") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 A.Loops = A.Loops or {}
 local LP = A.Loops
 LP.mirrors = LP.mirrors or {}

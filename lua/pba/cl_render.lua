@@ -4,6 +4,7 @@
 -- the server (net "pba_snd").
 
 local A = pba
+if A.JitFile then A.JitFile("cl_render") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local AC = A.AC
 local NET = "pba_snd"
 

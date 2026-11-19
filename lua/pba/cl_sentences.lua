@@ -21,6 +21,7 @@
 -- * "V_..." words are virtual: replaced by the engine with per-entity names, numbers, distances, grid
 --   positions, sectors... kept in its own state. A sentence with one is left to the engine.
 local A = pba
+if A.JitFile then A.JitFile("cl_sentences") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local S = A.Sentences or {}
 A.Sentences = S
 

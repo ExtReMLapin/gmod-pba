@@ -4,6 +4,7 @@
 -- Layouts from the public Source SDK 2013 bspfile.h (facts only).
 
 local A = pba
+if A.JitFile then A.JitFile("sh_bsp") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local BSP = {}
 A.BSP = BSP
 

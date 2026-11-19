@@ -45,6 +45,7 @@
 -- "_MAP__" index is written in place, so map-relative groups work, which a version with a truncating copy
 -- would not).
 local A = pba
+if A.JitFile then A.JitFile("cl_sentences_virtual") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local V = A.SentenceVirtual or {}
 A.SentenceVirtual = V
 

@@ -3,6 +3,7 @@
 -- which is the exact vanilla behaviour.
 
 local A = pba
+if A.JitFile then A.JitFile("sh_core") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 
 A.hooks = A.hooks or {} -- event -> fn, registered by sv_relay / cl_render under id "pba"
 
@@ -442,6 +443,7 @@ function A.OnConfigChanged(name)
 	-- the player's lip sync choice reaches the server (sv_loops MouthStart, the long lines' mouth copy)
 	if name == "lipsync" and CLIENT and A.SendLipsyncPref then A.SendLipsyncPref() end
 	if name == "compat_auto" and A.Compat and A.Compat.Check then A.Compat.Check() end
+	if name == "lua_interp" and A.JitApplyAll then A.JitApplyAll() end
 	if A.Paths then A.Paths.InvalidateCache() end
 end
 

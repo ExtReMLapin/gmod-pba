@@ -25,6 +25,7 @@
 -- loops reach the client without their channel: the channel rules (NPC_Looping, Vehicles_Looping) do not
 -- match them.
 local A = pba
+if A.JitFile then A.JitFile("cl_mix") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local M = A.Mix or {}
 A.Mix = M
 

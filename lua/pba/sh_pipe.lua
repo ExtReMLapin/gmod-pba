@@ -3,6 +3,7 @@
 -- sound/pba/pipe/<tier>_<n>.wav, synthesized by tools/meme_pipe/ (modal synthesis of a struck steel tube).
 
 local A = pba
+if A.JitFile then A.JitFile("sh_pipe") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local Pi = {}
 A.Pipe = Pi
 

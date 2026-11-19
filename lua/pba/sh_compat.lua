@@ -18,6 +18,7 @@
 --     neither the load nor the unload is heard as a jump.
 
 local A = pba
+if A.JitFile then A.JitFile("sh_compat") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 A.Compat = A.Compat or {}
 local C = A.Compat
 

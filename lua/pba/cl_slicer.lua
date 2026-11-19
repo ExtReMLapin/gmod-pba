@@ -24,6 +24,7 @@
 -- plus its propagation delay as before when pba_delay is on.
 
 local A = pba
+if A.JitFile then A.JitFile("cl_slicer") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local SL = A.Slicer or {}
 A.Slicer = SL
 

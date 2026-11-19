@@ -236,6 +236,7 @@ A.CONFIG = {
 	impact_cap      = { 16, 0, 200, "cl", "Most sounds per quarter second that pba takes of ONE family of short world sounds (the bullet impacts of a chopper's gun: the same file with another number, played on the world, 120 a second, each 1-2 s long: every one a path search, a native voice and a lock wait on the audio thread, 7-25 ms frames on gm_construct). The rest of the burst is dropped: past that density the ear hears one texture, not the impacts. A gun's, a shotgun's impacts are far under it. 0 = every one taken." },
 	impact_group    = { 4, 0, 200, "cl", "From this many sounds per quarter second of ONE family of short world sounds (a chopper's bullet impacts), a new one takes the full result of a source within 128 units that was evaluated a moment ago instead of its own path search (each cost 1-2 ms behind a wall: traces, slices). Under it every sound is evaluated for itself: a gun's impacts keep their exact positions. 0 = every sound evaluated." },
 	gc_lean         = { 0, 0, 1, "cl", "Less garbage per sound: the path cache key built as one string, no per-sound report record when reports are off. Same results. 0 = the former code." },
+	lua_interp      = { 1, 0, 1, "cl", "pba's Lua files that call the engine at every step (traces, vectors, entities) run with LuaJIT's compiler off: GMod's LuaJIT cannot compile through those calls and kept starting traces that aborted, and they measured 15-20 % faster interpreted. Pure-number code stays compiled. Same results. 0 = compiler on for every file (the former way)." },
 	gc_idle_step    = { 0, 0, 2000, "cl", "Garbage collector work (KB) done in each frame without a new sound, so that the collector catches up between bursts instead of during them. Touches the whole client Lua state. 0 = off." },
 	min_level       = { 50, 0, 140, "sv", "Sounds with a lower SNDLVL are left untouched." },
 	cache_ttl       = { 0.25, 0, 5, "sv", "Seconds a (source cell, listener cell) result stays cached." },
@@ -376,6 +377,41 @@ for name, c in pairs(A.CONFIG) do
 			if A.OnConfigChanged then A.OnConfigChanged(name) end
 		end, "pba_cfg")
 	end
+end
+
+-- LuaJIT compiler per file (pba_lua_interp, client only). GMod's LuaJIT cannot compile through the engine's
+-- C functions (traces, Vector methods, entity calls): it keeps starting traces that abort, and pba's code that
+-- calls them at every step runs faster interpreted (as cl_probes.lua does on purpose). A file listed here runs
+-- interpreted when pba_lua_interp is 1: each file calls A.JitFile(name) at the top of its chunk, which turns
+-- the compiler off (or back on) for that chunk and every function it defines (jit.off(chunk, true)), and for
+-- nothing else: other addons and pba's pure-number kernels (cl_probes_kernels.lua) stay compiled. The
+-- interpreter and the compiled code compute the same doubles: results are identical.
+-- The files measured faster interpreted (2026-11-19, gm_construct, 40 hidden sounds, module rendering: pba's Lua
+-- 53.9 -> 35.5 ms/s, -34 %, alternated rounds; P.Compute's own bench: no difference). The other files (cl_loops,
+-- cl_slicer, cl_streams, the sentences...) measured no faster and stay compiled.
+A.JIT_INTERP = { sh_paths = true, sh_acoustics = true, sh_graph = true, sh_doors = true, sh_bsp = true, sh_core = true,
+	cl_render = true, cl_renders = true, cl_sched = true, cl_native = true, cl_mix = true }
+A.jitChunks = A.jitChunks or {}
+local canJit = CLIENT and jit and jit.off and jit.on and debug and debug.getinfo
+local function jitApply(name)
+	local f = A.jitChunks[name]
+	if not f then return end
+	if A.JIT_INTERP[name] and (A.cfg.lua_interp or 1) >= 0.5 then jit.off(f, true) else jit.on(f, true) end
+end
+--- Called at the top of a pba file's chunk: registers the chunk under name and applies pba_lua_interp to it.
+function A.JitFile(name)
+	if not canJit then return end
+	local info = debug.getinfo(2, "f")
+	if not info or not info.func then return end
+	A.jitChunks[name] = info.func
+	jitApply(name)
+end
+--- Applies pba_lua_interp (or a changed A.JIT_INTERP) to every registered file; drops the compiled traces so
+-- that the change takes effect at once (jit.off alone leaves the traces already compiled running).
+function A.JitApplyAll()
+	if not canJit then return end
+	for name in pairs(A.jitChunks) do jitApply(name) end
+	if jit.flush then jit.flush() end
 end
 
 -- Migration flags kept in a DATA file (data/pba/migrations.txt, one key per line), for the migrations that

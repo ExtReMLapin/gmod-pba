@@ -3,6 +3,7 @@
 -- labels stay short, the details are in each control's tooltip (the convar's help text).
 
 local A = pba
+if A.JitFile then A.JitFile("cl_menu") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 
 --- Tooltip of a setting: its help text from sh_config plus the console variable.
 local function tip(name, extra)
@@ -57,6 +58,7 @@ function Build.player(panel)
 	sld(panel, "Bursts: impacts per 0.25 s taken (0 all)", "impact_cap", 0)
 	sld(panel, "Bursts: impacts sharing a result from (0 off)", "impact_group", 0)
 	chk(panel, "Less garbage per sound", "gc_lean")
+	chk(panel, "Lua: interpreter for engine-bound files", "lua_interp")
 	sld(panel, "GC step between bursts (KB, 0 off)", "gc_idle_step", 0)
 	sld(panel, "Builds during fights (ms/frame, 0 = off)", "build_ms_combat", 1)
 	chk(panel, "Fights: the builds take turns", "build_fair")

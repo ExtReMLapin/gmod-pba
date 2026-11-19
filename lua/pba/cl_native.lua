@@ -10,6 +10,7 @@
 -- Without the module, nothing changes: the Lua model runs as before.
 
 local A = pba
+if A.JitFile then A.JitFile("cl_native") end -- LuaJIT per file: pba_lua_interp (sh_config.lua)
 local N = A.Native or {}
 A.Native = N
 
