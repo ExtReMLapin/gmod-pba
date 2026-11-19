@@ -2417,11 +2417,13 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	if not hop then guard, guardDone = groupGuard(S, L, cfg, srcEnt) end -- (a hop's routes are its own)
 	local evaluated = {}
 	local gs = PR.groupStats
+	local fInners -- (f's own, read again by pba_route_alt below)
 	-- the shortest ways (f) and the ways round the doors' costs (f.doors, PR.BuildFields), ranked together
 	for _, fx in ipairs({ f, f.doors or false }) do
 		if fx then
 			fieldSeen(fx, L)
 			local inners = fieldPaths(fx, starts, S, L)
+			if fx == f then fInners = inners end
 			for x, inner in ipairs(inners) do
 				sliceCheck()
 				-- pba_group: the probe's arrival shared, joined to this source (sharedJoin above)
@@ -2451,8 +2453,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	if guardDone then guardDone() end
 	-- pba_route_alt: the way the tree did not take (altBranches), from the best probe S sees
 	if A.On(cfg, "route_alt") then
-		local inners = fieldPaths(f, starts, S, L)
-		local n = inners.nodes[1]
+		local n = fInners.nodes[1]
 		if n then
 			-- the first candidate, cheapest first, that is not one of the routes already found (PR.SameRoute:
 			-- a sidetrack along a parallel row of probes tightens to the same way)
