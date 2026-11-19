@@ -3161,8 +3161,6 @@ function P.ReevalDue(state, S, L, now, cfg)
 	return true
 end
 
-local function q(v) return math.floor(v.x / 32) .. "," .. math.floor(v.y / 32) .. "," .. math.floor(v.z / 32) end
-
 -- The result cache is keyed on 32 u cells, which can straddle a wall: a sound 8 u behind a concrete
 -- wall shared the cell of one 8 u past its edge, and whichever came first gave the other its result
 -- (the hidden one heard clear, 46 dB too loud, or the visible one muffled). The key also holds the
@@ -3225,12 +3223,9 @@ end
 local floor, format = math.floor, string.format
 function P.CacheKey(S, L, sndlvl, srcEnt, cfg)
 	local st = P.LineState(S, L, srcEnt, cfg)
-	-- pba_gc_lean: the same key (%s formats a number as a concatenation does) in one string instead of three
-	if A.On(cfg, "gc_lean") then
-		return format("%s,%s,%s|%s,%s,%s|%s|%s|%s", floor(S.x / 32), floor(S.y / 32), floor(S.z / 32),
-			floor(L.x / 32), floor(L.y / 32), floor(L.z / 32), sndlvl, entKey(srcEnt), st), st
-	end
-	return q(S) .. "|" .. q(L) .. "|" .. sndlvl .. "|" .. entKey(srcEnt) .. "|" .. st, st
+	-- one string (%s formats a number as a concatenation does: the key pba_gc_lean 0 built in three)
+	return format("%s,%s,%s|%s,%s,%s|%s|%s|%s", floor(S.x / 32), floor(S.y / 32), floor(S.z / 32),
+		floor(L.x / 32), floor(L.y / 32), floor(L.z / 32), sndlvl, entKey(srcEnt), st), st
 end
 
 --- The cheap evaluation of a new sound (pba_burst_budget_ms past its budget, pba_burst_mask_db under a loud
