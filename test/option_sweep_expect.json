@@ -594,5 +594,9 @@
  "loops_cut_chan": {
   "pos0": "hook",
   "why": "server: which loops a channel cut stops (sv_loops LP.CutChannel, that channel only), outside P.Compute; covered by review_server S9"
+ },
+ "loops_world_pos": {
+  "pos0": "hook",
+  "why": "server: the key of a loop followed on the world (sv_sound loopStage, its place added), outside P.Compute; covered by review_server S10"
  }
 }

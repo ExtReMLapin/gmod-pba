@@ -56,6 +56,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Your own sounds while your client loads (a map change, with the module rendering your own sounds) | ✅ | ✅ the engine plays them on you until the client runs | S `own_ready` |
 | A moving loop you come within range of (a car, a helicopter out of view) | ✅ | ✅ starts where its source is, not where it started | S `loops_join_pos` |
 | A new sound on a channel cuts only the loops of that channel (one loop played on two channels of an entity) | ✅ | ✅ | S `loops_cut_chan` |
+| Two loops of one sound played on the world at two places (a map or an addon) | ✅ | ✅ both followed, each at its place | S `loops_world_pos` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering

@@ -277,6 +277,24 @@ cases.S9 = function(opt)
 	return { pass = both and body and not item, both = both, bodyKept = body, itemCut = not item }
 end
 
+-- S10: the loops followed are keyed by entity, channel and name: two positional loops of one name on the world (two
+-- EmitSound(name, pos) of a map or an addon) shared a key, the second was taken as an update of the first (no START,
+-- the first one's position).
+cases.S10 = function(opt)
+	A.SetOverride("loops_world_pos", opt)
+	local n0 = 0
+	for _, x in pairs(LP.active) do if x.idx == 0 and x.name == LOOP then n0 = n0 + 1 end end
+	local i0 = #sent
+	EmitSound(LOOP, Vector(300, 200, 40), 0, CHAN_STATIC, 1, 75)
+	EmitSound(LOOP, Vector(300, 400, 40), 0, CHAN_STATIC, 1, 75)
+	job:sleep(0.1)
+	local n = -n0
+	for _, x in pairs(LP.active) do if x.idx == 0 and x.name == LOOP then n = n + 1 end end
+	local starts = #to("pba_loop", i0)
+	LP.Stop(0, LOOP)
+	return { pass = n == 2 and starts == 2, followed = n, starts = starts }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end

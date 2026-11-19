@@ -53,6 +53,12 @@ local function loopStage(data, snd)
 	end
 	local idx = IsValid(e) and e:EntIndex() or 0
 	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
+	-- (pba_loops_world_pos) the world's positional loops by their place too: two of one name (two EmitSound(name, pos) of
+	-- a map or an addon) shared a key, the second taken as an update of the first (no start, the first one's place)
+	local pos = data.Pos
+	if idx == 0 and pos and (A.cfg.loops_world_pos or 1) >= 0.5 then
+		key = key .. "@" .. math.floor(pos.x + 0.5) .. "," .. math.floor(pos.y + 0.5) .. "," .. math.floor(pos.z + 0.5)
+	end
 	local l = LP.active[key]
 	local flags = data.Flags or 0
 	snd.idx, snd.key, snd.l = idx, key, l
