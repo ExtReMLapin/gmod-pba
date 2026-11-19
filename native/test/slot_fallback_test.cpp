@@ -46,7 +46,7 @@ static void Check(bool ok, const char* what, double a = 0, double b = 0) {
 }
 
 // RMS of the room bus input over the voice's 0.5 s, for a voice at 20 m (slot = bound slot, < 0: none)
-static double RoomRms(float gain, float send, int slot, float srcSend) {
+static double RoomRms(float gain, float send, int slot, float srcSend, float wet = -1) {
 	double l, r;
 	render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 0, &l, &r);
 	render::CaptureStart();
@@ -55,7 +55,7 @@ static double RoomRms(float gain, float send, int slot, float srcSend) {
 	p.gain = gain;
 	p.send = send;
 	const int id = render::Play("noise.wav", p, false);
-	if (slot >= 0) render::SetVoiceSrcSlot(id, slot, 1, srcSend); // generation 1: never simulated here
+	if (slot >= 0) render::SetVoiceSrcSlot(id, slot, 1, srcSend, wet); // generation 1: never simulated here
 	std::this_thread::sleep_for(std::chrono::milliseconds(700));
 	std::vector<float> mix, room, src;
 	render::CaptureStop(&mix, &room, &src);
@@ -96,6 +96,14 @@ int main() {
 	// the slot send either
 	const double nearR = RoomRms(1.0f, 0.1f, 0, 0.5f) / ref;
 	Check(nearR <= 0.5 * 1.05 && nearR >= 0.5 * 0.95, "a near source: the slot send (below its gain)", nearR, 0.5);
+
+	// a loud far sound: Lua keeps it dry (N.LoudWet: its reverb x wet, 0.1 here); a voice without a slot gets g x wet on the
+	// room bus, so the waiting slot's share must not exceed that either (it took the gain alone: up to +20 dB of reverb)
+	const float loudG = 0.05f, wet = 0.1f;
+	const double loud = RoomRms(loudG, send, 0, srcSend, wet) / ref;
+	std::printf("     waiting slot, loud far source (wet %.2g): room bus %.4g of the signal; gain x wet %.4g\n", wet, loud, loudG * wet);
+	Check(loud <= loudG * wet * 1.05, "a waiting slot sends no more than the voice's gain x its wet share (what Lua gives a voice without a slot)", loud, loudG * wet);
+	Check(loud >= send * 0.95, "nor less than its own room send (loud)", loud, send);
 
 	// a voice bound with no slot send (a silent holder): its room send only
 	const double hold = RoomRms(gain, send, 0, 0.0f) / ref;

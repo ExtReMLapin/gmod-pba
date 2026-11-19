@@ -241,6 +241,7 @@ struct VoiceCtl {
 	int srcSlot = -1;
 	int srcGen = 0;
 	float srcSend = 0; // send into the slot
+	float fbWet = 1;   // the voice's wet share (Lua's N.LoudWet): caps its room-bus share while its slot waits (SetVoiceSrcSlot)
 	int slot = -1;     // index in the effect pool
 	int slot2 = -1;    // second effect pair of a stereo-width voice (index in the effect pool)
 	int pathSlot = -1; // index in the path effect pool (held by the control side until the audio thread reports it idle)
@@ -1407,13 +1408,14 @@ void RenderBlock() {
 		// send of a bound voice, so without it a one-shot started dry for the 100-300 ms of its first
 		// simulation (or stayed dry entirely). It crossfades into the slot over the block where the response
 		// becomes ready. The room bus is the reverb simulated AT the listener: what it may take is what Lua
-		// gives a voice without a slot, its gain at the listener (the slot send, never more), the room send
+		// gives a voice without a slot, its gain at the listener times its wet share (fbWet, Lua's N.LoudWet: a loud sound
+		// stays dry; without it the cap let up to +20 dB of reverb through) (the slot send, never more), the room send
 		// included. The slot send itself is the source's power at 1 m: fed into the room bus it placed the
 		// source at the listener (a far pod's stop sound on d3_citadel_01: a 30-60 ms burst 22 dB over the
 		// clear-sight direct at its true distance, at every new slot place). g_slotFbGain false: the slot send
 		// (wet room x g_srcScale), as before.
 		const float f1 = !(srcBound && !srcBus) ? 0
-			: g_slotFbGain ? std::max(std::min(v.srcSend * g_srcScale, g1) - s1, 0.0f) : v.srcSend * g_srcScale;
+			: g_slotFbGain ? std::max(std::min(v.srcSend * g_srcScale, g1 * v.fbWet) - s1, 0.0f) : v.srcSend * g_srcScale;
 		const float f0 = v.srcFbCur < 0 ? f1 : v.srcFbCur;
 		v.srcFbCur = f1;
 		// The source slot gets m, the voice's signal BEFORE the direct path's EQ: the simulation from
@@ -2774,7 +2776,7 @@ void SetSlotFallbackGain(bool on) {
 	SendMix();
 }
 
-bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend) {
+bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend, float fbWet) {
 	CtlCall cc;
 	ControlVoice* t = nullptr;
 	for (auto& v : g_c.voices)
@@ -2799,6 +2801,7 @@ bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend) {
 	}
 	t->c.srcSlot = slot;
 	if (srcSend >= 0) t->c.srcSend = srcSend;
+	if (fbWet >= 0) t->c.fbWet = std::min(fbWet, 1.0f); // (NaN: not >= 0, kept)
 	SendVoice(*t);
 	return true;
 }

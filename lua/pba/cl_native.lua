@@ -1453,9 +1453,12 @@ function N.SlotFadeSend(o, bound, entry, gain)
 end
 --- Binds a voice to a source reverb slot (call on every update, at least every 0.5 s). Returns true when
 -- the voice has a slot (then the room bus must only get the transmission part).
-function N.BindSource(id, S, srcSend)
+-- wet: the voice's wet share (N.LoudWet), with pba_native_slot_fallback_wet the cap of what the voice hands the room bus while
+-- its slot is simulated (its gain x wet, what a voice without a slot gets; a module before 2026-11-19 ignores it)
+function N.BindSource(id, S, srcSend, wet)
 	if not (id and pba_native.SourceReflect) then return false end
-	local slot = pba_native.SourceReflect(id, S, srcSend, N.ProbeLift(S))
+	if (A.cfg.native_slot_fallback_wet or 1) < 0.5 then wet = nil end
+	local slot = pba_native.SourceReflect(id, S, srcSend, N.ProbeLift(S) or 0, wet)
 	return slot ~= nil and slot >= 0
 end
 
@@ -1569,7 +1572,7 @@ function N.PlayVoice(name, pos, gain, lp, pitch, opt)
 	else id = pba_native.Play(n, pos, g, l, m, h, pitch or 100, false, opt.delay or 0, sh, opt.diffuse or 0, roomSend, opt.offset, opt.protect, opt.pausable, opt.own) end
 	if id and id > 0 and A.NoteRendered then A.NoteRendered(name, g) end -- (pba_silent_handback)
 	if id and id > 0 and srcPos and L then
-		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain) and not opt.roomSend then
+		if not N.BindSource(id, srcPos, (opt.srcSend or gain) * A.cfg.native_gain, opt.wet) and not opt.roomSend then
 			pba_native.Update(id, pos, g, l, m, h, pitch or 100, nil, g * (opt.wet or 1)) -- no slot: the room bus at its gain
 		end
 	end

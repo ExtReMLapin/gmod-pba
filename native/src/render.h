@@ -131,7 +131,10 @@ void PublishSimulated(int slot, int gen);
 // binds voice id to source reverb slot `slot` simulated at generation gen (slot < 0: unbinds it);
 // srcSend: send level into the slot (linear, < 0 = keep the voice's; 0 at the first bind).
 // Several voices may share a slot. false if the voice is gone (or dying, or an echo).
-bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend);
+// fbWet: the share of its reverb the voice keeps (Lua's N.LoudWet: a loud sound stays dry), which caps what the voice hands the
+// room bus while its slot is not simulated yet (SetSlotFallbackGain): its gain x fbWet, what Lua gives a voice without a slot
+// (< 0: unchanged; 1 at the first bind, the former cap: its gain alone).
+bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend, float fbWet = -1);
 // live[k]: number of live (not dying) voices bound to source reverb slot k, k < kSrcSlotsMax.
 // Returns the slot voice id is bound to (-1: none or gone; id <= 0: -1)
 int SrcSlotLive(int live[kSrcSlotsMax], int id = 0);

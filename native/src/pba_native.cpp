@@ -2188,7 +2188,8 @@ LUA_FUNCTION(Echo) {
 	return 2;
 }
 
-// SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot (0-based) | -1. Source reverb slot for a voice (lift: metres above pos
+// SourceReflect(voiceId, pos [, srcSend [, lift [, wet]]]) -> slot (0-based) | -1. wet: the voice's wet share (Lua's N.LoudWet), which
+// caps what it hands the room bus while its slot is not simulated yet (render::SetVoiceSrcSlot fbWet; absent: unchanged). Source reverb slot for a voice (lift: metres above pos
 // at which the slot's long-window reverb time is estimated, pba_native_source_long_rt: a point within ~0.5 m of the floor gives a
 // meaningless estimate, so Lua lifts a sound on the floor towards head height, under the ceiling; 0 = at pos):
 // reflections simulated from the source's position, so the source room's reverberant field reaches
@@ -2210,6 +2211,7 @@ LUA_FUNCTION(SourceReflect) {
 	const int id = (int)LUA->CheckNumber(1);
 	const float srcSend = LUA->IsType(3, Type::Number) ? std::max((float)LUA->GetNumber(3), 0.0f) : -1.0f;
 	const float lift = LUA->IsType(4, Type::Number) ? std::clamp((float)LUA->GetNumber(4), 0.0f, 2.0f) : 0.0f;
+	const float wet = LUA->IsType(5, Type::Number) ? std::clamp((float)LUA->GetNumber(5), 0.0f, 1.0f) : -1.0f;
 	const int n = std::clamp(g_srcPool.load(), 0, render::kSrcSlotsMax);
 	if (!LUA->IsType(2, Type::Vector) || !g_sim || !g_srcSlot[0].src || id <= 0 || n == 0) {
 		render::SetVoiceSrcSlot(id, -1, 0, 0);
@@ -2288,7 +2290,7 @@ LUA_FUNCTION(SourceReflect) {
 		return 1;
 	}
 	g_reflCv.notify_one();
-	if (!render::SetVoiceSrcSlot(id, slot, gen, srcSend)) { // the voice is gone (the slot frees itself)
+	if (!render::SetVoiceSrcSlot(id, slot, gen, srcSend, wet)) { // the voice is gone (the slot frees itself)
 		LUA->PushNumber(-1);
 		return 1;
 	}

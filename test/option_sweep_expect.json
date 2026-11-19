@@ -219,6 +219,10 @@
   "pos0": "hook",
   "why": "native module source slot banks"
  },
+ "native_slot_fallback_wet": {
+  "pos0": "hook",
+  "why": "native module source slot fallback cap"
+ },
  "native_pitch_glide": {
   "pos0": "hook",
   "why": "native module pitch glide"
