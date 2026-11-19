@@ -539,6 +539,10 @@
   "pos0": "hook",
   "why": "server and client: a line the engine started before the client was ready handed to the module once it is (sv_relay A.NoteEarly, cl_loops LP.TakeEarly), outside P.Compute; covered by early_line and early_line_map"
  },
+ "stop_order": {
+  "pos0": "hook",
+  "why": "server: the order of an explicit stop and the relay of the same tick on the network (sv_relay A.RelayStop), outside P.Compute; covered by stop_order"
+ },
  "probe_air_hop": {
   "pos0": "same",
   "why": "only a source that sees no probe at all (in a void under the platforms) takes the air hop: the sweep scenes stand on floors; covered by skylift_jumps"
