@@ -541,8 +541,7 @@ local function earlyMargin() return A.Sched.MIN_LEFT + A.Sched.Interval() end
 -- volume `vol` in place (SND_CHANGE_VOL on the same index, channel and name: the engine alters that channel, the
 -- line and its mouth go on; measured with snd_dumpclientsounds, vol 255 -> 0 on the SERVER channel).
 -- (the name the engine copy plays: m.early.name, see LP.TakeEarly)
-local function earlyEngineVolume(m, vol)
-	A.reemitting = true -- (pba's own: the hook lets it through)
+local function emitEarlyVolume(m, vol)
 	local e = Entity(m.idx)
 	local name = m.early and m.early.name or m.name
 	if IsValid(e) then
@@ -550,8 +549,8 @@ local function earlyEngineVolume(m, vol)
 	else
 		EmitSound(name, m.pos, m.idx, m.chan, vol, m.lvl, SND_CHANGE_VOL, m.pitch)
 	end
-	A.reemitting = false
 end
+local function earlyEngineVolume(m, vol) A.Emit(emitEarlyVolume, m, vol) end -- (pba's own: the hook lets it through)
 
 --- (pba_early_release) An early line's mirror that ends on its own before its line (its module voice gone early: the
 -- module's voice cap, a module stop) gives the line back to its engine copy, muted until then: before, that copy stayed
@@ -753,24 +752,24 @@ function MIRROR.native.stop(m)
 end
 
 MIRROR.engine = {}
+local function playPatch(p, lvl, dsp, vol, pitch)
+	p:SetSoundLevel(lvl)
+	p:SetDSP(dsp)
+	p:PlayEx(vol, pitch)
+end
 function MIRROR.engine.start(m, ent, g, dsp)
 	if m.once and m.started and not m.handBack then m.done = true return end
 	m.started = true
 	m.patch = LP.origCreateSound(ent, m.name)
-	A.reemitting = true
-	m.patch:SetSoundLevel(m.lvl)
-	m.patch:SetDSP(dsp)
-	m.patch:PlayEx(m.vol * g, m.pitch)
-	A.reemitting = false
+	A.Emit(playPatch, m.patch, m.lvl, dsp, m.vol * g, m.pitch)
 	A.NoteRendered(m.name, m.vol * g)
 	m.g, m.curDsp = g, dsp
 end
 
 function MIRROR.engine.update(m, g, dsp, fade)
 	if math.abs(g - (m.g or 1)) > 0.01 then
-		A.reemitting = true -- the mirror's own change must not read as the original's (HandleClient)
-		m.patch:ChangeVolume(m.vol * g, fade or 0.2)
-		A.reemitting = false
+		-- the mirror's own change must not read as the original's (HandleClient)
+		A.Emit(m.patch.ChangeVolume, m.patch, m.vol * g, fade or 0.2)
 		m.g = g
 	end
 	if dsp ~= m.curDsp then
@@ -805,6 +804,10 @@ function LP.StopClient(idx, chan, name, patch)
 		end
 	end
 end
+
+--- An engine patch's volume and pitch changed (0.1 s), run under A.Emit: volume first, or pitch first.
+local function changePatch(p, vol, pitch) p:ChangeVolume(vol, 0.1) p:ChangePitch(pitch, 0.1) end
+local function changePatchPitchFirst(p, vol, pitch) p:ChangePitch(pitch, 0.1) p:ChangeVolume(vol, 0.1) end
 
 --- Client EntityEmitSound: takes a long client-side sound over. Returns true when taken (the
 -- original must be suppressed). A new sound on a replacing channel cuts the previous mirror,
@@ -846,9 +849,7 @@ function LP.HandleClient(data)
 		if bit.band(flags, SND_CHANGE_VOL) ~= 0 then m.vol = data.Volume or m.vol end
 		if bit.band(flags, SND_CHANGE_PITCH) ~= 0 then m.pitch = data.Pitch or m.pitch end
 		if m.patch then
-			A.reemitting = true
-			m.patch:ChangeVolume(m.vol * (m.g or 1), 0.1) m.patch:ChangePitch(m.pitch, 0.1)
-			A.reemitting = false
+			A.Emit(changePatch, m.patch, m.vol * (m.g or 1), m.pitch)
 		end
 		local vol0 = m.appliedVol
 		local pitched = changeNow(m)
@@ -980,10 +981,7 @@ local function updateMirror(m, once, vol, pitch)
 	end
 	if m.patch then
 		if onceEnded(m) then m.done = true return end -- (a finished patch would start again from its top)
-		A.reemitting = true
-		m.patch:ChangePitch(pitch, 0.1)
-		m.patch:ChangeVolume(vol * (m.g or 1), 0.1)
-		A.reemitting = false
+		A.Emit(changePatchPitchFirst, m.patch, vol * (m.g or 1), pitch)
 	else
 		apply(m, 0)
 	end
@@ -1129,9 +1127,7 @@ local function edgeFade(now)
 			if m.patch then
 				-- an engine patch after all (its file not for the module): the engine fades it
 				m.edgeK, m.vol = nil, m.srvVol
-				A.reemitting = true
-				m.patch:ChangeVolume((m.vol or 1) * (m.g or 1), T)
-				A.reemitting = false
+				A.Emit(m.patch.ChangeVolume, m.patch, (m.vol or 1) * (m.g or 1), T)
 			elseif m.nativeId and m.edgeT0 then
 				local k = T > 0 and math.Clamp((now - m.edgeT0) / T, LP.EDGE_FLOOR, 1) or 1
 				m.edgeK = k
