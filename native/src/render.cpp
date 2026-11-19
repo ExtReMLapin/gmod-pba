@@ -1842,7 +1842,9 @@ void Callback(ma_device*, void* out, const void*, ma_uint32 frames) {
 	// renderer lock did, so every API call made meanwhile waits for the render
 	std::scoped_lock legacy(g_ctlMtx, g_sndMtx);
 #endif
-	g_cbEpoch.fetch_add(1, std::memory_order_acq_rel); // odd: inside
+	g_cbEpoch.fetch_add(1, std::memory_order_seq_cst); // odd: inside
+	// (with the fence of SetReflectionSources: either it sees this callback inside, or this callback sees its new sources)
+	std::atomic_thread_fence(std::memory_order_seq_cst);
 	ma_uint32 done = 0;
 	while (done < frames) {
 		if (g_fifoPos >= g_fifo.size()) {
@@ -2601,7 +2603,13 @@ void SetReflectionSources(IPLSource room, const IPLSource* echo, int n, const IP
 				SendVoice(v);
 			}
 	}
-	const uint64_t e = g_cbEpoch.load(std::memory_order_acquire);
+	// A store then a load of another variable may be reordered (a store buffer): without a full fence between the sources
+	// stored above and the epoch read here (and the same on the audio thread between its epoch increment and its read of
+	// the sources), this could read an even epoch while a callback just entered still reads the previous sources, which the
+	// caller then releases. On x64 the lock taken in between (CtlCall) happens to serialise them; the C++ memory model
+	// does not promise it, other architectures do not.
+	std::atomic_thread_fence(std::memory_order_seq_cst);
+	const uint64_t e = g_cbEpoch.load(std::memory_order_seq_cst);
 	if (e & 1)
 		while (g_cbEpoch.load(std::memory_order_acquire) == e) std::this_thread::yield();
 }
