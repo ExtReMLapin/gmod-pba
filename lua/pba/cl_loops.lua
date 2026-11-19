@@ -1003,7 +1003,7 @@ net.Receive("pba_loop", function()
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	if sid ~= 0 then LP.byId[sid] = m end
 	-- a loop joined midway, rendered by the module: faded in (pba_loops_edge_fade)
-	if new and joined and not once and (A.cfg.loops_edge_fade or 0) > 0 and A.Native and A.Native.render and A.Enabled() then
+	if new and joined and not once and (A.cfg.loops_edge_fade or 1) > 0 and A.Native and A.Native.render and A.Enabled() then
 		m.edgeK = LP.EDGE_FLOOR
 	end
 	m.pitch = pitch
@@ -1073,7 +1073,7 @@ local function edgeFade(now)
 	local N = A.Native
 	for _, m in pairs(LP.mirrors) do
 		if m.edgeK and not m.done then
-			local T = A.cfg.loops_edge_fade or 0
+			local T = A.cfg.loops_edge_fade or 1
 			if m.patch then
 				-- an engine patch after all (its file not for the module): the engine fades it
 				m.edgeK, m.vol = nil, m.srvVol
