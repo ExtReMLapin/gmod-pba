@@ -411,6 +411,30 @@ local function objectDetour(ent, S, L)
 	return P.DetourDelta(lS, lL, mn, mx, objectWayClear, true, ent, S, L)
 end
 
+--- Where the line entry -> L leaves the solid it entered at entry (pba_wall_prop_exit), read by point contents
+-- (they see static props, which a trace started inside one does not leave: AllSolid): stepped every
+-- SOLID_EXIT_STEP u, then bisected. nil when L is in the solid, or the solid runs past SOLID_EXIT_MAX u.
+local SOLID_EXIT_STEP, SOLID_EXIT_MAX, SOLID_EXIT_BISECT = 4, 512, 5
+function P.SolidExit(entry, dir, L, mask)
+	if bit.band(util.PointContents(L), mask) ~= 0 then return nil end
+	local len = math.min(entry:Distance(L), SOLID_EXIT_MAX)
+	local a = 0.5 -- (inside: the trace started there)
+	local t = a
+	while t < len do
+		t = math.min(t + SOLID_EXIT_STEP, len)
+		if bit.band(util.PointContents(entry + dir * t), mask) == 0 then
+			local b = t -- a: in the solid, b: out
+			for _ = 1, SOLID_EXIT_BISECT do
+				local m = (a + b) * 0.5
+				if bit.band(util.PointContents(entry + dir * m), mask) == 0 then b = m else a = m end
+			end
+			return entry + dir * b
+		end
+		a = t
+	end
+	return nil
+end
+
 --- Walls crossed by the straight line S -> L, traced from S only (see P.Walls). lisAt: the listener's end of
 -- the line, S or L (pba_listener_object: the object holding it is no wall; the line's other end is the
 -- source's, P.SourceObject).
@@ -474,7 +498,13 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 			exit = (back.Hit and not back.StartSolid) and back.HitPos or entry
 		elseif inside.StartSolid then
 			if inside.AllSolid or inside.FractionLeftSolid >= 1 then
-				exit = L -- listener inside solid: give up on this wall
+				-- pba_wall_prop_exit: a trace started inside a static prop reports AllSolid (it never reports where
+				-- it leaves the prop), not only one whose end is in the solid. Read as the latter, the prop's wall
+				-- ran to the end of the line and hid every wall behind it (gm_cozyforestcabin: a bundle line 186 u
+				-- of "**studio**", dropped by the native backend, so paid nothing: 7.0 dB through three walls, 16 dB
+				-- in 1 u)
+				exit = (inside.AllSolid and A.On(cfg, "wall_prop_exit") and P.SolidExit(entry, dir, L, insideTr.mask)) or L
+				-- (else: listener inside solid, give up on this wall)
 			else
 				local inStart = P.SCR.step(P.SCR.wallsHalf, entry, dir, 0.5)
 				exit = P.SCR.lerp(Vector(), inStart, L, inside.FractionLeftSolid)
