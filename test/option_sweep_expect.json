@@ -383,6 +383,10 @@
   "pos0": "differs",
   "why": "bundle of lines for the transmission"
  },
+ "wall_prop_exit": {
+  "pos0": "same",
+  "why": "needs a line through a static prop: the sweep's generated maps have none (test cabin_radio)"
+ },
  "trans_bundle_mid_leaf": {
   "pos0": "same",
   "why": "needs a bundle line bending inside a shut door leaf: not met (test bundle_leaf_once)"
