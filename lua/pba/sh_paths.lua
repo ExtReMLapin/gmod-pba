@@ -91,20 +91,31 @@ end
 -- The entries live in parallel arrays (entry k: its six numbers, its answer, the next entry of its bucket or false),
 -- reused after each emptying: a table per entry was a quarter of pba's garbage while far sounds were re-evaluated
 -- (a moving listener's segments are new ones: one entry per trace; gm_cozyforestcabin).
+-- The buckets are arrays too (bh: an entry, bg: the emptying it belongs to), indexed by the hash's bits: emptying is a
+-- new number (cur), not a new table. The former head table, made anew at each emptying and grown back to `limit` keys,
+-- was 21 % of the sampled time on gm_converted_apartment and 0.3-0.55 MB/s of garbage.
 function P.WorldSegMemo(fn, limit)
-	local t, n, gen, TL, TH, tg = {}, 0, nil, nil, nil, nil
+	local n, gen, TL, TH, tg, cur = 0, nil, nil, nil, nil, 0
 	local e1, e2, e3, e4, e5, e6, er, en = {}, {}, {}, {}, {}, {}, {}, {}
+	local size = 1
+	while size < limit do size = size * 2 end
+	local mask = size - 1
+	local bh, bg = {}, {}
+	for i = 1, size do bh[i], bg[i] = 0, 0 end
+	local band, bxor, rshift, tobit, floor = bit.band, bit.bxor, bit.rshift, bit.tobit, math.floor
 	return function(a, b, tag)
 		local ul, uh = util.TraceLine, util.TraceHull
 		if gen ~= P.worldGen or TL ~= ul or TH ~= uh or tg ~= tag or n >= limit then
-			t, n, gen, TL, TH, tg = {}, 0, P.worldGen, ul, uh, tag
+			n, gen, TL, TH, tg, cur = 0, P.worldGen, ul, uh, tag, cur + 1
 		end
 		local ax, ay, az = a:Unpack()
 		local bx, by, bz = b:Unpack()
 		local h = ax + ay * 1.7 + az * 2.9 + bx * 4.3 + by * 6.1 + bz * 8.7
-		if h ~= h then return fn(a, b) end
-		local e = t[h]
-		while e do
+		if h ~= h or h == math.huge or h == -math.huge then return fn(a, b) end
+		local k = tobit(floor(h * 8) % 4294967296)
+		local s = band(bxor(k, rshift(k, 15)), mask) + 1
+		local e = bg[s] == cur and bh[s] or 0
+		while e > 0 do
 			if same(e1[e], ax) and same(e2[e], ay) and same(e3[e], az) and same(e4[e], bx) and same(e5[e], by) and same(e6[e], bz) then
 				return er[e]
 			end
@@ -112,8 +123,8 @@ function P.WorldSegMemo(fn, limit)
 		end
 		local r = fn(a, b)
 		n = n + 1
-		e1[n], e2[n], e3[n], e4[n], e5[n], e6[n], er[n], en[n] = ax, ay, az, bx, by, bz, r, t[h] or false
-		t[h] = n
+		e1[n], e2[n], e3[n], e4[n], e5[n], e6[n], er[n], en[n] = ax, ay, az, bx, by, bz, r, bg[s] == cur and bh[s] or 0
+		bh[s], bg[s] = n, cur
 		return r
 	end
 end

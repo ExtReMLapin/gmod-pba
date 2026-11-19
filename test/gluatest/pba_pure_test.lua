@@ -1835,14 +1835,31 @@ local SUITE = {
 			collectgarbage("restart")
 			local perEntry = (k1 - k0) * 1024 / 4000
 			print(string.format("[pba test] WorldSegMemo garbage per new entry: %.0f bytes", perEntry))
-			-- (the head table's growth stays: a hash node per bucket)
-			expect(perEntry < 64).to.beTrue()
+			-- (the buckets are arrays emptied by a number: nothing per entry; the former head table, made anew at each
+			-- emptying, was 25 bytes per entry)
+			expect(perEntry < 2).to.beTrue()
 			-- answers unchanged: hits give the kept answer, the function is not called again
 			local c0 = calls
 			a:SetUnpacked(2e5 + 3999, 1999.5, 3) -- (kept after the last emptying)
 			b:SetUnpacked(7998, 2e5 - 3999, 7)
 			expect(memo(a, b)).to.equal(false)
 			expect(calls).to.equal(c0)
+			-- emptied by a world change (a door state, P.worldGen): nothing made either, and the answer is asked again
+			local g0 = P.worldGen
+			collectgarbage("stop")
+			local w0 = collectgarbage("count")
+			P.worldGen = (P.worldGen or 0) + 1
+			fill(3e5)
+			local w1 = collectgarbage("count")
+			collectgarbage("restart")
+			expect((w1 - w0) * 1024 / 4000 < 2).to.beTrue()
+			local c1 = calls
+			memo(a, b) -- (the last segment of that fill: kept)
+			expect(calls).to.equal(c1)
+			P.worldGen = P.worldGen + 1
+			memo(a, b) -- (emptied: asked again)
+			expect(calls).to.equal(c1 + 1)
+			P.worldGen = g0
 		end },
 		{ name = "Probe tighten: its bisections make no garbage per step (three new Vectors a step were half of pba's garbage with a far sound re-evaluated, gm_cozyforestcabin)", func = function()
 			-- a pillar between a and b (world box 640..680 x 200..300); the stub traces write their shared output table
