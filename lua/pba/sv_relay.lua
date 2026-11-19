@@ -295,8 +295,9 @@ function A.RelaySend(data, pos, plys, echoOnly)
 	net.Send(plys)
 end
 
---- One explicit stop (pba_snd_stop) of entity idx's `name` on chan to plys; unreliable: in order with the relays.
-local function sendStop(idx, name, chan, plys, unreliable)
+--- One stop (pba_snd_stop) of entity idx's `name` on chan to plys; unreliable: in order with the relays.
+-- st: the start time (SoundTime) of the sound that replaces (the channel rule's cut); nil / 0: an explicit stop, at once.
+local function sendStop(idx, name, chan, plys, unreliable, st)
 	net.Start("pba_snd_stop", unreliable)
 	net.WriteUInt(idx, 16)
 	net.WriteInt(chan or CHAN_AUTO, 10) -- CHAN_AUTO (0): any channel
@@ -309,7 +310,9 @@ local function sendStop(idx, name, chan, plys, unreliable)
 		net.WriteUInt(n, 8)
 		for i = 1, n do net.WriteString(waves[i]) end
 	end
-	net.WriteBool(false) -- (no replacing sound: an explicit stop, at once)
+	local stamped = st ~= nil and st ~= 0
+	net.WriteBool(stamped)
+	if stamped then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
 	net.Send(plys)
 end
 
@@ -320,6 +323,16 @@ end
 -- the reliable one cannot be lost, the unreliable one is read behind the copy (and if that packet is lost, so is the copy
 -- it carried). A second stop of a stopped sound does nothing. Same for the channel rule's cut (A.CutChannel).
 local STOP_BOTH_S = 1
+
+--- Adds player p, relayed a copy at time t, to the list `recent` of the stop's second (unreliable) stream when
+-- pba_stop_both is on (`both`) and that copy is at most STOP_BOTH_S old; returns the list (nil while empty).
+local function noteRecent(recent, both, now, t, p)
+	if both and now - t <= STOP_BOTH_S then
+		recent = recent or {}
+		recent[#recent + 1] = p
+	end
+	return recent
+end
 
 --- The engine stopped `name` on entity e (chan: only that channel's copies; nil, any): clients that got
 -- relayed copies stop theirs. except: players left out (set).
@@ -344,10 +357,7 @@ function A.RelayStop(e, name, chan, except)
 					behind[#behind + 1] = p
 				else
 					plys[#plys + 1] = p
-					if both and now - t <= STOP_BOTH_S then
-						recent = recent or {}
-						recent[#recent + 1] = p
-					end
+					recent = noteRecent(recent, both, now, t, p)
 				end
 			end
 		else
@@ -403,27 +413,15 @@ function A.CutChannel(data, idx, chan)
 			-- (a copy is never longer than max_duration; 30 s as for recentTo)
 			if IsValid(p) and now - t < 30 then
 				plys[#plys + 1] = p
-				if both and now - t <= STOP_BOTH_S then
-					recent = recent or {}
-					recent[#recent + 1] = p
-				end
+				recent = noteRecent(recent, both, now, t, p)
 			end
 		end
 	end
 	if next(held) == nil then rc[chan] = nil end
 	if #plys == 0 then return end
 	local st = A.On(A.cfg, "soundtime") and data.SoundTime or 0
-	local function cut(to, unreliable)
-		net.Start("pba_snd_stop", unreliable)
-		net.WriteUInt(idx, 16)
-		net.WriteInt(chan, 10)
-		net.WriteUInt(0, 8) -- every name
-		net.WriteBool(st ~= 0)
-		if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
-		net.Send(to)
-	end
-	cut(plys, false)
-	if recent then cut(recent, true) end
+	sendStop(idx, nil, chan, plys, false, st) -- (every name)
+	if recent then sendStop(idx, nil, chan, recent, true, st) end
 	A.stats.chanCuts = (A.stats.chanCuts or 0) + 1
 end
 
