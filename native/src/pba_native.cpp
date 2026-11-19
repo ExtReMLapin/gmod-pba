@@ -27,7 +27,7 @@
 //     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
-//     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k),
+//     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k), SetSlotFallback(on),
 //     SetSourceSlots(n) -> n, SetSourceAccum(radius, passes) -> radius, passes, SrcSlotStats() -> table
 //     SourceReflect: binds a voice to a source reverb slot (reflections simulated at pos, Vector,
 //     Source units) that the voice feeds at srcSend (linear, absent = keep; 0 at bind) on top of its
@@ -2378,6 +2378,14 @@ LUA_FUNCTION(SetSourceReverbScale) {
 	return 0;
 }
 
+// SetSlotFallback(on): while a voice's source reverb slot is not simulated yet, its share goes to the room bus (the reverb at
+// the listener) at no more than the voice's gain at the listener (true, default; pba_native_slot_fallback), or at the slot
+// send, the source's 1 m power (false: the behaviour before)
+LUA_FUNCTION(SetSlotFallback) {
+	render::SetSlotFallbackGain(LUA->GetBool(1));
+	return 0;
+}
+
 // StreamFilter(channel, eqL, eqM, eqH) -> true | false, reason : 3-band EQ on the BASS channel of
 // an IGModAudioChannel (sound.PlayURL / PlayFile of any addon), see streams.cpp
 LUA_FUNCTION(StreamFilter) {
@@ -3074,6 +3082,8 @@ GMOD_MODULE_OPEN() {
 	LUA->SetField(-2, "SetSourceSlots");
 	LUA->PushCFunction(SetSourceReverbScale);
 	LUA->SetField(-2, "SetSourceReverbScale");
+	LUA->PushCFunction(SetSlotFallback);
+	LUA->SetField(-2, "SetSlotFallback");
 	LUA->PushCFunction(SrcSlotStats);
 	LUA->SetField(-2, "SrcSlotStats");
 	LUA->PushCFunction(SetSourceAccum);

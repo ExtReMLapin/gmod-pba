@@ -380,6 +380,7 @@ constexpr float kSrcBlendStep = (float)kBlock / (0.2f * kRate); // full swing in
 std::vector<float> g_slotW(kBlock); // one slot's W-channel output this block (both banks summed)
 float g_wetRoom = 0, g_wetEcho = 0;
 float g_srcScale = 1; // source reverb level, relative to the room reverb's wet
+bool g_slotFbGain = true; // a waiting slot's share on the room bus: the voice's gain (true) or the slot send (SetSlotFallbackGain)
 bool g_paused = false;
 float g_uw = 0, g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: target, current mix, LP states
 float g_roomRt[3] = {0, 0, 0};
@@ -527,6 +528,7 @@ struct MixSettings {
 	float wetRoom = 0, wetEcho = 0;
 	float diffuseSend = 1.5f, diffuseRtRef = 1.0f;
 	float srcScale = 1;
+	bool slotFbGain = true; // SetSlotFallbackGain
 	float limFastMs = 6.0f, limSlowMs = 50.0f, limSlowK = 3.0f;
 	bool paused = false;
 	bool dfOn = true;
@@ -1311,11 +1313,17 @@ void RenderBlock() {
 		const int srcTo = srcBus ? v.srcSlot : -1;
 		const float q1 = srcBus ? v.srcSend : 0;
 		const float q0 = v.srcSendCur < 0 ? q1 : v.srcSendCur;
-		// bound but not simulated yet: the slot's share goes to the room bus meanwhile, at the slot's
-		// level (wet room x g_srcScale). Lua lowers the room send of a bound voice, so without it a
-		// one-shot started dry for the 100-300 ms of its first simulation (or stayed dry entirely).
-		// It crossfades into the slot over the block where the response becomes ready.
-		const float f1 = srcBound && !srcBus ? v.srcSend * g_srcScale : 0;
+		// bound but not simulated yet: the slot's share goes to the room bus meanwhile. Lua lowers the room
+		// send of a bound voice, so without it a one-shot started dry for the 100-300 ms of its first
+		// simulation (or stayed dry entirely). It crossfades into the slot over the block where the response
+		// becomes ready. The room bus is the reverb simulated AT the listener: what it may take is what Lua
+		// gives a voice without a slot, its gain at the listener (the slot send, never more), the room send
+		// included. The slot send itself is the source's power at 1 m: fed into the room bus it placed the
+		// source at the listener (a far pod's stop sound on d3_citadel_01: a 30-60 ms burst 22 dB over the
+		// clear-sight direct at its true distance, at every new slot place). g_slotFbGain false: the slot send
+		// (wet room x g_srcScale), as before.
+		const float f1 = !(srcBound && !srcBus) ? 0
+			: g_slotFbGain ? std::max(std::min(v.srcSend * g_srcScale, g1) - s1, 0.0f) : v.srcSend * g_srcScale;
 		const float f0 = v.srcFbCur < 0 ? f1 : v.srcFbCur;
 		v.srcFbCur = f1;
 		// The source slot gets m, the voice's signal BEFORE the direct path's EQ: the simulation from
@@ -1674,6 +1682,7 @@ void ApplyMix(const MixSettings& m) {
 	g_diffuseSend = m.diffuseSend;
 	g_diffuseRtRef = m.diffuseRtRef;
 	g_srcScale = m.srcScale;
+	g_slotFbGain = m.slotFbGain;
 	g_dfOn = m.dfOn;
 	if (m.limiterMode != g_limiterMode) g_limiter.Reset(); // (no stale frames of an earlier run in the delay line)
 	g_limiterMode = m.limiterMode;
@@ -2540,6 +2549,12 @@ void SrcSlotStates(SrcSlotState* out, double* seconds) {
 void SetSourceReverbScale(float k) {
 	CtlCall cc;
 	g_c.mix.srcScale = std::clamp(k, 0.0f, 16.0f);
+	SendMix();
+}
+
+void SetSlotFallbackGain(bool on) {
+	CtlCall cc;
+	g_c.mix.slotFbGain = on;
 	SendMix();
 }
 

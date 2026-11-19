@@ -247,6 +247,10 @@
   "pos0": "hook",
   "why": "native module render (needs the module and native rendering)"
  },
+ "native_slot_fallback": {
+  "pos0": "hook",
+  "why": "native module render: the room bus share of a source slot not simulated yet (render.cpp), outside P.Compute; covered by the native test pba_slot_fallback_test"
+ },
  "native_stereo_width": {
   "pos0": "hook",
   "why": "native module stereo"
