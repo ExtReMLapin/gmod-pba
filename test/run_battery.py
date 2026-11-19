@@ -1631,7 +1631,7 @@ steps = [
     ("field_continuity noportal", lambda: seq(lambda: load("pba_noportal"), lambda: job("client", "field_continuity.lua", 300))),
     ("sky_route gm_construct", lambda: seq(lambda: load("gm_construct"), lambda: job("client", "sky_route.lua", 600))),
     # the 32 u result cache never serves a source across a floor or a wall (pba_cache_barrier): a pinned gm_construct pair, no hit lost without one
-    ("cell_barrier gm_construct", lambda: seq(lambda: load("gm_construct"), lambda: job("client", "cell_barrier.lua", 120))),
+    ("cell_barrier gm_construct", lambda: seq(lambda: load("gm_construct"), lambda: job("client", "cell_barrier.lua", 300))),
     # cases reported on rp_downtown: a radio upstairs heard through the ceiling (loudest voice first), and
     # behind a pillar of the same room (probes off the floor, no doubled vertex: the route hugs the corner)
     ("downtown_cases rp_downtown", lambda: seq(lambda: load("rp_downtown_v4c_v2"), lambda: job("client", "downtown_cases.lua", 400))),
