@@ -2317,7 +2317,6 @@ local SUITE = {
 			local S, L = Vector(-2633.84, 299.1, 60), Vector(-3776, 224, 60)
 			local xs = { -3640, -3112, -2936 }
 			local perms = { { 1, 2, 3 }, { 1, 3, 2 }, { 2, 1, 3 }, { 2, 3, 1 }, { 3, 1, 2 }, { 3, 2, 1 } }
-			local cfg = setmetatable({ route_pos_straight = 1 }, { __index = CFG })
 			local seen = {}
 			for trial = 1, 20 do
 				local doors = {}
@@ -2329,8 +2328,8 @@ local SUITE = {
 				local leaves = {}
 				for _, k in ipairs(perms[(trial - 1) % 6 + 1]) do leaves[doors[k]] = true end
 				local bent = PR.RouteHeardPos({ edgePos = Vector(S), leaves = leaves },
-					{ S, Vector(-2934.87, 274.8, 43.82), Vector(-3121.75, 275.25, 40), Vector(-3520, 320, 48), L }, S, L, cfg)
-				local straight = PR.RouteHeardPos({ pos = Vector(S), leaves = leaves }, { S, L }, S, L, cfg)
+					{ S, Vector(-2934.87, 274.8, 43.82), Vector(-3121.75, 275.25, 40), Vector(-3520, 320, 48), L }, S, L)
+				local straight = PR.RouteHeardPos({ pos = Vector(S), leaves = leaves }, { S, L }, S, L)
 				seen[#seen + 1] = { bent.pos, straight.pos }
 			end
 			for _, s in ipairs(seen) do

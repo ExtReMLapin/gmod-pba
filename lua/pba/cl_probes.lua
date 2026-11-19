@@ -2076,18 +2076,18 @@ function PR.HeardLeaf(leaves, S, L)
 end
 
 --- Where a probe route p (its polyline pulled, S .. L) is heard from (pure): sets p.pos.
-function PR.RouteHeardPos(p, pulled, S, L, cfg)
+function PR.RouteHeardPos(p, pulled, S, L)
 	-- heard from its last corner ON the edge, not from its clearance vertex: two copies of one
 	-- route (from two probes the source sees) end on clearance vertices 60 u apart and the
 	-- voice's direction swung 14.5 degrees in a 4 u step of the source when the copy kept
 	-- changed (field_continuity); on the edge they meet
 	if #pulled >= 3 and p.edgePos then p.pos = p.edgePos end
-	-- pba_route_pos_straight: a route whose corners all came to lie on the line once refined (its last
-	-- corner on the edge is the source itself) is heard where its line passes its clearance vertex (the
+	-- a route whose corners all came to lie on the line once refined (its last corner on the edge is the
+	-- source itself) is heard where its line passes its clearance vertex (the
 	-- opening it goes through), not at the source: at the source, the listener-room send took the
 	-- source's own level as what enters the listener's space (rp_downtown's doorway: 12.5 dB in 4 u, the
 	-- route toggling between a corner at the jamb and none), and the direction swung by up to 177 deg
-	if #pulled >= 3 and A.On(cfg, "route_pos_straight") and p.pos and p.pos:DistToSqr(S) < 1 then
+	if #pulled >= 3 and p.pos and p.pos:DistToSqr(S) < 1 then
 		local v, ab = pulled[#pulled - 1], L - S
 		-- (its doorway's leaf when it has one: the vertex may be a probe deep in a room)
 		local ent = PR.HeardLeaf(p.leaves, S, L)
@@ -2420,7 +2420,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 					local p = A.Paths.EvalRoute(pulled, cfg)
 					p.probe = true
 					if hop then hopFade(p, hopW[inners.nodes[x]]) end
-					PR.RouteHeardPos(p, pulled, S, L, cfg)
+					PR.RouteHeardPos(p, pulled, S, L)
 					out[#out + 1] = p
 				end
 			end
@@ -2445,7 +2445,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 						local p = A.Paths.EvalRoute(pulled, cfg)
 						p.probe, p.alt = true, true
 						if hop then hopFade(p, hopW[n]) end
-						PR.RouteHeardPos(p, pulled, S, L, cfg)
+						PR.RouteHeardPos(p, pulled, S, L)
 						out[#out + 1] = p
 						break
 					end
