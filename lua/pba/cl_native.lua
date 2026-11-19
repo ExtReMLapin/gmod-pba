@@ -1666,7 +1666,7 @@ function N.UpdateFollowers(L)
 			-- the entity is gone: the engine plays its sound to the end where it was, so do we
 			N.follow[id] = nil
 		else
-			local S = A.SoundPos({ Entity = e, Channel = f.chan })
+			local S = A.EntSoundPos(e, f.chan)
 			local d = S:Distance(L)
 			local g = f.vol * N.PhysClear(f.lvl, d) * N.Directivity(e, L, f.chan, f.aim or nil) * A.cfg.native_gain
 			local l, m, h = N.VoiceEQ(0, d)

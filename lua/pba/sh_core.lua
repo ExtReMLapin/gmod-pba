@@ -930,38 +930,62 @@ function A.ShotWeapon(e, chan)
 	return nil
 end
 
+-- Per-frame memo of an entity's sound position (client): entity -> channel -> position, and the frame it was
+-- worked out in. A sound is placed several times a frame (its evaluation, its voice, the followers, the
+-- directivity...): a weapon's muzzle (two attachment lookups) was worked out about 6 times per shot. Within a
+-- frame the entities barely move: an NPC's mouth was seen 0.24 u off once in 11500 calls (its bones set up again
+-- between two hooks of a frame): pba_sound_pos_memo 0 works every call out afresh. The listener's own sound (centred
+-- on the view) is not memoised. The position returned is shared by the callers of the frame: read it, never change
+-- it in place.
+local posMemo = CLIENT and setmetatable({}, { __mode = "k" }) or nil
+local posMemoFrame = CLIENT and setmetatable({}, { __mode = "k" }) or nil
+local NOCHAN = -1
+
+local function entSoundPos(e, ch)
+	if (A.cfg.sound_origin or 1) >= 0.5 and not e:IsWorld() then
+		-- the shot of a weapon comes from its muzzle
+		local w = A.ShotWeapon(e, ch)
+		if w then return muzzlePos(w) end
+		-- a line from the mouth
+		if ch == CHAN_VOICE or ch == CHAN_VOICE2 then
+			local m = mouthPos(e)
+			if m then return m end
+		end
+		return engineOrigin(e)
+	end
+	if e:IsPlayer() or e:IsNPC() then return e:EyePos() end
+	return e:WorldSpaceCenter()
+end
+
+--- Where the sound of entity e on channel ch comes from (A.SoundPos without its data table). Nil when e is not valid.
+function A.EntSoundPos(e, ch)
+	if not IsValid(e) then return nil end
+	-- the local player's own sound played by the module (pba_native_own): centered, 1 unit ahead of the
+	-- ears (the engine plays the listener's own sounds unspatialized; at the ears the module would have
+	-- no direction), and following the view. His weapon's shots are his own sounds too.
+	if CLIENT and A.NativeOwn and A.NativeOwn() then
+		local lp = LocalPlayer()
+		local w, owner = A.ShotWeapon(e, ch)
+		if (e == lp or owner == lp) and A.HearsFromSelf(lp) then
+			local L, ang = A.ListenerPos()
+			if L then return L + ang:Forward() end
+		end
+	end
+	if not posMemo or (A.cfg.sound_pos_memo or 1) < 0.5 then return entSoundPos(e, ch) end
+	local k = ch or NOCHAN
+	local fr = FrameNumber()
+	local mf = posMemoFrame[e]
+	if mf and mf[k] == fr then return posMemo[e][k] end
+	if not mf then mf = {} posMemoFrame[e] = mf posMemo[e] = {} end
+	local p = entSoundPos(e, k ~= NOCHAN and k or nil)
+	mf[k], posMemo[e][k] = fr, p
+	return p
+end
+
 --- World position of a sound.
 function A.SoundPos(data)
 	if data.Pos then return data.Pos end
-	local e = data.Entity
-	if IsValid(e) then
-		-- the local player's own sound played by the module (pba_native_own): centered, 1 unit ahead of the
-		-- ears (the engine plays the listener's own sounds unspatialized; at the ears the module would have
-		-- no direction), and following the view. His weapon's shots are his own sounds too.
-		if CLIENT and A.NativeOwn and A.NativeOwn() then
-			local lp = LocalPlayer()
-			local w, owner = A.ShotWeapon(e, data.Channel)
-			if (e == lp or owner == lp) and A.HearsFromSelf(lp) then
-				local L, ang = A.ListenerPos()
-				if L then return L + ang:Forward() end
-			end
-		end
-		if (A.cfg.sound_origin or 1) >= 0.5 and not e:IsWorld() then
-			-- the shot of a weapon comes from its muzzle
-			local w = A.ShotWeapon(e, data.Channel)
-			if w then return muzzlePos(w) end
-			-- a line from the mouth
-			local ch = data.Channel
-			if ch == CHAN_VOICE or ch == CHAN_VOICE2 then
-				local m = mouthPos(e)
-				if m then return m end
-			end
-			return engineOrigin(e)
-		end
-		if e:IsPlayer() or e:IsNPC() then return e:EyePos() end
-		return e:WorldSpaceCenter()
-	end
-	return nil
+	return A.EntSoundPos(data.Entity, data.Channel)
 end
 
 -- ------------------------------------------------------------------ map lifecycle
