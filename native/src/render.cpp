@@ -242,7 +242,7 @@ struct Reflection {
 	// fed but not convolved (a source slot bank weighted out): its input history is missing, so it
 	// restarts from silence when weighted in again instead of replaying input from long ago
 	bool stale = false;
-	int flushLeft = -1; // (g_bankFlush) weighted out: blocks of silence still to convolve before it is clean; -1: not flushing
+	int flushLeft = -1; // (g_set.bankFlush) weighted out: blocks of silence still to convolve before it is clean; -1: not flushing
 	// long-window reverb times of this slot's own position (SetSlotReverbTimes), and the ones its last block used
 	std::atomic<float> rtLong[3] = {0, 0, 0};
 	std::atomic<bool> rtLongOn{false};
@@ -278,22 +278,12 @@ std::atomic<bool> g_hqDecode{true};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Audio thread state: written and read by the audio thread only (Callback -> ApplyCommands, RenderBlock), set up by
-// Start before the device runs. The settings below are replicas of the control side's (Control::mix / lis), applied
-// from the command queue at the start of a block.
+// Start before the device runs. The listener below and the settings (g_set, after MixSettings) are replicas of the
+// control side's (Control::lis / mix), applied from the command queue at the start of a block.
 IPLVector3 g_lisPos{}, g_lisAhead{0, 0, -1}, g_lisUp{0, 1, 0};
 float g_master = 1;
-int g_outMode = 0; // 0 binaural, 1 panning
-// Share of the HRTF in the binaural output (Steam Audio's spatialBlend of the direct path: 1 = the HRTF alone, the
-// default and the former behaviour; 0 = the mono sound on both ears). The default HRTF colours a source in the median
-// plane (6-16 kHz 4 to 7 dB under the file's own spectrum in front and behind, +2 dB at 2-6 kHz), where the engine's
-// panning leaves the spectrum alone; the blend gives some of that timbre back for less precise localisation.
-std::atomic<float> g_hrtfBlend{1.0f};
-std::atomic<float> g_pitchGlideMs{0.0f}; // SetPitchGlide
 IPLVector3 g_lastDir{};                // last binaural direction computed (debug)
 constexpr int kMaxLag = 48;           // +-1 ms at 48 kHz
-// the debug meters (g_xc, dbgIn/L/R) run only once Debug() was called (a test reads them): the ITD
-// cross-correlation alone is ~40 000 multiply-adds per block on the audio thread
-bool g_debugOn = false;
 
 // audio-thread scratch buffers
 IPLAudioBuffer g_mono{}, g_mono2{}, g_stereo{}, g_amb{}, g_ambTmp{}, g_ambOut{};
@@ -304,17 +294,6 @@ IPLAudioBuffer g_mono3{}, g_mono4{}, g_stereo2{};
 IPLAudioBuffer g_monoP{}, g_stereoP{};
 IPLAmbisonicsDecodeEffect g_decode = nullptr;
 Reflection g_room;                 // reverb at the listener, fed by every voice (send bus = g_room.in)
-// extra room-reverb send of a diffuse voice: send x (1 + g_diffuseSend x share). 1.5 keeps the total
-// (direct + reverb) about constant in a typical room (measured on pba_demo: direct x 0.11 at share 0.85)
-float g_diffuseSend = 1.5f;
-// The diffuse redistribution is energy-neutral only where the listener's room gives the energy back:
-// outdoors (short or no tail) the share taken off the direct was simply lost (gm_melancholia under the
-// open sky: -8 dB of direct for a winding route). The share is scaled by the room's mid-band reverb time
-// over this reference (s): 1 at and above it (a room: unchanged), 0 with no tail. 0 = always 1 (former).
-float g_diffuseRtRef = 1.0f;
-bool g_difSmooth = true; // SetDiffuseSmooth: the diffuse share ramped over the block (Voice::difCur)
-bool g_bankFlush = true; // SetSlotBankFlush: a source slot bank weighted out is flushed with silence, not reset (ApplyReflection)
-bool g_eqCont = true;    // SetEqContinuous: a voice's direct EQ, once used, is applied every block (Voice::eqUsed)
 Reflection g_echo[kEchoSlots];     // per-source reflections
 Reflection g_src[kSrcSlotsMax];    // source reverb slots (shared by position, see kSrcSlotsMax), bank 0
 Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same input as g_src[k])
@@ -326,20 +305,9 @@ Reflection g_srcB[kSrcBankB];      // bank 1 of the first kSrcBankB slots (same 
 float g_srcW[kSrcSlotsMax][2], g_srcT[kSrcSlotsMax][2];
 constexpr float kSrcBlendStep = (float)kBlock / (0.2f * kRate); // full swing in 0.2 s
 std::vector<float> g_slotW(kBlock); // one slot's W-channel output this block (both banks summed)
-float g_wetRoom = 0, g_wetEcho = 0;
-float g_srcScale = 1; // source reverb level, relative to the room reverb's wet
-bool g_slotFbGain = true; // a waiting slot's share on the room bus: the voice's gain (true) or the slot send (SetSlotFallbackGain)
-bool g_paused = false;
-float g_uw = 0, g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: target, current mix, LP states
+float g_uwCur = 0, g_uwL = 0, g_uwR = 0; // under water: current mix, LP states (the target: g_set.uw)
 float g_roomRt[3] = {0, 0, 0};
 std::vector<float> g_mix(kBlock * 2);
-// mix quality (SetMixQuality): the output stage (limiter / legacy soft clip from 0.8 / hard clip); the voices'
-// windowed-sinc reader (true) or linear interpolation (false)
-bool g_limiterPre = false; // the output stage works before the master volume (SetMixQuality premaster)
-int g_limiterMode = 1; // 0 legacy soft clip, 1 limiter, 2 hard clip at full scale (what the engine's int16 mix does)
-bool g_hqResample = true;
-float g_streamFade = 0.005f * 48000; // output samples of the fade in / out of a captured stream's edges (0 = none)
-float g_limFastMs = 6.0f, g_limSlowMs = 50.0f, g_limSlowK = 3.0f; // limiter release tuning (see Limiter)
 std::vector<float> g_side(kBlock); // the side channel of the voice being rendered (stereo sounds)
 // largest lateral shift of the two channels of a stereo-width voice (tangent of the angle each one moves
 // away from the source seen straight ahead: tan 30 deg, a stereo speaker pair)
@@ -507,25 +475,47 @@ enum : uint8_t {
 	kResetPath = 4,  // same, its path effect
 	kSelInit = 8,    // SetVoiceStereo before the voice's first block: start at the new channel mix (no ramp)
 };
+// The renderer's settings: the control side's copy (Control::mix, changed by the Set* calls) is sent whole (Op::Mix) and
+// becomes the audio thread's (g_set) at the start of the next block.
 struct MixSettings {
-	int outMode = 0;
+	int outMode = 0; // 0 binaural, 1 panning
+	// the output stage (SetMixQuality): 0 legacy soft clip from 0.8, 1 limiter, 2 hard clip at full scale (what the
+	// engine's int16 mix does)
 	int limiterMode = 1;
-	float uw = 0;
+	float uw = 0; // under water: target of the low-pass mix
 	float wetRoom = 0, wetEcho = 0;
-	float diffuseSend = 1.5f, diffuseRtRef = 1.0f;
-	bool difSmooth = true; // SetDiffuseSmooth
-	bool eqCont = true;    // SetEqContinuous
-	bool bankFlush = true; // SetSlotBankFlush
-	float srcScale = 1;
-	bool slotFbGain = true; // SetSlotFallbackGain
-	float limFastMs = 6.0f, limSlowMs = 50.0f, limSlowK = 3.0f;
+	// extra room-reverb send of a diffuse voice: send x (1 + diffuseSend x share). 1.5 keeps the total
+	// (direct + reverb) about constant in a typical room (measured on pba_demo: direct x 0.11 at share 0.85)
+	float diffuseSend = 1.5f;
+	// The diffuse redistribution is energy-neutral only where the listener's room gives the energy back:
+	// outdoors (short or no tail) the share taken off the direct was simply lost (gm_melancholia under the
+	// open sky: -8 dB of direct for a winding route). The share is scaled by the room's mid-band reverb time
+	// over this reference (s): 1 at and above it (a room: unchanged), 0 with no tail. 0 = always 1 (former).
+	float diffuseRtRef = 1.0f;
+	bool difSmooth = true;  // SetDiffuseSmooth: the diffuse share ramped over the block (Voice::difCur)
+	bool eqCont = true;     // SetEqContinuous: a voice's direct EQ, once used, is applied every block (Voice::eqUsed)
+	bool bankFlush = true;  // SetSlotBankFlush: a source slot bank weighted out is flushed with silence, not reset (ApplyReflection)
+	float srcScale = 1;     // source reverb level, relative to the room reverb's wet
+	bool slotFbGain = true; // a waiting slot's share on the room bus: the voice's gain (true) or the slot send (SetSlotFallbackGain)
+	float limFastMs = 6.0f, limSlowMs = 50.0f, limSlowK = 3.0f; // limiter release tuning (see Limiter)
 	bool paused = false;
-	bool dfOn = true;
-	bool limiterPre = false;
-	bool hqRead = true;
+	bool dfOn = true;        // the diffuse-field equaliser of the reverb bus's binaural decode (SetDiffuseFieldEq)
+	bool limiterPre = false; // the output stage works before the master volume (SetMixQuality premaster)
+	bool hqRead = true;      // the voices' windowed-sinc reader (SetMixQuality hqResample), else linear interpolation
+	// the debug meters (g_xc, dbgIn/L/R) run only once Debug() was called (a test reads them): the ITD
+	// cross-correlation alone is ~40 000 multiply-adds per block on the audio thread
 	bool debugOn = false;
-	float streamFadeMs = 5.0f; // fade of a captured stream's edges (SetStreamFade)
+	float streamFadeMs = 5.0f; // fade of a captured stream's edges (SetStreamFade; 0 = none)
+	// Share of the HRTF in the binaural output (Steam Audio's spatialBlend of the direct path: 1 = the HRTF alone, the
+	// default and the former behaviour; 0 = the mono sound on both ears). The default HRTF colours a source in the median
+	// plane (6-16 kHz 4 to 7 dB under the file's own spectrum in front and behind, +2 dB at 2-6 kHz), where the engine's
+	// panning leaves the spectrum alone; the blend gives some of that timbre back for less precise localisation.
+	float hrtfBlend = 1.0f;
+	float pitchGlideMs = 0.0f; // SetPitchGlide
 };
+MixSettings g_set; // audio thread: the settings in force (ApplyMix)
+// output samples of the fade in / out of a captured stream's edges (0 = none)
+inline float StreamFadeSamples() { return g_set.streamFadeMs * 0.001f * 48000.0f; }
 struct ListenerState {
 	IPLVector3 pos{}, ahead{0, 0, -1}, up{0, 1, 0};
 	float master = 1;
@@ -698,7 +688,6 @@ struct DfState {
 	float w[2][kDfTaps - 1 + kBlock] = {};
 };
 DfState g_dfState;
-bool g_dfOn = true; // audio thread (the control side's: Control::mix.dfOn)
 
 void Fft(std::vector<std::complex<double>>& a, bool inverse) {
 	const size_t n = a.size();
@@ -952,7 +941,7 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	if (rtOut)
 		for (int b = 0; b < 3; ++b) rtOut[b] = rt[b];
 	if (wet <= 0 || over) return;
-	// weighted out (a source slot bank the blend left) while it still rings. g_bankFlush: it goes on being convolved, with
+	// weighted out (a source slot bank the blend left) while it still rings. g_set.bankFlush: it goes on being convolved, with
 	// silence and its output discarded, until its tail is over; weighted in again meanwhile it restarts from that silence
 	// with its impulse response kept. Otherwise (the former way) it is left as it is, marked stale, and reset when weighted
 	// in again; that reset also drops the response the effect holds (see above): a bank back without a new simulation of
@@ -960,7 +949,7 @@ void ApplyReflection(Reflection& r, float wet, float* rtOut = nullptr, int minTa
 	bool flush = false;
 	if (w0 <= 0 && w1 <= 0) {
 		if (r.silent) return;
-		if (!g_bankFlush) {
+		if (!g_set.bankFlush) {
 			r.stale = true;
 			return;
 		}
@@ -1035,10 +1024,10 @@ inline float SoftClip(float x) {
 // frames (bit for bit: the gain is exactly 1). Over it the gain has already come down along a linear ramp over the
 // kLimLook frames before the peak (no step, no clipping). The sample peak after the gain is <= kLimCeil by
 // construction (the gain at a frame is <= ceiling / peak of that frame).
-// Release, programme dependent, on the deficit d = 1 - gain: a fast part (time constant g_limFastMs) lets the
+// Release, programme dependent, on the deficit d = 1 - gain: a fast part (time constant limFastMs) lets the
 // gain recover right after an isolated spike (the HRTF's ringing on a full-scale shot is a few frames wide:
-// holding its gain reduction for 60 ms took 3.5 dB off the whole shot), and a slow part (g_limSlowK x the
-// g_limSlowMs average of the deficit, never more than its slow peak hold) holds the gain down while peaks keep coming (a loud low tone, whose peaks
+// holding its gain reduction for 60 ms took 3.5 dB off the whole shot), and a slow part (limSlowK x the
+// limSlowMs average of the deficit, never more than its slow peak hold) holds the gain down while peaks keep coming (a loud low tone, whose peaks
 // every 10 ms would otherwise modulate the gain at the tone's own period: harmonics). Both only deepen the
 // reduction beyond what the lookahead needs, so the ceiling holds.
 constexpr int kLimLook = 96; // 2 ms at 48 kHz
@@ -1077,13 +1066,13 @@ struct Limiter {
 		}
 		// kept as deficits: near 1 a float gain stops moving (the step is below its resolution)
 		const float dInst = 1.0f - g;
-		const float cf = std::exp(-1.0f / (g_limFastMs * 0.001f * (float)kRate));
-		const float as = 1.0f - std::exp(-1.0f / (g_limSlowMs * 0.001f * (float)kRate));
-		const float cs = std::exp(-1.0f / (g_limSlowMs * 0.001f * (float)kRate));
+		const float cf = std::exp(-1.0f / (g_set.limFastMs * 0.001f * (float)kRate));
+		const float as = 1.0f - std::exp(-1.0f / (g_set.limSlowMs * 0.001f * (float)kRate));
+		const float cs = std::exp(-1.0f / (g_set.limSlowMs * 0.001f * (float)kRate));
 		dFast = std::max(dInst, dFast * cf);
 		dAvg += (dInst - dAvg) * as;
 		dHold = std::max(dInst, dHold * cs);
-		float d = std::max(dFast, std::min(g_limSlowK * dAvg, dHold));
+		float d = std::max(dFast, std::min(g_set.limSlowK * dAvg, dHold));
 		if (d < 1e-6f) { d = 0; dFast = 0; if (dAvg < 1e-6f) dAvg = 0; if (dHold < 1e-6f) dHold = 0; }
 		gain = 1.0f - d;
 		minGain = std::min(minGain, gain);
@@ -1127,7 +1116,7 @@ void RenderBlock() {
 		if (!v.alive) continue;
 		// game paused: a voice the engine would pause feeds nothing and stays where it is (a stopped one
 		// still fades out: its slot must come back)
-		if (g_paused && v.pausable && !v.dying) {
+		if (g_set.paused && v.pausable && !v.dying) {
 			v.wasPaused = true;
 			continue;
 		}
@@ -1155,7 +1144,7 @@ void RenderBlock() {
 		// from the end of the last block (a time constant: one value per game frame is a staircase of pitch steps),
 		// moved sample by sample from `rate0` to `rate1`
 		float rate0 = v.rate, rate1 = v.rate;
-		const float glideMs = g_pitchGlideMs.load(std::memory_order_relaxed);
+		const float glideMs = g_set.pitchGlideMs;
 		if (glideMs > 0 && !v.dying) {
 			if (v.rateCur < 0) v.rateCur = v.rate;
 			rate0 = v.rateCur;
@@ -1188,21 +1177,21 @@ void RenderBlock() {
 			if (!v.primed && (avail >= target || closed)) { // (closed: drain what is left)
 				v.primed = true;
 				// the start, or the return from an underrun: the stream is at some point of its waveform, a step
-				// from the silence before it (a click). Ramped in over g_streamFade samples
-				v.fadeIn = (int)g_streamFade;
+				// from the silence before it (a click). Ramped in over StreamFadeSamples()
+				v.fadeIn = (int)StreamFadeSamples();
 			}
 			if (!v.primed) {
 				std::fill(m, m + kBlock, 0.0f);
 			} else {
 				const double adj = std::clamp((avail - target) / target * 0.01, -0.005, 0.005);
 				const double step = srcRate / kRate * (1.0 + adj) * (0.5 * ((double)rate0 + (double)rate1));
-				const bool hqStream = g_hqResample;
+				const bool hqStream = g_set.hqRead;
 				uint64_t r = v.sr;
 				const uint64_t w = b.w.load(std::memory_order_acquire);
 				const size_t ringSize = b.data.size();
-				// the fade out before an underrun / the end: over the last g_streamFade output samples' worth of
+				// the fade out before an underrun / the end: over the last StreamFadeSamples() output samples' worth of
 				// stream, in the stream's own samples (the data left to read, minus what the reader needs ahead)
-				const float fadeLen = g_streamFade;
+				const float fadeLen = StreamFadeSamples();
 				const double fadeSrc = fadeLen * srcRate / kRate * v.rate;
 				const double need = hqStream ? (closed ? 1.0 : (double)kIntHalf) : 1.0;
 				for (int i = 0; i < kBlock; ++i) {
@@ -1270,7 +1259,7 @@ void RenderBlock() {
 		if (st) std::fill(g_side.begin(), g_side.end(), 0.0f);
 		// a voice off its file's own speed (pitch, Doppler) or between two samples reads the 48 kHz copy through the
 		// windowed-sinc interpolator (SetMixQuality hqResample); at pitch 100 on a whole sample the sample itself
-		const bool hqRead = g_hqResample;
+		const bool hqRead = g_set.hqRead;
 		InterpLoop il;
 		il.loop = v.loop && len > 1;
 		il.wrapped = v.wrapped;
@@ -1363,10 +1352,10 @@ void RenderBlock() {
 		// stays dry; without it the cap let up to +20 dB of reverb through) (the slot send, never more), the room send
 		// included. The slot send itself is the source's power at 1 m: fed into the room bus it placed the
 		// source at the listener (a far pod's stop sound on d3_citadel_01: a 30-60 ms burst 22 dB over the
-		// clear-sight direct at its true distance, at every new slot place). g_slotFbGain false: the slot send
-		// (wet room x g_srcScale), as before.
+		// clear-sight direct at its true distance, at every new slot place). g_set.slotFbGain false: the slot send
+		// (wet room x g_set.srcScale), as before.
 		const float f1 = !(srcBound && !srcBus) ? 0
-			: g_slotFbGain ? std::max(std::min(v.srcSend * g_srcScale, g1 * v.fbWet) - s1, 0.0f) : v.srcSend * g_srcScale;
+			: g_set.slotFbGain ? std::max(std::min(v.srcSend * g_set.srcScale, g1 * v.fbWet) - s1, 0.0f) : v.srcSend * g_set.srcScale;
 		const float f0 = v.srcFbCur < 0 ? f1 : v.srcFbCur;
 		v.srcFbCur = f1;
 		// The source slot gets m, the voice's signal BEFORE the direct path's EQ: the simulation from
@@ -1408,17 +1397,17 @@ void RenderBlock() {
 			g_room.fed = true;
 		};
 		// diffuse energy (long winding path): the direct part gives way to the room reverb send, and
-		// its direction blurs (binaural spatial blend); the total energy is kept. With g_difSmooth the share moves from
+		// its direction blurs (binaural spatial blend); the total energy is kept. With g_set.difSmooth the share moves from
 		// the last block's to this one over the block, like the gain (taken whole, an Update from 0 to 0.85 dropped the
 		// direct sound by 8 dB in one sample); the spatial blend, one value per block, takes the block's mean share.
-		const float encl = g_diffuseRtRef > 0 ? std::clamp(g_roomRt[1] / g_diffuseRtRef, 0.0f, 1.0f) : 1.0f;
+		const float encl = g_set.diffuseRtRef > 0 ? std::clamp(g_roomRt[1] / g_set.diffuseRtRef, 0.0f, 1.0f) : 1.0f;
 		const float dif1 = v.diffuse * encl;
-		const float dif0 = g_difSmooth && v.difCur >= 0 ? v.difCur : dif1;
+		const float dif0 = g_set.difSmooth && v.difCur >= 0 ? v.difCur : dif1;
 		v.difCur = dif1;
 		const float dif = 0.5f * (dif0 + dif1);
 		const float directGain0 = v.own ? 1.0f : std::sqrt(std::max(1.0f - dif0, 0.0f));
 		const float directGain1 = v.own ? 1.0f : std::sqrt(std::max(1.0f - dif1, 0.0f));
-		const float sendBoost0 = 1.0f + g_diffuseSend * dif0, sendBoost1 = 1.0f + g_diffuseSend * dif1;
+		const float sendBoost0 = 1.0f + g_set.diffuseSend * dif0, sendBoost1 = 1.0f + g_set.diffuseSend * dif1;
 		// path / straight-line share (see Voice::pathMixCur): a voice given a path by Update fades
 		// from the straight line into it over one block, and back when Update drops the path
 		const float pw1 = v.hasSH && v.pathSlot >= 0 ? 1.0f : 0.0f;
@@ -1439,7 +1428,7 @@ void RenderBlock() {
 			for (int b = 0; b < 3; ++b) pp.eqCoeffs[b] = v.eq[b];
 			pp.shCoeffs = v.sh;
 			pp.order = 1;
-			pp.binaural = g_outMode == 0 ? IPL_TRUE : IPL_FALSE;
+			pp.binaural = g_set.outMode == 0 ? IPL_TRUE : IPL_FALSE;
 			pp.hrtf = g_hrtf;
 			pp.listener = lis;
 			pp.normalizeEQ = IPL_FALSE;
@@ -1462,10 +1451,10 @@ void RenderBlock() {
 			// EQ first (linear), then the gain and send ramps: one EQ pass serves both the direct
 			// path and the send (same level and EQ as gain-then-EQ)
 			IPLAudioBuffer* bin_in = &g_mono;
-			// skipped while every band is ~1 (no filtering to do); with g_eqCont a voice that has used it keeps it at every
+			// skipped while every band is ~1 (no filtering to do); with g_set.eqCont a voice that has used it keeps it at every
 			// block (at 1 the filters pass the signal and their state follows it): resumed after a skip, the effect started
 			// from the state and gain of its last use, possibly seconds old, a transient (-4 dB of error in that block)
-			if (v.eq[0] < 0.999f || v.eq[1] < 0.999f || v.eq[2] < 0.999f || (g_eqCont && v.eqUsed)) {
+			if (v.eq[0] < 0.999f || v.eq[1] < 0.999f || v.eq[2] < 0.999f || (g_set.eqCont && v.eqUsed)) {
 				v.eqUsed = true;
 				IPLDirectEffectParams dp{};
 				dp.flags = IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION; // used as the 3-band EQ
@@ -1481,11 +1470,11 @@ void RenderBlock() {
 			const IPLVector3 dir = iplCalculateRelativeDirection(g_ctx, v.pos, g_lisPos, g_lisAhead, g_lisUp);
 			g_lastDir = dir;
 			auto spatialise = [&](int slot, IPLVector3 d, IPLAudioBuffer* in, IPLAudioBuffer* out) {
-				if (g_outMode == 0) {
+				if (g_set.outMode == 0) {
 					IPLBinauralEffectParams bp{};
 					bp.direction = d;
 					bp.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
-					bp.spatialBlend = (1.0f - 0.8f * dif) * g_hrtfBlend.load(std::memory_order_relaxed); // diffuse: the direction blurs towards the centre
+					bp.spatialBlend = (1.0f - 0.8f * dif) * g_set.hrtfBlend; // diffuse: the direction blurs towards the centre
 					bp.hrtf = g_hrtf;
 					iplBinauralEffectApply(g_pool[slot].binaural, &bp, in, out);
 				} else {
@@ -1561,7 +1550,7 @@ void RenderBlock() {
 			} else {
 				spatialise(v.slot, dir, bin_in, &g_stereo);
 			}
-			if (g_debugOn)
+			if (g_set.debugOn)
 				for (int i = 0; i < kBlock; ++i) dbgIn += (double)bin_in->data[0][i] * bin_in->data[0][i];
 		}
 		PROF_LAP(VSpat);
@@ -1580,7 +1569,7 @@ void RenderBlock() {
 			const float dg = directGain0 + (directGain1 - directGain0) * (float)i / kBlock;
 			l *= dg;
 			r *= dg;
-			if (g_debugOn) {
+			if (g_set.debugOn) {
 				dbgL += (double)l * l;
 				dbgR += (double)r * r;
 			}
@@ -1607,15 +1596,15 @@ void RenderBlock() {
 	PROF_LAP(Capture);
 	// reflections -> ambisonic bus -> decode
 	g_blkNew = 0;
-	ApplyReflection(g_room, g_wetRoom, g_roomRt);
+	ApplyReflection(g_room, g_set.wetRoom, g_roomRt);
 	PROF_LAP(Room);
 	// echo and source slots: their own tail, never shorter than the room's (see ApplyReflection)
-	for (auto& e : g_echo) ApplyReflection(e, g_wetEcho, nullptr, g_room.tailBlocks);
+	for (auto& e : g_echo) ApplyReflection(e, g_set.wetEcho, nullptr, g_room.tailBlocks);
 	PROF_LAP(Echo);
 	const int newBefore = g_blkNew;
 	{
 		// source slots: both banks fed the slot's input, weighted by the blend (ramped per block)
-		const float wet = g_wetRoom * g_srcScale;
+		const float wet = g_set.wetRoom * g_set.srcScale;
 		for (int k = 0; k < kSrcSlotsMax; ++k) {
 			float* w = g_srcW[k];
 			const float* t = g_srcT[k];
@@ -1647,7 +1636,7 @@ void RenderBlock() {
 	if (g_blkNew > g_newMaxAll.load(std::memory_order_relaxed)) g_newMaxAll.store(g_blkNew, std::memory_order_relaxed);
 	PROF_LAP(SrcIn);
 	if (g_decode) {
-		DecodeBus(g_decode, g_dfState, lis, &g_amb, &g_ambOut, g_outMode, g_dfOn);
+		DecodeBus(g_decode, g_dfState, lis, &g_amb, &g_ambOut, g_set.outMode, g_set.dfOn);
 		for (int i = 0; i < kBlock; ++i) {
 			g_mix[i * 2] += g_ambOut.data[0][i];
 			g_mix[i * 2 + 1] += g_ambOut.data[1][i];
@@ -1656,17 +1645,17 @@ void RenderBlock() {
 	PROF_LAP(Decode);
 
 	// under water: one-pole low-pass (~400 Hz, -3 dB), cross-faded in and out over ~0.1 s
-	if (g_uw > 0 || g_uwCur > 0) {
+	if (g_set.uw > 0 || g_uwCur > 0) {
 		const float a = 1.0f - std::exp(-2.0f * 3.14159265f * 400.0f / kRate);
 		for (int i = 0; i < kBlock; ++i) {
-			g_uwCur += (g_uw - g_uwCur) * 0.0002f;
+			g_uwCur += (g_set.uw - g_uwCur) * 0.0002f;
 			const float l = g_mix[i * 2], r = g_mix[i * 2 + 1];
 			g_uwL += a * (l - g_uwL);
 			g_uwR += a * (r - g_uwR);
 			g_mix[i * 2] = l + (g_uwL * 0.7f - l) * g_uwCur;
 			g_mix[i * 2 + 1] = r + (g_uwR * 0.7f - r) * g_uwCur;
 		}
-		if (g_uw == 0 && g_uwCur < 1e-4f) g_uwCur = 0;
+		if (g_set.uw == 0 && g_uwCur < 1e-4f) g_uwCur = 0;
 	}
 	{
 		double eL = 0, eR = 0;
@@ -1679,22 +1668,22 @@ void RenderBlock() {
 	}
 	// cross-correlation: xc[lag] = sum L[i] * R[i + lag]; R lagging behind L (lag > 0) means the
 	// sound reaches the left ear first
-	for (int lag = -kMaxLag; g_debugOn && lag <= kMaxLag; ++lag) {
+	for (int lag = -kMaxLag; g_set.debugOn && lag <= kMaxLag; ++lag) {
 		double acc = 0;
 		for (int i = kMaxLag; i < kBlock - kMaxLag; ++i) acc += (double)g_mix[i * 2] * g_mix[(i + lag) * 2 + 1];
 		AddTo(g_xc[lag + kMaxLag], acc);
 	}
-	if (g_debugOn) {
+	if (g_set.debugOn) {
 		AddTo(g_dbgIn, dbgIn);
 		AddTo(g_dbgL, dbgL);
 		AddTo(g_dbgR, dbgR);
 	}
 	g_dbgVoices.fetch_add(dbgVoices, std::memory_order_relaxed);
-	const int mode = g_limiterMode;
+	const int mode = g_set.limiterMode;
 	// the output stage (limiter / clip) before the master volume, as the engine does (its mix is clipped at full scale
 	// and the volume applies after: at a low volume its loud sounds clip all the same), or after it (the legacy order:
 	// at a low master volume the stage never acted)
-	const bool pre = g_limiterPre;
+	const bool pre = g_set.limiterPre;
 	const float stageIn = pre ? 1.0f : g_master;
 	const float stageOut = pre ? g_master : 1.0f;
 	if (mode == 1) {
@@ -1764,28 +1753,8 @@ void ApplyVoiceFlags(Voice& v, uint8_t flags) {
 }
 
 void ApplyMix(const MixSettings& m) {
-	g_outMode = m.outMode;
-	g_paused = m.paused;
-	g_uw = m.uw;
-	g_wetRoom = m.wetRoom;
-	g_wetEcho = m.wetEcho;
-	g_diffuseSend = m.diffuseSend;
-	g_diffuseRtRef = m.diffuseRtRef;
-	g_difSmooth = m.difSmooth;
-	g_eqCont = m.eqCont;
-	g_bankFlush = m.bankFlush;
-	g_srcScale = m.srcScale;
-	g_slotFbGain = m.slotFbGain;
-	g_dfOn = m.dfOn;
-	if (m.limiterMode != g_limiterMode) g_limiter.Reset(); // (no stale frames of an earlier run in the delay line)
-	g_limiterMode = m.limiterMode;
-	g_limiterPre = m.limiterPre;
-	g_hqResample = m.hqRead;
-	g_streamFade = m.streamFadeMs * 0.001f * 48000.0f;
-	g_limFastMs = m.limFastMs;
-	g_limSlowMs = m.limSlowMs;
-	g_limSlowK = m.limSlowK;
-	g_debugOn = m.debugOn;
+	if (m.limiterMode != g_set.limiterMode) g_limiter.Reset(); // (no stale frames of an earlier run in the delay line)
+	g_set = m;
 }
 
 void ApplyCommand(const Cmd& c) {
@@ -2580,64 +2549,30 @@ bool Running() { return g_running.load(); }
 std::string HrtfInfo() { return g_hrtfInfo; }
 
 // ------------------------------------------------------------------ settings: the control side's copy, sent whole
-void SetOutputMode(int mode) {
+// one call: the control side's copy changed by `set`, then sent to the audio thread
+template <class F>
+void SetMix(F&& set) {
 	CtlCall cc;
-	g_c.mix.outMode = mode == 1 ? 1 : 0;
+	set(g_c.mix);
 	SendMix();
 }
 
-void SetHrtfBlend(float blend) { g_hrtfBlend = std::clamp(blend, 0.0f, 1.0f); }
-
-void SetPitchGlide(float ms) { g_pitchGlideMs = std::clamp(ms, 0.0f, 500.0f); }
-
-void SetPaused(bool paused) {
-	CtlCall cc;
-	g_c.mix.paused = paused;
-	SendMix();
-}
-
-void SetUnderwater(float amount) {
-	CtlCall cc;
-	g_c.mix.uw = std::clamp(amount, 0.0f, 1.0f);
-	SendMix();
-}
-
+void SetOutputMode(int mode) { SetMix([&](MixSettings& m) { m.outMode = mode == 1 ? 1 : 0; }); }
+void SetHrtfBlend(float blend) { SetMix([&](MixSettings& m) { m.hrtfBlend = std::clamp(blend, 0.0f, 1.0f); }); }
+void SetPitchGlide(float ms) { SetMix([&](MixSettings& m) { m.pitchGlideMs = std::clamp(ms, 0.0f, 500.0f); }); }
+void SetPaused(bool paused) { SetMix([&](MixSettings& m) { m.paused = paused; }); }
+void SetUnderwater(float amount) { SetMix([&](MixSettings& m) { m.uw = std::clamp(amount, 0.0f, 1.0f); }); }
 void SetWet(float room, float echo) {
-	CtlCall cc;
-	g_c.mix.wetRoom = std::clamp(room, 0.0f, 4.0f);
-	g_c.mix.wetEcho = std::clamp(echo, 0.0f, 4.0f);
-	SendMix();
+	SetMix([&](MixSettings& m) {
+		m.wetRoom = std::clamp(room, 0.0f, 4.0f);
+		m.wetEcho = std::clamp(echo, 0.0f, 4.0f);
+	});
 }
-
-void SetDiffuseRtRef(float s) {
-	CtlCall cc;
-	g_c.mix.diffuseRtRef = std::clamp(s, 0.0f, 10.0f);
-	SendMix();
-}
-
-void SetSlotBankFlush(bool on) {
-	CtlCall cc;
-	g_c.mix.bankFlush = on;
-	SendMix();
-}
-
-void SetEqContinuous(bool on) {
-	CtlCall cc;
-	g_c.mix.eqCont = on;
-	SendMix();
-}
-
-void SetDiffuseSmooth(bool on) {
-	CtlCall cc;
-	g_c.mix.difSmooth = on;
-	SendMix();
-}
-
-void SetDiffuseSend(float k) {
-	CtlCall cc;
-	g_c.mix.diffuseSend = std::clamp(k, 0.0f, 8.0f);
-	SendMix();
-}
+void SetDiffuseRtRef(float s) { SetMix([&](MixSettings& m) { m.diffuseRtRef = std::clamp(s, 0.0f, 10.0f); }); }
+void SetSlotBankFlush(bool on) { SetMix([&](MixSettings& m) { m.bankFlush = on; }); }
+void SetEqContinuous(bool on) { SetMix([&](MixSettings& m) { m.eqCont = on; }); }
+void SetDiffuseSmooth(bool on) { SetMix([&](MixSettings& m) { m.difSmooth = on; }); }
+void SetDiffuseSend(float k) { SetMix([&](MixSettings& m) { m.diffuseSend = std::clamp(k, 0.0f, 8.0f); }); }
 
 // The audio thread reads a bus's source once per block. The previous sources are released by the caller as soon as
 // this returns (pba_native, world unload), so it waits for the end of the callback in flight, if one is (at most one
@@ -2746,17 +2681,8 @@ void SrcSlotStates(SrcSlotState* out, double* seconds) {
 	if (seconds) *seconds = s;
 }
 
-void SetSourceReverbScale(float k) {
-	CtlCall cc;
-	g_c.mix.srcScale = std::clamp(k, 0.0f, 16.0f);
-	SendMix();
-}
-
-void SetSlotFallbackGain(bool on) {
-	CtlCall cc;
-	g_c.mix.slotFbGain = on;
-	SendMix();
-}
+void SetSourceReverbScale(float k) { SetMix([&](MixSettings& m) { m.srcScale = std::clamp(k, 0.0f, 16.0f); }); }
+void SetSlotFallbackGain(bool on) { SetMix([&](MixSettings& m) { m.slotFbGain = on; }); }
 
 bool SetVoiceSrcSlot(int id, int slot, int gen, float srcSend, float fbWet) {
 	CtlCall cc;
@@ -2876,11 +2802,7 @@ void TestBlockExtra(double busyMs, double sleepMs) {
 }
 #endif
 
-void SetDiffuseFieldEq(bool on) {
-	CtlCall cc;
-	g_c.mix.dfOn = on;
-	SendMix();
-}
+void SetDiffuseFieldEq(bool on) { SetMix([&](MixSettings& m) { m.dfOn = on; }); }
 
 bool DiffuseFieldEqOn() {
 	std::lock_guard<std::mutex> lk(g_ctlMtx);
@@ -3143,28 +3065,26 @@ std::string CaptureFinish(const std::string& dir, const std::string& name, int b
 float OutputClip(float x) { return SoftClip(x); }
 
 void SetMixQuality(int limiterMode, bool hqResample, bool premaster) {
-	CtlCall cc;
-	g_c.mix.limiterPre = premaster;
-	g_c.mix.limiterMode = std::clamp(limiterMode, 0, 2); // (the audio thread resets the limiter on a change)
-	g_c.mix.hqRead = hqResample;
-	g_hqDecode = hqResample;
-	SendMix();
+	SetMix([&](MixSettings& m) {
+		m.limiterPre = premaster;
+		m.limiterMode = std::clamp(limiterMode, 0, 2); // (the audio thread resets the limiter on a change)
+		m.hqRead = hqResample;
+		g_hqDecode = hqResample;
+	});
 }
 void SetStreamFade(float ms) {
-	CtlCall cc;
-	g_c.mix.streamFadeMs = std::isfinite(ms) ? std::clamp(ms, 0.0f, 100.0f) : 0.0f;
-	SendMix();
+	SetMix([&](MixSettings& m) { m.streamFadeMs = std::isfinite(ms) ? std::clamp(ms, 0.0f, 100.0f) : 0.0f; });
 }
 int OutputMode() {
 	std::lock_guard<std::mutex> lk(g_ctlMtx);
 	return g_c.mix.limiterMode;
 }
 void SetLimiterTuning(float fastMs, float slowMs, float slowK) {
-	CtlCall cc;
-	g_c.mix.limFastMs = std::clamp(fastMs, 0.5f, 1000.0f);
-	g_c.mix.limSlowMs = std::clamp(slowMs, 1.0f, 2000.0f);
-	g_c.mix.limSlowK = std::clamp(slowK, 0.0f, 10.0f);
-	SendMix();
+	SetMix([&](MixSettings& m) {
+		m.limFastMs = std::clamp(fastMs, 0.5f, 1000.0f);
+		m.limSlowMs = std::clamp(slowMs, 1.0f, 2000.0f);
+		m.limSlowK = std::clamp(slowK, 0.0f, 10.0f);
+	});
 }
 int OutputLatency() { return OutputMode() == 1 ? kLimLook : 0; }
 float OutputCeiling() { return OutputMode() == 1 ? kLimCeil : 1.0f; }
