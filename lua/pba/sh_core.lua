@@ -930,6 +930,17 @@ function A.ShotWeapon(e, chan)
 	return nil
 end
 
+--- True (client) when the sound of the valid entity e on channel chan is the local player's own: e is him, or a weapon
+-- whose shot it is (A.ShotWeapon) is his, and he hears from himself (A.HearsFromSelf: not through a camera).
+function A.IsListenerOwn(e, chan)
+	local lp = LocalPlayer()
+	if e ~= lp then
+		local _, owner = A.ShotWeapon(e, chan)
+		if owner ~= lp then return false end
+	end
+	return IsValid(lp) and A.HearsFromSelf(lp)
+end
+
 -- Per-frame memo of an entity's sound position (client): entity -> channel -> position, and the frame it was
 -- worked out in. A sound is placed several times a frame (its evaluation, its voice, the followers, the
 -- directivity...): a weapon's muzzle (two attachment lookups) was worked out about 6 times per shot. Within a
@@ -963,13 +974,9 @@ function A.EntSoundPos(e, ch)
 	-- the local player's own sound played by the module (pba_native_own): centered, 1 unit ahead of the
 	-- ears (the engine plays the listener's own sounds unspatialized; at the ears the module would have
 	-- no direction), and following the view. His weapon's shots are his own sounds too.
-	if CLIENT and A.NativeOwn and A.NativeOwn() then
-		local lp = LocalPlayer()
-		local w, owner = A.ShotWeapon(e, ch)
-		if (e == lp or owner == lp) and A.HearsFromSelf(lp) then
-			local L, ang = A.ListenerPos()
-			if L then return L + ang:Forward() end
-		end
+	if CLIENT and A.NativeOwn and A.NativeOwn() and A.IsListenerOwn(e, ch) then
+		local L, ang = A.ListenerPos()
+		if L then return L + ang:Forward() end
 	end
 	if not posMemo or A.Num(A.cfg, "sound_pos_memo") < 0.5 then return entSoundPos(e, ch) end
 	local k = ch or NOCHAN

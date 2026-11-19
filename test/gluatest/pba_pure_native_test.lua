@@ -938,6 +938,39 @@ return {
 			_G.LocalPlayer, A.NativeOwn = savedLP, savedOwn
 			if not ok then error(err, 0) end
 		end },
+		{ name = "IsListenerOwn: one rule for the listener's own sound (A.EntSoundPos, N.OwnDirect, N.Directivity): he, or the shot of a weapon he holds (a SWEP's own sound, his CHAN_WEAPON), while he hears from himself; not another shooter, not through a camera", func = function()
+			local me = fakeEnt("player", Vector(1, 0, 0), Vector(0, 0, 64), nil)
+			local npc = fakeEnt("npc", Vector(1, 0, 0), Vector(0, 0, 64), nil)
+			local myGun = fakeEnt("weapon", nil, nil, me)
+			local npcGun = fakeEnt("weapon", nil, nil, npc)
+			local floorGun = fakeEnt("weapon", nil, nil, nil)
+			function me:GetActiveWeapon() return myGun end
+			function npc:GetActiveWeapon() return npcGun end
+			local view = me
+			function me:GetViewEntity() return view end
+			local savedLP, savedOwn = _G.LocalPlayer, A.NativeOwn
+			_G.LocalPlayer = function() return me end
+			A.NativeOwn = function() return true end
+			local ok, err = pcall(function()
+				expect(A.IsListenerOwn(me, CHAN_BODY)).to.equal(true)
+				expect(A.IsListenerOwn(me, CHAN_WEAPON)).to.equal(true)
+				expect(A.IsListenerOwn(myGun, CHAN_AUTO)).to.equal(true)
+				expect(A.IsListenerOwn(npc, CHAN_WEAPON)).to.equal(false)
+				expect(A.IsListenerOwn(npcGun, CHAN_WEAPON)).to.equal(false)
+				expect(A.IsListenerOwn(floorGun, CHAN_WEAPON)).to.equal(false)
+				-- his own shot is not behind his muzzle (N.Directivity 1), another shooter's is
+				withCfg({ native_dir = 0.5 }, function()
+					expect(N.Directivity(me, Vector(-500, 0, 64), CHAN_WEAPON)).to.equal(1)
+					expect(N.Directivity(myGun, Vector(-500, 0, 64), CHAN_WEAPON)).to.equal(1)
+					expect(N.Directivity(npc, Vector(-500, 0, 64), CHAN_WEAPON) < 0.1).to.beTrue()
+				end)
+				view = npc -- through a camera: his sounds are anybody's
+				expect(A.IsListenerOwn(me, CHAN_BODY)).to.equal(false)
+				expect(A.IsListenerOwn(myGun, CHAN_WEAPON)).to.equal(false)
+			end)
+			_G.LocalPlayer, A.NativeOwn = savedLP, savedOwn
+			if not ok then error(err, 0) end
+		end },
 		{ name = "ApplySettings pushes the output stage and the resampling to the module (pba_native_limiter, pba_native_resample_hq); a module without SetMixQuality is left alone", func = function()
 			local saved, savedRender = _G.pba_native, N.render
 			local got
