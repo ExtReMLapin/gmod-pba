@@ -50,6 +50,15 @@ function R.NativeOK(name, dsp, ownDsp)
 	return not (name and A.IsSentence(name)) or A.Sentences.On()
 end
 
+--- True when a module voice of the sound named `name` gets no reverb at all, wherever it starts (pba_native_dry_prefix_all
+-- over N.DryMix, pba_native_dry_prefix): a "#" (dry mix) sound, on which the engine runs no DSP, takes no source slot
+-- and feeds no room. Only N.PlayVoice (short copies) had the rule; a copy handed to the module mid-sound (cl_render
+-- switchNative) and the loop / long-sound mirrors (cl_loops) bound a slot and fed the room (review C4).
+function R.Dry(name)
+	local N = A.Native
+	return (A.cfg.native_dry_prefix_all or 1) >= 0.5 and N ~= nil and N.DryMix ~= nil and N.DryMix(name) or false
+end
+
 --- What a module voice adds to its path's EQ and pitch, whatever its owner: a speaker's EQ (speaker true:
 -- N.SPEAKER_EQ) and the Doppler shift of its moving source (ent) or listener. vL: the listener's velocity
 -- (nil: read now). Returns el, em, eh, pitch.

@@ -40,6 +40,13 @@ local function isSpeech(key, t0)
 	if c and c >= t0 - SPEECH_CAP_S then return true end
 	return string.sub(key, 1, 3) == "vo/"
 end
+--- A voice of `name` the model made inaudible (cl_render emitVoice: under the emission thresholds, the walls' loss):
+-- silent on purpose, so the safety net leaves it silent (pba_handback_quiet). Before, a line on a voice channel behind
+-- enough walls was rendered by nothing, then handed to the engine, which played it clear through them (review C5).
+A.silentT = A.silentT or {} -- file key -> RealTime() a voice of it was dropped as inaudible
+function A.NoteSilent(name)
+	if name then A.silentT[lineKey(name)] = RealTime() end
+end
 --- A rendering of `name` at linear gain / volume `g` (module voice, engine emission, mirror patch).
 function A.NoteRendered(name, g)
 	if name and (g or 1) > AUDIBLE then A.renderedT[lineKey(name)] = RealTime() end
@@ -90,6 +97,8 @@ function A.WatchLine(name, lag, why, handback, idx, chan, busy)
 		end
 		local t = A.renderedT[key]
 		if t and t >= t0 - 0.05 then return end
+		local q = A.silentT[key]
+		if q and q >= t0 - 0.05 and (A.cfg.handback_quiet or 1) >= 0.5 then return end -- (inaudible on purpose)
 		if (A.cfg.silent_handback or 1) < 0.5 or not isSpeech(key, t0) then return end
 		local ok = handback()
 		if ok == false then return end -- (stopped meanwhile: nothing to give back)
@@ -286,53 +295,48 @@ end
 -- running ramp and the last evaluation scaled by new / old volume, the route kept (the forced re-evaluation
 -- follows at the voice's next turn). Before, the change waited for that turn (half an update_interval at least,
 -- then a ramp over one interval): a dropship's engine fade stayed +8..11 dB over its law meanwhile (d3_c17_10b).
-local function volumeNow(m)
-	if not m.nativeId or (A.cfg.native_vol_now or 1) < 0.5 then return end
-	local old, new = m.appliedVol, m.vol
-	if not (old and new) or old == new or old <= 1e-6 then return end
-	local k = new / old
-	m.appliedVol = new
-	local e = m.lastEval
-	if e then e.gain, e.send = e.gain * k, e.send * k end
-	if m.roomSend then m.roomSend = m.roomSend * k end
-	if m.srcSend then m.srcSend = m.srcSend * k end
-	local ramp = m.ramp
-	local gain, el, em, eh, pos, pitch
-	if ramp and ramp.to then
-		ramp.from[1], ramp.to[1] = ramp.from[1] * k, ramp.to[1] * k
-		gain, el, em, eh, pos, pitch = A.Paths.RampAt(ramp, RealTime(), A.ListenerPos())
-	elseif e then
-		gain, el, em, eh, pos, pitch = e.gain, e.el, e.em, e.eh, e.pos, e.pitch
+-- A pitch change (SND_CHANGE_PITCH: a vehicle's revs, an ambient_generic's Pitch input or LFO, a patch's
+-- ChangePitch) the same way (pba_native_pitch_now): the voice's pitch (Doppler included) scaled by new / old, the
+-- running ramp and the last evaluation with it, the route kept. Before, the change waited for the voice's next
+-- turn (up to update_interval) and then glided over one more interval (audit B-6), with a path re-evaluation
+-- forced for a pitch that is not the path's business.
+-- Both in one module Update (m.sentFrame: the frame it was sent, LP.FollowNative sends nothing more then): a change
+-- of both sent the voice the new gain with the old pitch, then again with the new pitch, and the frame's follower a
+-- third time (review C0). Returns true when the voice took a pitch change.
+-- vol: the volume goes whatever pba_native_vol_now (a fade pba makes itself, edgeFade: review M7).
+local function changeNow(m, vol)
+	if not m.nativeId then return false end
+	local kv, kp = 1, 1
+	if vol or (A.cfg.native_vol_now or 1) >= 0.5 then
+		local old, new = m.appliedVol, m.vol
+		if old and new and old ~= new and old > 1e-6 then kv = new / old m.appliedVol = new end
 	end
-	if not (gain and pos) then return end
-	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, m.roomSend) then m.nativeId = nil end
-end
-
---- A pitch change of a mirror's sound (SND_CHANGE_PITCH: a vehicle's revs, an ambient_generic's Pitch input or
--- LFO, a patch's ChangePitch) reaches its native voice at once (pba_native_pitch_now), as the engine's channel
--- takes it at the tick: the voice's pitch (Doppler included) scaled by new / old, the running ramp and the last
--- evaluation with it, the route kept. Before, the change waited for the voice's next turn (up to update_interval)
--- and then glided over one more interval (audit B-6), with a path re-evaluation forced for a pitch that is not
--- the path's business. Returns true when the voice took the change.
-local function pitchNow(m)
-	if not m.nativeId or (A.cfg.native_pitch_now or 1) < 0.5 then return false end
-	local old, new = m.appliedPitch, m.pitch
-	if not (old and new) or old == new or old <= 1e-6 then return false end
-	local k = new / old
-	m.appliedPitch = new
+	local pitched = false
+	if (A.cfg.native_pitch_now or 1) >= 0.5 then
+		local old, new = m.appliedPitch, m.pitch
+		if old and new and old ~= new and old > 1e-6 then kp = new / old m.appliedPitch = new pitched = true end
+	end
+	if kv == 1 and kp == 1 then return false end
 	local e = m.lastEval
-	if e then e.pitch = new end
+	if e then
+		e.gain, e.send = e.gain * kv, e.send * kv
+		if pitched then e.pitch = m.pitch end
+	end
+	if m.roomSend then m.roomSend = m.roomSend * kv end
+	if m.srcSend then m.srcSend = m.srcSend * kv end
 	local ramp = m.ramp
 	local gain, el, em, eh, pos, pitch
 	if ramp and ramp.to then
-		ramp.from[5], ramp.to[5] = ramp.from[5] * k, ramp.to[5] * k
+		ramp.from[1], ramp.to[1] = ramp.from[1] * kv, ramp.to[1] * kv
+		ramp.from[5], ramp.to[5] = ramp.from[5] * kp, ramp.to[5] * kp
 		gain, el, em, eh, pos, pitch = A.Paths.RampAt(ramp, RealTime(), A.ListenerPos())
 	elseif e then
 		gain, el, em, eh, pos, pitch = e.gain, e.el, e.em, e.eh, e.pos, e.pitch
 	end
 	if not (gain and pos) then return false end
 	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, m.roomSend) then m.nativeId = nil end
-	return true
+	m.sentFrame = FrameNumber()
+	return pitched
 end
 
 -- a mirror's far evaluation is ready (cl_slicer): applied at once
@@ -445,16 +449,19 @@ local function applyNative(m, S, L)
 	-- at the voice's gain
 	local now = RealTime()
 	local d = S:Distance(L)
-	m.srcSend = N.PhysSrcSend(m.lvl, d) * m.vol * A.cfg.native_gain
-	if m.nativeId and (not m.srcNext or now >= m.srcNext) then
+	-- ("#", dry mix: no slot, no room send, as N.PlayVoice: A.Render.Dry)
+	local dry = A.Render.Dry(m.name)
+	m.srcSend = dry and 0 or N.PhysSrcSend(m.lvl, d) * m.vol * A.cfg.native_gain
+	if dry then m.srcBound = false
+	elseif m.nativeId and (not m.srcNext or now >= m.srcNext) then
 		m.srcNext = now + 0.3
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
 	end
 	m.appliedVol = m.vol -- (the volume the voice's values below carry: see the quiet shortcut in apply)
-	m.appliedPitch = m.pitch -- (and the pitch: pitchNow)
+	m.appliedPitch = m.pitch -- (and the pitch: changeNow)
 	gain = gain * m.vol * A.cfg.native_gain
 	local send = N.SlotFadeSend(m, m.srcBound, (trans or 0) * m.vol * A.cfg.native_gain, gain)
-	send = send * N.LoudWet(m.lvl) -- (a loud loop stays dry, as in the engine)
+	send = dry and 0 or send * N.LoudWet(m.lvl) -- (a loud loop stays dry, as in the engine)
 	m.roomSend = send
 	-- the speaker's EQ and Doppler, as every module voice (A.Render.Tail)
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L), lpDb)
@@ -532,15 +539,32 @@ local function earlyMargin() return A.Sched.MIN_LEFT + A.Sched.Interval() end
 --- The engine's copy of early line m (the server's sound on its entity and channel, cl_loops LP.TakeEarly) set to
 -- volume `vol` in place (SND_CHANGE_VOL on the same index, channel and name: the engine alters that channel, the
 -- line and its mouth go on; measured with snd_dumpclientsounds, vol 255 -> 0 on the SERVER channel).
+-- (the name the engine copy plays: m.early.name, see LP.TakeEarly)
 local function earlyEngineVolume(m, vol)
 	A.reemitting = true -- (pba's own: the hook lets it through)
 	local e = Entity(m.idx)
+	local name = m.early and m.early.name or m.name
 	if IsValid(e) then
-		e:EmitSound(m.name, m.lvl, m.pitch, vol, m.chan, SND_CHANGE_VOL)
+		e:EmitSound(name, m.lvl, m.pitch, vol, m.chan, SND_CHANGE_VOL)
 	else
-		EmitSound(m.name, m.pos, m.idx, m.chan, vol, m.lvl, SND_CHANGE_VOL, m.pitch)
+		EmitSound(name, m.pos, m.idx, m.chan, vol, m.lvl, SND_CHANGE_VOL, m.pitch)
 	end
 	A.reemitting = false
+end
+
+--- (pba_early_release) An early line's mirror that ends on its own before its line (its module voice gone early: the
+-- module's voice cap, a module stop) gives the line back to its engine copy, muted until then: before, that copy stayed
+-- muted to its end and the rest of the line was silent (review C7). Not for a true stop (OP_STOP, the channel rule,
+-- stopsound: stopMirror, the engine stops its copy too: a volume change would start it again), nor once the entity is
+-- gone or the line is about over.
+function LP.EarlyRelease(m)
+	local e = m.early
+	if not (e and e.muted) or (A.cfg.early_release or 1) < 0.5 then return end
+	-- (an entity the client saw and lost was removed; one never seen here, out of its view, is the engine copy's by index)
+	if RealTime() >= e.tEnd - 0.25 or (m.seen and not IsValid(m.ent)) then return end
+	earlyEngineVolume(m, e.ev)
+	e.muted = nil
+	A.stats.earlyReleased = (A.stats.earlyReleased or 0) + 1
 end
 
 function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
@@ -604,7 +628,7 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	if m.nativeId then
 		N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m)
 		m.srcNext = RealTime() + 0.3
-		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
+		m.srcBound = not A.Render.Dry(m.name) and N.BindSource(m.nativeId, S, m.srcSend)
 		-- a voice with its slot from birth feeds the room bus only what enters through walls, as a short voice
 		-- (cl_render switchNative / N.PlayVoice): the slot fade starting from "no slot" sent the full gain to the
 		-- listener's room for its first ~0.5 s (Breencast br_welcome05: 0.28 against 0.012; pba_loops_slot_birth)
@@ -826,8 +850,7 @@ function LP.HandleClient(data)
 			A.reemitting = false
 		end
 		local vol0 = m.appliedVol
-		volumeNow(m)
-		local pitched = pitchNow(m)
+		local pitched = changeNow(m)
 		-- (the route) at its next turn: a volume change reads differently at the quiet threshold; a pitch change
 		-- the voice has taken is not the path's business
 		if m.nativeId and m.reeval and not (pitched and m.appliedVol == m.vol and vol0 == m.vol) then m.reeval.force = true end
@@ -886,8 +909,19 @@ function LP.TakeEarly(d)
 	local t0 = now - (d.elapsed or 0)
 	local caps = pba_native and pba_native.caps
 	local on = N.render and A.Enabled() and pba_native.Play ~= nil and A.Render.NativeOK(name, d.DSP)
+	local allNative = (A.cfg.native_all or 1) >= 0.5
+	local rules = (A.cfg.early_line_rules or 1) >= 0.5
+	-- (pba_early_line_rules) a line this client could not take yet reaches it marked blocked whatever its verdict: in
+	-- clear sight (no wall on the straight line, the server's own far-muffle test) and with pba_native_all 0 it is
+	-- the engine's, as every clear sound then (review M8: the module took it)
+	if rules and on and d.blocked and not allNative and d.Pos then
+		local L = A.ListenerPos()
+		local P = A.Paths
+		local ent = d.EntIndex and d.EntIndex > 0 and Entity(d.EntIndex) or nil
+		if L and #P.Walls(P.FreeSource(d.Pos), L, 1, P.SourceObject(d.Pos, IsValid(ent) and ent or nil)) == 0 then return "clear" end
+	end
 	local v, why = N.EarlyVerdict(on and true or false, type(caps) == "table" and caps.playOffset and true or false,
-		d.blocked, (A.cfg.native_all or 1) >= 0.5, now, t0, t0 + secs, earlyMargin())
+		d.blocked, allNative, now, t0, t0 + secs, earlyMargin())
 	if v ~= "switch" then return why end
 	local key = "early:" .. d.EntIndex .. ":" .. d.Channel .. ":" .. name
 	local old = LP.mirrors[key]
@@ -896,6 +930,11 @@ function LP.TakeEarly(d)
 	local m = { key = key, name = name, idx = d.EntIndex, chan = d.Channel, flags = d.Flags, pos = d.Pos, lvl = d.SoundLevel,
 		dsp = d.DSP, once = true, vol = d.Volume, pitch = d.Pitch, born = now, speaker = speaker or nil,
 		endT = t0 + secs + A.END_GRACE, early = { t0 = t0, tEnd = t0 + secs, ev = d.ev or d.Volume } }
+	-- (pba_early_line_rules) the engine copy's own name: a "#" line the server re-emitted muffled for this player plays
+	-- without its "#" (the engine skips the preset of a "#" sound, sv_sound), and is the one played quieter than its volume
+	-- (ev: the muffle's gain). A volume change to the "#" name found no such sound and started a new one, the copy
+	-- left audible under the module's voice (review M8).
+	if rules and A.IsDryMix(name) and (d.ev or d.Volume or 1) < (d.Volume or 1) * 0.999 then m.early.name = A.WithoutDryMix(name) end
 	if speaker then -- (its speaker preset is the flag's, rendered by the module's speaker EQ: as a long speaker line)
 		local cv = GetConVar("dsp_speaker")
 		local sp = cv and cv:GetInt() or 0
@@ -928,14 +967,13 @@ function LP.StopAll()
 end
 
 --- A volume / pitch change reaching mirror m (the server's update, full or compact): its native voice takes it at
--- once (volumeNow, pitchNow), an engine patch is moved to it.
+-- once (changeNow), an engine patch is moved to it.
 local function updateMirror(m, once, vol, pitch)
 	m.pitch = pitch
 	LP.SetVolume(m, vol)
 	if m.nativeId then
 		local vol0 = m.appliedVol
-		volumeNow(m)
-		local pitched = pitchNow(m)
+		local pitched = changeNow(m)
 		if m.reeval and not (pitched and m.appliedVol == m.vol and vol0 == m.vol) then m.reeval.force = true end
 		return -- applied at the next tick
 	end
@@ -1003,7 +1041,8 @@ net.Receive("pba_loop", function()
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	if sid ~= 0 then LP.byId[sid] = m end
 	-- a loop joined midway, rendered by the module: faded in (pba_loops_edge_fade)
-	if new and joined and not once and (A.cfg.loops_edge_fade or 1) > 0 and A.Native and A.Native.render and A.Enabled() then
+	if new and joined and not once and (A.cfg.loops_edge_fade or 1) > 0 and A.Native and A.Native.render and A.Enabled()
+		and LP.NearEdge(pos, lvl) then
 		m.edgeK = LP.EDGE_FLOOR
 	end
 	m.pitch = pitch
@@ -1066,6 +1105,18 @@ end
 -- 2500 u at 75 dB) is no edge of audibility (-33.6 dB clear there), and gm_converted_apartment's cars stepped the
 -- output by +12..+25 dB within 10-30 ms each time one entered it (most of it their source reverb slot).
 LP.EDGE_FLOOR = 1e-3
+--- (pba_loops_edge_fade_near) True when a loop at S of level lvl joined midway is near the edge of the server's range for it
+-- (over EDGE_NEAR of A.AudibleRadius from the listener): a source driving into range, faded in. A join well inside it
+-- (a spawn, a teleport, a noclip next to the source) starts at once, as the engine plays it: the server flags every join,
+-- and a machine beside a player who spawned there was faded in from -60 dB (review M6). 0: every join faded.
+local EDGE_NEAR = 0.8
+function LP.NearEdge(S, lvl)
+	if (A.cfg.loops_edge_fade_near or 1) < 0.5 then return true end
+	local L = A.ListenerPos()
+	if not (L and S and lvl) then return true end
+	local r = A.AudibleRadius(lvl) * EDGE_NEAR
+	return S:DistToSqr(L) > r * r
+end
 function LP.SetVolume(m, vol)
 	if m.edgeK then m.srvVol, m.vol = vol, vol and vol * m.edgeK else m.vol = vol end
 end
@@ -1084,7 +1135,8 @@ local function edgeFade(now)
 				local k = T > 0 and math.Clamp((now - m.edgeT0) / T, LP.EDGE_FLOOR, 1) or 1
 				m.edgeK = k
 				m.vol = (m.srvVol or 1) * k
-				volumeNow(m) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
+				-- (pba_loops_edge_fade_direct: whatever pba_native_vol_now, which left the voice at the floor until an evaluation)
+				changeNow(m, (A.cfg.loops_edge_fade_direct or 1) >= 0.5) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
 				-- its source reverb slot's feed at once, not at its 0.3 s rebinding
 				if m.srcBound and N then
 					local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
@@ -1094,6 +1146,13 @@ local function edgeFade(now)
 			end
 		end
 	end
+end
+
+--- (pba_loops_follow_dead) The follower's Update found m's voice gone (the module ended it): the mirror forgets it, as an
+-- evaluation's Update does (its once_gone / handback / early release then follow). Before, the answer was dropped and a
+-- still scene kept a dead id until an evaluation came.
+local function followDead(m, alive)
+	if not alive and (A.cfg.loops_follow_dead or 1) >= 0.5 then m.nativeId = nil end
 end
 
 function LP.FollowNative(L)
@@ -1124,13 +1183,14 @@ function LP.FollowNative(L)
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
 					-- clear sight: nothing through walls; the reverb is the slot's (no slot: the room at the gain)
-					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, m.srcBound and 0 or g * N.LoudWet(m.lvl))
+					followDead(m, pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, (m.srcBound or A.Render.Dry(m.name)) and 0 or g * N.LoudWet(m.lvl)))
 				end
-				N.ApplyStereo(m.nativeId, m.name, d, ent, S, L, m)
+				if m.nativeId then N.ApplyStereo(m.nativeId, m.name, d, ent, S, L, m) end
 			end
-			if ramp and ramp.pending then
+			-- (not when a volume / pitch change sent this frame's values already: changeNow)
+			if ramp and ramp.pending and (ent or m.sentFrame ~= FrameNumber()) then
 				local g, el, em, eh, pos, pitch = P.RampAt(ramp, now, L)
-				pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch) -- sends: kept from the last evaluation
+				followDead(m, pba_native.Update(m.nativeId, pos, g, el, em, eh, pitch)) -- sends: kept from the last evaluation
 			end
 		end
 	end
@@ -1141,6 +1201,7 @@ local function step(key, m)
 	-- a client loop whose patch was collected (the engine stops its sound then, without any event)
 	if m.src and not m.src[1] then m.done = true end
 	if m.done then
+		if m.early then LP.EarlyRelease(m) end -- (ended before its line: the engine copy heard again)
 		-- a client patch's one-shot that played to its end: a later volume / pitch change restarts it (engine), taken again
 		if m.client and m.once and m.src and m.src[1] and IsValid(m.ent) then LP.finished[m.src[1]] = true end
 		stopMirror(m)
