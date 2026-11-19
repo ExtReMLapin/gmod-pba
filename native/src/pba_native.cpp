@@ -2110,6 +2110,10 @@ LUA_FUNCTION(Echo) {
 		return 1;
 	}
 	const IPLVector3 p = ToSA(LUA->GetVector(2));
+	if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) { // (never simulated at a position that is not one)
+		LUA->PushNumber(0);
+		return 1;
+	}
 	// 7: the shooter's aim (Source direction), 8: dipole weight (0 omni .. 1 figure of eight)
 	IPLVector3 aim{0, 0, -1};
 	float dipole = 0;
@@ -2916,7 +2920,8 @@ LUA_FUNCTION(SetListener) {
 	const float master = LUA->IsType(4, Type::Number) ? (float)LUA->GetNumber(4) : 1.0f;
 	double eL = 0, eR = 0;
 	const IPLVector3 pos = ToSA(LUA->GetVector(1)), ahead = DirToSA(LUA->GetVector(2)), up = DirToSA(LUA->GetVector(3));
-	{
+	auto finite = [](const IPLVector3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+	if (finite(pos) && finite(ahead) && finite(up)) { // (a NaN listener never reaches the simulation; the renderer ignores it too)
 		std::lock_guard<std::mutex> lk(g_stageMtx);
 		g_stageLis.origin = pos;
 		g_stageLis.ahead = ahead;

@@ -2139,11 +2139,23 @@ float SaneGain(float x) {
 	return std::min(x, kMaxGain);
 }
 
+// The other numbers the Lua hands a voice or the listener (pitch, delay, start offset, position, direction, master volume)
+// as the renderer can take them. std::clamp lets a NaN through: a NaN pitch or delay made the voice's cursor NaN, and the
+// reader indexed the sound and its interpolation table with the integer conversion of it (out of bounds: the game
+// crashed); a NaN listener direction left NaN in the HRTF effects' state for good (the voice silent ever after), a NaN
+// master volume with the limiter before it sent NaN to the device. Not finite: the value is ignored (the previous one is
+// kept; a new voice gets the default).
+inline bool Finite(const IPLVector3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+inline float SaneRate(float pitch, float previous) {
+	return std::isfinite(pitch) ? std::clamp(pitch / 100.0f, 0.05f, 4.0f) : previous;
+}
+inline float SaneDelay(float delay) { return std::isfinite(delay) ? std::clamp(delay, 0.0f, 3.0f) : 0.0f; }
+
 // Play / Update parameters into a voice's control fields; returns the reset flag of a path effect just taken
 uint8_t SetVoiceCtl(ControlVoice& v, const VoiceParams& p) {
-	v.c.pos = p.pos;
+	if (Finite(p.pos)) v.c.pos = p.pos;
 	v.c.gain = SaneGain(p.gain);
-	v.c.rate = std::clamp(p.pitch / 100.0f, 0.05f, 4.0f);
+	v.c.rate = SaneRate(p.pitch, v.c.rate);
 	for (int b = 0; b < 3; ++b) v.c.eq[b] = SaneEq(p.eq[b]);
 	// baked path: new coefficients (acquiring a path effect if the voice had none), or back to the
 	// straight line (the renderer fades the path out, then the effect is released); neither: kept. A
@@ -3262,7 +3274,7 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 	v.c.loop = loop;
 	v.c.protect = p.protect;
 	v.c.pausable = p.pausable;
-	double cursor = -std::clamp(p.delay, 0.0f, 3.0f) * kRate;
+	double cursor = -(double)SaneDelay(p.delay) * kRate;
 	v.c.own = p.own;
 	if (p.own && v.hasSide) {
 		// a stereo file: the side channel needs an effect pair of its own for the voice's EQ (none free: the
@@ -3277,7 +3289,7 @@ int Play(const std::string& name, const VoiceParams& p, bool loop, bool* pathFal
 	flags |= SetVoiceCtl(v, p); // takes a path effect if p.hasSH (see AcquirePath)
 	double startAt = 0;
 	int fadeIn = 0;
-	if (p.offset > 0) {
+	if (p.offset > 0 && std::isfinite(p.offset)) {
 		// offset is playback time: at pitch 150 the sound has advanced 1.5 s of pcm per second.
 		// Past the end of a one-shot the voice simply ends on its first block (the sound is over);
 		// a loop wraps in the mixer.
@@ -3340,8 +3352,8 @@ int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch
 	v.c.pausable = pausable;
 	v.c.needGen = gen;
 	v.c.gain = SaneGain(gain);
-	v.c.rate = std::clamp(pitch / 100.0f, 0.05f, 4.0f);
-	const double cursor = -std::clamp(delay, 0.0f, 3.0f) * kRate;
+	v.c.rate = SaneRate(pitch, 1.0f);
+	const double cursor = -(double)SaneDelay(delay) * kRate;
 	return AddVoice(std::move(v), 0, cursor, 0, 0);
 }
 
@@ -3377,9 +3389,9 @@ bool SetVoiceStereo(int id, float sel, float width) {
 	CtlCall cc;
 	ControlVoice* v = FindVoice(id);
 	if (!v || v->c.dying) return false;
-	v->c.sel = std::clamp(sel, -1.0f, 1.0f);
+	v->c.sel = std::isfinite(sel) ? std::clamp(sel, -1.0f, 1.0f) : 0.0f;
 	// width spreads the two channels: only for a file played as stereo (not a variant pick)
-	v->c.width = v->c.sel == 0 ? std::clamp(width, 0.0f, 1.0f) : 0.0f;
+	v->c.width = v->c.sel == 0 && std::isfinite(width) ? std::clamp(width, 0.0f, 1.0f) : 0.0f;
 	uint8_t f = kSelInit; // not rendered yet: start there (no ramp from the defaults)
 	if (v->c.width > 0 && v->c.slot2 < 0 && v->hasSide && v->c.echoSlot < 0) {
 		// a second effect pair from the pool (none free: the downmix at the source, as before)
@@ -3403,10 +3415,11 @@ void StopVoice(int id) {
 
 int SetListener(IPLVector3 pos, IPLVector3 ahead, IPLVector3 up, float master, double* eL, double* eR) {
 	CtlCall cc;
-	g_c.lis.pos = pos;
-	g_c.lis.ahead = ahead;
-	g_c.lis.up = up;
-	g_c.lis.master = master;
+	// (a value that is not a number is ignored: the previous one stays, see Finite)
+	if (Finite(pos)) g_c.lis.pos = pos;
+	if (Finite(ahead)) g_c.lis.ahead = ahead;
+	if (Finite(up)) g_c.lis.up = up;
+	if (std::isfinite(master)) g_c.lis.master = master;
 	SendListener();
 	const double l = g_energyL.exchange(0), r = g_energyR.exchange(0);
 	if (eL) *eL = l;
