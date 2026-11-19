@@ -2081,11 +2081,19 @@ local SUITE = {
 			local savedCo = P.slice.co
 			P.slice.co = true -- as in a slice (not the running coroutine: no yield)
 			for _ = 1, 50 do P.DetourDelta(S, L, mins, maxs, valid, true) end
+			-- measured interpreted (review R2): LuaJIT's own trace objects, recorded, aborted and flushed while the loop
+			-- ran, live in the same heap and were counted as the calls' garbage: 3 to over 64 bytes per call from one
+			-- run to the next (the flake, 1 run in 4). The interpreter allocates all the compiled code would (the
+			-- compiler only sinks some away): an upper bound, the same every run (0 bytes offline). In game the suite
+			-- runs under lua_job's debug hook, interpreted already.
+			local jitOn = jit and jit.status()
+			if jit then jit.off() jit.flush() end
 			collectgarbage("stop")
 			local k0 = collectgarbage("count")
 			for _ = 1, 200 do P.DetourDelta(S, L, mins, maxs, valid, true) end
 			local k1 = collectgarbage("count")
 			collectgarbage("restart")
+			if jitOn then jit.on() end
 			P.slice.co = savedCo
 			expect((k1 - k0) * 1024 / 200 < 64).to.beTrue()
 		end },
