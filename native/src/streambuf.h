@@ -9,7 +9,7 @@ struct StreamBuf {
 	std::vector<float> data;    // power-of-two size
 	uint64_t mask = 0;
 	std::atomic<uint64_t> w{0}; // samples written (producer)
-	std::atomic<uint64_t> r{0}; // samples read (consumer)
+	std::atomic<uint64_t> r{0}; // samples read by the last voice rendered (diagnostics: each voice keeps its own position)
 	std::atomic<float> rate{44100};
 	std::atomic<bool> closed{false}; // channel freed: the consumer drains then stops
 

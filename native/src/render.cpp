@@ -248,6 +248,7 @@ struct Voice : VoiceCtl {
 	const Sound* snd = nullptr;
 	StreamBuf* stream = nullptr; // captured stream instead of a decoded sound
 	double sfrac = 0;            // fractional read position in the stream
+	uint64_t sr = 0;             // read position in the stream's ring (samples), this voice's own
 	bool primed = false;         // enough buffered to start (or restart after a gap)
 	double cursor = 0;  // < 0: start delay still running (output samples)
 	double startAt = 0; // cursor once the start delay has run (VoiceParams::offset, in pcm samples)
@@ -555,6 +556,7 @@ struct Cmd {
 	StreamBuf* stream = nullptr;
 	double cursor = 0, startAt = 0;
 	int fadeIn = 0;
+	uint64_t streamAt = 0; // Add of a stream voice: its read position (Voice::sr)
 	int k = 0;            // SrcBlend: slot
 	float w[2] = {0, 0};  // SrcBlend: targets
 	bool snap = false;
@@ -1143,9 +1145,11 @@ void RenderBlock() {
 			const double target = srcRate * 0.12;
 			// closed first, then the write count: a closed buffer's count is final
 			const bool closed = b.closed.load();
-			double avail = (double)b.Available();
+			// the voice's own read position (Voice::sr): two voices may read one ring at once (a stream handed to a new
+			// voice while the old one fades out), and the ring's index is not shared with the game thread
+			double avail = (double)(b.w.load(std::memory_order_acquire) - v.sr);
 			if (avail > (double)b.data.size() - srcRate * 0.25) { // overrun: jump close to the writer
-				b.r.store(b.w.load() - (uint64_t)target);
+				v.sr = b.w.load(std::memory_order_acquire) - (uint64_t)target;
 				avail = target;
 			}
 			if (!v.primed && (avail >= target || closed)) { // (closed: drain what is left)
@@ -1160,7 +1164,7 @@ void RenderBlock() {
 				const double adj = std::clamp((avail - target) / target * 0.01, -0.005, 0.005);
 				const double step = srcRate / kRate * (1.0 + adj) * (0.5 * ((double)rate0 + (double)rate1));
 				const bool hqStream = g_hqResample;
-				uint64_t r = b.r.load(std::memory_order_relaxed);
+				uint64_t r = v.sr;
 				const uint64_t w = b.w.load(std::memory_order_acquire);
 				const size_t ringSize = b.data.size();
 				// the fade out before an underrun / the end: over the last g_streamFade output samples' worth of
@@ -1220,8 +1224,9 @@ void RenderBlock() {
 						++r;
 					}
 				}
-				b.r.store(r, std::memory_order_release);
-				if (closed && b.Available() < 2) v.alive = false;
+				v.sr = r;
+				b.r.store(r, std::memory_order_relaxed); // (the last position read, for diagnostics: nobody reads it back)
+				if (closed && w - r < 2) v.alive = false;
 			}
 		} else {
 		const auto& pcm = v.snd->pcm;
@@ -1720,6 +1725,7 @@ void ApplyCommand(const Cmd& c) {
 		v.cursor = c.cursor;
 		v.startAt = c.startAt;
 		v.fadeIn = c.fadeIn;
+		v.sr = c.streamAt;
 		v.ctlSeq = c.ctl;
 		v.alive = true;
 		ApplyVoiceFlags(v, c.flags);
@@ -2186,7 +2192,7 @@ uint8_t SetVoiceCtl(ControlVoice& v, const VoiceParams& p) {
 }
 
 // a voice joins: its record and start claim, the Add command
-int AddVoice(ControlVoice&& v, uint8_t flags, double cursor, double startAt, int fadeIn) {
+int AddVoice(ControlVoice&& v, uint8_t flags, double cursor, double startAt, int fadeIn, uint64_t streamAt = 0) {
 	const int rec = FindRecord(); // (always one: Reap keeps the voices under kMaxVoices)
 	if (rec < 0) {
 		FreeVoice(v, 0);
@@ -2203,6 +2209,7 @@ int AddVoice(ControlVoice&& v, uint8_t flags, double cursor, double startAt, int
 	c.cursor = cursor;
 	c.startAt = startAt;
 	c.fadeIn = fadeIn;
+	c.streamAt = streamAt;
 	Push(c);
 	const int id = v.id;
 	g_c.voices.push_back(std::move(v));
@@ -3330,10 +3337,11 @@ int PlayStream(std::shared_ptr<StreamBuf> buf, const VoiceParams& p) {
 	v.c.slot = slot;
 	v.stream = std::move(buf);
 	v.c.own = p.own; // the listener's own stream: not spatialised (see VoiceParams::own)
-	// start from what is buffered now (no backlog)
-	v.stream->r.store(v.stream->w.load());
+	// start from what is buffered now (no backlog). The voice's own read position: the ring's index belongs to the audio
+	// thread, and the voice this one replaces may still be reading the same ring (fading out over its last block)
+	const uint64_t at = v.stream->w.load(std::memory_order_acquire);
 	const uint8_t flags = kResetSlot | SetVoiceCtl(v, p);
-	return AddVoice(std::move(v), flags, 0, 0, 0);
+	return AddVoice(std::move(v), flags, 0, 0, 0, at);
 }
 
 int PlayEcho(const std::string& name, int slot, int gen, float gain, float pitch, float delay, bool pausable) {
