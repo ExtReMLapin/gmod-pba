@@ -50,6 +50,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | A loop you come within range of while it plays (a car driving into the radius the server follows it in) | ◐ started at once (the engine's law is near silent at that radius) | ✅ faded in over a second, not started at its whole level | C `loops_edge_fade` |
 | A loop already playing when you join (an ambience, a machine near the spawn) | ✅ | ✅ joined once your client is ready, as when you walk into its range | S `loops_ready` |
 | A line stopped or cut off while you join (a cancelled scene, the speaker interrupted) | ✅ | ✅ not handed to the module once you are ready | S `early_purge` |
+| A sound restarted a tick or two later (two outputs of a map, a client reading several ticks per packet) plays once, as in the engine | ✅ | ✅ | S `stop_both` |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering

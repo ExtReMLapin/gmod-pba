@@ -570,5 +570,9 @@
  "early_purge": {
   "pos0": "hook",
   "why": "server: the lines an early window keeps dropped at their stop or channel cut (sv_relay A.PurgeEarly), outside P.Compute; covered by review_server M2"
+ },
+ "stop_both": {
+  "pos0": "hook",
+  "why": "server: an explicit stop or a channel cut sent on both network streams to the players relayed a copy in the last second (sv_relay A.RelayStop, A.CutChannel), outside P.Compute; covered by stop_order apart and review_server M5"
  }
 }

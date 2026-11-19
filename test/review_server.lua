@@ -114,16 +114,40 @@ cases.M2 = function(opt)
 		afterStop = afterStop, afterCut = table.concat(afterCut, ",") }
 end
 
+-- M5: the channel rule's cut of a copy relayed a tick or two earlier goes on both streams (pba_stop_both): reliable
+-- alone, a client reading both ticks in one packet reads it before the copy and the copy plays over its successor.
+-- A line on a can behind the closed door is relayed to the host; the next tick a second line on that channel is not
+-- (the host then has pba off on his side: the engine's), so the cut reaches him.
+cases.M5 = function(opt)
+	A.SetOverride("stop_both", opt)
+	local st = A.PState(ply)
+	local e = prop(Vector(784, 256, 40))
+	job:sleep(0.3)
+	local i0 = #sent
+	e:EmitSound(LINE1, 75, 100, 1, CHAN_VOICE)
+	local relayed = #to("pba_snd", i0)
+	job:frames(1)
+	st.off = true
+	local i1 = #sent
+	e:EmitSound(LINE2, 75, 100, 1, CHAN_VOICE)
+	st.off = false
+	local rel, unrel = 0, 0
+	for _, m in ipairs(to("pba_snd_stop", i1)) do if m.unreliable then unrel = unrel + 1 else rel = rel + 1 end end
+	job:sleep(0.1)
+	e:StopSound(LINE2)
+	return { pass = relayed == 1 and rel == 1 and unrel == 1, relayed = relayed, cutReliable = rel, cutUnreliable = unrel }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end
 local st0 = A.PState(ply)
-local wasReady, wasEarlyDone, wasEarlyT0 = st0.ready, st0.earlyDone, st0.earlyT0
+local wasReady, wasEarlyDone, wasEarlyT0, wasOff = st0.ready, st0.earlyDone, st0.earlyT0, st0.off
 local ok, res = pcall(fn, CONTROL and 0 or nil)
 unspy()
 st0.ready = wasReady == nil and true or wasReady
-st0.earlyDone, st0.earlyT0, st0.early = wasEarlyDone, wasEarlyT0, nil
-for _, k in ipairs({ "loops_ready", "early_purge" }) do A.SetOverride(k, nil) end
+st0.earlyDone, st0.earlyT0, st0.early, st0.off = wasEarlyDone, wasEarlyT0, nil, wasOff
+for _, k in ipairs({ "loops_ready", "early_purge", "stop_both" }) do A.SetOverride(k, nil) end
 for _, e in ipairs(spawned) do if IsValid(e) then e:Remove() end end
 if not ok then return { pass = false, err = tostring(res) } end
 res.case, res.control = CASE, CONTROL

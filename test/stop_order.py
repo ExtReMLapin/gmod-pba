@@ -14,10 +14,14 @@ Phases:
   pba      module voices of the file started (pba_native.Play) and not stopped 0.8 s later. Pass: exactly 1, as the engine.
 Pass: both. --off (pba_stop_order 0): must fail (2 voices). --control: the same run with the option off, judged the
 other way (the battery's control step): pass = 2 voices left.
-Usage: python -I test/stop_order.py <mcp.py> [--off | --control] [vanilla,pba]"""
+--apart (pba_stop_both): the second PlaySound one tick after the first, not in the same tick: a client at 20 fps (or a low
+cl_updaterate) reads both ticks in one packet, its reliable stop before both copies; --off / --control then turn
+pba_stop_both off (pba_stop_order stays on: the same-tick rule does not cover it).
+Usage: python -I test/stop_order.py <mcp.py> [--off | --control] [--apart] [vanilla,pba]"""
 import json, os, re, subprocess, sys, time
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 CONTROL = "--control" in sys.argv
+APART = "--apart" in sys.argv
 OFF = "--off" in sys.argv or CONTROL
 MCP = args[0]
 PHASES = args[1].split(",") if len(args) > 1 else ["vanilla", "pba"]
@@ -58,6 +62,8 @@ PBA_SO_AMB = e
 return e:EntIndex()""" % WAV
 # the map's outputs: two PlaySound in one tick (each one: SND_STOP, SND_STOP, the sound)
 FIRE = "PBA_SO_AMB:Fire('PlaySound') PBA_SO_AMB:Fire('PlaySound') return true"
+if APART:  # one tick apart (engine.TickInterval later): two ticks of one packet
+    FIRE = "PBA_SO_AMB:Fire('PlaySound') PBA_SO_AMB:Fire('PlaySound', '', engine.TickInterval() * 1.5) return true"
 SPY = r"""
 local NA = pba_native
 PBA_SO = { plays = {}, stops = {} }
@@ -121,7 +127,7 @@ def phase(name):
 
 
 if OFF:
-    call("console_exec", {"realm": "server", "cmd": "pba_stop_order 0"})
+    call("console_exec", {"realm": "server", "cmd": "pba_stop_both 0" if APART else "pba_stop_order 0"})
     time.sleep(1)
 res = {}
 for ph in PHASES:
@@ -129,4 +135,4 @@ for ph in PHASES:
 ok = all(v.get("pass") for v in res.values())
 if CONTROL:  # the old behaviour: both plays left as module voices
     ok = res.get("pba", {}).get("live") == 2
-print(json.dumps({"pass": ok, "off": OFF, "control": CONTROL, **res}))
+print(json.dumps({"pass": ok, "off": OFF, "control": CONTROL, "apart": APART, **res}))
