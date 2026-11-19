@@ -590,5 +590,9 @@
  "loops_join_pos": {
   "pos0": "hook",
   "why": "server: the position a joined loop's START carries (sv_loops send, the source's current one), outside P.Compute; covered by review_server S6"
+ },
+ "loops_cut_chan": {
+  "pos0": "hook",
+  "why": "server: which loops a channel cut stops (sv_loops LP.CutChannel, that channel only), outside P.Compute; covered by review_server S9"
  }
 }

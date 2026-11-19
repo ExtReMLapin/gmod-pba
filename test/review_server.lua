@@ -258,6 +258,25 @@ cases.S7 = function()
 		afterStop = tostring(afterStop) }
 end
 
+-- S9: the channel rule cuts the loops followed on the new sound's channel; it stopped their name on every channel (the
+-- same loop on another channel of the entity went too).
+cases.S9 = function(opt)
+	A.SetOverride("loops_cut_chan", opt)
+	local e = prop(Vector(320, 256, 40))
+	job:sleep(0.2)
+	local idx = e:EntIndex()
+	e:EmitSound(LOOP, 75, 100, 1, CHAN_BODY)
+	e:EmitSound(LOOP, 75, 100, 1, CHAN_ITEM)
+	job:sleep(0.1)
+	local kb, ki = idx .. ":" .. CHAN_BODY .. ":" .. LOOP, idx .. ":" .. CHAN_ITEM .. ":" .. LOOP
+	local both = LP.active[kb] ~= nil and LP.active[ki] ~= nil
+	e:EmitSound("buttons/button14.wav", 75, 100, 1, CHAN_ITEM)
+	job:sleep(0.1)
+	local body, item = LP.active[kb] ~= nil, LP.active[ki] ~= nil
+	LP.Stop(idx, LOOP)
+	return { pass = both and body and not item, both = both, bodyKept = body, itemCut = not item }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end

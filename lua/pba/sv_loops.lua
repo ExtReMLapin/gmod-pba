@@ -460,7 +460,8 @@ end
 -- lines and loops followed there under another name (the engine replaces them; a capped one is over).
 function LP.CutChannel(idx, chan, name)
 	for _, x in pairs(LP.active) do
-		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name) end
+		-- (pba_loops_cut_chan: that channel's only; the same name on another channel of the entity plays on)
+		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name, (A.cfg.loops_cut_chan or 1) >= 0.5 and chan or nil) end
 	end
 	for k, x in pairs(LP.capped) do
 		if x.idx == idx and x.chan == chan and x.name ~= name then LP.capped[k] = nil end
