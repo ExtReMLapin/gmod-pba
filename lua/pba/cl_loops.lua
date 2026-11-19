@@ -439,8 +439,11 @@ local function applyNative(m, S, L)
 	-- at the voice's gain
 	local now = RealTime()
 	local d = S:Distance(L)
-	m.srcSend = N.PhysSrcSend(m.lvl, d) * m.vol * A.cfg.native_gain
-	if m.nativeId and (not m.srcNext or now >= m.srcNext) then
+	-- ("#", dry mix: no slot, no room send, as N.PlayVoice: A.Render.Dry)
+	local dry = A.Render.Dry(m.name)
+	m.srcSend = dry and 0 or N.PhysSrcSend(m.lvl, d) * m.vol * A.cfg.native_gain
+	if dry then m.srcBound = false
+	elseif m.nativeId and (not m.srcNext or now >= m.srcNext) then
 		m.srcNext = now + 0.3
 		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
 	end
@@ -448,7 +451,7 @@ local function applyNative(m, S, L)
 	m.appliedPitch = m.pitch -- (and the pitch: changeNow)
 	gain = gain * m.vol * A.cfg.native_gain
 	local send = N.SlotFadeSend(m, m.srcBound, (trans or 0) * m.vol * A.cfg.native_gain, gain)
-	send = send * N.LoudWet(m.lvl) -- (a loud loop stays dry, as in the engine)
+	send = dry and 0 or send * N.LoudWet(m.lvl) -- (a loud loop stays dry, as in the engine)
 	m.roomSend = send
 	-- the speaker's EQ and Doppler, as every module voice (A.Render.Tail)
 	local el, em, eh = N.VoiceEQ(lp, S:Distance(L), lpDb)
@@ -598,7 +601,7 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	if m.nativeId then
 		N.ApplyStereo(m.nativeId, m.name, S:Distance(L), m.ent, S, L, m)
 		m.srcNext = RealTime() + 0.3
-		m.srcBound = N.BindSource(m.nativeId, S, m.srcSend)
+		m.srcBound = not A.Render.Dry(m.name) and N.BindSource(m.nativeId, S, m.srcSend)
 		-- a voice with its slot from birth feeds the room bus only what enters through walls, as a short voice
 		-- (cl_render switchNative / N.PlayVoice): the slot fade starting from "no slot" sent the full gain to the
 		-- listener's room for its first ~0.5 s (Breencast br_welcome05: 0.28 against 0.012; pba_loops_slot_birth)
@@ -1116,7 +1119,7 @@ function LP.FollowNative(L)
 					P.Retarget(ramp, g, el, em, eh, S, pitch) -- a ramp into clear sight ends on the moving entity
 				else
 					-- clear sight: nothing through walls; the reverb is the slot's (no slot: the room at the gain)
-					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, m.srcBound and 0 or g * N.LoudWet(m.lvl))
+					pba_native.Update(m.nativeId, S, g, el, em, eh, pitch, nil, (m.srcBound or A.Render.Dry(m.name)) and 0 or g * N.LoudWet(m.lvl))
 				end
 				N.ApplyStereo(m.nativeId, m.name, d, ent, S, L, m)
 			end

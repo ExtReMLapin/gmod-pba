@@ -786,7 +786,8 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	local offset = math.max(now - fv.t0, 0)
 	local sh = (A.cfg.native_path_fx or 0) >= 0.5 and t.sh or nil
 	-- the listener's room: what the path brings to its entry point (N.EntrySend), clear sight: none
-	local roomSend = t.len and t.pos and t.pos:DistToSqr(rec.S) > 1 and rec.vol * N.EntrySend(N.Law(rec.lvl), t, L, N.LossLin(t, rec.lvl))
+	local dry = A.Render.Dry(rec.name) -- ("#": no reverb, as N.PlayVoice)
+	local roomSend = not dry and t.len and t.pos and t.pos:DistToSqr(rec.S) > 1 and rec.vol * N.EntrySend(N.Law(rec.lvl), t, L, N.LossLin(t, rec.lvl))
 		* N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain * N.LoudWet(rec.lvl) or 0
 	-- the engine's mix value and ducking (cl_mix): the record's groups, found once
 	if A.Mix and not rec.mixG then rec.mixG = A.Mix.GroupsOf(rec.name, rec.ent, rec.chan, rec.lvl) end
@@ -803,11 +804,11 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	-- loud sound is already echoed; without a slot, a voice that is not a transmission feeds the room
 	local echoed = (A.cfg.native_all or 0) < 0.5 and rec.lvl >= (A.cfg.native_echo_lvl or 95)
 	local bound = false
-	if dominant and not echoed and rec.S then
+	if dominant and not echoed and not dry and rec.S then
 		local srcSend = rec.vol * N.PhysSrcSend(rec.lvl, rec.S:Distance(L)) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain
 		bound = N.BindSource(id, rec.S, srcSend)
 	end
-	if not bound and roomSend <= 0 then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g * N.LoudWet(rec.lvl)) end
+	if not bound and roomSend <= 0 and not dry then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g * N.LoudWet(rec.lvl)) end
 	fv.stSel, fv.stW = nil, nil
 	if rec.S then N.ApplyStereo(id, rec.name, t.len or rec.S:Distance(L), rec.dirEnt, rec.S, L, fv) end
 	-- the engine copy stops once the module has it (stopCopy without cancelling the handle)
