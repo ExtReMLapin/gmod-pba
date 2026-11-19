@@ -847,7 +847,7 @@ local function switchNative(rec, fv, t, L, now, dominant)
 	local bound = false
 	if dominant and not echoed and not dry and rec.S then
 		local srcSend = rec.vol * N.PhysSrcSend(rec.lvl, rec.S:Distance(L)) * N.Directivity(rec.dirEnt, L, rec.chan, rec.aim) * A.cfg.native_gain
-		bound = N.BindSource(id, rec.S, srcSend)
+		bound = N.BindSource(id, rec.S, srcSend, N.LoudWet(rec.lvl)) -- (wet: its room-bus cap while the slot waits)
 	end
 	if not bound and roomSend <= 0 and not dry then pba_native.Update(id, pos, g, el, em, eh, pitch, nil, g * N.LoudWet(rec.lvl)) end
 	fv.stSel, fv.stW = nil, nil
