@@ -586,5 +586,9 @@
  "own_ready": {
   "pos0": "hook",
   "why": "server: a player's own sound relayed to his module only once his client is ready (sv_sound S.Audience), outside P.Compute; covered by review_server S5"
+ },
+ "loops_join_pos": {
+  "pos0": "hook",
+  "why": "server: the position a joined loop's START carries (sv_loops send, the source's current one), outside P.Compute; covered by review_server S6"
  }
 }

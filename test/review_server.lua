@@ -209,6 +209,29 @@ cases.S5 = function(opt)
 	return { pass = relayed == 0, relayedToNotReady = relayed }
 end
 
+-- S6: a player joining a loop that plays (entering its range, or ready) gets its START with the source's position: it was
+-- the position at the loop's start, wrong for a moving source (a car, a helicopter) out of his PVS (no entity to follow).
+cases.S6 = function(opt)
+	A.SetOverride("loops_join_pos", opt)
+	local e = prop(Vector(320, 256, 40))
+	job:sleep(0.2)
+	e:EmitSound(LOOP, 75, 100, 1, CHAN_STATIC)
+	job:sleep(0.2)
+	local l
+	for _, x in pairs(LP.active) do if x.ent == e then l = x end end
+	if not l then return { pass = false, err = "loop not followed" } end
+	e:SetPos(Vector(320, 900, 40))
+	job:sleep(0.1)
+	l.subs[ply] = nil
+	local i0 = #sent
+	job:sleep(1.2)
+	local m = to("pba_loop", i0)[1]
+	e:StopSound(LOOP)
+	if not m or not m.pos then return { pass = false, err = "no join start" } end
+	local off = m.pos:Distance(e:WorldSpaceCenter())
+	return { pass = off < 16, joinPosOff = math.Round(off, 1) }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end
