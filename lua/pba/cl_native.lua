@@ -2090,6 +2090,43 @@ function N.SyncDoors()
 	-- continuous sounds re-evaluate (reeval_adaptive; P.ReevalDue watches the world version)
 	local L, moved = A.ListenerPos(), false
 	local function near(p) return L and p and p:DistToSqr(L) < MOVED_NEAR2 end
+	-- pba_native_moved_local: what the object swept (its box at its last mark and its box now, one world AABB) goes
+	-- to P.InvalidateRegion; only the paths and sounds of that region are re-evaluated. 0: the whole cache emptied.
+	local localMode = (A.cfg.native_moved_local or 1) >= 0.5 and A.Paths and A.Paths.InvalidateRegion
+	local boxes
+	local function mark(d, e)
+		if not localMode then moved = true return end
+		local b = d.bx
+		local x0, y0, z0, x1, y1, z1
+		if IsValid(e) then
+			local a, c = e:WorldSpaceAABB()
+			x0, y0, z0, x1, y1, z1 = a.x, a.y, a.z, c.x, c.y, c.z
+			local px0, py0, pz0, px1, py1, pz1
+			if b then
+				px0, py0, pz0, px1, py1, pz1 = b[1], b[2], b[3], b[4], b[5], b[6]
+			else
+				-- (first mark: the box it left, its box now moved back to its last place sent)
+				b = {}
+				d.bx = b
+				local q, o = e:GetPos(), d.p or e:GetPos()
+				local dx, dy, dz = o.x - q.x, o.y - q.y, o.z - q.z
+				px0, py0, pz0, px1, py1, pz1 = x0 + dx, y0 + dy, z0 + dz, x1 + dx, y1 + dy, z1 + dz
+			end
+			b[1], b[2], b[3], b[4], b[5], b[6] = x0, y0, z0, x1, y1, z1
+			x0, y0, z0 = math.min(x0, px0), math.min(y0, py0), math.min(z0, pz0)
+			x1, y1, z1 = math.max(x1, px1), math.max(y1, py1), math.max(z1, pz1)
+		elseif b then
+			x0, y0, z0, x1, y1, z1 = b[1], b[2], b[3], b[4], b[5], b[6]
+		elseif d.p then
+			local p = d.p -- (gone, its box never known: a cube round its last place)
+			x0, y0, z0, x1, y1, z1 = p.x - 64, p.y - 64, p.z - 64, p.x + 64, p.y + 64, p.z + 64
+		else
+			return
+		end
+		boxes = boxes or {}
+		local n = #boxes
+		boxes[n + 1], boxes[n + 2], boxes[n + 3], boxes[n + 4], boxes[n + 5], boxes[n + 6] = x0, y0, z0, x1, y1, z1
+	end
 	local farM = A.cfg.native_scene_far_m or 20
 	local farR2 = farM > 0 and L and (farM * UNITS_PER_M) ^ 2 or nil
 	local function track(e, id, d)
@@ -2125,7 +2162,7 @@ function N.SyncDoors()
 				propSent = true
 			end
 			pba_native.DynamicMove(id, e:GetWorldTransformMatrix():ToTable())
-			if d.p and near(p) then moved = true end
+			if d.p and near(p) then mark(d, e) end
 			d.p, d.a = p, a
 		end
 	end
@@ -2215,7 +2252,7 @@ function N.SyncDoors()
 	-- unseen (gone, no longer a candidate, props switched off): out of the scene
 	for id, d in pairs(N.doors) do
 		if (not seen[id] and not (hold and d.prop)) or (d.prop and not wantProps) then
-			if d.prop and near(d.p) then moved = true end
+			if d.prop and near(d.p) then mark(d, d.ent) end
 			if d.prop then propSent = true end
 			removeDyn(id)
 		end
@@ -2231,7 +2268,7 @@ function N.SyncDoors()
 			local c = cands[i]
 			local d = N.doors[c.id]
 			if d and d.prop then
-				if near(d.p) then moved = true end
+				if near(d.p) then mark(d, c.e) end
 				removeDyn(c.id)
 				propSent = true
 			end
@@ -2246,7 +2283,7 @@ function N.SyncDoors()
 					local d = addProp(c.e, c.id, c.info)
 					addSpent = addSpent + (SysTime() - t0) * 1000
 					track(c.e, c.id, d)
-					if near(d.p) then moved = true end
+					if near(d.p) then mark(d, c.e) end
 					propSent = true
 				end
 			end
@@ -2257,6 +2294,7 @@ function N.SyncDoors()
 	-- the module only commits when something changed (and retries itself after a running bake)
 	pba_native.DynamicCommit()
 	if moved and A.Paths then A.Paths.InvalidateCache() end
+	if boxes then A.Paths.InvalidateRegion(boxes) end
 end
 timer.Create("pba_native_doors", 0.1, 0, function() N.SyncDoors() end)
 

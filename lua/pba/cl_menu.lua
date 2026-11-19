@@ -237,6 +237,7 @@ function Build.native(panel)
 	dep(chk(panel, "Props over the cap: only the ranking's winners enter", "native_props_rank_keep"), "ready")
 	dep(sld(panel, "Far moving objects: updated once at rest beyond (m, 0 = never)", "native_scene_far_m"), "ready")
 	dep(sld(panel, "Spinning objects: seconds before they are updated rarely (0 = never)", "native_spin_s", 1), "ready")
+	dep(chk(panel, "Moving objects re-evaluate only the sounds near them", "native_moved_local"), "ready")
 
 	panel:Help("Limits:")
 	dep(sld(panel, "Max native voices", "native_max_voices"), R)

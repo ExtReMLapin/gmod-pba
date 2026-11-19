@@ -2916,6 +2916,88 @@ function P.InvalidateCache()
 	P.cacheGen = P.cacheGen + 1
 end
 
+-- pba_native_moved_local: an object that moved near the listener (N.SyncDoors) invalidates the region it swept, not the
+-- whole cache. P.regionGen counts those invalidations, P.regionLog keeps the last REGION_LOG boxes ({ gen, box }; box =
+-- { x0, y0, z0, x1, y1, z1, ... }, six numbers per object). A cached result, a memo or a sound (P.ReevalDue) whose region
+-- the box, grown by REGION_MARGIN, does not touch is kept.
+P.regionGen = P.regionGen or 0
+P.regionLog = P.regionLog or {}
+do -- (a block: this file is at the 200 locals a chunk may have)
+local REGION_LOG = 32
+local REGION_MARGIN = 128
+-- a result's region: its ends and the points of its routes and edge (computed once, kept beside the result)
+local extOf = setmetatable({}, { __mode = "k" })
+local function extentOf(r)
+	local e = extOf[r]
+	if e then return e end
+	local S, L = r.S, r.L
+	local x0, y0, z0 = math.min(S.x, L.x), math.min(S.y, L.y), math.min(S.z, L.z)
+	local x1, y1, z1 = math.max(S.x, L.x), math.max(S.y, L.y), math.max(S.z, L.z)
+	local function add(v)
+		if v.x < x0 then x0 = v.x elseif v.x > x1 then x1 = v.x end
+		if v.y < y0 then y0 = v.y elseif v.y > y1 then y1 = v.y end
+		if v.z < z0 then z0 = v.z elseif v.z > z1 then z1 = v.z end
+	end
+	for _, p in ipairs(r.paths or {}) do
+		for _, v in ipairs(p.points or {}) do add(v) end
+	end
+	if r.edge and r.edge.apex then add(r.edge.apex) end
+	e = { x0, y0, z0, x1, y1, z1 }
+	extOf[r] = e
+	return e
+end
+-- true when one of the boxes of bx (grown by REGION_MARGIN) overlaps the box x0..z1
+local function boxesTouch(bx, x0, y0, z0, x1, y1, z1)
+	local m = REGION_MARGIN
+	for i = 1, #bx, 6 do
+		if bx[i] - m <= x1 and bx[i + 3] + m >= x0 and bx[i + 1] - m <= y1 and bx[i + 4] + m >= y0
+			and bx[i + 2] - m <= z1 and bx[i + 5] + m >= z0 then return true end
+	end
+	return false
+end
+local function resultTouches(r, bx)
+	if not (r and r.S and r.L) then return true end
+	local e = extentOf(r)
+	return boxesTouch(bx, e[1], e[2], e[3], e[4], e[5], e[6])
+end
+-- true when a box logged after generation gen0 touches the region x0..z1 (or the log no longer reaches back to gen0)
+local function regionSince(gen0, x0, y0, z0, x1, y1, z1)
+	local log = P.regionLog
+	if #log == 0 or log[1].gen > gen0 + 1 then return true end
+	for i = #log, 1, -1 do
+		local g = log[i]
+		if g.gen <= gen0 then break end
+		if boxesTouch(g.box, x0, y0, z0, x1, y1, z1) then return true end
+	end
+	return false
+end
+
+--- Empties the cached results and memos whose region one of the boxes touches (bx: six numbers per box, world
+-- AABB of what an object swept; the table is kept in the log) and logs it for P.ReevalDue.
+function P.InvalidateRegion(bx)
+	if #bx == 0 then return end
+	for k, e in pairs(P.cache) do
+		if resultTouches(e.r, bx) then P.cache[k] = nil end
+	end
+	local list = P.timeMemo
+	for i = #list, 1, -1 do
+		if resultTouches(list[i].r, bx) then table.remove(list, i) end
+	end
+	P.regionGen = P.regionGen + 1
+	local log = P.regionLog
+	log[#log + 1] = { gen = P.regionGen, box = bx }
+	if #log > REGION_LOG then table.remove(log, 1) end
+end
+
+--- True when a region invalidation logged after generation gen0 touches the result r (P.Compute's store guard).
+function P.RegionTouched(gen0, r)
+	if gen0 == P.regionGen then return false end
+	local e = extentOf(r)
+	return regionSince(gen0, e[1], e[2], e[3], e[4], e[5], e[6])
+end
+P.RegionSince = regionSince
+end -- (region invalidation)
+
 --- Adaptive re-evaluation of a continuous sound (loop, long sound, radio: reeval_adaptive). Its path
 -- only changes when the source or the listener moves, or when the world model changes: P.cacheGen,
 -- bumped by everything that calls P.InvalidateCache (door states, map, probe graph, native scene,
@@ -2933,11 +3015,22 @@ function P.ReevalDue(state, S, L, now, cfg)
 			local mv2 = mv * mv
 			local dx, dy, dz = S.x - state.sx, S.y - state.sy, S.z - state.sz
 			local ex, ey, ez = L.x - state.lx, L.y - state.ly, L.z - state.lz
-			if dx * dx + dy * dy + dz * dz <= mv2 and ex * ex + ey * ey + ez * ez <= mv2 then return false end
+			if dx * dx + dy * dy + dz * dz <= mv2 and ex * ex + ey * ey + ez * ez <= mv2 then
+				-- pba_native_moved_local: an object moved since, somewhere: due if what it swept touches the box of
+				-- the source and the listener (then and now), else the sound keeps its path
+				local rg = state.rgen
+				if rg == P.regionGen then return false end
+				if rg and not P.RegionSince(rg, math.min(S.x, L.x, state.sx, state.lx), math.min(S.y, L.y, state.sy, state.ly),
+					math.min(S.z, L.z, state.sz, state.lz), math.max(S.x, L.x, state.sx, state.lx),
+					math.max(S.y, L.y, state.sy, state.ly), math.max(S.z, L.z, state.sz, state.lz)) then
+					state.rgen = P.regionGen
+					return false
+				end
+			end
 		end
 	end
 	-- numbers, not the vectors: an owner may move the same Vector object in place
-	state.t, state.gen, state.force, state.n = now, P.cacheGen, nil, (state.n or 0) + 1
+	state.t, state.gen, state.rgen, state.force, state.n = now, P.cacheGen, P.regionGen, nil, (state.n or 0) + 1
 	state.sx, state.sy, state.sz, state.lx, state.ly, state.lz = S.x, S.y, S.z, L.x, L.y, L.z
 	return true
 end
@@ -3322,12 +3415,14 @@ end
 -- Stage 1b, the result kept: dead entries swept (older than cache_ttl: never served again); only
 -- P.InvalidateCache emptied the cache, one entry per cell pair, level, emitter and line state, for good on a
 -- map whose doors never move
-local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0)
+local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0, region0)
 	-- pba_cache_gen_guard: the world model changed while this evaluation ran (a far sound's job, cl_slicer: a
 	-- setting, a door state, the probe graph or a door field changed between or inside its slices). Its answer,
 	-- partly on the old inputs, was kept under the NEW generation (read at the store): the job's own restart read
 	-- it back, and the next sounds of that cell or emitter got it for cache_ttl / reeval_max_s. Not kept then.
 	if gen0 and (gen0 ~= P.cacheGen or world0 ~= P.worldGen or field0 ~= (A.Probes and A.Probes.fieldEpoch or 0)) then return end
+	-- (an object near the listener swept its region meanwhile, pba_native_moved_local: the same)
+	if region0 and region0 ~= P.regionGen and P.RegionTouched(region0, r) then return end
 	if now >= (P.cacheSweepT or 0) then
 		P.cacheSweepT = now + CACHE_SWEEP_S
 		local ttl = cfg.cache_ttl
@@ -3702,6 +3797,7 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	-- (numbers, not a table: no garbage per evaluation)
 	local gen0 = (cfg.cache_gen_guard or 1) >= 0.5 and P.cacheGen or nil
 	local world0, field0 = P.worldGen, A.Probes and A.Probes.fieldEpoch or 0
+	local region0 = gen0 and P.regionGen or nil
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
@@ -3734,6 +3830,6 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 		end
 		selectVoices(r, S, L, sndlvl, cfg)
 	end
-	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0)
+	storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0, region0)
 	return r
 end

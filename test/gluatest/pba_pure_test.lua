@@ -1351,6 +1351,42 @@ local SUITE = {
 			expect(P.ReevalDue(st, S, L, 1.0, cfg)).to.beTrue()
 			expect(P.ReevalDue(st, S, L, 1.25, cfg)).to.equal(false)
 		end },
+		{ name = "ReevalDue: an object moving away from the source and the listener (InvalidateRegion) keeps the sound; one moving near them re-evaluates it", func = function()
+			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 1, update_interval = 0.25 }, { __index = CFG })
+			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
+			P.ReevalDue(st, S, L, 0, cfg)
+			-- a lift 600 u off, sweeping 10 u: far beyond the 128 u margin
+			P.InvalidateRegion({ 600, 600, 0, 664, 664, 74 })
+			expect(P.ReevalDue(st, S, L, 0.25, cfg)).to.equal(false)
+			P.InvalidateRegion({ 600, 610, 0, 664, 674, 74 })
+			expect(P.ReevalDue(st, S, L, 0.5, cfg)).to.equal(false)
+			-- a door leaf 60 u beside the line
+			P.InvalidateRegion({ 40, 60, 0, 44, 116, 100 })
+			expect(P.ReevalDue(st, S, L, 0.75, cfg)).to.beTrue()
+			expect(P.ReevalDue(st, S, L, 1.0, cfg)).to.equal(false) -- once
+			-- more moves than the log keeps since the last evaluation: due (nothing known of the oldest)
+			for i = 1, 40 do P.InvalidateRegion({ 5000, 5000, 0, 5010, 5010, 10 }) end
+			expect(P.ReevalDue(st, S, L, 1.25, cfg)).to.beTrue()
+		end },
+		{ name = "InvalidateRegion: drops the cached results and memos whose ends or route points the box touches, keeps the others", func = function()
+			local cfg = setmetatable({ group_time = 1, reeval_move = 8, reeval_max_s = 1, cache_ttl = 0.25 }, { __index = CFG })
+			P.InvalidateCache()
+			local r1 = { S = Vector(0, 0, 0), L = Vector(100, 0, 0), paths = { { points = { Vector(50, 400, 0) } } } }
+			local r2 = { S = Vector(2000, 0, 0), L = Vector(2100, 0, 0) }
+			P.cache.a = { t = 0, r = r1 }
+			P.cache.b = { t = 0, r = r2 }
+			P.timeMemo[1] = { t = 0, r = r1 }
+			P.timeMemo[2] = { t = 0, r = r2 }
+			local g = P.cacheGen
+			-- touches r1's route point (50, 400) within the margin, not its ends; nowhere near r2
+			P.InvalidateRegion({ 40, 450, 0, 60, 460, 10 })
+			expect(P.cache.a).to.equal(nil)
+			expect(P.cache.b ~= nil).to.beTrue()
+			expect(#P.timeMemo).to.equal(1)
+			expect(P.timeMemo[1].r == r2).to.beTrue()
+			expect(P.cacheGen).to.equal(g) -- the far sounds' jobs are not restarted
+			P.InvalidateCache()
+		end },
 		{ name = "ReevalDue: never twice within half an update_interval, whatever changed", func = function()
 			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 0.1, update_interval = 1 }, { __index = CFG })
 			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
