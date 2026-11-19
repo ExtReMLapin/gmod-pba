@@ -231,6 +231,10 @@
   "pos0": "hook",
   "why": "native module scene (mover shapes): test mover_hollow_lift"
  },
+ "native_props_add_ms": {
+  "pos0": "hook",
+  "why": "native module scene (when props enter it, spread over the syncs): test native_props_add"
+ },
  "native_props_hull": {
   "pos0": "hook",
   "why": "native module scene (prop shapes): test source_inside_prop"

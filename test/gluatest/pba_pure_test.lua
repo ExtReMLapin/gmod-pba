@@ -1737,6 +1737,88 @@ local SUITE = {
 				expect(routeClear(r2) and r2[2]:Distance(Vector(720, 320, 64)) > 8).to.beTrue()
 			end)
 		end },
+		{ name = "WorldSegMemo: no table per kept answer (a moving listener's segments are new ones: one entry per trace, a quarter of pba's garbage on gm_cozyforestcabin)", func = function()
+			local calls = 0
+			local function f(a, b) calls = calls + 1 return a.x < b.x end
+			local memo = P.WorldSegMemo(f, 4096)
+			local a, b = Vector(0, 0, 0), Vector(0, 0, 0)
+			local function fill(base)
+				for i = 1, 4000 do
+					a:SetUnpacked(base + i, i * 0.5, 3)
+					b:SetUnpacked(i * 2, base - i, 7)
+					memo(a, b)
+				end
+			end
+			fill(0) -- (the arrays reach their size)
+			fill(1e5) -- (emptied at the limit: same sizes again)
+			collectgarbage("stop")
+			local k0 = collectgarbage("count")
+			fill(2e5)
+			local k1 = collectgarbage("count")
+			collectgarbage("restart")
+			local perEntry = (k1 - k0) * 1024 / 4000
+			print(string.format("[pba test] WorldSegMemo garbage per new entry: %.0f bytes", perEntry))
+			-- (the head table's growth stays: a hash node per bucket)
+			expect(perEntry < 64).to.beTrue()
+			-- answers unchanged: hits give the kept answer, the function is not called again
+			local c0 = calls
+			a:SetUnpacked(2e5 + 3999, 1999.5, 3) -- (kept after the last emptying)
+			b:SetUnpacked(7998, 2e5 - 3999, 7)
+			expect(memo(a, b)).to.equal(false)
+			expect(calls).to.equal(c0)
+		end },
+		{ name = "Probe tighten: its bisections make no garbage per step (three new Vectors a step were half of pba's garbage with a far sound re-evaluated, gm_cozyforestcabin)", func = function()
+			-- a pillar between a and b (world box 640..680 x 200..300); the stub traces write their shared output table
+			-- and make nothing, the answers are kept by the probes' memo after the first call: what remains is Tighten's own
+			local mnx, mny, mxx, mxy = 640, 200, 680, 300
+			local function hits(t)
+				local pad = t.maxs and t.maxs.x or 0
+				local ax, ay = t.start.x, t.start.y
+				local dx, dy = t.endpos.x - ax, t.endpos.y - ay
+				local t0, t1 = 0, 1
+				for k = 1, 2 do
+					local o, d, lo, hi = k == 1 and ax or ay, k == 1 and dx or dy, (k == 1 and mnx or mny) - pad, (k == 1 and mxx or mxy) + pad
+					if d == 0 then
+						if o < lo or o > hi then return false end
+					else
+						local u0, u1 = (lo - o) / d, (hi - o) / d
+						if u0 > u1 then u0, u1 = u1, u0 end
+						if u0 > t0 then t0 = u0 end
+						if u1 < t1 then t1 = u1 end
+						if t0 > t1 then return false end
+					end
+				end
+				return true
+			end
+			local function stub(t)
+				local o = t.output
+				local h = hits(t)
+				o.Hit, o.Fraction, o.StartSolid, o.AllSolid, o.HitPos = h, h and 0.5 or 1, false, false, t.endpos
+				o.HitWorld, o.HitNoDraw, o.HitTexture = true, false, ""
+				return o
+			end
+			local saved, savedNT = { util.TraceLine, util.TraceHull }, A.cfg.native_traces
+			util.TraceLine, util.TraceHull, A.cfg.native_traces = stub, stub, 0
+			local ok, err = pcall(function()
+				local runs = {}
+				for i = 1, 60 do runs[i] = { Vector(600, 320, 64), Vector(720, 320, 64), Vector(720, 160, 64) } end
+				local r = A.Probes.Tighten(runs[1])
+				-- (the case tightens: the corner goes to the pillar's edge, many bisection steps)
+				expect(#r == 3 and r[2]:Distance(Vector(720, 320, 64)) > 8).to.beTrue()
+				for i = 2, 10 do A.Probes.Tighten(runs[i]) end
+				collectgarbage("stop")
+				local k0 = collectgarbage("count")
+				for i = 11, 60 do A.Probes.Tighten(runs[i]) end
+				local k1 = collectgarbage("count")
+				collectgarbage("restart")
+				local perCall = (k1 - k0) * 1024 / 50
+				-- bytes per call; a reference print helps set the bound (main: see the commit)
+				print(string.format("[pba test] Tighten garbage per call: %.0f bytes", perCall))
+				expect(perCall < 2048).to.beTrue()
+			end)
+			util.TraceLine, util.TraceHull, A.cfg.native_traces = saved[1], saved[2], savedNT
+			if not ok then error(err, 0) end
+		end },
 		{ name = "Doors: closed end by geometry then start-open flag, brush doors keep their thickness, double doors add in power", func = function()
 			local D = pba.Doors
 			if not D.CombineLeaves then return end -- sh_doors.lua is loaded in game only, not by the offline runner

@@ -212,6 +212,7 @@ function Build.native(panel)
 	dep(chk(panel, "Props take their collision shape (not their box)", "native_props_hull"), "ready")
 	dep(chk(panel, "Lifts and movers use their real shape", "native_movers_brushes"), "ready")
 	dep(chk(panel, "Update props only out of fights", "native_props_calm"), "ready")
+	dep(sld(panel, "Props entering the scene: ms per update (0 = all at once)", "native_props_add_ms", 1), "ready")
 	dep(sld(panel, "Spinning objects: seconds before they are updated rarely (0 = never)", "native_spin_s", 1), "ready")
 
 	panel:Help("Limits:")

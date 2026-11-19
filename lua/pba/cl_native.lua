@@ -2057,6 +2057,10 @@ function N.SyncDoors()
 	local hold = wantProps and (A.cfg.native_props_calm or 1) >= 0.5
 		and (now < (N.propCommitT or 0) or (A.Sched and A.Sched.InCombat and A.Sched.InCombat()))
 	local propSent = false
+	-- pba_native_props_add_ms: the props entering the scene this sync stop once their DynamicAdd calls took that
+	-- long (the first always enters); the others enter at the next syncs, which the calm hold then does not wait for
+	local addMs = A.cfg.native_props_add_ms or 3
+	local addSpent, addCut = 0, false
 	local rerank = wantProps and not hold and now >= (N.propRankT or 0)
 	if rerank then N.propRankT = now + PROP_RANK_S end
 	local cands = rerank and {} or nil
@@ -2159,11 +2163,17 @@ function N.SyncDoors()
 				if d then
 					seen[id] = true
 				elseif nProps < cap and not hold then
-					-- room left under the cap: in at once (the next ranking may swap it out)
-					d = addProp(e, id, info)
-					nProps = nProps + 1
-					seen[id] = true
-					propSent = true
+					if addMs > 0 and addSpent >= addMs then
+						addCut = true -- (this sync's share is spent: at the next one)
+					else
+						-- room left under the cap: in at once (the next ranking may swap it out)
+						local t0 = SysTime()
+						d = addProp(e, id, info)
+						addSpent = addSpent + (SysTime() - t0) * 1000
+						nProps = nProps + 1
+						seen[id] = true
+						propSent = true
+					end
 				end
 				if cands then cands[#cands + 1] = { e = e, id = id, info = info, s = propScore(e, info, L) * (d and PROP_KEEP or 1) } end
 			end
@@ -2194,14 +2204,21 @@ function N.SyncDoors()
 		for i = 1, cap do
 			local c = cands[i]
 			if not N.doors[c.id] then
-				local d = addProp(c.e, c.id, c.info)
-				track(c.e, c.id, d)
-				if near(d.p) then moved = true end
-				propSent = true
+				if addMs > 0 and addSpent >= addMs then
+					addCut = true
+				else
+					local t0 = SysTime()
+					local d = addProp(c.e, c.id, c.info)
+					addSpent = addSpent + (SysTime() - t0) * 1000
+					track(c.e, c.id, d)
+					if near(d.p) then moved = true end
+					propSent = true
+				end
 			end
 		end
 	end
-	if propSent and (A.cfg.native_props_calm or 1) >= 0.5 then N.propCommitT = now + PROP_COMMIT_S end
+	-- (props left for the next syncs: no calm hold before them, they come in at the next sync)
+	if propSent and (A.cfg.native_props_calm or 1) >= 0.5 then N.propCommitT = addCut and now or now + PROP_COMMIT_S end
 	-- the module only commits when something changed (and retries itself after a running bake)
 	pba_native.DynamicCommit()
 	if moved and A.Paths then A.Paths.InvalidateCache() end

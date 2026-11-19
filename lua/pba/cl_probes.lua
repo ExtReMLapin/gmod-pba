@@ -1545,6 +1545,23 @@ end
 -- the taut string (each pass only moves a bend part of the way when its neighbours move too).
 local MOVE_EPS, MAX_PASSES, MAX_HALVINGS = 1, 32, 24
 
+-- Scratch points of the bisections below: each probe point is built in place (Set / Sub / Mul / Add, the very
+-- float operations of `q + (t - q) * mid`, so the same bits) instead of three new Vectors per step. They were
+-- about half of pba's garbage while a far sound was re-evaluated (gm_cozyforestcabin, the listener moving: 2.8 of
+-- 5.8 MB). Each is filled after the step's slice check and read only by the traces of that step (the traces
+-- keep numbers, never the Vector), so a slice yielding to another evaluation never finds one half-used.
+local slidePt, edgePt, edgeGoal, tightPt, tightRel = Vector(), Vector(), Vector(), Vector(), Vector()
+local tightAb, tightTarget = Vector(), Vector()
+local edgeA, edgeB, edgeQ = Vector(), Vector(), Vector()
+-- out = q + (t - q) * k, in place
+local function lerpInto(out, q, t, k)
+	out:Set(t)
+	out:Sub(q)
+	out:Mul(k)
+	out:Add(q)
+	return out
+end
+
 --- Moves q along q -> toward as far as `other` still sees it (to MOVE_EPS).
 local function slideTo(q, toward, other)
 	local len = q:Distance(toward)
@@ -1553,29 +1570,33 @@ local function slideTo(q, toward, other)
 		if (hi - lo) * len < MOVE_EPS then break end
 		sliceCheck()
 		local mid = (lo + hi) / 2
-		if clearFat(q + (toward - q) * mid, other) then lo = mid else hi = mid end
+		if clearFat(lerpInto(slidePt, q, toward, mid), other) then lo = mid else hi = mid end
 	end
-	return q + (toward - q) * lo
+	return lerpInto(Vector(), q, toward, lo) -- (one new Vector, not the operators' three)
 end
 
 --- Moves q vertically towards the height of the a-b line above q, as far as both ends still see it.
 local function alongEdgeZ(q, a, b)
-	local ha, hb = Vector(a.x, a.y, 0), Vector(b.x, b.y, 0)
-	local hq = Vector(q.x, q.y, 0)
+	local ha, hb, hq = edgeA, edgeB, edgeQ
+	ha:SetUnpacked(a.x, a.y, 0)
+	hb:SetUnpacked(b.x, b.y, 0)
+	hq:SetUnpacked(q.x, q.y, 0)
 	local da, db = ha:Distance(hq), hq:Distance(hb)
 	if da + db < 1 then return q end
 	local zt = a.z + (b.z - a.z) * da / (da + db)
-	local goal = Vector(q.x, q.y, zt)
+	local goal = edgeGoal
 	local len = abs(zt - q.z)
 	local lo, hi = 0, 1
 	for _ = 1, MAX_HALVINGS do
 		if (hi - lo) * len < MOVE_EPS then break end
 		sliceCheck()
 		local mid = (lo + hi) / 2
-		local p = q + (goal - q) * mid
+		goal:SetUnpacked(q.x, q.y, zt) -- (after the slice check: another evaluation may have used it meanwhile)
+		local p = lerpInto(edgePt, q, goal, mid)
 		if clearFat(a, p) and clearFat(p, b) then lo = mid else hi = mid end
 	end
-	return q + (goal - q) * lo
+	goal:SetUnpacked(q.x, q.y, zt)
+	return lerpInto(Vector(), q, goal, lo)
 end
 
 -- Every move starts from a vertex whose two segments are traced clear: the bisection keeps lo = 0 (the
@@ -1599,10 +1620,19 @@ local function tighten(pts)
 		while i < #pts do
 			sliceCheck()
 			local a, v, b = pts[i - 1], pts[i], pts[i + 1]
-			local ab = b - a
+			local ab = tightAb
+			ab:Set(b)
+			ab:Sub(a)
 			local len2 = ab:LengthSqr()
-			local t = len2 > 0 and math.Clamp((v - a):Dot(ab) / len2, 0, 1) or 0
-			local target = a + ab * t
+			tightRel:Set(v)
+			tightRel:Sub(a)
+			local t = len2 > 0 and math.Clamp(tightRel:Dot(ab) / len2, 0, 1) or 0
+			-- target = a + ab * t, kept as numbers across the slice checks below (the scratch is set again after each)
+			local target = tightTarget
+			target:Set(ab)
+			target:Mul(t)
+			target:Add(a)
+			local tx, ty, tz = target:Unpack()
 			if clearFat(a, b) then
 				table.remove(pts, i)
 				table.remove(ok, i)
@@ -1617,10 +1647,12 @@ local function tighten(pts)
 					if (hi - lo) * len < MOVE_EPS then break end
 					sliceCheck()
 					local mid = (lo + hi) / 2
-					local q = v + (target - v) * mid
+					target:SetUnpacked(tx, ty, tz)
+					local q = lerpInto(tightPt, v, target, mid)
 					if clearFat(a, q) and clearFat(q, b) then lo = mid else hi = mid end
 				end
-				local nv = v + (target - v) * lo
+				target:SetUnpacked(tx, ty, tz)
+				local nv = lerpInto(Vector(), v, target, lo)
 				-- the corner is not always on the way to the straight line: a probe inside a room seeing
 				-- the listener through a doorway diagonally stayed 30 u from the jamb (straight line
 				-- through the wall; rp_downtown: 10.5 dB, lp 2 for a radio 40 u from the jamb). Slide
