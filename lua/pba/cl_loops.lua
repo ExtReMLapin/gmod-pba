@@ -378,13 +378,14 @@ local function holdTunnel(m, share)
 	return m.tunnel
 end
 
---- Engine preset of low-pass level `level` with the tunnel choice already decided (held).
-local function presetFor(level, tunnel)
+--- Engine preset of low-pass level `level` with the tunnel choice already decided (held). Also cl_render's.
+function LP.PresetFor(level, tunnel)
 	level = level or 0
 	-- a share of 1 is above any diffuse_dsp_at: AC.DSPForVoice keeps its own rule (diffuse model off: plain)
 	if tunnel then return AC.DSPForVoice(level, 1) end
 	return AC.DSPForLevel(level)
 end
+local presetFor = LP.PresetFor
 
 --- Gain multiplier and DSP of a loop at S for the local listener (nil while its evaluation runs, pathOf).
 local function muffle(m, S, L)

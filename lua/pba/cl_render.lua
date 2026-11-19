@@ -483,13 +483,9 @@ A.tunnelHeld = A.tunnelHeld or {} -- "idx:slot" -> { on, t }
 
 local function hystMargin() return A.Num(A.cfg, "diffuse_dsp_hyst") end
 
---- Engine preset of low-pass level `level` with the tunnel choice `tunnel` already decided (held).
-local function presetFor(level, tunnel)
-	level = level or 0
-	-- a share of 1 is above any diffuse_dsp_at: AC.DSPForVoice keeps its own rule (diffuse model off: plain)
-	if tunnel then return AC.DSPForVoice(level, 1) end
-	return AC.DSPForLevel(level)
-end
+--- Engine preset of low-pass level `level` with the tunnel choice `tunnel` already decided (held): the loops' one
+-- (cl_loops, loaded first).
+local presetFor = A.Loops.PresetFor
 
 --- Tunnel choice of a new one-shot voice: held from the previous sound of the same source and slot when
 -- that one is recent (key nil: a source without an entity, no hold).
