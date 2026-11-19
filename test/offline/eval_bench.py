@@ -75,10 +75,20 @@ if __name__ == "__main__":
         for sd in seeds:
             a = results(run(sys.argv[2], "dump", pairs, sd))
             for bu in budgets:
-                b = results(run(sys.argv[2], "dumpsliced", pairs, sd, bu))
+                out = run(sys.argv[2], "dumpsliced", pairs, sd, bu)
+                b = results(out)
                 diff = sum(1 for x, y in zip(a, b) if x != y) + abs(len(a) - len(b))
                 bad += diff
-                print("seed %d, budget %g checks/frame: %d evaluations, %d differ" % (sd, bu, len(a), diff))
+                # (the bench must slice: with no job held past its first slice it compared the synchronous run
+                # with itself, as when the slices ran on the real clock)
+                head = out.splitlines()[0]
+                held = int(head.split(" held ")[1].split(" ")[0]) if " held " in head else 0
+                slices = int(head.split(" slices ")[1].split(",")[0]) if " slices " in head else 0
+                vacuous = held == 0 or (bu < 0 and slices < 4 * held)
+                if vacuous:
+                    bad += 1
+                print("seed %d, budget %g checks/frame: %d evaluations, %d differ (held %d, slices %d)%s"
+                      % (sd, bu, len(a), diff, held, slices, " VACUOUS: no job was sliced" if vacuous else ""))
         print("IDENTICAL" if bad == 0 else "DIFFERENT")
         sys.exit(1 if bad else 0)
     elif sys.argv[1] == "slicebench":
