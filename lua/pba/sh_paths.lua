@@ -436,8 +436,7 @@ function P.SolidExit(entry, dir, L, mask)
 end
 
 --- Walls crossed by the straight line S -> L, traced from S only (see P.Walls). lisAt: the listener's end of
--- the line, S or L (pba_listener_object: the object holding it is no wall; the line's other end is the
--- source's, P.SourceObject).
+-- the line, S or L (the object holding it is no wall; the line's other end is the source's, P.SourceObject).
 -- scratch of wallsOneWay: the inside trace's start, the next wall trace's start, half a step along the line. Each is
 -- read by the trace right after it is set (no slice check between), so another evaluation's use in between is harmless.
 local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
@@ -446,14 +445,13 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 	local dir = (L - S):GetNormalized()
 	local start = S
 	ignoreEnt, ignoreLis, traceCfg = srcEnt, nil, cfg
-	local lisObj = lisAt and A.On(cfg, "listener_object")
 	for i = 1, maxWalls or 6 do
 		wallTr.start, wallTr.endpos = start, L
 		util.TraceLine(wallTr)
 		local tr = wallOut
 		if not tr.Hit or tr.Fraction >= 1 then break end
 		local trEnt = IsValid(tr.Entity) and not tr.Entity:IsWorld() and tr.Entity or nil
-		if lisObj and lisAt == S and i == 1 and tr.StartSolid and trEnt then
+		if lisAt == S and i == 1 and tr.StartSolid and trEnt then
 			-- the line starts inside an object at the listener's end: that object is ignored, traced again
 			ignoreLis = trEnt
 			util.TraceLine(wallTr)
@@ -489,7 +487,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 			backEnt, backTr.start, backTr.endpos = hitEnt, far, entry
 			util.TraceLine(backTr)
 			local back = backOut
-			if lisObj and lisAt == L and back.StartSolid and far:DistToSqr(L) < 1 then
+			if lisAt == L and back.StartSolid and far:DistToSqr(L) < 1 then
 				-- the line ends inside this object at the listener: no wall (traced from inside it, the line
 				-- re-hit it every 0.5 u, StartSolid: up to 6 walls for one crate around the listener)
 				ignoreLis = hitEnt
@@ -539,8 +537,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 		end
 		local prev = walls[#walls]
 		if not hitEnt and prev and not prev.ent and not prev.water and prev.surfIdx == w.surfIdx
-			and (prev.thickness < 0.01 or w.thickness < 0.01) and prev.exit:DistToSqr(w.entry) <= 4
-			and A.On(cfg, "wall_merge_graze") then
+			and (prev.thickness < 0.01 or w.thickness < 0.01) and prev.exit:DistToSqr(w.entry) <= 4 then
 			-- the same world surface met twice within 2 u, one of the two hits a zero-thickness face: a line
 			-- grazing a brush's face (a floor's top at a wall's foot) left the 0.5 u probe out of the solid and
 			-- counted the face as a wall of its own, then the brush behind it again (rp_downtown: 18 dB in 8 u
@@ -677,14 +674,14 @@ end
 P.HasDisplacements = mapHasDisplacements
 
 --- The object a sound comes from: srcEnt itself, or for a sound played on the world (srcEnt nil or the
--- world) at a point inside an object, that object (pba_source_object). The engine plays impacts, breaks and
+-- world) at a point inside an object, that object. The engine plays impacts, breaks and
 -- debris on the world at the physics object's origin (vphysics_sound.h): traced from there, the object was
 -- its own wall (in plain sight, 20 to 70 dB and a relay for every impact). One point trace, entities only.
 local srcObjOut = {}
 local srcObjTr = { mask = MASK_SOLID, ignoreworld = true, output = srcObjOut }
 function P.SourceObject(S, srcEnt, cfg)
 	if IsValid(srcEnt) and not srcEnt:IsWorld() then return srcEnt end
-	if A.Num(cfg, "source_object") < 0.5 or not S then return srcEnt end
+	if not S then return srcEnt end
 	srcObjTr.start, srcObjTr.endpos = S, S
 	util.TraceLine(srcObjTr)
 	local e = srcObjOut.Entity
@@ -715,7 +712,7 @@ end
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
 -- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
 -- noLis: L is not where a listener stands (a point the caller made up: P.BundleLine's bend), so an object L lies
--- inside is not the listener's own (pba_listener_object) but a wall the line ends in
+-- inside is not the listener's own (see wallsOneWay) but a wall the line ends in
 function P.Walls(S, L, maxWalls, srcEnt, lazy, cfg, noLis)
 	local lisAt = (not noLis) and L or nil
 	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
@@ -2225,23 +2222,20 @@ function P.BundleMids(S, L, cfg)
 end
 --- The walls one offset line S -> m -> L of the bundle pays (keep(w, karg) picks the world walls; door leaves are
 -- always in): traced from each end towards its bend m.
--- pba_trans_bundle_mid_leaf: m is a point of the bundle, not a listener, so a leaf that m lies in is not dropped as
--- the listener's own object (pba_listener_object: both halves ended inside the shut leaf of a doorway beside the
+-- m is a point of the bundle, not a listener, so a leaf that m lies in is not dropped as
+-- the listener's own object (both halves ended inside the shut leaf of a doorway beside the
 -- wall the centre cuts, the line counted as open air, and the bundle's mean gave 10 log10(5) = 7.0 dB through a
 -- shut door and 17 u of concrete: pba_twodoors, door_sweep_real's closed slide, 25.7 -> 6.9 -> 24.6 dB in 2 u
 -- steps); and a leaf is paid once per line (its loss is the leaf's, whatever the chord: P.EvalWalls), not once
 -- per half nor once per re-hit of the traces restarting inside it. World walls keep their chord on both halves.
 function P.BundleLine(S, L, m, srcEnt, cfg, keep, karg)
 	local sel = {}
-	local fix = A.On(cfg, "trans_bundle_mid_leaf")
 	local seen
 	for h = 1, 2 do
-		local half = P.Walls(h == 1 and S or L, m, cfg.trans_max_walls, srcEnt, true, cfg, fix)
+		local half = P.Walls(h == 1 and S or L, m, cfg.trans_max_walls, srcEnt, true, cfg, true)
 		for _, w in ipairs(half) do
 			if bundleDoor(w) then
-				if not fix then
-					sel[#sel + 1] = w
-				elseif not (seen and seen[w.ent]) then
+				if not (seen and seen[w.ent]) then
 					seen = seen or {}
 					seen[w.ent] = true
 					sel[#sel + 1] = w

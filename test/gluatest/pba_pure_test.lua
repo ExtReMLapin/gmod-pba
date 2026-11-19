@@ -1722,8 +1722,7 @@ local SUITE = {
 		{ name = "A cfg given to the path model is used whole: corners, walls and their trace filter, source object, path cut and follow groups read nothing from A.cfg", func = function()
 			-- a complete cfg of its own (P.Compute(..., cfg): benches, P.DRY_SOURCE_CFG), A.cfg replaced by a recorder
 			local full = table.Copy(A.cfg)
-			full.corner_relax, full.corner_step_first, full.model_soft_cull, full.native_voice_mix = 1, 1, 1, 1
-			full.trans_props, full.listener_object, full.source_object = 1, 1, 1
+			full.corner_relax, full.native_voice_mix, full.trans_props = 1, 1, 1
 			local box = { Vector(140, -50, -50), Vector(160, 50, 50) }
 			local prop = { GetClass = function() return "prop_physics" end, BoundingRadius = function() return 100 end,
 				IsVehicle = function() return false end }
@@ -1758,8 +1757,7 @@ local SUITE = {
 			P.ForgetWorld()
 			if not ok then error(err, 0) end
 			local mixed = {}
-			for _, k in ipairs({ "trans_props", "trans_prop_min", "listener_object", "wall_merge_graze", "door_3d", "source_object",
-				"corner_relax", "corner_step_first", "model_soft_cull", "native_voice_mix" }) do
+			for _, k in ipairs({ "trans_props", "trans_prop_min", "door_3d", "corner_relax", "native_voice_mix" }) do
 				if reads[k] then mixed[#mixed + 1] = k end
 			end
 			expect(table.concat(mixed, " ")).to.equal("")
