@@ -1274,19 +1274,57 @@ local FIELD_SEEDS = 8
 -- `reuse`: a field no longer used (the one just replaced), whose tables are cleared and filled again
 -- instead of growing new ones (three tables of 22 000 entries: ~0.7 MB of garbage per build).
 local denseCosts = setmetatable({}, { __mode = "k" }) -- costs table -> K.DenseCosts array
+-- The cost / nxt / root tables of the fields no longer referenced anywhere are filled again by the next builds (FieldFor's
+-- builds passed no `reuse`: three tables of the graph's size per build, ~220 KB on gm_construct, several builds a second
+-- while walking). A bin holds one field's three tables and its owner field in a weak slot: once nothing holds that field
+-- (not kept, no far evaluation paused on it, no door-field job), the collector empties the slot and the tables are free.
+-- binOf: cost table -> its bin (a `reuse` hand-over moves the bin to the new field). The heap's two arrays are pooled the
+-- same way (a build's own: taken at its start, given back at its end).
+local fieldBins, binOf, heapPool = {}, setmetatable({}, { __mode = "k" }), {}
+local FIELD_BINS = 16
+PR.fieldBins = fieldBins -- (read by the tests)
+local function takeBin(g)
+	for i = #fieldBins, 1, -1 do
+		local b = fieldBins[i]
+		if b.g ~= g then
+			table.remove(fieldBins, i) -- (another graph: its tables go)
+			binOf[b.cost] = nil
+		elseif b.ref[1] == nil then
+			return b
+		end
+	end
+end
 function PR.BuildField(g, L, yield, reuse, costs, seedList)
-	local cost, nxt, root = {}, {}, {}
+	local cost, nxt, root
+	local bin
 	if reuse and reuse.g == g and reuse.root then
 		cost, nxt, root = reuse.cost, reuse.nxt, reuse.root
+		bin = binOf[cost]
+	else
+		bin = takeBin(g)
+		if bin then cost, nxt, root = bin.cost, bin.nxt, bin.root end
+	end
+	if cost then
 		for id = 1, #g.nodes do cost[id], nxt[id], root[id] = nil, nil, nil end
+	else
+		cost, nxt, root = {}, {}, {}
 	end
 	-- arr: arrival of each probe's route at the listener, filled on first use (pba_group, PR.SharedJoin)
 	local f = { g = g, L = L, cost = cost, nxt = nxt, root = root, base = {}, seeds = {}, pulled = {}, arr = {}, arrEpoch = PR.doorEpoch }
+	if bin then
+		bin.ref[1] = f
+	elseif #fieldBins < FIELD_BINS then
+		bin = { g = g, cost = cost, nxt = nxt, root = root, ref = setmetatable({ f }, { __mode = "v" }) }
+		fieldBins[#fieldBins + 1] = bin
+		binOf[cost] = bin
+	end
 	local adj = g.adj or PR.Prepare(g)
 	local first, nid, elen = adj.first, adj.nid, adj.len
 	-- the doors and portals on the links as part of their cost: `costs` (PR.LinkCosts' table), or none
 	local extra = costs or nil
-	local hk, hv, n = {}, {}, 0
+	local heap = heapPool[#heapPool]
+	if heap then heapPool[#heapPool] = nil else heap = { {}, {} } end
+	local hk, hv, n = heap[1], heap[2], 0
 	-- seedList: the field of a set of seeds, at cost 0 each, whatever the listener's exact
 	-- position (fieldCost adds the seed's distance to the listener at query time): see PR.FieldRoutes
 	for _, s in ipairs(seedList or PR.Visible(g, L, FIELD_SEEDS, 2)) do
@@ -1313,6 +1351,8 @@ function PR.BuildField(g, L, yield, reuse, costs, seedList)
 	else
 		dijkstra(first, nid, elen, extra, cost, nxt, root, hk, hv, n, math.huge)
 	end
+	-- (the heap's entries past its size are never read: given back as they are)
+	heapPool[#heapPool + 1] = heap
 	return f
 end
 

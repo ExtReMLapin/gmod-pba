@@ -1387,6 +1387,59 @@ local SUITE = {
 			expect(P.cacheGen).to.equal(g) -- the far sounds' jobs are not restarted
 			P.InvalidateCache()
 		end },
+		{ name = "BuildField: a field no longer held gives its tables to the next build, whose costs, hops and roots are those of a build on new tables", func = function()
+			local PR = A.Probes
+			withProbeRooms({ { 16, 64, 112 }, { 360, 424, 140 } }, nil, nil, function(g)
+				local L1, L2 = Vector(300, 300, 64), Vector(800, 200, 90)
+				local function fresh(L)
+					-- (a `reuse` of new empty tables: the former build on tables of its own)
+					return PR.BuildField(g, L, nil, { g = g, cost = {}, nxt = {}, root = {} }, false, nil)
+				end
+				local function same(a, b)
+					for id = 1, #g.nodes do
+						if a.cost[id] ~= b.cost[id] or a.nxt[id] ~= b.nxt[id] or a.root[id] ~= b.root[id] then return false end
+					end
+					return true
+				end
+				-- (built and dropped in a function of its own: no stack slot of this one keeps the field)
+				local function oneUse(L)
+					local f = PR.BuildField(g, L, nil, nil, false, nil)
+					local ok = same(f, fresh(L))
+					return f.cost, ok
+				end
+				local t1, ok1 = oneUse(L1)
+				expect(ok1).to.beTrue()
+				collectgarbage() collectgarbage()
+				-- the free tables: the first field's, and any other field's of this graph no longer held
+				local free, firstFree = {}, false
+				for _, b in ipairs(PR.fieldBins) do
+					if b.g == g and b.ref[1] == nil then
+						free[b.cost] = true
+						if b.cost == t1 then firstFree = true end
+					end
+				end
+				expect(firstFree).to.beTrue() -- (the first field is gone: its tables are free)
+				local f2 = PR.BuildField(g, L2, nil, nil, false, nil)
+				expect(free[f2.cost] == true).to.beTrue() -- (recycled)
+				expect(same(f2, fresh(L2))).to.beTrue()
+				-- a field still held keeps its tables: the next build takes others
+				local f3 = PR.BuildField(g, L1, nil, nil, false, nil)
+				expect(f3.cost ~= f2.cost).to.beTrue()
+				expect(same(f2, fresh(L2)) and same(f3, fresh(L1))).to.beTrue()
+				-- garbage of a build on recycled tables vs new ones (reported)
+				oneUse(L2)
+				collectgarbage() collectgarbage()
+				collectgarbage("stop")
+				local k0 = collectgarbage("count")
+				local f4 = PR.BuildField(g, L1, nil, nil, false, nil)
+				local k1 = collectgarbage("count")
+				fresh(L1)
+				local k2 = collectgarbage("count")
+				collectgarbage("restart")
+				print(string.format("[pba test] field build garbage: %.1f KB recycled, %.1f KB on new tables (%d probes)", k1 - k0, k2 - k1, #g.nodes))
+				expect(f4 ~= nil).to.beTrue() -- (the scene's 32 probes: the three tables are a small part; in game ~220 KB of ~280)
+			end)
+		end },
 		{ name = "ReevalDue: never twice within half an update_interval, whatever changed", func = function()
 			local cfg = setmetatable({ reeval_adaptive = 1, reeval_move = 8, reeval_max_s = 0.1, update_interval = 1 }, { __index = CFG })
 			local S, L, st = Vector(100, 0, 0), Vector(0, 0, 0), {}
