@@ -539,13 +539,15 @@ local function earlyMargin() return A.Sched.MIN_LEFT + A.Sched.Interval() end
 --- The engine's copy of early line m (the server's sound on its entity and channel, cl_loops LP.TakeEarly) set to
 -- volume `vol` in place (SND_CHANGE_VOL on the same index, channel and name: the engine alters that channel, the
 -- line and its mouth go on; measured with snd_dumpclientsounds, vol 255 -> 0 on the SERVER channel).
+-- (the name the engine copy plays: m.early.name, see LP.TakeEarly)
 local function earlyEngineVolume(m, vol)
 	A.reemitting = true -- (pba's own: the hook lets it through)
 	local e = Entity(m.idx)
+	local name = m.early and m.early.name or m.name
 	if IsValid(e) then
-		e:EmitSound(m.name, m.lvl, m.pitch, vol, m.chan, SND_CHANGE_VOL)
+		e:EmitSound(name, m.lvl, m.pitch, vol, m.chan, SND_CHANGE_VOL)
 	else
-		EmitSound(m.name, m.pos, m.idx, m.chan, vol, m.lvl, SND_CHANGE_VOL, m.pitch)
+		EmitSound(name, m.pos, m.idx, m.chan, vol, m.lvl, SND_CHANGE_VOL, m.pitch)
 	end
 	A.reemitting = false
 end
@@ -907,8 +909,19 @@ function LP.TakeEarly(d)
 	local t0 = now - (d.elapsed or 0)
 	local caps = pba_native and pba_native.caps
 	local on = N.render and A.Enabled() and pba_native.Play ~= nil and A.Render.NativeOK(name, d.DSP)
+	local allNative = (A.cfg.native_all or 1) >= 0.5
+	local rules = (A.cfg.early_line_rules or 1) >= 0.5
+	-- (pba_early_line_rules) a line this client could not take yet reaches it marked blocked whatever its verdict: in
+	-- clear sight (no wall on the straight line, the server's own far-muffle test) and with pba_native_all 0 it is
+	-- the engine's, as every clear sound then (review M8: the module took it)
+	if rules and on and d.blocked and not allNative and d.Pos then
+		local L = A.ListenerPos()
+		local P = A.Paths
+		local ent = d.EntIndex and d.EntIndex > 0 and Entity(d.EntIndex) or nil
+		if L and #P.Walls(P.FreeSource(d.Pos), L, 1, P.SourceObject(d.Pos, IsValid(ent) and ent or nil)) == 0 then return "clear" end
+	end
 	local v, why = N.EarlyVerdict(on and true or false, type(caps) == "table" and caps.playOffset and true or false,
-		d.blocked, (A.cfg.native_all or 1) >= 0.5, now, t0, t0 + secs, earlyMargin())
+		d.blocked, allNative, now, t0, t0 + secs, earlyMargin())
 	if v ~= "switch" then return why end
 	local key = "early:" .. d.EntIndex .. ":" .. d.Channel .. ":" .. name
 	local old = LP.mirrors[key]
@@ -917,6 +930,11 @@ function LP.TakeEarly(d)
 	local m = { key = key, name = name, idx = d.EntIndex, chan = d.Channel, flags = d.Flags, pos = d.Pos, lvl = d.SoundLevel,
 		dsp = d.DSP, once = true, vol = d.Volume, pitch = d.Pitch, born = now, speaker = speaker or nil,
 		endT = t0 + secs + A.END_GRACE, early = { t0 = t0, tEnd = t0 + secs, ev = d.ev or d.Volume } }
+	-- (pba_early_line_rules) the engine copy's own name: a "#" line the server re-emitted muffled for this player plays
+	-- without its "#" (the engine skips the preset of a "#" sound, sv_sound), and is the one played quieter than its volume
+	-- (ev: the muffle's gain). A volume change to the "#" name found no such sound and started a new one, the copy
+	-- left audible under the module's voice (review M8).
+	if rules and A.IsDryMix(name) and (d.ev or d.Volume or 1) < (d.Volume or 1) * 0.999 then m.early.name = A.WithoutDryMix(name) end
 	if speaker then -- (its speaker preset is the flag's, rendered by the module's speaker EQ: as a long speaker line)
 		local cv = GetConVar("dsp_speaker")
 		local sp = cv and cv:GetInt() or 0
