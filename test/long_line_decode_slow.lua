@@ -1,8 +1,9 @@
 -- Long line whose file is still decoding (client lua_job, after long_line_setup.lua, before long_line_emit.lua):
 -- the module's asynchronous decode of Barney's long line is made to last DECODE_S (pba_native.HasSound false and
 -- SoundPending true for it until then), as the first play of a large wave (d3_c17_12's 1.4 MB 'rockets' line,
--- decoded on a worker thread). Undone by long_line_decode_check.lua. The lines handed back so far are forgotten.
-local DECODE_S = 0.35
+-- decoded on a worker thread). Undone by long_line_decode_check.lua (or silent_handback_check.lua). The lines
+-- handed back so far are forgotten. `PBA_DECODE_S = x` before the file: a decode of x s (1e9: one that never ends).
+local DECODE_S = PBA_DECODE_S or 0.35
 local function its(n) return n and string.find(string.lower(n), "ba_getoutfast", 1, true) ~= nil end
 pba.testOrig = pba.testOrig or { has = pba_native.HasSound, pending = pba_native.SoundPending, async = pba_native.LoadSoundAsync }
 local o, untilT = pba.testOrig, nil

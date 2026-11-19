@@ -4,7 +4,7 @@
 -- L -> m. On pba_twodoors' closed slide (door_sweep_real: S in room B, L sliding beside the doorway in room A,
 -- the centre line through the 17 u concrete wall) one offset midpoint falls INSIDE the closed leaf door_s for
 -- a few units of the slide. Both halves then ended inside the leaf, and P.Walls took that end for a listener
--- standing inside an object (pba_listener_object): the leaf was dropped from both halves, the line counted as
+-- standing inside an object (the listener-object rule): the leaf was dropped from both halves, the line counted as
 -- clear, and the bundle's mean gave 10 log10(5) = 7.0 dB through a shut door and a concrete wall
 -- (door_sweep_real twodoors: slide closed s=-80 -> -78: 25.7 -> 6.9 dB, red since the listener-object rule).
 -- Client phase, door closed, s from -96 to 96 in 1 u steps (the slide line of door_sweep_real):
@@ -13,7 +13,7 @@
 --     every line of the bundle goes through the leaf or through the wall, none through the open air;
 --   * once: with P.BundleLine (the per-line collector of the fix), a line whose two halves cross the leaf's
 --     box holds that leaf exactly once (not one per half, not one per 0.5 u re-hit inside it).
--- Red on main (floor: 7.0 dB under a 24 dB leaf), and with pba_trans_bundle_mid_leaf 0 (control).
+-- Red before the fix (floor: 7.0 dB under a 24 dB leaf).
 local A = pba
 if game.GetMap() ~= "pba_twodoors" then return { pass = false, why = "needs pba_twodoors" } end
 local P = A.Paths
@@ -97,18 +97,10 @@ local function run()
 	return out
 end
 local res = {}
-local had = A.override.trans_bundle_mid_leaf
 local ok, err = pcall(function()
-	A.SetOverride("trans_bundle_mid_leaf", nil)
 	res.on = run()
-	if A.cfg.trans_bundle_mid_leaf ~= nil then
-		A.SetOverride("trans_bundle_mid_leaf", 0)
-		res.control = run() -- (option 0: the old collection; must be red)
-	end
 end)
-A.SetOverride("trans_bundle_mid_leaf", had)
 RunConsoleCommand("pba_test_blo_done")
 if not ok then return { pass = false, err = tostring(err) } end
-res.hasOption = A.cfg.trans_bundle_mid_leaf ~= nil
-res.pass = res.hasOption and res.on.pass == true and res.control and res.control.pass == false
+res.pass = res.on.pass == true
 return res

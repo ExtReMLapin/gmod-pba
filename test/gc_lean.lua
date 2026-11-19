@@ -1,7 +1,7 @@
--- Less garbage (pba_gc_lean, pba_gc_idle_step): client lua_job, any map.
---   gc_lean: P.CacheKey gives the very same key (and line state) both ways, for sources and listeners spread
+-- Less garbage (gc_lean, pba_gc_idle_step): client lua_job, any map.
+--   gc_lean: P.CacheKey gives the same key (and line state) on two passes, for sources and listeners spread
 --     over the map (negative cells, fractions, levels with decimals, with and without an emitter); what 400
---     new keys allocate either way is reported (kb0, kb1);
+--     new keys allocate is reported (kb1);
 --   gc_idle_step: collector steps are done in frames without a new sound when > 0, none at 0.
 local A = pba
 local P = A.Paths
@@ -9,7 +9,7 @@ local function set(name, v)
 	RunConsoleCommand("pba_" .. name, tostring(v))
 	job:wait(function() return A.cfg[name] == v end, 3)
 end
-local lean0, idle0 = A.cfg.gc_lean, A.cfg.gc_idle_step
+local idle0 = A.cfg.gc_idle_step
 local L0 = LocalPlayer():EyePos()
 local ent = LocalPlayer()
 local cases = {}
@@ -43,10 +43,7 @@ local function alloc(off)
 	P.LineState = ls
 	return m1 - m0
 end
-set("gc_lean", 0)
 local k0 = keys()
-res.kb0 = alloc(100000)
-set("gc_lean", 1)
 local k1 = keys()
 res.kb1 = alloc(300000)
 for i = 1, #k0 do
@@ -62,7 +59,7 @@ local function steps(k)
 end
 res.steps0 = steps(0)
 res.steps64 = steps(64)
-set("gc_lean", lean0) set("gc_idle_step", idle0)
--- (kb0 / kb1 reported only: the key's own garbage is a few bytes per key, under the noise of the measure)
+set("gc_idle_step", idle0)
+-- (kb1 reported only: the key's own garbage is a few bytes per key, under the noise of the measure)
 res.pass = res.differ == 0 and res.same == #cases and res.steps0 == 0 and res.steps64 >= 3
 return res

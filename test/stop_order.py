@@ -1,5 +1,4 @@
-"""An explicit stop sent in the same tick as a relayed copy of the sound it stops reaches the client behind that copy
-(pba_stop_order).
+"""An explicit stop sent in the same tick as a relayed copy of the sound it stops reaches the client behind that copy.
 Seen on d3_citadel_01 (skylift pods): at each stop, the map fires PlaySound twice in one tick on each of two
 non-looped ambient_generic (sound_digger3_hit, ambient/machines/floodgate_stop1.wav, CHAN_STATIC). Each PlaySound
 sends SND_STOP, SND_STOP, then the new sound: stop, stop, play, stop, stop, play on one entity. The engine plays one
@@ -12,17 +11,14 @@ Phases:
   vanilla  pba off (enable override 0, both realms): the engine's channels of the file on the entity, read with
            snd_dumpclientsounds. The reference: 1.
   pba      module voices of the file started (pba_native.Play) and not stopped 0.8 s later. Pass: exactly 1, as the engine.
-Pass: both. --off (pba_stop_order 0): must fail (2 voices). --control: the same run with the option off, judged the
-other way (the battery's control step): pass = 2 voices left.
---apart (pba_stop_both): the second PlaySound one tick after the first, not in the same tick: a client at 20 fps (or a low
-cl_updaterate) reads both ticks in one packet, its reliable stop before both copies; --off / --control then turn
-pba_stop_both off (pba_stop_order stays on: the same-tick rule does not cover it).
-Usage: python -I test/stop_order.py <mcp.py> [--off | --control] [--apart] [vanilla,pba]"""
+Pass: both (the old behaviour, every stop reliable: 2 voices left).
+--apart: the second PlaySound one tick after the first, not in the same tick: a client at 20 fps (or a low
+cl_updaterate) reads both ticks in one packet, its reliable stop before both copies (the stop goes on both streams;
+the old single reliable stop: 2 voices left).
+Usage: python -I test/stop_order.py <mcp.py> [--apart] [vanilla,pba]"""
 import json, os, re, subprocess, sys, time
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-CONTROL = "--control" in sys.argv
 APART = "--apart" in sys.argv
-OFF = "--off" in sys.argv or CONTROL
 MCP = args[0]
 PHASES = args[1].split(",") if len(args) > 1 else ["vanilla", "pba"]
 WAV = "ambient/machines/floodgate_stop1.wav"
@@ -126,13 +122,8 @@ def phase(name):
         time.sleep(3.5)  # (the file's end: the next phase starts clean)
 
 
-if OFF:
-    call("console_exec", {"realm": "server", "cmd": "pba_stop_both 0" if APART else "pba_stop_order 0"})
-    time.sleep(1)
 res = {}
 for ph in PHASES:
     res[ph] = phase(ph)
 ok = all(v.get("pass") for v in res.values())
-if CONTROL:  # the old behaviour: both plays left as module voices
-    ok = res.get("pba", {}).get("live") == 2
-print(json.dumps({"pass": ok, "off": OFF, "control": CONTROL, "apart": APART, **res}))
+print(json.dumps({"pass": ok, "apart": APART, **res}))

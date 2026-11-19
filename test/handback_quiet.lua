@@ -4,7 +4,7 @@
 -- (pba_silent_handback, armed as cl_render's relay receiver arms it) then saw nothing rendered and handed it to the
 -- engine, which played it clear through the walls.
 -- The path search is stubbed with that voice. Pass: taken (A.Process true), no voice, and the net does not hand it
--- back within 0.5 s. pre: `local CONTROL = true` runs with pba_handback_quiet 0: passes when it IS handed back.
+-- back within 0.5 s.
 local A = pba
 local NAME = "vo/npc/male01/hi01.wav"
 local L = A.ListenerPos()
@@ -15,7 +15,6 @@ for _, e in ipairs(ents.GetAll()) do
 end
 if not src then return { pass = false, err = "no entity" } end
 local idx = src:EntIndex()
-A.SetOverride("handback_quiet", CONTROL and 0 or 1)
 A.SetOverride("burst_budget_ms", 0)
 A.SetOverride("burst_mask_db", 0)
 local origEval, origSlicer = A.Paths.Evaluate, A.Slicer
@@ -36,15 +35,10 @@ local ok, err = pcall(function()
 	res.checks.notHandedBack = handed == false
 end)
 A.Paths.Evaluate = origEval
-A.SetOverride("handback_quiet", nil)
 A.SetOverride("burst_budget_ms", nil)
 A.SetOverride("burst_mask_db", nil)
 if not ok then return { pass = false, err = tostring(err) } end
 res.fails = {}
 for k, okc in SortedPairs(res.checks) do if not okc then res.fails[#res.fails + 1] = k end end
 res.pass = #res.fails == 0
-if CONTROL then
-	res.controlRed = not res.pass
-	res.pass = res.checks.taken and res.checks.noVoice and handed == true or false
-end
 return res

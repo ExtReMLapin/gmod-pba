@@ -308,7 +308,7 @@ if SERVER then
 
 	-- Doors created after the map loaded (a sandbox spawn, the duplicator, a point_template): D.Relink lists
 	-- the doors at D.Start and PostCleanupMap only, so such a door was never polled, and a door without a
-	-- state counts as shut in the paths and the probe links (pba_doors_spawned). Taken in on the next tick
+	-- state counts as shut in the paths and the probe links. Taken in on the next tick
 	-- (its name and model are set by then), into its areaportal's link when the portal targets its name. A
 	-- removed door's state goes, here and on the clients.
 	local DOOR_SET = {}
@@ -316,7 +316,7 @@ if SERVER then
 	hook.Add("OnEntityCreated", "pba_doors_new", function(e)
 		if not DOOR_SET[e:GetClass()] then return end
 		timer.Simple(0, function()
-			if not IsValid(e) or A.Num(A.cfg, "doors_spawned") < 0.5 or not timer.Exists("pba_doors") then return end
+			if not IsValid(e) or not timer.Exists("pba_doors") then return end
 			for _, x in ipairs(D.ents) do if x == e then return end end
 			D.ents[#D.ents + 1] = e
 			local name = e:GetName()
@@ -328,7 +328,7 @@ if SERVER then
 		end)
 	end)
 	hook.Add("EntityRemoved", "pba_doors_gone", function(e)
-		if not DOOR_SET[e:GetClass()] or A.Num(A.cfg, "doors_spawned") < 0.5 then return end
+		if not DOOR_SET[e:GetClass()] then return end
 		for i = #D.ents, 1, -1 do if D.ents[i] == e then table.remove(D.ents, i) end end
 		local idx = e:EntIndex()
 		if D.entState[idx] then

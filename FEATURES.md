@@ -9,7 +9,7 @@ PBA comes in two versions:
 
 Without the module nothing breaks: the native options are greyed out and Light runs alone.
 
-Every feature can be switched off. The server decides what costs server time or bandwidth, or
+Every feature can be switched off (a fix that only replaced a bug is not an option). The server decides what costs server time or bandwidth, or
 affects every player; each player decides how sound is rendered for them. The convars are
 declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 
@@ -26,8 +26,8 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Transmission through walls by material and thickness (concrete, wood, metal, glass, plaster, brick...) | ✅ muffled, not cut; loud sounds and low frequencies get through more | ✅ plus soft volumetric occlusion near door frames | S `trans_*`, `fullscale_db` |
 | Doors: open, ajar, closed, followed live | ✅ | ✅ and part of the acoustic scene (reverb and echoes see them) | S `door_closed_db`, C `native_doors` |
 | Glass windows (`func_areaportalwindow`) | ✅ transmission through the glass, sound placed on the pane | ✅ | — |
-| Props: a big object casts a shadow, a closed crate muffles, a can changes nothing | ✅ detours checked with traces, mass law for hollow objects | ✅ and big props reflect sound, with their collision shape | S `trans_props`, C `native_props`, `native_props_hull` |
-| Moving map parts (garage doors, lifts, bridges) | ◐ obstacles for the traces | ✅ moving objects of the acoustic scene, with their solid shape | C `native_doors`, `native_movers_brushes` |
+| Props: a big object casts a shadow, a closed crate muffles, a can changes nothing | ✅ detours checked with traces, mass law for hollow objects | ✅ and big props reflect sound, with their collision shape | S `trans_props`, C `native_props` |
+| Moving map parts (garage doors, lifts, bridges) | ◐ obstacles for the traces | ✅ moving objects of the acoustic scene, with their solid shape | C `native_doors` |
 | A source in the open air away from the floors (a lift or a pod hanging in a void) keeps its routes as it moves | ✅ it joins the probe graph through the air it sees | ✅ | C `probe_air_hop` |
 | Water surface between source and listener | ✅ air-water interface, heavily muffled | ✅ plus a low-pass on the mix when the head is under water | S `water`, `water_db` |
 
@@ -44,19 +44,19 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Sentences (Combine and metrocop radio, HL2 NPC lines from `sentences.txt`) | ✅ relayed and muffled by the engine | ✅ words assembled and played by the module (HRTF, reverb) | C `native_sentences` |
 | Physics scrapes and rolling (props sliding or rolling) | ✅ followed like loops | ✅ played by the module | S `phys_loops_mirror` |
 | Bullet fly-bys (a miss passing your ears, NPCs' too) | ✅ the engine's whizz | ✅ or played by the module (off by default) | S `whiz`, C `native_whiz` |
-| Several speakers playing one line (the Breencast screens) start together: no comb filter behind a door | ✅ the engine's copies | ✅ | C `loops_start_sync` |
+| Several speakers playing one line (the Breencast screens) start together: no comb filter behind a door | ✅ the engine's copies | ✅ | — |
 | A line spoken while you join (a map's first scene, before PBA's client is ready) | the engine's, to its end | ✅ the rest of the line handed to the module once ready, from the point reached (the engine copy muted, the mouth still moves) | S `early_line_takeover` |
-| A sound restarted twice in one tick (a non-looped `ambient_generic` fired twice by a map's outputs: d3_citadel_01's skylift pods) plays once, as in the engine | ✅ | ✅ | S `stop_order` |
+| A sound restarted twice in one tick (a non-looped `ambient_generic` fired twice by a map's outputs: d3_citadel_01's skylift pods) plays once, as in the engine | ✅ | ✅ | — |
 | A loop you come within range of while it plays (a car driving into the radius the server follows it in) | ◐ started at once (the engine's law is near silent at that radius) | ✅ faded in over a second, not started at its whole level | C `loops_edge_fade` |
-| A loop already playing when you join (an ambience, a machine near the spawn) | ✅ | ✅ joined once your client is ready, as when you walk into its range | S `loops_ready` |
-| A line stopped or cut off while you join (a cancelled scene, the speaker interrupted) | ✅ | ✅ not handed to the module once you are ready | S `early_purge` |
-| A sound restarted a tick or two later (two outputs of a map, a client reading several ticks per packet) plays once, as in the engine | ✅ | ✅ | S `stop_both` |
-| Another player shooting while running (MP): his shot heard by those who see him, only his footstep left to their own client | ✅ | ✅ | S `step_by_name` |
-| A sentence (Combine radio) while a player joins | ✅ | ✅ left to the engine for everyone until his client runs (no relay he cannot play) | S `sentence_ready` |
-| Your own sounds while your client loads (a map change, with the module rendering your own sounds) | ✅ | ✅ the engine plays them on you until the client runs | S `own_ready` |
-| A moving loop you come within range of (a car, a helicopter out of view) | ✅ | ✅ starts where its source is, not where it started | S `loops_join_pos` |
-| A new sound on a channel cuts only the loops of that channel (one loop played on two channels of an entity) | ✅ | ✅ | S `loops_cut_chan` |
-| Two loops of one sound played on the world at two places (a map or an addon) | ✅ | ✅ both followed, each at its place | S `loops_world_pos` |
+| A loop already playing when you join (an ambience, a machine near the spawn) | ✅ | ✅ joined once your client is ready, as when you walk into its range | — |
+| A line stopped or cut off while you join (a cancelled scene, the speaker interrupted) | ✅ | ✅ not handed to the module once you are ready | — |
+| A sound restarted a tick or two later (two outputs of a map, a client reading several ticks per packet) plays once, as in the engine | ✅ | ✅ | — |
+| Another player shooting while running (MP): his shot heard by those who see him, only his footstep left to their own client | ✅ | ✅ | — |
+| A sentence (Combine radio) while a player joins | ✅ | ✅ left to the engine for everyone until his client runs (no relay he cannot play) | — |
+| Your own sounds while your client loads (a map change, with the module rendering your own sounds) | ✅ | ✅ the engine plays them on you until the client runs | — |
+| A moving loop you come within range of (a car, a helicopter out of view) | ✅ | ✅ starts where its source is, not where it started | — |
+| A new sound on a channel cuts only the loops of that channel (one loop played on two channels of an entity) | ✅ | ✅ | — |
+| Two loops of one sound played on the world at two places (a map or an addon) | ✅ | ✅ both followed, each at its place | — |
 | OGG sound files | ✅ played by the engine | ✅ decoded by the module | — |
 
 ## Rendering
@@ -67,7 +67,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Spatialisation | Source engine (stereo panning) | ✅ binaural HRTF on headphones, or speaker panning; custom HRTF (SOFA) | C `native_out`, `native_hrtf`, `native_hrtf_blend` |
 | Sounds in clear sight | vanilla (engine) | ✅ "all native": HRTF and reverb on every sound | C `native_all`, S `native_relay` |
 | Room reverb simulated from the geometry | — (the engine's automatic reverb only) | ✅ convolution plus parametric tail, ambisonic, at the listener's position | C `native_reverb` |
-| A far loud sound's reverb, before its own reverb slot is simulated, stays at the sound's level at the listener (no burst) | — | ✅ | C `native_slot_fallback` |
+| A far loud sound's reverb, before its own reverb slot is simulated, stays at the sound's level at the listener (no burst) | — | ✅ | — |
 | Source reverb slots simulated in groups, so their new responses do not all crossfade in the same audio block (no overrun spike) | — | ✅ | C `native_slot_group` |
 | **Echoes of loud sounds** (gunfire, explosions) simulated on the walls around the source | — | ✅ even when the engine plays the direct sound | C `native_echo`, `native_echo_lvl`, S `echo_relay` |
 | Speed-of-sound delay (343 m/s, over the real path length) | ✅ | ✅ | C `delay` |
@@ -83,12 +83,12 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Map traces of the probe graph and path tightening done in the engine (about 2.5x faster than `util.TraceHull` from Lua; checked against it on every map, off at the first difference) | — | ◐ experimental | C `native_traces` |
 | The paths' world-only traces (segment tests, corners, wall insides) and the probe traces done in the engine with numbers in and out: no Vector per trace, so fewer userdata for the garbage collector's pauses (checked against `util.TraceLine` on every map) | — | ✓ | C `native_trace_nums` |
 | Third-person and death views: the server hears from where the player's view really is | ✅ | ✅ | S `ear_report` |
-| Far sounds' paths worked out over several frames within a fixed time per frame, also while the listener moves fast | ✅ | ✅ | C `far_sliced`, `far_sliced_ms`, `far_sliced_cap`, `far_hold_pace`, `far_held_closer` |
-| Cached paths never kept from a world that changed while they were worked out | ✅ | ✅ | C `cache_gen_guard` |
-| Two sounds with no entity close to each other never share a cached path | ✅ | ✅ | C `cache_src_near` |
-| Paths worked out before a door changed state are dropped once the door costs are redone | ✅ | ✅ | C `door_field_invalidate` |
-| Door costs redone only when a door or portal state really changed | ✅ | ✅ | C `state_sig_sorted` |
-| A new sound's quick evaluation (bursts) uses the same wall model as the full one | ✅ | ✅ | C `cheap_same_trans` |
+| Far sounds' paths worked out over several frames within a fixed time per frame, also while the listener moves fast | ✅ | ✅ | C `far_sliced`, `far_sliced_ms`, `far_hold_pace` |
+| Cached paths never kept from a world that changed while they were worked out | ✅ | ✅ | — |
+| Two sounds with no entity close to each other never share a cached path | ✅ | ✅ | — |
+| Paths worked out before a door changed state are dropped once the door costs are redone | ✅ | ✅ | — |
+| Door costs redone only when a door or portal state really changed | ✅ | ✅ | — |
+| A new sound's quick evaluation (bursts) uses the same wall model as the full one | ✅ | ✅ | — |
 | `pba_enable 0` = exact vanilla (A/B) | ✅ | ✅ | S `enable` |
 | Menus (player, admin, Steam Audio) | ✅ | ✅ | — |
 | The server can forbid the native module (fairness in competitive play) | — | ✅ | S `allow_native` |

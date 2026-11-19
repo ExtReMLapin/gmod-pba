@@ -592,24 +592,6 @@ local SUITE = {
 			A.retuneRan = ranBefore
 			if not ok then error(err, 0) end
 		end },
-		{ name = "Default migration chain: a saved pba_native_reverb of 0.15 (the 1.0 default) moves to 0.4 (the 1.1 default), not to today's default: the retune migration scales it later, on the right DLL", func = function()
-			local G = _G
-			local saved = { cookie = G.cookie, rcc = G.RunConsoleCommand, cv = A.cv.native_reverb }
-			local store, cmds, stored = {}, {}, 0.15
-			G.cookie = {
-				GetNumber = function(k, d) local v = store[k] if v == nil then return d end return tonumber(v) end,
-				GetString = function(k, d) local v = store[k] if v == nil then return d end return v end,
-				Set = function(k, v) store[k] = tostring(v) end,
-			}
-			G.RunConsoleCommand = function(name, val) cmds[#cmds + 1] = name .. " " .. val if name == "pba_native_reverb" then stored = tonumber(val) end end
-			A.cv.native_reverb = { GetFloat = function() return stored end, GetName = function() return "pba_native_reverb" end }
-			local ok, err = pcall(function()
-				A.MigrateDefaults()
-				expect(stored).to.equal(0.4)
-			end)
-			G.cookie, G.RunConsoleCommand, A.cv.native_reverb = saved.cookie, saved.rcc, saved.cv
-			if not ok then error(err, 0) end
-		end },
 		{ name = "EngineGain: 1 near the source, decreasing, level 0 = no attenuation", func = function()
 
 			expect(AC.EngineGain(0, 75) <= 1).to.beTrue()
@@ -803,9 +785,8 @@ local SUITE = {
 		{ name = "Soft cull (continuity review step 2): a path just past reject_db or past max_paths fades out by its level, a voice past max_voices gives its energy", func = function()
 			local L = Vector(0, 0, 0)
 			local mk = function(pos, len, loss) return { pos = pos, length = len, lossDb = loss, lp = 0 } end
-			local on, off = table.Copy(CFG), table.Copy(CFG)
-			on.model_soft_cull, off.model_soft_cull = 1, 0
-			on.diffuse, off.diffuse = 0, 0
+			local on = table.Copy(CFG)
+			on.diffuse = 0
 			local rej = on.reject_db
 			-- half-way through the fade (smoothstep 0.5): the second path keeps half its energy
 			local function two(cfg) return P.SelectVoices(L, { mk(Vector(100, 100, 0), 500, 5), mk(Vector(100, -100, 0), 500, 5 + rej + 3) }, nil, 75, cfg) end
@@ -813,19 +794,15 @@ local SUITE = {
 			local function energy(v) local e = 0 for _, x in ipairs(v) do e = e + x.gain ^ 2 end return e end
 			local e1 = AC.EngineGain(500, 75) ^ 2 * 10 ^ (-5 / 10)
 			local full = AC.EngineGain(500, 75) ^ 2 * 10 ^ (-(5 + rej + 3) / 10)
-			local a, b = energy(two(off)), energy(two(on))
-			expect(near(a / e1, 1, 1e-6)).to.beTrue()
+			local b = energy(two(on))
 			if not near((b - e1) / full, 0.5, 1e-6) then error(string.format("faded energy share %.4f, want 0.5", (b - e1) / full)) end
 			-- the fade is continuous: at its two ends it matches the cut
 			local function e2(loss) return energy(P.SelectVoices(L, { mk(Vector(100, 100, 0), 500, 5), mk(Vector(100, -100, 0), 500, loss) }, nil, 75, on)) - e1 end
 			expect(near(e2(5 + rej + 6.001), 0, 1e-12)).to.beTrue()
 			expect(near(e2(5 + rej + 0.001) / (AC.EngineGain(500, 75) ^ 2 * 10 ^ (-(5 + rej + 0.001) / 10)), 1, 1e-4)).to.beTrue()
 			-- max_paths: the 4th of 3 at 3 dB under the 3rd keeps part of its energy (its loss raised), at 7 dB none
-			local old = A.cfg.model_soft_cull
-			A.cfg.model_soft_cull = 1
 			local k = P.KeepLoudest({ mk(Vector(1, 0, 0), 500, 1), mk(Vector(1, 0, 0), 500, 2), mk(Vector(1, 0, 0), 500, 3), mk(Vector(1, 0, 0), 500, 6) }, 3, 75)
 			local k7 = P.KeepLoudest({ mk(Vector(1, 0, 0), 500, 1), mk(Vector(1, 0, 0), 500, 2), mk(Vector(1, 0, 0), 500, 3), mk(Vector(1, 0, 0), 500, 10) }, 3, 75)
-			A.cfg.model_soft_cull = old
 			expect(#k).to.equal(4)
 			expect(near(k[4].cullDb, -10 * math.log10(0.5), 1e-6)).to.beTrue()
 			expect(#k7).to.equal(3)
@@ -1646,7 +1623,7 @@ local SUITE = {
 			P.InvalidateCache()
 			if not ok then error(err, 0) end
 		end },
-		{ name = "Compute cache: two sources with no entity in one 32 u cell are two emitters: one does not get the other's path unless it stands within reeval_move of it (pba_cache_src_near, review P2)", func = function()
+		{ name = "Compute cache: two sources with no entity in one 32 u cell are two emitters: one does not get the other's path unless it stands within reeval_move of it (review P2)", func = function()
 			-- a concrete wall x 100..110 ending at y = 16 between the listener and both sources (line state "w" for both)
 			local mn, mx = Vector(100, -200, -100), Vector(110, 16, 100)
 			local savedWalls, savedTrace, savedGet = P.Walls, util.TraceLine, A.Graph.Get
@@ -1677,11 +1654,6 @@ local SUITE = {
 				expect(dumpResult(b)).to.equal(dumpResult(ownB))
 				-- the same emitter a little further (within reeval_move, 8 u): still one computation
 				expect(rawequal(P.Compute(Sn, L, 75, cfg), a)).to.beTrue()
-				-- control: pba_cache_src_near 0 (former behaviour): b gets a's path
-				cfg.cache_src_near = 0
-				P.InvalidateCache()
-				a = P.Compute(Sa, L, 75, cfg)
-				expect(rawequal(P.Compute(Sb, L, 75, cfg), a)).to.beTrue()
 			end)
 			P.Walls, util.TraceLine, A.Graph.Get = savedWalls, savedTrace, savedGet
 			P.InvalidateCache()
@@ -1722,8 +1694,7 @@ local SUITE = {
 		{ name = "A cfg given to the path model is used whole: corners, walls and their trace filter, source object, path cut and follow groups read nothing from A.cfg", func = function()
 			-- a complete cfg of its own (P.Compute(..., cfg): benches, P.DRY_SOURCE_CFG), A.cfg replaced by a recorder
 			local full = table.Copy(A.cfg)
-			full.corner_relax, full.corner_step_first, full.model_soft_cull, full.native_voice_mix = 1, 1, 1, 1
-			full.trans_props, full.listener_object, full.source_object = 1, 1, 1
+			full.corner_relax, full.native_voice_mix, full.trans_props = 1, 1, 1
 			local box = { Vector(140, -50, -50), Vector(160, 50, 50) }
 			local prop = { GetClass = function() return "prop_physics" end, BoundingRadius = function() return 100 end,
 				IsVehicle = function() return false end }
@@ -1758,8 +1729,7 @@ local SUITE = {
 			P.ForgetWorld()
 			if not ok then error(err, 0) end
 			local mixed = {}
-			for _, k in ipairs({ "trans_props", "trans_prop_min", "listener_object", "wall_merge_graze", "door_3d", "source_object",
-				"corner_relax", "corner_step_first", "model_soft_cull", "native_voice_mix" }) do
+			for _, k in ipairs({ "trans_props", "trans_prop_min", "door_3d", "corner_relax", "native_voice_mix" }) do
 				if reads[k] then mixed[#mixed + 1] = k end
 			end
 			expect(table.concat(mixed, " ")).to.equal("")
@@ -2071,11 +2041,11 @@ local SUITE = {
 			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
 			if not ok then error(err, 0) end
 		end },
-		{ name = "CornerPoint: trying the smallest slide first (pba_corner_step_first) gives the full halving's point, in fewer traces", func = function()
+		{ name = "CornerPoint: trying the smallest slide first, the point found sees both neighbours", func = function()
 			-- the same doorway; vertices around both jambs, from either room, and a pillar in room A
 			local boxes = { { Vector(512, -1000, -100), Vector(528, 97, 300) }, { Vector(512, 143, -100), Vector(528, 1000, 300) },
 				{ Vector(300, 200, -100), Vector(340, 240, 300) } }
-			local savedTL, savedNT, savedSF = util.TraceLine, A.cfg.native_traces, A.cfg.corner_step_first
+			local savedTL, savedNT = util.TraceLine, A.cfg.native_traces
 			local n = 0
 			local function stub()
 				-- a new function each time: the corner memos are kept per trace function
@@ -2108,20 +2078,23 @@ local SUITE = {
 					local V = Vector(rnd(490, 560), i % 2 == 0 and rnd(60, 100) or rnd(140, 180), rnd(0, 100))
 					cases[i] = { S, V, L }
 				end
-				local got, traces = {}, {}
-				for mode = 0, 1 do
-					A.cfg.corner_step_first = mode
-					util.TraceLine, n = stub(), 0
-					got[mode] = {}
-					for i, c in ipairs(cases) do got[mode][i] = P.CornerPoint(c[1], c[2], c[3]) end
-					traces[mode] = n
+				local function clear(a, b)
+					for _, x in ipairs(boxes) do
+						local t0, t1 = segBox(a, b, x[1], x[2])
+						if t0 and t1 - t0 > 1e-6 then return false end
+					end
+					return true
 				end
-				for i = 1, #cases do
-					expect(got[1][i] == got[0][i]).to.beTrue()
+				util.TraceLine, n = stub(), 0
+				for _, c in ipairs(cases) do
+					local q = P.CornerPoint(c[1], c[2], c[3])
+					if clear(c[1], c[2]) and clear(c[2], c[3]) then
+						expect(clear(c[1], q) and clear(q, c[3])).to.beTrue()
+					end
 				end
-				expect(traces[1] < traces[0] * 0.8).to.beTrue()
+				print(string.format("[pba test] CornerPoint: %d traces for %d corners", n, #cases))
 			end)
-			util.TraceLine, A.cfg.native_traces, A.cfg.corner_step_first = savedTL, savedNT, savedSF
+			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
 			if not ok then error(err, 0) end
 		end },
 		{ name = "DetourDelta: the world closing on the best way round an object moves it by degrees along its edge (was a jump to the next edge: 10 -> 3 dB in 2 u, pba_twodoors)", func = function()
@@ -2297,7 +2270,7 @@ local SUITE = {
 				o.StartSolid = t0 == 0
 				return o
 			end
-			local cfg = setmetatable({ prop_max_db = 18, corner_refine = 0 }, { __index = CFG })
+			local cfg = setmetatable({ prop_max_db = 18 }, { __index = CFG })
 			local ok, err = pcall(function()
 				D.byEnt[9989] = { frac = 1, closedDb = 28, closedLp = 3 }
 				local S, L = Vector(640, 120, 56), Vector(424, 70, 56)
@@ -2317,7 +2290,6 @@ local SUITE = {
 			local S, L = Vector(-2633.84, 299.1, 60), Vector(-3776, 224, 60)
 			local xs = { -3640, -3112, -2936 }
 			local perms = { { 1, 2, 3 }, { 1, 3, 2 }, { 2, 1, 3 }, { 2, 3, 1 }, { 3, 1, 2 }, { 3, 2, 1 } }
-			local cfg = setmetatable({ route_pos_straight = 1 }, { __index = CFG })
 			local seen = {}
 			for trial = 1, 20 do
 				local doors = {}
@@ -2329,8 +2301,8 @@ local SUITE = {
 				local leaves = {}
 				for _, k in ipairs(perms[(trial - 1) % 6 + 1]) do leaves[doors[k]] = true end
 				local bent = PR.RouteHeardPos({ edgePos = Vector(S), leaves = leaves },
-					{ S, Vector(-2934.87, 274.8, 43.82), Vector(-3121.75, 275.25, 40), Vector(-3520, 320, 48), L }, S, L, cfg)
-				local straight = PR.RouteHeardPos({ pos = Vector(S), leaves = leaves }, { S, L }, S, L, cfg)
+					{ S, Vector(-2934.87, 274.8, 43.82), Vector(-3121.75, 275.25, 40), Vector(-3520, 320, 48), L }, S, L)
+				local straight = PR.RouteHeardPos({ pos = Vector(S), leaves = leaves }, { S, L }, S, L)
 				seen[#seen + 1] = { bent.pos, straight.pos }
 			end
 			for _, s in ipairs(seen) do
@@ -2464,9 +2436,6 @@ local SUITE = {
 				if worst > 3 then error(string.format("largest step %.1f dB per unit", worst), 0) end
 				local deep = lossAt(0)
 				expect(deep > 5 and deep < 20).to.beTrue()
-				-- world_edge 0: the transmission alone, as before
-				cfg.world_edge = 0
-				expect(lossAt(0) > 40).to.beTrue()
 			end)
 			util.TraceLine, P.Walls, A.Graph.Get, A.Native = saved[1], saved[2], saved[3], savedNative
 			P.InvalidateCache()
@@ -2574,7 +2543,7 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "StateSig: the same door states give the same signature whatever order pairs() walks them in (a door table rehashed or a door gone and back: link costs and door fields redone for nothing, far jobs restarted; pba_state_sig_sorted, review P6)", func = function()
+		{ name = "StateSig: the same door states give the same signature whatever order pairs() walks them in (a door table rehashed or a door gone and back: link costs and door fields redone for nothing, far jobs restarted; review P6)", func = function()
 			local PR = A.Probes
 			local savedDoors, savedList, savedEpoch = A.Doors, PR.doorList, PR.doorEpoch
 			local ok, err = pcall(function()
@@ -2608,12 +2577,6 @@ local SUITE = {
 				a[k].frac = f0 < 0.5 and 1 or 0
 				expect(sig(a) ~= s0).to.beTrue()
 				a[k].frac = f0
-				-- control: pba_state_sig_sorted 0 (former behaviour): the walk's order is in the signature
-				local saved = rawget(A.cfg, "state_sig_sorted")
-				A.cfg.state_sig_sorted = 0
-				local sa, sb = sig(a), sig(b)
-				A.cfg.state_sig_sorted = saved
-				expect(sa ~= sb).to.beTrue()
 			end)
 			A.Doors, PR.doorList, PR.doorEpoch = savedDoors, savedList, savedEpoch
 			if not ok then error(err, 0) end
@@ -2697,7 +2660,7 @@ local SUITE = {
 							if not PR.doorFieldJob and #((PR.doorFieldQueue or {}).list or {}) == 0 then break end
 						end
 						PR.current = cur
-						-- the field swapped in the background (pba_door_field_invalidate): the cached path and the loop's
+						-- the field swapped in the background: the cached path and the loop's
 						-- values were worked out on the old one: neither stands (was: up to cache_ttl / reeval_max_s more)
 						return P.cache.swapTest ~= kept, P.ReevalDue(loop, S, L, 1000.2, cfgC)
 					end
@@ -2705,17 +2668,6 @@ local SUITE = {
 					expect(fresh).to.beTrue()
 					expect(reeval).to.beTrue()
 					expect(f2.stateSig ~= nil and f2.doors == nil).to.beTrue()
-					-- control: pba_door_field_invalidate 0 (former behaviour): both stand after the swap
-					A.Doors.byEnt[9990].frac = 0
-					PR.doorList = nil
-					expect(PR.FieldFor(g, L) == f2 and f2.stateSig ~= PR.StateSig(g)).to.beTrue() -- (queued again)
-					local savedOpt = rawget(A.cfg, "door_field_invalidate")
-					A.cfg.door_field_invalidate = 0
-					fresh, reeval = swapField()
-					A.cfg.door_field_invalidate = savedOpt
-					expect(fresh).to.equal(false)
-					expect(reeval).to.equal(false)
-					expect(f2.doors ~= nil).to.beTrue() -- (it did swap: the closed door's field again)
 					A.Doors.byEnt[9990].frac = 0.5
 					expect(PR.StateSig(g) ~= f2.stateSig).to.beTrue()
 				end)
@@ -2760,7 +2712,7 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "Cheap: its transmission is P.Compute's (one model of the walls on the straight line: bundle, module occlusion, leaf fade), only the routes round them are left out (pba_cheap_same_trans, review P4)", func = function()
+		{ name = "Cheap: its transmission is P.Compute's (one model of the walls on the straight line: bundle, module occlusion, leaf fade), only the routes round them are left out (review P4)", func = function()
 			withSlicedRooms(function(cfg, list)
 				cfg.far_sliced = 0
 				local function diffs()
@@ -2779,15 +2731,9 @@ local SUITE = {
 					end
 					return n, worst
 				end
-				local saved = cfg.cheap_same_trans
-				cfg.cheap_same_trans = 0
-				local n0, w0 = diffs()
-				cfg.cheap_same_trans = 1
 				local n1, w1 = diffs()
-				cfg.cheap_same_trans = saved
-				print(string.format("[pba test] cheap vs full transmission over %d pairs: worst %.2f dB (option 0) -> %.2f dB", n1, w0, w1))
+				print(string.format("[pba test] cheap vs full transmission over %d pairs: worst %.2f dB", n1, w1))
 				expect(n1 >= 3).to.beTrue()
-				expect(w0 > 0.5).to.beTrue() -- control: two models
 				expect(w1 < 1e-9).to.beTrue()
 			end)
 		end },
@@ -3112,10 +3058,10 @@ local SUITE = {
 				expect(dumpResult(r)).to.equal(full(list[#list][1]))
 			end)
 		end },
-		{ name = "Far sliced: a playing sound's answer worked out for where the listener (or the source) was is dropped when the answer in use is nearer to where they are now, and asked again: a view that went to a camera and came back (d3_breen_01's blackout, 2.7 s) got the camera's answers 0.1-2.5 s after it was back, one flip per far sound (pba_far_held_closer); 0 = applied (former behaviour); a listener walking on keeps getting its answers", func = function()
+		{ name = "Far sliced: a playing sound's answer worked out for where the listener (or the source) was is dropped when the answer in use is nearer to where they are now, and asked again: a view that went to a camera and came back (d3_breen_01's blackout, 2.7 s) got the camera's answers 0.1-2.5 s after it was back, one flip per far sound; a listener walking on keeps getting its answers", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL = A.Slicer
-				local saved = { A.cfg.far_sliced_ms, rawget(A.cfg, "far_held_closer") }
+				local saved = A.cfg.far_sliced_ms
 				local ok, err = pcall(function()
 					A.cfg.far_sliced_ms = 0 -- (no budget: a job waits for its deadline, reached by hand)
 					local S = list[1][1]
@@ -3139,8 +3085,7 @@ local SUITE = {
 						setNow(j.deadline)
 						SL.Run()
 					end
-					local function scenario(on)
-						A.cfg.far_held_closer = on
+					local function scenario()
 						P.cache, SL.jobs = {}, {}
 						owner = { pbaSliceSeen = true, pbaCfg = cfg }
 						-- an answer in use, for L1
@@ -3154,11 +3099,8 @@ local SUITE = {
 						finish()
 						return SL.Held(owner, S, L1, 75, nil, nil)
 					end
-					-- off: the answer for L2 applied with the listener back at L1 (the flip)
-					local r = scenario(0)
-					expect(r ~= nil and r.L:Distance(L2) < 1).to.beTrue()
-					-- on: dropped and asked again for L1, whose answer comes next
-					r = scenario(1)
+					-- the answer for L2 is dropped and asked again for L1, whose answer comes next
+					local r = scenario()
 					expect(r).to.beNil()
 					finish()
 					r = SL.Held(owner, S, L1, 75, nil, nil)
@@ -3171,15 +3113,15 @@ local SUITE = {
 					r = SL.Held(owner, S, L2, 75, nil, nil)
 					expect(r ~= nil and r.L:Distance(M) < 1).to.beTrue()
 				end)
-				A.cfg.far_sliced_ms, A.cfg.far_held_closer = saved[1], saved[2]
+				A.cfg.far_sliced_ms = saved
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "Far sliced: with pba_far_sliced_cap, a held burst's jobs (pba_burst_hold_ms) keep the pacing up to 4 x far_sliced_ms: ready by their hold's end in full instead of falling to the cheap model (pba_far_hold_pace, review M4)", func = function()
+		{ name = "Far sliced: a held burst's jobs (pba_burst_hold_ms) keep the pacing up to 4 x far_sliced_ms: ready by their hold's end in full instead of falling to the cheap model (pba_far_hold_pace, review M4)", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
 				local clock = A.Paths.slice.clock
-				local saved = { A.cfg.far_sliced_cap, A.cfg.far_force_ms, A.cfg.far_sliced_ms, rawget(A.cfg, "far_hold_pace") }
+				local saved = { A.cfg.far_force_ms, A.cfg.far_sliced_ms, rawget(A.cfg, "far_hold_pace") }
 				local L = Vector(300, 300, 64)
 				PR.fieldsByKey, P.cache = nil, {}
 				P.Compute(list[1][1], L, 75, cfg)
@@ -3187,8 +3129,8 @@ local SUITE = {
 				local B = 0
 				-- the burst, held HOLD each; returns the answers given by the cheap model, the jobs, the most ticks (one
 				-- per slice check) of one frame's SL.Run, and the burst's work in ticks
-				local function burst(pace, cap, budget, force)
-					A.cfg.far_sliced_cap, A.cfg.far_hold_pace = cap, pace
+				local function burst(pace, budget, force)
+					A.cfg.far_hold_pace = pace
 					A.cfg.far_sliced_ms, A.cfg.far_force_ms = budget * 1000, force * 1000
 					P.cache, SL.jobs = {}, {}
 					local jobs, got = {}, {}
@@ -3218,8 +3160,8 @@ local SUITE = {
 					return nCheap, #jobs, maxT, w
 				end
 				-- the burst's work (warm: the first run fills what evaluations keep across requests), all in one frame
-				burst(0, 0, 1e6, 0)
-				local _, _, _, W = burst(0, 0, 1e6, 0)
+				burst(0, 1e6, 0)
+				local _, _, _, W = burst(0, 1e6, 0)
 				local ok, err = pcall(function()
 					-- the hold leaves two frames of pacing (requested in one frame, due two frames later). A budget B of a
 					-- sixth of the work: B a frame holds a third of it, 4 x B all of it. Then a tenth: 4 x B no longer all.
@@ -3228,11 +3170,11 @@ local SUITE = {
 						B = math.ceil(W / div)
 						-- control: pba_far_hold_pace 0 (former behaviour): far_sliced_ms a frame, then far_force_ms once
 						-- due: part of the burst gets the cheap model
-						local c0, n0 = burst(0, 1, B, B / 2)
+						local c0, n0 = burst(0, B, B / 2)
 						expect(n0 >= 5).to.beTrue()
 						expect(c0 >= 1).to.beTrue()
 						-- 1: no frame past 4 x far_sliced_ms (+ a check, three bookkeeping reads a job run, the forced share)
-						local c1, n1, t1 = burst(1, 1, B, B / 2)
+						local c1, n1, t1 = burst(1, B, B / 2)
 						expect(n1).to.equal(n0)
 						expect(t1 <= 4 * B + B / 2 + 1 + 3 * (n1 + 1)).to.beTrue()
 						if div == 6 then expect(c1).to.equal(0) else expect(c1 < c0).to.beTrue() end
@@ -3240,15 +3182,14 @@ local SUITE = {
 					end
 					print("[pba test] held burst, work " .. W .. " ticks: " .. table.concat(out, "; "))
 				end)
-				A.cfg.far_sliced_cap, A.cfg.far_force_ms, A.cfg.far_sliced_ms, A.cfg.far_hold_pace = saved[1], saved[2], saved[3], saved[4]
+				A.cfg.far_force_ms, A.cfg.far_sliced_ms, A.cfg.far_hold_pace = saved[1], saved[2], saved[3]
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "Far sliced: pba_far_sliced_cap keeps a frame's work on the jobs not yet due within far_sliced_ms whatever the pacing asks; 0 = the pacing raises it; the answers are the synchronous ones either way", func = function()
+		{ name = "Far sliced: a frame's work on the jobs not yet due stays within far_sliced_ms whatever the pacing asks; the answers are the synchronous ones", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
 				local clock = A.Paths.slice.clock
-				local cap0 = A.cfg.far_sliced_cap
 				local L = Vector(300, 300, 64)
 				PR.fieldsByKey, P.cache = nil, {}
 				P.Compute(list[1][1], L, 75, cfg)
@@ -3258,8 +3199,7 @@ local SUITE = {
 				-- jobs held 10 s (never due here), and a pacing estimate far above the budget: what a listener moving
 				-- fast gave (every far evaluation a new listener field, 12-37 ms each against far_sliced_ms 1.5).
 				-- Returns the first frame's ticks, the answers, the jobs.
-				local function run(cap)
-					A.cfg.far_sliced_cap = cap
+				local function run()
 					P.cache, SL.jobs = {}, {}
 					local jobs, got = {}, {}
 					for _, pr in ipairs(list) do
@@ -3287,23 +3227,17 @@ local SUITE = {
 					return dumpResult(P.Compute(S, L, 75, cfg))
 				end
 				local ok, err = pcall(function()
-					run(0) -- (warms what an evaluation keeps across requests: the next runs do equal work)
-					-- 0: the pacing's need (est over the frames left) is the frame's budget: every job done at once
-					local T0, got0, jobs0 = run(0)
-					expect(#jobs0 >= 5).to.beTrue()
-					expect(T0 > 10 * B).to.beTrue()
-					for k, j in ipairs(jobs0) do expect(dumpResult(got0[k])).to.equal(full(j.S)) end
-					-- 1: far_sliced_ms whatever the pacing asks (one slice check past it, and each job run's three clock
-					-- reads of bookkeeping); the jobs go on over the next frames, with the same answers
-					local T1, got1, jobs1 = run(1)
+					run() -- (warms what an evaluation keeps across requests: the next run does equal work)
+					-- far_sliced_ms whatever the pacing asks (one slice check past it, and each job run's three clock
+					-- reads of bookkeeping); the jobs go on over the next frames, with the synchronous answers
+					local T1, got1, jobs1 = run()
+					expect(#jobs1 >= 5).to.beTrue()
 					expect(T1 <= B + 1 + 3 * (#jobs1 + 1)).to.beTrue()
-					expect(#jobs1).to.equal(#jobs0)
 					for k, j in ipairs(jobs1) do
 						expect(got1[k] ~= nil).to.beTrue()
 						expect(dumpResult(got1[k])).to.equal(full(j.S))
 					end
 				end)
-				A.cfg.far_sliced_cap = cap0
 				if not ok then error(err, 0) end
 			end)
 		end },
@@ -3354,7 +3288,7 @@ local SUITE = {
 				if not ok then error(err, 0) end
 			end)
 		end },
-		{ name = "Far sliced: a job whose inputs change in its last slice, or past its restart cap, leaves no result under the new cache generation: its restart and the next sounds get the new answer (pba_cache_gen_guard, review P1)", func = function()
+		{ name = "Far sliced: a job whose inputs change in its last slice, or past its restart cap, leaves no result under the new cache generation: its restart and the next sounds get the new answer (review P1)", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes
 				A.cfg.far_sliced_ms = 4000
@@ -3432,18 +3366,10 @@ local SUITE = {
 						expect(pastCap()).to.equal(false)
 						expect(dumpResult(P.Compute(pr[1], pr[2], 75, cfg))).to.equal(after)
 					end
-					-- control: pba_cache_gen_guard 0 (former behaviour): the restart reads the stale answer back, and the
-					-- answer past the cap is kept
-					cfg.cache_gen_guard = 0
-					cfg.cache_ttl, cfg.group_time = 10, 0
-					expect(lastSlice()).to.equal(before)
-					expect(pastCap()).to.equal(true)
-					cfg.cache_ttl, cfg.group_time = 0, 1
-					expect(pastCap()).to.equal(true)
 				end)
 				P.SelectVoices = sv
 				cfg.trans_scale = saved
-				cfg.cache_ttl, cfg.group_time, cfg.cache_gen_guard = 0, 0, nil
+				cfg.cache_ttl, cfg.group_time = 0, 0
 				if not ok then error(err, 0) end
 			end)
 		end },

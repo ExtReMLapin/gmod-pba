@@ -2,7 +2,7 @@
 -- loop heard through the wall from room A (528 u), then the listener goes 5500 u away (inside lod_dist):
 -- "quiet" there (pba_quiet_db), so no new path search. The voice kept the gain it had near (frozen: a
 -- far loop as loud as from the next room, the sweep's louder_vanilla +6..+20 dB). It must keep following
--- its distance law (pba_native_quiet_law).
+-- its distance law (native_quiet_law).
 -- Pass: the gain sent to the voice drops by the law's own drop between the two distances (within 3 dB).
 local A, LP, N = pba, pba.Loops, pba.Native
 local key = GetGlobalString("pba_test_quietfar_key", "")
@@ -36,6 +36,5 @@ if not (res.g1 and res.g2) then res.pass = false res.err = "no gain sent" return
 local d1, d2 = S:Distance(Vector(256, 256, 40)), 5500
 res.dropDb = math.Round(20 * math.log10(res.g1 / math.max(res.g2, 1e-9)), 1)
 res.lawDropDb = math.Round(20 * math.log10(N.PhysClear(60, d1) / N.PhysClear(60, d2)), 1)
-res.quietLaw = A.cfg.native_quiet_law
 res.pass = not res.clearNear and math.abs(res.dropDb - res.lawDropDb) <= 3
 return res

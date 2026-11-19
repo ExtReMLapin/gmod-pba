@@ -48,7 +48,6 @@ local function setOpt(k, v)
 end
 local function burst(variant, hold)
 	setOpt("burst_hold_ms", hold)
-	setOpt("burst_fair", 1)
 	if variant == "budget" then
 		setOpt("burst_budget_ms", 2) setOpt("burst_mask_db", 0)
 	else
@@ -106,7 +105,7 @@ local function burst(variant, hold)
 	return out
 end
 local saved = {}
-for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair", "burst_hold_ms" }) do saved[k] = A.override[k] end
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_hold_ms" }) do saved[k] = A.override[k] end
 local ok, res = pcall(function()
 	local o = {}
 	for _, variant in ipairs({ "budget", "mask" }) do
@@ -116,7 +115,7 @@ local ok, res = pcall(function()
 	return o
 end)
 -- (by key: pairs() skipped the keys that had no override, and the test left its own four in memory)
-for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_fair", "burst_hold_ms" }) do A.SetOverride(k, saved[k]) end
+for _, k in ipairs({ "burst_budget_ms", "burst_mask_db", "burst_hold_ms" }) do A.SetOverride(k, saved[k]) end
 P.InvalidateCache() -- (the following tests start cold, as burst_budget's timing assumes)
 if not ok then return { pass = false, err = tostring(res) } end
 local function good(r)

@@ -26,7 +26,7 @@ A.Probes = PR
 -- 6: links cross grates; 7: and invisible tool brushes; 8: displacements both ways; 9: probes kept off
 -- floors; 10: probes follow the floors (one per storey and column, explicit positions), map seeds only;
 -- 12: a displacement's underside adds no empty segments (floors below it no longer hidden)
-local CACHE_VERSION = 15 -- 13: links over a column whose probe left its centre (pba_probe_skip_links); 15: and over a column whose probes give no way through (a nook beside a doorway), where the graph has no way within twice the distance
+local CACHE_VERSION = 16 -- 13: links over a column whose probe left its centre; 15: and over a column whose probes give no way through (a nook beside a doorway), where the graph has no way within twice the distance; 16: those links always on (the former pba_probe_skip_links, whose 1 wrote 15.5)
 local MAX_PROBES = 30000
 -- a build that reaches MAX_PROBES is redone at a wider spacing, up to this one, instead of keeping the
 -- part of the map flood-filled first (the far side of a big map had no probe at all)
@@ -575,7 +575,6 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		end
 		return c, colIds[ck]
 	end
-	local skipLinks = A.On(A.cfg, "probe_skip_links")
 	local queue, qh, truncated = {}, 1, false
 	local function node(i, j, k)
 		local c, ids = column(i, j)
@@ -656,20 +655,18 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		-- stands on one side of that wall only; the other side of its cell has no probe, and a room behind
 		-- it reached by a doorway in that wall was never linked (gm_melancholia's upper room: the radio saw
 		-- no probe, 70 dB through the walls, 48 dB lower 4 u aside). Link over that column to the next one,
-		-- by a gap point through the doorway (pba_probe_skip_links).
-		if skipLinks then
-			for _, d in ipairs(DIRS) do
-				local i1, j1 = n.i + d[1], n.j + d[2]
-				local cx, cy = (i1 + 0.5) * s, (j1 + 0.5) * s
-				local moved = false
-				for _, q in ipairs((column(i1, j1))) do
-					if abs(q.z - n.pos.z) < s and (abs(q.x - cx) > 1 or abs(q.y - cy) > 1) then moved = true break end
-				end
-				if moved then
-					local i2, j2 = i1 + d[1], j1 + d[2]
-					for k, q in ipairs((column(i2, j2))) do
-						if abs(q.z - n.pos.z) < s then tryLink(n, i2, j2, k, q, true, false) end
-					end
+		-- by a gap point through the doorway.
+		for _, d in ipairs(DIRS) do
+			local i1, j1 = n.i + d[1], n.j + d[2]
+			local cx, cy = (i1 + 0.5) * s, (j1 + 0.5) * s
+			local moved = false
+			for _, q in ipairs((column(i1, j1))) do
+				if abs(q.z - n.pos.z) < s and (abs(q.x - cx) > 1 or abs(q.y - cy) > 1) then moved = true break end
+			end
+			if moved then
+				local i2, j2 = i1 + d[1], j1 + d[2]
+				for k, q in ipairs((column(i2, j2))) do
+					if abs(q.z - n.pos.z) < s then tryLink(n, i2, j2, k, q, true, false) end
 				end
 			end
 		end
@@ -680,7 +677,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 	-- gap point searched over both cells' width. gm_melancholia's bathroom: its doorway to the hall lies
 	-- between the columns, the middle probe in a nook beside it; with no link through it the radio came by the
 	-- far side of the house (left ear), then by the hall 14 u to the right (right ear). Existing probes only.
-	if skipLinks and not truncated then
+	if not truncated then
 		-- whether the graph already joins a and b within `limit` (a bounded Dijkstra over the links): a link over
 		-- the middle column is only wanted where the graph has no reasonable way between them (a real detour),
 		-- not as a shortcut beside one (pba_twodoors: the shortest routes of every start then went by the one
@@ -725,7 +722,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 			if budgetFn then budgetFn(#nodes) end -- (each node: its joined() searches and links are ms of work)
 		end
 	end
-	return { spacing = s, nodes = nodes, truncated = truncated, skip = skipLinks }
+	return { spacing = s, nodes = nodes, truncated = truncated }
 end
 
 -- Cache format (text; util.JSONToTable silently truncates arrays at 15000 elements):
@@ -735,7 +732,7 @@ end
 --   spacing asked for (pba_probe_spacing), `spacing` the one built (wider when MAX_PROBES was reached).
 local function num(v) return string.format("%.10g", v) end
 function PR.Serialize(g, hash)
-	local out = { util.TableToJSON({ v = CACHE_VERSION + ((g.skip and 0.5) or 0), hash = hash, spacing = g.spacing, want = g.want or g.spacing,
+	local out = { util.TableToJSON({ v = CACHE_VERSION, hash = hash, spacing = g.spacing, want = g.want or g.spacing,
 		truncated = g.truncated, count = #g.nodes }) }
 	for _, n in ipairs(g.nodes) do
 		local ids = {}
@@ -761,7 +758,7 @@ function PR.Deserialize(text, hash, spacing)
 	if not text then return nil end
 	local nl = string.find(text, "\n", 1, true)
 	local head = util.JSONToTable(nl and string.sub(text, 1, nl - 1) or text)
-	if not head or head.v ~= CACHE_VERSION + ((A.On(A.cfg, "probe_skip_links")) and 0.5 or 0) or (hash and head.hash ~= hash) then return nil end
+	if not head or head.v ~= CACHE_VERSION or (hash and head.hash ~= hash) then return nil end
 	local want = tonumber(head.want) or tonumber(head.spacing)
 	if spacing and not (want and abs(want - spacing) < 1e-3) then return nil end
 	local s = tonumber(head.spacing)
@@ -1242,29 +1239,23 @@ function PR.StateSig(g)
 	local function mix(v) acc = (acc * 31 + v) % 2147483647 end
 	local D = A.Doors
 	if D and D.byEnt then
-		if A.On(A.cfg, "state_sig_sorted") then
-			-- pba_state_sig_sorted: the doors in index order. The mix is not commutative, and pairs() walks the same
-			-- states in another order once the table was rehashed (a door gone and back, one more door then one less):
-			-- the signature changed with no state changed, and the link costs, the door fields and the far jobs were
-			-- all redone for nothing.
-			local list = D.entIdx
-			if not list then
-				list = sigDoorIdx
-				local n = 0
-				for idx in pairs(D.byEnt) do n = n + 1 list[n] = idx end
-				for i = #list, n + 1, -1 do list[i] = nil end
-				table.sort(list)
-			end
-			local byEnt = D.byEnt
-			for i = 1, #list do
-				local idx = list[i]
-				local st = byEnt[idx]
-				if st then mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0) end
-			end
-		else
-			for idx, st in pairs(D.byEnt) do
-				mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0)
-			end
+		-- the doors in index order. The mix is not commutative, and pairs() walks the same states in another
+		-- order once the table was rehashed (a door gone and back, one more door then one less): the signature
+		-- changed with no state changed, and the link costs, the door fields and the far jobs were all redone
+		-- for nothing.
+		local list = D.entIdx
+		if not list then
+			list = sigDoorIdx
+			local n = 0
+			for idx in pairs(D.byEnt) do n = n + 1 list[n] = idx end
+			for i = #list, n + 1, -1 do list[i] = nil end
+			table.sort(list)
+		end
+		local byEnt = D.byEnt
+		for i = 1, #list do
+			local idx = list[i]
+			local st = byEnt[idx]
+			if st then mix(idx) mix(floor((st.frac or 0) * 255)) mix(st.closedDb or 0) end
 		end
 	end
 	local ag = g.area
@@ -1601,10 +1592,10 @@ function PR.AdvanceDoorFields()
 		-- a far sound's evaluation paused in a slice may hold the old one (cl_slicer: restarted)
 		PR.fieldEpoch = (PR.fieldEpoch or 0) + 1
 		PR.doorFieldJob = nil
-		-- pba_door_field_invalidate: the paths worked out on the old field (a door just closed: still the way through
-		-- it) were kept for cache_ttl, and a loop re-evaluated at the door's change kept them for reeval_max_s (its
-		-- state's generation unchanged): the closed door still heard through for 1-2 s, then the switch
-		if A.On(A.cfg, "door_field_invalidate") then A.Paths.InvalidateCache() end
+		-- the paths worked out on the old field (a door just closed: still the way through it) would be kept for
+		-- cache_ttl, and a loop re-evaluated at the door's change kept them for reeval_max_s (its state's
+		-- generation unchanged): the closed door still heard through for 1-2 s, then the switch (review P5)
+		A.Paths.InvalidateCache()
 	end
 end
 hook.Add("Think", "pba_probes_door_field", function() PR.AdvanceDoorFields() end)
@@ -2082,18 +2073,18 @@ function PR.HeardLeaf(leaves, S, L)
 end
 
 --- Where a probe route p (its polyline pulled, S .. L) is heard from (pure): sets p.pos.
-function PR.RouteHeardPos(p, pulled, S, L, cfg)
+function PR.RouteHeardPos(p, pulled, S, L)
 	-- heard from its last corner ON the edge, not from its clearance vertex: two copies of one
 	-- route (from two probes the source sees) end on clearance vertices 60 u apart and the
 	-- voice's direction swung 14.5 degrees in a 4 u step of the source when the copy kept
 	-- changed (field_continuity); on the edge they meet
 	if #pulled >= 3 and p.edgePos then p.pos = p.edgePos end
-	-- pba_route_pos_straight: a route whose corners all came to lie on the line once refined (its last
-	-- corner on the edge is the source itself) is heard where its line passes its clearance vertex (the
+	-- a route whose corners all came to lie on the line once refined (its last corner on the edge is the
+	-- source itself) is heard where its line passes its clearance vertex (the
 	-- opening it goes through), not at the source: at the source, the listener-room send took the
 	-- source's own level as what enters the listener's space (rp_downtown's doorway: 12.5 dB in 4 u, the
 	-- route toggling between a corner at the jamb and none), and the direction swung by up to 177 deg
-	if #pulled >= 3 and A.On(cfg, "route_pos_straight") and p.pos and p.pos:DistToSqr(S) < 1 then
+	if #pulled >= 3 and p.pos and p.pos:DistToSqr(S) < 1 then
 		local v, ab = pulled[#pulled - 1], L - S
 		-- (its doorway's leaf when it has one: the vertex may be a probe deep in a room)
 		local ent = PR.HeardLeaf(p.leaves, S, L)
@@ -2176,18 +2167,16 @@ local function altBranches(f, n, L)
 	end)
 	local out, roots = {}, {}
 	f.altPulled = f.altPulled or {}
-	local byFork = A.On(A.cfg, "route_alt_fork")
 	for _, c in ipairs(cands) do
 		local x, m = c[2], c[3]
 		local rt = f.root[m]
-		-- one per seed reached and per probe it leaves the branch at (sidetracks to one seed, or from one
-		-- probe, are mostly one way: the cheapest kept). pba_route_alt_fork: per probe it leaves at only: a
-		-- seed is a grid artefact (the seeds the listener sees change step by step), and two ways that
-		-- leave the branch far apart (the south way at its first bend, a parallel lane at the last) reached
-		-- one seed one step and two the next, so the way the cheapest parallel lane shadowed was lost
-		-- (rp_downtown's street walk, step 168: 4 dB)
-		if rt and not roots[-B[x]] and (byFork or not roots[rt]) then
-			roots[rt], roots[-B[x]] = true, true
+		-- one per probe it leaves the branch at (sidetracks from one probe are mostly one way: the cheapest
+		-- kept), not also one per seed reached: a seed is a grid artefact (the seeds the listener sees change
+		-- step by step), and two ways that leave the branch far apart (the south way at its first bend, a
+		-- parallel lane at the last) reached one seed one step and two the next, so the way the cheapest
+		-- parallel lane shadowed was lost (rp_downtown's street walk, step 168: 4 dB)
+		if rt and not roots[B[x]] then
+			roots[B[x]] = true
 			local key = n.id .. ":" .. B[x] .. ":" .. m
 			local pts = f.altPulled[key]
 			if not pts then
@@ -2428,7 +2417,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 					local p = A.Paths.EvalRoute(pulled, cfg)
 					p.probe = true
 					if hop then hopFade(p, hopW[inners.nodes[x]]) end
-					PR.RouteHeardPos(p, pulled, S, L, cfg)
+					PR.RouteHeardPos(p, pulled, S, L)
 					out[#out + 1] = p
 				end
 			end
@@ -2453,7 +2442,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 						local p = A.Paths.EvalRoute(pulled, cfg)
 						p.probe, p.alt = true, true
 						if hop then hopFade(p, hopW[n]) end
-						PR.RouteHeardPos(p, pulled, S, L, cfg)
+						PR.RouteHeardPos(p, pulled, S, L)
 						out[#out + 1] = p
 						break
 					end

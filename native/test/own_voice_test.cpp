@@ -7,7 +7,7 @@
 // Built with -DPBA_TESTS=ON (target pba_own_voice_test).
 //
 // What is compared with the dry file (x gain): energy per band (0-500 Hz, 0.5-4 kHz, 4-16 kHz) of the two
-// ears together, the first 20 ms (the attack), the peak after the output soft clip, the stereo correlation, and
+// ears together, the first 20 ms (the attack), the stereo correlation, and
 // the waveform itself (error in dB against gain x the file's left / right channel). The reverb feed is
 // measured apart: the mono send into the room bus and the source reverb slot must be what they were (the
 // pre-HRTF signal of the voice), whatever the direct path does.
@@ -235,7 +235,7 @@ static Out Render(const char* name, double seconds, const Setup& s) {
 struct Metrics {
 	double band[3];   // dB of the two ears' energy over gain x dry's, 0-500 Hz, 0.5-4 kHz, 4-16 kHz
 	double attack;    // dB, first 20 ms
-	double peakDry, peakOut, peakClipped;
+	double peakDry, peakOut;
 	double corrDry, corrOut; // L/R correlation
 	double errL, errR;       // dB, waveform error against gain x dry L / R (module's 48 kHz decode)
 	double roomE, srcE;      // energy of the sends
@@ -262,7 +262,6 @@ static Metrics Measure(const Wav& w, const std::vector<float>& dl, const std::ve
 	m.peakDry *= gain;
 	for (size_t i = 0; i < o.l.size(); ++i) {
 		m.peakOut = std::max({m.peakOut, (double)std::fabs(o.l[i]), (double)std::fabs(o.r[i])});
-		m.peakClipped = std::max({m.peakClipped, (double)std::fabs(render::OutputClip(o.l[i])), (double)std::fabs(render::OutputClip(o.r[i]))});
 	}
 	m.corrDry = Corr(w.l, w.r);
 	m.corrOut = Corr(o.l, o.r);
@@ -281,18 +280,18 @@ static Metrics Measure(const Wav& w, const std::vector<float>& dl, const std::ve
 }
 
 static void Print(const char* tag, const Metrics& m) {
-	std::printf("  %-22s bands %+6.2f %+6.2f %+6.2f dB | attack %+6.2f dB | peak dry %.3f out %.3f clipped %.3f | corr %.3f (dry %.3f) |"
+	std::printf("  %-22s bands %+6.2f %+6.2f %+6.2f dB | attack %+6.2f dB | peak dry %.3f out %.3f | corr %.3f (dry %.3f) |"
 	            " err L %.1f R %.1f dB | send room %.4g slot %.4g\n",
-	            tag, m.band[0], m.band[1], m.band[2], m.attack, m.peakDry, m.peakOut, m.peakClipped, m.corrOut, m.corrDry, m.errL,
+	            tag, m.band[0], m.band[1], m.band[2], m.attack, m.peakDry, m.peakOut, m.corrOut, m.corrDry, m.errL,
 	            m.errR, m.roomE, m.srcE);
 }
 
 static void WriteOut(const std::string& dir, const std::string& tag, const Out& o) {
 	if (dir.empty()) return;
-	// as heard on the device: master volume 1, soft clip
+	// clipped at full scale (master volume 1)
 	std::vector<float> l = o.l, r = o.r;
-	for (auto& x : l) x = render::OutputClip(x);
-	for (auto& x : r) x = render::OutputClip(x);
+	for (auto& x : l) x = std::clamp(x, -1.0f, 1.0f);
+	for (auto& x : r) x = std::clamp(x, -1.0f, 1.0f);
 	const std::string d = MakeWav(48000, l, r);
 	std::ofstream f(dir + "/" + tag + ".wav", std::ios::binary);
 	f.write(d.data(), (std::streamsize)d.size());

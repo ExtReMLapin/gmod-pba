@@ -1,16 +1,14 @@
-"""A followed loop's compact updates (pba_loops_net_compact) with TWO real players on a listen server: a player who
+"""A followed loop's compact updates with TWO real players on a listen server: a player who
 subscribes late (walks into range while the loop's volume and pitch change at every tick) and a player who loses his
 mirror (a missed message) get a correct mirror (entity, position, volume, pitch) within 2 s, and every client follows
 the volume / pitch ramp. Halves: loops_net_compact_mp_sv.lua (server) and loops_net_compact_mp_cl.lua (each client).
 Needs two game instances: the host (listen server on pba_tworooms, maxplayers 4, sv_lan 1) and a second one that
 joins it (`connect <LAN address>:27015`; sv_lan 1 is what lets the same Steam account in twice). The script sets up
 the host's map and connects the second instance when it is not in yet.
-Usage: MCP_INSTANCE=<host> MCP_INSTANCE_B=<second> python -I test/loops_net_compact_mp.py <mcp.py> [--off]
-  --off: pba_loops_net_compact 0 (every update full: the same results are expected, it is a control)."""
+Usage: MCP_INSTANCE=<host> MCP_INSTANCE_B=<second> python -I test/loops_net_compact_mp.py <mcp.py>"""
 import json, os, socket, subprocess, sys, time
 
 MCP = sys.argv[1]
-OFF = "--off" in sys.argv
 HOST, B = os.environ.get("MCP_INSTANCE"), os.environ.get("MCP_INSTANCE_B")
 HERE = os.path.dirname(os.path.abspath(__file__))
 if not HOST or not B or HOST == B:
@@ -77,22 +75,17 @@ for inst in (HOST, B):
         print("FAIL: pba not ready on " + inst, flush=True)
         sys.exit(1)
 time.sleep(3)
-call("console_exec", {"realm": "server", "cmd": f"pba_loops_net_compact {0 if OFF else 1}"}, HOST)
+jobs = {}
+for inst in (HOST, B):
+    r = call("lua_job", {"realm": "client", "code": src("loops_net_compact_mp_cl.lua"), "timeout_s": 60, "async": True}, inst)
+    jobs[inst] = r.get("job_id")
 time.sleep(1)
-try:
-    jobs = {}
-    for inst in (HOST, B):
-        r = call("lua_job", {"realm": "client", "code": src("loops_net_compact_mp_cl.lua"), "timeout_s": 60, "async": True}, inst)
-        jobs[inst] = r.get("job_id")
-    time.sleep(1)
-    sv = call("lua_job", {"realm": "server", "code": src("loops_net_compact_mp_sv.lua"), "timeout_s": 60}, HOST, timeout=120)
-    sv = sv.get("values", [sv])[0]
-    cl = {}
-    for inst, jid in jobs.items():
-        r = call("lua_job_status", {"id": jid, "wait_s": 40}, inst, timeout=120)
-        cl[inst] = r.get("values", [r])[0] if isinstance(r, dict) else r
-finally:
-    call("console_exec", {"realm": "server", "cmd": "pba_loops_net_compact 1"}, HOST)
+sv = call("lua_job", {"realm": "server", "code": src("loops_net_compact_mp_sv.lua"), "timeout_s": 60}, HOST, timeout=120)
+sv = sv.get("values", [sv])[0]
+cl = {}
+for inst, jid in jobs.items():
+    r = call("lua_job_status", {"id": jid, "wait_s": 40}, inst, timeout=120)
+    cl[inst] = r.get("values", [r])[0] if isinstance(r, dict) else r
 print(json.dumps({"server": sv, "clients": cl}, indent=1), flush=True)
 ok = isinstance(sv, dict) and sv.get("pass") is True and all(isinstance(c, dict) and c.get("pass") is True for c in cl.values())
 print("PASS" if ok else "FAIL", flush=True)

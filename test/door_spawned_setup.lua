@@ -3,8 +3,7 @@
 -- state never sent, and a door without a state counts as shut in the paths and the probe links. A removed
 -- door's state stayed too (its entity index may be reused by another door).
 -- Server half (pba_tworooms with a human; client half: door_spawned.lua): a prop_door_rotating spawned open.
--- Pass (this half): the server polls it (D.entState) within 1 s, and not with pba_doors_spawned 0 (control);
--- the index is published.
+-- Pass (this half): the server polls it (D.entState) within 1 s; the index is published.
 local A = pba
 local D = A.Doors
 local ply = player.GetHumans()[1]
@@ -20,15 +19,6 @@ local function door()
 	e:Fire("Open")
 	return e
 end
--- control: pba_doors_spawned 0, the door is never polled (the old behaviour)
-local saved = A.cfg.doors_spawned
-A.cfg.doors_spawned = 0
-local c = door()
-local cIdx = c:EntIndex()
-local controlPolled = job:wait(function() return D.entState[cIdx] ~= nil end, 0.6)
-c:Remove()
-A.cfg.doors_spawned = saved
-job:sleep(0.2)
 local e = door()
 local idx = e:EntIndex()
 SetGlobalInt("pba_test_doorspawn_idx", idx)
@@ -36,4 +26,4 @@ SetGlobalEntity("pba_test_doorspawn_ent", e)
 local ok = job:wait(function() return D.entState[idx] ~= nil end, 1)
 job:sleep(1.5) -- (it swings open)
 local s = D.entState[idx]
-return { pass = ok and not controlPolled, polled = ok, controlPolled = controlPolled, frac = s and s.frac }
+return { pass = ok, polled = ok, frac = s and s.frac }

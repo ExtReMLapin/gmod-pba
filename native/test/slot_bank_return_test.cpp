@@ -7,14 +7,13 @@
 // retiring bank comes back) rang with no response at all. In game (coordinator's measure, listener oscillating 110 u
 // every 0.6 s across the 1.5 m anchor radius): 11 windows of 0.25 s on 75 in total silence and ~10 more 10-35 dB down,
 // the slot's input steady and its two weights summing to 1.
-// SetSlotBankFlush(true) (the default, pba_native_slot_bank_flush): a bank weighted out goes on being convolved with
+// The renderer now: a bank weighted out goes on being convolved with
 // silence (its output discarded) until its tail is over, so its history is clean and it keeps its response; no reset.
 // Measure: a looping noise voice bound to slot 0, both banks simulated once (no simulation afterwards); bank 0 alone
 // (energy E0 over 0.5 s), then bank 1 alone for 0.6 s (bank 0 weighted out while still fed), then bank 0 alone again
 // (energy E2 over 0.5 s, from 0.3 s after its return): E2 must be >= half of E0 (the former code: ~0 for the convolved
 // part). Control: bank 1 while it carries the slot (E1 > 0).
-// Built with -DPBA_TESTS=ON: pba_slot_bank_return_test, and pba_slot_bank_return_red_test (-DPBA_SLOT_FLUSH_OFF: the
-// option off, the former reset; must fail).
+// Built with -DPBA_TESTS=ON: pba_slot_bank_return_test.
 #include <phonon.h>
 
 #include <cmath>
@@ -68,11 +67,6 @@ int main() {
 	IPLContext ctx = nullptr;
 	if (iplContextCreate(&cs, &ctx) != IPL_STATUS_SUCCESS) { std::printf("FAIL context\n"); return 1; }
 	if (!render::StartOffline(ctx).empty()) { std::printf("FAIL StartOffline\n"); return 1; }
-#ifdef PBA_SLOT_FLUSH_OFF
-	render::SetSlotBankFlush(false);
-#else
-	render::SetSlotBankFlush(true);
-#endif
 	const std::string w = Wav(48000 * 2);
 	double secs = 0;
 	render::LoadSound("noise.wav", w.data(), w.size(), &secs);

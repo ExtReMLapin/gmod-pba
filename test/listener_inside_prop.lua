@@ -1,7 +1,7 @@
 -- Listener inside an object (lua_job, server realm, pba_tworooms): a line traced from outside to a point
 -- inside a prop's physics hull hit the prop again every 0.5 u (the trace restarting inside it, StartSolid):
--- up to 6 "walls" for one object. The object holding the listener is ignored (pba_listener_object), as the
--- object holding the source is (pba_source_object). A prop BETWEEN the two ends still counts once.
+-- up to 6 "walls" for one object. The object holding the listener is ignored, as the
+-- object holding the source is (P.SourceObject). A prop BETWEEN the two ends still counts once.
 -- Pass: inside -> 0 walls of that prop; between -> exactly 1.
 local P = pba.Paths
 local res = { checks = {} }
@@ -24,12 +24,6 @@ local C = e:WorldSpaceCenter()
 res.inside = count(C + Vector(-120, 0, 0), C)
 res.insideOff = count(C + Vector(-120, 30, 10), C + Vector(5, 3, 2))
 res.between = count(C + Vector(-120, 0, 0), C + Vector(120, 0, 0))
--- option off: the former count (proves the option is what changes it)
-local was = pba.cfg.listener_object
-pba.cfg.listener_object = 0
-res.off = count(C + Vector(-120, 0, 0), C)
-pba.cfg.listener_object = was
-chk("optionOff", res.off >= 1)
 chk("inside", res.inside == 0)
 chk("insideOff", res.insideOff == 0)
 chk("between", res.between == 1)

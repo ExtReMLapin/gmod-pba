@@ -4,7 +4,6 @@
 -- the entity's origin; the centre of the model's bounds for a brush model and for an NPC with IK; the "mouth"
 -- attachment for CHAN_VOICE / CHAN_VOICE2. Added by PBA: a shot (a weapon's sounds, CHAN_WEAPON on the shooter)
 -- comes from the weapon's muzzle (its centre without one). Passes when every case is within TOL units of that rule.
--- `local EXPECT_ON = false` before the file: the option off, the cases are then expected to miss (the test has teeth).
 local L = LocalPlayer():EyePos()
 local TOL = 3
 local IK = { npc_citizen = true, npc_combine_s = true, npc_metropolice = true, npc_zombie = true, npc_hunter = true, npc_strider = true }
@@ -72,7 +71,5 @@ local armed = 0
 for _, r in ipairs(rows) do if string.find(r.case, "shot", 1, true) then armed = armed + 1 end end
 if armed < 3 then fails[#fails + 1] = "only " .. armed .. " armed shooters seen (want >= 3: smg1, ar2, pistol, bots)" end
 table.sort(rows, function(a, b) return a.err > b.err end)
-local on = EXPECT_ON ~= false
-local pass
-if on then pass = #fails == 0 and n >= 15 else pass = #fails > 0 end -- option off: must miss
+local pass = #fails == 0 and n >= 15
 return { pass = pass, n = n, floorWalls = floorWalls, cases = #rows, armed = armed, worst = math.Round(worst, 1), fails = fails, rows = rows }

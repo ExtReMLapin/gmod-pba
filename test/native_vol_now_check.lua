@@ -1,5 +1,5 @@
 -- Server volume change of a hidden loop (part 2, client lua_job, started before native_vol_now_emit.lua): the
--- native voice follows the server's volume change at once (pba_native_vol_now), as the engine's channel does.
+-- native voice follows the server's volume change at once (native_vol_now), as the engine's channel does.
 -- Before, the change only forced a re-evaluation at the voice's next turn (half an update_interval at least,
 -- then a ramp over one interval): a dropship's engine fade stayed +8..11 dB over its law meanwhile (SW2,
 -- d3_c17_10b). Pass: within 0.1 s of the new volume reaching the mirror, its voice gain is within 1.5 dB of

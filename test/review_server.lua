@@ -1,12 +1,10 @@
 -- Server findings of the 2026-11-19 review, one case per finding (RS_CASE), each judged on what the server sends
 -- (net messages spied: name, reliable or not, recipients, and the sound body's position) or on its own state.
 -- Server lua_job on pba_tworooms with a human (the host) in room A at (256, 256, 0).
--- pre: `local RS_CASE = "S1"` (the finding), `local RS_CONTROL = true` (the case's option at 0: the old behaviour, so
--- the case must FAIL; the battery's control step passes when it does).
+-- pre: `local RS_CASE = "S1"` (the finding).
 local A = pba
 local LP = A.Loops
 local CASE = RS_CASE or "S1"
-local CONTROL = RS_CONTROL == true
 local ply = player.GetHumans()[1]
 if not IsValid(ply) or game.GetMap() ~= "pba_tworooms" then return { pass = false, err = "needs pba_tworooms with a human" } end
 ply:SetPos(Vector(256, 256, 0))
@@ -64,8 +62,7 @@ local cases = {}
 
 -- S1: a loop started while the player's client is not ready (joining) must reach him once it is: its OP_START sent
 -- before then is lost (no receiver yet), and he stayed subscribed, so nothing ever came again.
-cases.S1 = function(opt)
-	A.SetOverride("loops_ready", opt)
+cases.S1 = function()
 	local st = A.PState(ply)
 	st.ready = false
 	local e = prop(Vector(320, 256, 40))
@@ -86,8 +83,7 @@ end
 -- line stopped (StopSound), or replaced on its voice channel by a new line, is no longer one; it was handed to his
 -- module all the same once he was ready (a ghost line, or two lines over each other).
 local LINE1, LINE2 = "vo/npc/male01/question06.wav", "vo/npc/male01/question05.wav"
-cases.M2 = function(opt)
-	A.SetOverride("early_purge", opt)
+cases.M2 = function()
 	local st = A.PState(ply)
 	st.ready, st.earlyDone, st.earlyT0, st.early = false, nil, nil, nil
 	local e = prop(Vector(320, 300, 40))
@@ -114,12 +110,11 @@ cases.M2 = function(opt)
 		afterStop = afterStop, afterCut = table.concat(afterCut, ",") }
 end
 
--- M5: the channel rule's cut of a copy relayed a tick or two earlier goes on both streams (pba_stop_both): reliable
+-- M5: the channel rule's cut of a copy relayed a tick or two earlier goes on both streams: reliable
 -- alone, a client reading both ticks in one packet reads it before the copy and the copy plays over its successor.
 -- A line on a can behind the closed door is relayed to the host; the next tick a second line on that channel is not
 -- (the host then has pba off on his side: the engine's), so the cut reaches him.
-cases.M5 = function(opt)
-	A.SetOverride("stop_both", opt)
+cases.M5 = function()
 	local st = A.PState(ply)
 	local e = prop(Vector(784, 256, 40))
 	job:sleep(0.3)
@@ -141,8 +136,7 @@ end
 -- S3: the footstep a player's witnesses generate themselves is left out for them (PlayerFootstep), but only the
 -- footstep: his gunshot in the same tick was left out too (marked by player and tick only), and nothing played it for them.
 -- A bot steps and fires in one tick next to the host: the host's verdict on each.
-cases.S3 = function(opt)
-	A.SetOverride("step_by_name", opt)
+cases.S3 = function()
 	local bot = player.CreateNextBot("pba_rs_step")
 	if not IsValid(bot) then return { pass = false, err = "no bot" } end
 	spawned[#spawned + 1] = bot
@@ -172,8 +166,7 @@ end
 -- S4: a sentence cannot be re-emitted to some players only (EmitSentence takes no filter): when one listener is blocked
 -- every listener gets the relay. A player whose client is not ready got it too, and nothing played it for him. The
 -- sentence is now left to the engine for everyone then. A sentence on a can behind the closed door, the host not ready.
-cases.S4 = function(opt)
-	A.SetOverride("sentence_ready", opt)
+cases.S4 = function()
 	A.SetOverride("sentences", 1)
 	A.PState(ply).ready = false
 	local e = prop(Vector(784, 256, 40))
@@ -188,8 +181,7 @@ end
 -- S5: a player's own sound goes to his module (pba_native_own: his userinfo asks for it) by a relay, with no check that
 -- his client runs: on a map change the userinfo still says 1 while his new client loads, and his own sounds were relayed
 -- to nothing. Not ready, his own sound is the engine's (played on him, clear).
-cases.S5 = function(opt)
-	A.SetOverride("own_ready", opt)
+cases.S5 = function()
 	A.SetOverride("native_relay", 1)
 	A.SetOverride("allow_native", 1)
 	A.PState(ply).ready = false
@@ -211,8 +203,7 @@ end
 
 -- S6: a player joining a loop that plays (entering its range, or ready) gets its START with the source's position: it was
 -- the position at the loop's start, wrong for a moving source (a car, a helicopter) out of his PVS (no entity to follow).
-cases.S6 = function(opt)
-	A.SetOverride("loops_join_pos", opt)
+cases.S6 = function()
 	local e = prop(Vector(320, 256, 40))
 	job:sleep(0.2)
 	e:EmitSound(LOOP, 75, 100, 1, CHAN_STATIC)
@@ -260,8 +251,7 @@ end
 
 -- S9: the channel rule cuts the loops followed on the new sound's channel; it stopped their name on every channel (the
 -- same loop on another channel of the entity went too).
-cases.S9 = function(opt)
-	A.SetOverride("loops_cut_chan", opt)
+cases.S9 = function()
 	local e = prop(Vector(320, 256, 40))
 	job:sleep(0.2)
 	local idx = e:EntIndex()
@@ -280,8 +270,7 @@ end
 -- S10: the loops followed are keyed by entity, channel and name: two positional loops of one name on the world (two
 -- EmitSound(name, pos) of a map or an addon) shared a key, the second was taken as an update of the first (no START,
 -- the first one's position).
-cases.S10 = function(opt)
-	A.SetOverride("loops_world_pos", opt)
+cases.S10 = function()
 	local n0 = 0
 	for _, x in pairs(LP.active) do if x.idx == 0 and x.name == LOOP then n0 = n0 + 1 end end
 	local i0 = #sent
@@ -313,13 +302,12 @@ local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end
 local st0 = A.PState(ply)
 local wasReady, wasEarlyDone, wasEarlyT0, wasOff = st0.ready, st0.earlyDone, st0.earlyT0, st0.off
-local ok, res = pcall(fn, CONTROL and 0 or nil)
+local ok, res = pcall(fn)
 unspy()
 st0.ready = wasReady == nil and true or wasReady
 st0.earlyDone, st0.earlyT0, st0.early, st0.off = wasEarlyDone, wasEarlyT0, nil, wasOff
-for _, k in ipairs({ "loops_ready", "early_purge", "stop_both", "step_by_name", "sentence_ready", "sentences", "own_ready", "native_relay", "allow_native", "loops_join_pos", "long_lipsync", "loops_cut_chan", "loops_world_pos" }) do A.SetOverride(k, nil) end
+for _, k in ipairs({ "sentences", "native_relay", "allow_native", "long_lipsync" }) do A.SetOverride(k, nil) end
 for _, e in ipairs(spawned) do if IsValid(e) then if e:IsPlayer() then e:Kick("pba test") else e:Remove() end end end
 if not ok then return { pass = false, err = tostring(res) } end
-res.case, res.control = CASE, CONTROL
-if CONTROL then res.pass = not res.pass end
+res.case = CASE
 return res

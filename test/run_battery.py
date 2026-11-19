@@ -238,10 +238,9 @@ def lua_reload():
     return out
 
 def levels_off_states():
-    """T23: four options at 0 give the behaviour they replace, at 1 the one pba adds (each run both ways):
+    """T23: two options at 0 give the behaviour they replace, at 1 the one pba adds (each run both ways):
     pba_lipsync (mouth copy of a muffled line, pba_materials), pba_long_captions (subtitle of a long line taken over
-    by sv_loops, pba_tworooms), pba_soundscape_engine (soundscape wave round the ear left to the engine or taken,
-    d1_town_01), pba_stopsound_watch (the console's stopsound stops the mirrors and native voices, or leaves them)."""
+    by sv_loops, pba_tworooms); and a soundscape wave round the ear is left to the engine (d1_town_01)."""
     res = {}
     fails = []
     RED = os.environ.get("PBA_RED", "").split(",")  # red proof: PBA_RED=lipsync,long_captions,... leaves that option on while the run asks for 0
@@ -286,45 +285,18 @@ def levels_off_states():
             need(checks.get("ducked") is True, f"long_captions {v}: line not followed (no ducker note)")
             need(checks.get("caption") is (v == 1), f"long_captions {v}: caption shown = {checks.get('caption')}")
         call("console_exec", {"realm": "server", "cmd": "pba_long_captions 1"})
-        # stopsound_watch: the same console stopsound as stopsound_console, the watch on then off
-        native_on(True)
-        src = open(os.path.join(TEST, "stopsound_console.lua"), encoding="utf-8").read()
-        for v in (1, 0):
-            job("server", "stopsound_setup.lua")
-            if v == 0:
-                red("stopsound_watch", "client")
-            r = job("client", "stopsound_console.lua") if v == 1 else None
-            if v == 0:
-                code = src.replace('run("pba_stopsound_watch", "1")', 'run("pba_stopsound_watch", "0")')
-                r = call("lua_job", {"realm": "client", "code": code, "timeout_s": 60}, timeout=120)
-                r = r.get("values", [r])[0]
-            res[f"stopsound_watch {v}"] = r
-            if not isinstance(r, dict) or "before" not in r:
-                fails.append(f"stopsound_watch {v}: {r}")
-                continue
-            need(r["before"]["mirrors"] > 0, f"stopsound_watch {v}: no mirror before the command")
-            left = r["at15"]["mirrors"] + r["at15"]["voices"]
-            need((left == 0) == (v == 1), f"stopsound_watch {v}: {left} mirrors+voices left 1.5 s after the command")
-            if v == 0:
-                call("console_exec", {"realm": "client", "cmd": "pba_stopsound_watch 1"})
-                time.sleep(1)
-        # soundscape: engine 1 leaves the three waves to the engine (answer nil), 0 takes them (false)
+        # soundscape: the three waves round the ear are left to the engine (answer nil)
         load("d1_town_01")
-        for v in (1, 0):
-            if v == 0:
-                red("soundscape_engine", "client")
-            code = f"SS_ENGINE = '{v}'" + chr(10) + open(os.path.join(TEST, "soundscape_engine.lua"), encoding="utf-8").read()
-            r = call("lua_job", {"realm": "server", "code": code, "timeout_s": 60}, timeout=120)
-            r = r.get("values", [r])[0]
-            res[f"soundscape_engine {v}"] = r
-            if not isinstance(r, dict) or r.get("n") != 3:
-                fails.append(f"soundscape_engine {v}: {r}")
-                continue
-            need(r["taken"] == (0 if v == 1 else 3), f"soundscape_engine {v}: {r['taken']} of 3 waves taken by pba")
+        r = job("server", "soundscape_engine.lua", 60)
+        res["soundscape"] = r
+        if not isinstance(r, dict) or r.get("n") != 3:
+            fails.append(f"soundscape: {r}")
+        else:
+            need(r["taken"] == 0, f"soundscape: {r['taken']} of 3 waves taken by pba")
     finally:
-        for o, rl in (("lipsync", "client"), ("soundscape_engine", "client"), ("stopsound_watch", "client"), ("long_captions", "server")):
+        for o, rl in (("lipsync", "client"), ("long_captions", "server")):
             lua(rl, f"pba.SetOverride('{o}', nil) return true")
-        cl_set(lipsync=1, soundscape_engine=1, stopsound_watch=1)
+        cl_set(lipsync=1)
         call("console_exec", {"realm": "server", "cmd": "pba_long_captions 1"})
     return {"pass": not fails, "fails": fails, "res": res}
 
@@ -337,7 +309,7 @@ def long_sound_boundary():
     import threading
     load(TW)
     native_on(False)
-    RED = os.environ.get("PBA_RED", "").split(",")  # red proof: captions / mouth / end switch a long-path feature off
+    RED = os.environ.get("PBA_RED", "").split(",")  # red proof: captions / mouth switch a long-path feature off
     fails = []
     def chans():
         """Audible channels of the line in the engine's own list (snd_dumpclientsounds), not EntityEmitSound calls:
@@ -380,9 +352,6 @@ def long_sound_boundary():
             call("console_exec", {"realm": "server", "cmd": "pba_long_captions 0"})
         if "mouth" in RED:
             call("console_exec", {"realm": "server", "cmd": "pba_long_lipsync 0"})
-        if "end" in RED:
-            call("console_exec", {"realm": "server", "cmd": "pba_loops_once_end 0"})
-        call("console_exec", {"realm": "client", "cmd": "pba_loops_once_end " + ("0" if "end" in RED else "1")})
         time.sleep(1)
         (svL, clL), (svS, clS) = run(10.3), run(10.7)
         res.update(long=[svL, clL], short=[svS, clS])
@@ -422,9 +391,8 @@ def long_sound_boundary():
         if svO.get("long") is not False or svO.get("relayed") != 0 or clO.get("mirror") or clO.get("copies") or clO.get("mouth") or clO.get("nv"):
             fails.append(f"long_sounds 0: pba still took the long line: {svO} {clO}")
     finally:
-        for c in ("pba_max_duration 8", "pba_long_sounds 1", "pba_long_captions 1", "pba_long_lipsync 1", "pba_loops_once_end 1"):
+        for c in ("pba_max_duration 8", "pba_long_sounds 1", "pba_long_captions 1", "pba_long_lipsync 1"):
             call("console_exec", {"realm": "server", "cmd": c})
-        call("console_exec", {"realm": "client", "cmd": "pba_loops_once_end 1"})
     return {"pass": not fails, "fails": fails, "res": res}
 
 def glass_window():
@@ -469,10 +437,9 @@ def once_native_end():
         lua("client", "pba.SetOverride('quiet_db', nil) return true")
 
 def once_gone():
-    """A followed long one-shot mirror whose module voice is gone is dropped at once, with its slicer job
-    (pba_loops_once_gone); once_gone.lua builds the mirrors itself. PBA_RED=once_gone: the option off (red proof)."""
-    red = "once_gone" in os.environ.get("PBA_RED", "").split(",")
-    return job("client", "once_gone.lua", 30, pre="local ONCE_GONE = " + ("0" if red else "1"))
+    """A followed long one-shot mirror whose module voice is gone is dropped at once, with its slicer job;
+    once_gone.lua builds the mirrors itself."""
+    return job("client", "once_gone.lua", 30)
 
 def make_ogg():
     d = os.path.join(GAME, "sound", "pba_test")
@@ -639,8 +606,7 @@ def seq(*fns):
 
 def sound_origin():
     """Where a sound attached to an entity is taken (A.SoundPos) against the engine's point: origin, bounds centre
-    (brush, NPC with IK), mouth for voice lines, muzzle for shots. Option on: every case within 3 u; option off
-    (pba_sound_origin 0, the former eyes / centre rule): the same cases must miss (the test has teeth)."""
+    (brush, NPC with IK), mouth for voice lines, muzzle for shots: every case within 3 u."""
     load(TW)
     on = None
     ai = lua("server", "return GetConVar('ai_disabled'):GetInt()") or 0  # (the spawn script freezes the NPCs)
@@ -648,17 +614,11 @@ def sound_origin():
         job("server", "sound_origin_sv.lua", 30, pre="PAR14_REMOVE = nil")
         time.sleep(1.5)
         on = job("client", "sound_origin.lua", 30)
-        call("console_exec", {"realm": "server", "cmd": "pba_sound_origin 0"})
-        wait_lua("client", "return (pba.cfg.sound_origin or 1) < 0.5", 10)
-        off = job("client", "sound_origin.lua", 30, pre="local EXPECT_ON = false")
     finally:
-        call("console_exec", {"realm": "server", "cmd": "pba_sound_origin 1"})
         job("server", "sound_origin_sv.lua", 30, pre="PAR14_REMOVE = true")
         call("console_exec", {"realm": "server", "cmd": f"ai_disabled {ai}"})
     okon = isinstance(on, dict) and on.get("pass") is True
-    okoff = isinstance(off, dict) and off.get("pass") is True
-    return {"pass": okon and okoff, "on": {k: (on or {}).get(k) for k in ("pass", "n", "worst", "fails", "floorWalls")},
-            "offMisses": (off or {}).get("pass"), "offWorst": (off or {}).get("worst")}
+    return {"pass": okon, "on": {k: (on or {}).get(k) for k in ("pass", "n", "worst", "fails", "floorWalls")}}
 
 def source_embedded():
     """A source inside the world's solid (a combine camera in its ceiling) or exactly on a face of it (a floor's, at a
@@ -924,43 +884,53 @@ def cl_set(**kv):
         call("console_exec", {"realm": "client", "cmd": f"pba_{k} {v}"})
     wait_lua("client", " and ".join(f"(pba.cfg.{k} or -1) == {v}" for k in kv for v in [kv[k]]), 5)
 
-def long_line_play_fail(net):
+def long_line_play_fail():
     """A long line the native module cannot play (pba_native.Play fails) is still heard: its engine patch plays
-    it (pba_loops_native_fail; net=False: the safety net off) or the safety net gives it back (net=True,
-    pba_loops_native_fail 0: pba_silent_handback, with its console line)."""
+    it (the safety net off, so the patch is the mirror's own fallback)."""
     load(TW)
     native_on(True)
-    cl_set(loops_native_fail=0 if net else 1, silent_handback=1 if net else 0)
+    cl_set(silent_handback=0)
     try:
         job("server", "long_line_setup.lua")
         job("client", "long_line_play_fail.lua")
         emit = job("server", "long_line_emit.lua")
         chk = job("client", "long_line_play_check.lua")
     finally:
-        cl_set(loops_native_fail=1, silent_handback=1)
+        cl_set(silent_handback=1)
     if not (isinstance(emit, dict) and emit.get("pass") is True):
         return {"pass": False, "emit": emit, "check": chk}
-    if net and isinstance(chk, dict) and chk.get("pass") is True:
-        back = chk.get("handedBack") or []
-        if not any(str(b).startswith("long line mirror") for b in back):
-            chk["pass"] = False
-            chk["fails"] = ["handedBack"]
     return chk
 
-def long_line_decode(on=True):
-    """A long line whose file the module is still decoding (a large wave's first play) is the module's voice once
-    decoded, started at once, and never handed back to the engine meanwhile (pba_loops_decode_wait; on=False: red,
-    d3_c17_12's 'rockets' line heard only through the safety net)."""
+def silent_handback():
+    """The safety net (pba_silent_handback): a long line nothing renders (the module's decode of its file never ends:
+    no module voice, no engine patch while it decodes) is given back to the engine once its decode wait is over,
+    with its console line."""
     load(TW)
     native_on(True)
-    cl_set(silent_handback=1, loops_decode_wait=1 if on else 0)
+    cl_set(silent_handback=1)
     try:
         job("server", "long_line_setup.lua")
-        job("client", "long_line_decode_slow.lua")
+        job("client", "long_line_decode_slow.lua", pre="local PBA_DECODE_S = 1e9")
         emit = job("server", "long_line_emit.lua")
-        chk = job("client", "long_line_decode_check.lua")
+        chk = job("client", "silent_handback_check.lua", 30)
     finally:
-        cl_set(loops_decode_wait=1)
+        lua("client", "local o = pba.testOrig if o then pba_native.HasSound, pba_native.SoundPending, pba_native.LoadSoundAsync = o.has, o.pending, o.async pba.testOrig = nil end "
+                      "if pba.testOrigEnsure then pba.Native.EnsureSound = pba.testOrigEnsure pba.testOrigEnsure = nil end return true")
+    if not (isinstance(emit, dict) and emit.get("pass") is True):
+        return {"pass": False, "emit": emit, "check": chk}
+    return chk
+
+def long_line_decode():
+    """A long line whose file the module is still decoding (a large wave's first play) is the module's voice once
+    decoded, started at once, and never handed back to the engine meanwhile (d3_c17_12's 'rockets' line was heard
+    only through the safety net)."""
+    load(TW)
+    native_on(True)
+    cl_set(silent_handback=1)
+    job("server", "long_line_setup.lua")
+    job("client", "long_line_decode_slow.lua")
+    emit = job("server", "long_line_emit.lua")
+    chk = job("client", "long_line_decode_check.lua")
     if not (isinstance(emit, dict) and emit.get("pass") is True):
         return {"pass": False, "emit": emit, "check": chk}
     return chk
@@ -980,80 +950,64 @@ def silent_relay(on=True):
         return {"pass": False, "emit": emit, "check": chk}
     return chk
 
-def handback_replaced(on=True):
-    """The safety net respects the channel rule (pba_handback_channel): a relayed line pba renders nowhere, replaced
-    0.08 s later by a newer line on the same NPC's CHAN_VOICE, is NOT handed back (d3_c17_10b, two lines at once)."""
+def handback_replaced():
+    """The safety net respects the channel rule: a relayed line pba renders nowhere, replaced 0.08 s later by a
+    newer line on the same NPC's CHAN_VOICE, is NOT handed back (d3_c17_10b, two lines at once)."""
     load(TW)
-    cl_set(silent_handback=1, handback_channel=1 if on else 0)
-    try:
-        job("server", "long_line_setup.lua")
-        job("client", "handback_replaced_wrap.lua")
-        emit = job("server", "handback_replaced_emit.lua")
-        chk = job("client", "handback_replaced_check.lua")
-    finally:
-        cl_set(handback_channel=1)
+    cl_set(silent_handback=1)
+    job("server", "long_line_setup.lua")
+    job("client", "handback_replaced_wrap.lua")
+    emit = job("server", "handback_replaced_emit.lua")
+    chk = job("client", "handback_replaced_check.lua")
     if not (isinstance(emit, dict) and emit.get("pass") is True):
         return {"pass": False, "emit": emit, "check": chk}
     return chk
 
-def native_vol_now(on=True):
-    """A server volume change of a hidden loop reaches its native voice at once (pba_native_vol_now): within 0.1 s
+def native_vol_now():
+    """A server volume change of a hidden loop reaches its native voice at once: within 0.1 s
     of the new volume (x 0.25) reaching the mirror, the voice gain is within 1.5 dB of before x 0.25 (SW2: a
     dropship fade stayed +8..11 dB over its law until the next re-evaluation)."""
     import threading
     load(TW)
     native_on(True)
     at_room_a()
-    cl_set(native_vol_now=1 if on else 0)
     out = {}
     def check():
         out["check"] = job("client", "native_vol_now_check.lua")
-    try:
-        t = threading.Thread(target=check)
-        t.start()
-        time.sleep(1.0)
-        emit = job("server", "native_vol_now_emit.lua")
-        t.join()
-    finally:
-        cl_set(native_vol_now=1)
+    t = threading.Thread(target=check)
+    t.start()
+    time.sleep(1.0)
+    emit = job("server", "native_vol_now_emit.lua")
+    t.join()
     chk = out.get("check")
     if not (isinstance(emit, dict) and emit.get("pass") is True):
         return {"pass": False, "emit": emit, "check": chk}
     return chk
 
-def loops_net_compact(on=True):
-    """A followed loop's volume / pitch updates are compact (pba_loops_net_compact, audit B-14): the mean pba_loop
+def loops_net_compact():
+    """A followed loop's volume / pitch updates are compact (audit B-14): the mean pba_loop
     message of 40 updates under 25 bytes (98 with the full body), and the client mirror still follows (0.3)."""
     import threading
     load(TW)
     at_room_a()
-    call("console_exec", {"realm": "server", "cmd": f"pba_loops_net_compact {1 if on else 0}"})
-    time.sleep(0.5)
     out = {}
     def check():
         out["check"] = job("client", "loops_net_compact_check.lua", 40)
-    try:
-        t = threading.Thread(target=check)
-        t.start()
-        time.sleep(0.5)
-        emit = job("server", "loops_net_compact_emit.lua", 40)
-        t.join()
-    finally:
-        call("console_exec", {"realm": "server", "cmd": "pba_loops_net_compact 1"})
+    t = threading.Thread(target=check)
+    t.start()
+    time.sleep(0.5)
+    emit = job("server", "loops_net_compact_emit.lua", 40)
+    t.join()
     chk = out.get("check")
     return {"pass": bool(isinstance(emit, dict) and emit.get("pass") is True and isinstance(chk, dict) and chk.get("pass") is True),
             "emit": emit, "check": chk}
 
-def streams_vol_now(on=True):
-    """Another addon's radio rendered natively follows its SetVolume at once (pba_streams_vol_now): 0.1 s after
+def streams_vol_now():
+    """Another addon's radio rendered natively follows its SetVolume at once: 0.1 s after
     SetVolume(0.5 -> 0.125) the voice gain is within 1.5 dB of before x 0.25 (#54: it waited for the next
     re-evaluation, then a ramp)."""
     native_on(True)
-    cl_set(streams_vol_now=1 if on else 0)
-    try:
-        return job("client", "streams_vol_now.lua", 60)
-    finally:
-        cl_set(streams_vol_now=1)
+    return job("client", "streams_vol_now.lua", 60)
 
 def stream_own():
     """The listener's own radio stream (stream_own.lua): a BASS stream another addon puts on the player's body is started
@@ -1063,20 +1017,18 @@ def stream_own():
     return job("client", "stream_own.lua", 60)
 
 
-def streams_rate(on=True):
+def streams_rate():
     """Another addon's BASS stream rendered natively follows its channel's playback rate and goes silent at once on
     Pause / Stop (parity P2-14, streams_rate.lua, impulse method): 2 Hz bursts played at rate 2 / 0.5 / 1 by the
-    voice at 4 / 1 / 2 Hz, Pause and Stop silencing it within 0.12 s. on=False: both options at 0, the old behaviour
-    is what passes. Frames at 60 fps for the run (a latency is read per frame), put back after."""
+    voice at 4 / 1 / 2 Hz, Pause and Stop silencing it within 0.12 s. Frames at 60 fps for the run (a latency is
+    read per frame), put back after."""
     native_on(True)
     was = lua("client", "return GetConVar('fps_max'):GetString() .. ' ' .. GetConVar('fps_max_nofocus'):GetString()") or "20 20"
     fm, fn = was.split()
     call("console_exec", {"realm": "client", "cmd": "fps_max 60; fps_max_nofocus 60"})
-    cl_set(streams_rate=1 if on else 0, streams_stop_now=1 if on else 0)
     try:
         return job("client", "streams_rate.lua", 240)
     finally:
-        cl_set(streams_rate=1, streams_stop_now=1)
         call("console_exec", {"realm": "client", "cmd": f"fps_max {fm}; fps_max_nofocus {fn}"})
 
 def long_line():
@@ -1260,9 +1212,9 @@ steps = [
     # a long speech line (sv_loops) keeps its subtitle and ducks the other sounds like the short lines
     ("long_line", lambda: long_line()),
     # a long line the module cannot play goes to the engine (side bug 32: captioned, never heard)
-    ("long_line_play_fail", lambda: long_line_play_fail(False)),
+    ("long_line_play_fail", lambda: long_line_play_fail()),
     # the safety net: a line taken from the engine that nothing renders is handed back (pba_silent_handback)
-    ("silent_handback", lambda: long_line_play_fail(True)),
+    ("silent_handback", lambda: silent_handback()),
     ("silent_handback relay", lambda: silent_relay()),
     ("handback_replaced", lambda: handback_replaced()),
     ("long_line_decode", lambda: long_line_decode()),
@@ -1273,20 +1225,15 @@ steps = [
     ("speech_floor light", lambda: seq(lambda: load(TW), lambda: native_on(False), lambda: job("client", "speech_floor.lua"))),
     # review C1: a client volume change of a short sound pba took over goes to its copies, never restarts the original (pba_change_copies)
     ("change_taken", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("change_taken.py"))),
-    ("change_taken control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("change_taken.py", "--control"))),
     # review C2: a sound held while its routes are computed keeps a deferred channel cut (pba_cut_at_start_held)
     ("held_cut", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "held_cut.lua"))),
-    ("held_cut control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "held_cut.lua", pre="local CONTROL = true"))),
     # review C5: the silent line net leaves a line made inaudible on purpose alone (pba_handback_quiet)
     ("handback_quiet", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "handback_quiet.lua"))),
-    ("handback_quiet control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "handback_quiet.lua", pre="local CONTROL = true"))),
     # review C6: a deferred cut by name never stops the newer copy of the same name (pba_cut_name_newer)
     ("cut_name_newer", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("cut_name_newer.py"))),
-    ("cut_name_newer control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("cut_name_newer.py", "--control"))),
     ("speech_floor native", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "speech_floor.lua"))),
     # review C3: the speech floor kept when a followed line's engine copy is handed to the module (pba_speech_floor_switch)
     ("speech_switch", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "speech_switch.lua"))),
-    ("speech_switch control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "speech_switch.lua", pre="local CONTROL = true"))),
     ("looping_sound_stop", lambda: seq(lambda: load(TW), lambda: job("server", "looping_sound_stop.lua"))),
     ("weapon_loop_owner", lambda: seq(lambda: load(TW), lambda: job("server", "weapon_loop_owner.lua"))),
     # the same from real pick-ups: no mirror, no native voice for the weapon's hold loop (Workshop: loops never stop)
@@ -1308,7 +1255,6 @@ steps = [
     ("stream_own", lambda: seq(any_map, lambda: stream_own())),
     # a BASS stream's playback rate reaches its native voice, Pause / Stop silence it at once (P2-14); then both options off
     ("streams_rate", lambda: seq(any_map, lambda: streams_rate())),
-    ("streams_rate off", lambda: seq(any_map, lambda: streams_rate(False))),
     ("loop_fade_tail", lambda: seq(lambda: load(TW), lambda: job("server", "loop_fade_tail.lua"))),
     ("constraint_travel_loop", lambda: seq(lambda: load(TW), lambda: job("server", "constraint_travel_loop.lua"))),
     ("loud_loop_far", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "loud_loop_far_setup.lua"), lambda: job("client", "loud_loop_far.lua"))),
@@ -1318,12 +1264,9 @@ steps = [
     # the two copies of one long line (the Breencast's two speakers) start in step behind a shut door; the control (the old
     # behaviour, pba_loops_start_sync 0) must show the bug: one copy handed to the engine, or the copies apart (warbly speech)
     ("loops_copy_sync", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job_bg("client", "loops_copy_sync.lua", 40), lambda: job("server", "loops_copy_sync_sv.lua"), lambda: job_wait())),
-    ("loops_copy_sync control", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job_bg("client", "loops_copy_sync.lua", 40, "local PBA_COPYSYNC_CONTROL = true"), lambda: job("server", "loops_copy_sync_sv.lua"), lambda: job_wait())),
     # the same for the copies of a SHORT line (the evaluation of the second held in the slicer, 40-70 ms behind the first)
     ("loops_copy_sync_short", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job_bg("client", "loops_copy_sync_short.lua", 40), lambda: job("server", "loops_copy_sync_short_sv.lua"), lambda: job_wait())),
-    ("loops_copy_sync_short control", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job_bg("client", "loops_copy_sync_short.lua", 40, "local PBA_COPYSYNC_CONTROL = true"), lambda: job("server", "loops_copy_sync_short_sv.lua"), lambda: job_wait())),
     ("loops_copy_sync_short sentence", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job_bg("client", "loops_copy_sync_short.lua", 40, "local PBA_COPYSYNC_SENTENCE = true"), lambda: job("server", "loops_copy_sync_short_sv.lua", 60, "local PBA_COPYSYNC_SENTENCE = true"), lambda: job_wait())),
-    ("loops_copy_sync_short sentence control", lambda: seq(lambda: load(TW, 1), lambda: native_on(True), lambda: job_bg("client", "loops_copy_sync_short.lua", 40, "local PBA_COPYSYNC_SENTENCE = true local PBA_COPYSYNC_CONTROL = true"), lambda: job("server", "loops_copy_sync_short_sv.lua", 60, "local PBA_COPYSYNC_SENTENCE = true"), lambda: job_wait())),
     ("breencast_long_render d1_trainstation_01", lambda: seq(lambda: load("d1_trainstation_01", 1), lambda: native_on(True), lambda: job("server", "breencast_long_render_sv.lua"), lambda: job("client", "breencast_long_render.lua", 60))),
     ("line_first_play", lambda: seq(lambda: native_on(True), lambda: job("client", "line_first_play.lua", 30))),
     ("caption_net", lambda: seq(lambda: load("pba_tworooms", 1), lambda: job_bg("client", "caption_net.lua", 30), lambda: job("server", "caption_net_sv.lua"), lambda: job_wait())),
@@ -1392,13 +1335,10 @@ steps = [
     ("early_line control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("early_line.py", "--control", "mid"))),
     # review C7: an early line whose module voice ends early is heard again from its engine copy (pba_early_release)
     ("early_release", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("early_release.py"))),
-    ("early_release control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("early_release.py", "--control"))),
     # review M8: the early takeover follows the client's native_all for a clear line and mutes the engine copy's own name (pba_early_line_rules)
     ("early_rules", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "early_rules.lua"))),
-    ("early_rules control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "early_rules.lua", pre="local CONTROL = true"))),
     # review client risk: the per-frame follower notices a mirror's dead voice (pba_loops_follow_dead)
     ("follow_dead", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "follow_dead.lua"))),
-    ("follow_dead control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "follow_dead.lua", pre="local CONTROL = true"))),
     # the real case: a fresh d1_trainstation_05 (singleplayer), Alyx's first line starts before the client's pba runs
     ("early_line_map d1_trainstation_05", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("early_line_map.py"))),
     ("early_line_map d1_trainstation_05 control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("early_line_map.py", "--control"))),
@@ -1411,37 +1351,24 @@ steps = [
     ("cabin_radio gm_cozyforestcabin", lambda: seq(lambda: load("gm_cozyforestcabin", 1), lambda: py("cabin_radio.py"))),
     ("cabin_radio gm_cozyforestcabin control", lambda: seq(lambda: load("gm_cozyforestcabin", 1), lambda: py("cabin_radio.py", "--control"))),
     ("stop_order", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("stop_order.py"))),
-    ("stop_order control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("stop_order.py", "--control", "pba"))),
     ("stop_order apart", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("stop_order.py", "--apart"))),
-    ("stop_order apart control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("stop_order.py", "--apart", "--control", "pba"))),
     ("review_server S1", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S1"'))),
-    ("review_server S1 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S1" local RS_CONTROL = true'))),
     ("review_server M2", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "M2"'))),
-    ("review_server M2 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "M2" local RS_CONTROL = true'))),
     ("review_server M5", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "M5"'))),
-    ("review_server M5 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "M5" local RS_CONTROL = true'))),
     ("review_server S3", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S3"'))),
-    ("review_server S3 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S3" local RS_CONTROL = true'))),
     ("review_server S4", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S4"'))),
-    ("review_server S4 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S4" local RS_CONTROL = true'))),
     ("review_server S5", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S5"'))),
-    ("review_server S5 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S5" local RS_CONTROL = true'))),
     ("review_server S6", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S6"'))),
-    ("review_server S6 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S6" local RS_CONTROL = true'))),
     ("review_server S7", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S7"'))),
     ("review_server S9", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S9"'))),
-    ("review_server S9 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S9" local RS_CONTROL = true'))),
     ("review_server S10", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S10"'))),
-    ("review_server S10 control", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S10" local RS_CONTROL = true'))),
     ("review_server S12", lambda: seq(lambda: load(TW), lambda: job("server", "review_server.lua", 60, 'local RS_CASE = "S12"'))),
     ("range_edge_fade gm_converted_apartment", lambda: seq(lambda: load("gm_converted_apartment", 1), lambda: py("range_edge_fade.py"))),
     ("range_edge_fade gm_converted_apartment control", lambda: seq(lambda: load("gm_converted_apartment", 1), lambda: py("range_edge_fade.py", "--control"))),
     # review M7: the range-edge fade-in reaches the voice whatever pba_native_vol_now (pba_loops_edge_fade_direct)
     ("edge_fade_direct", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "edge_fade_direct.lua"))),
-    ("edge_fade_direct control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "edge_fade_direct.lua", pre="local CONTROL = true"))),
     # review M6: the range-edge fade only for a join near the edge, not a spawn / teleport next to the source (pba_loops_edge_fade_near)
     ("edge_fade_near", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("edge_fade_near.py"))),
-    ("edge_fade_near control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: py("edge_fade_near.py", "--control"))),
     # the prewarm's entity walk spans frames: an entity removed meanwhile is skipped (was: whole prewarm lost)
     ("prewarm_null_entity", lambda: job("client", "prewarm_null_entity.lua", 30)),
     # the held weapons' sound files decoded ahead (pba_native_prewarm_weapons): the first shot is the module's
@@ -1465,10 +1392,8 @@ steps = [
     ("native_dry_prefix", lambda: seq(lambda: native_on(True), lambda: job("client", "native_dry_prefix.lua", 30))),
     # review C4: the "#" rule also for a copy handed to the module mid-sound and for the mirrors (pba_native_dry_prefix_all)
     ("dry_prefix_all", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "dry_prefix_all.lua"))),
-    ("dry_prefix_all control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "dry_prefix_all.lua", pre="local CONTROL = true"))),
     # review M3 follow-up: the wet share (N.LoudWet) reaches SourceReflect from the mirrors, switchNative and the streams too
     ("wet_bind", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "wet_bind.lua"))),
-    ("wet_bind control", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: at_room_a(), lambda: job("client", "wet_bind.lua", pre="local CONTROL = true"))),
     ("native_own_dsp", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                    lambda: job("client", "native_own_dsp.lua", 60))),
     # a speaker's voice keeps its speaker EQ while followed, not only at its start (side bug 44)
@@ -1687,7 +1612,6 @@ steps = [
     # far slicer within its budget while the listener moves fast (pba_far_sliced_cap; d3_breen_01, 8 hidden loops, noclip at
     # 1500 u/s): Run per frame p99 <= 20 ms and max <= 60 ms; control: cap 0 must fail (frames of 100-330 ms). Cost test: alone
     ("far_slicer_budget d3_breen_01", lambda: seq(lambda: load("d3_breen_01", 1), lambda: native_on(True), lambda: py("far_slicer_budget.py"))),
-    ("far_slicer_budget d3_breen_01 control", lambda: seq(lambda: load("d3_breen_01", 1), lambda: native_on(True), lambda: py("far_slicer_budget.py", "--cap=0", "--expect=red"))),
     ("reeval_adaptive", lambda: py("reeval_adaptive.py")),    # T6: relayed sounds carry the door loss and DSP, <= 30 bytes each, relay_rate falls back to the engine (muffled), allow_native 0
     ("relay_net", lambda: seq(lambda: load(TW), lambda: py("relay_net.py"))),
     # T8: the native module over 3 map changes, a disconnect / reconnect and stopsound (voices, mirrors, memory)
@@ -1707,7 +1631,7 @@ steps = [
     ("loud_dry_reverb", lambda: loud_dry_reverb()),
     # T24: the loudest sounds of d1_canals_01 (train horn, brake, explosion, two reports) piled 100 u from the listener: the default output stage
     # leaves no flat top and stays under its ceiling; the soft clip, the hard clip and the 1.2 order (soft clip after the master volume: peak 3.7 at volume 0.16) are red
-    ("canals_loud", lambda: py("canals_loud.py", "--expect-red=0,2,3", timeout=600)),
+    ("canals_loud", lambda: py("canals_loud.py", "--expect-red=2", timeout=600)),
     ("canals_loud selftest (pure)", lambda: py("canals_loud.py", "--selftest")),
     # T16: a fake Sound Muffling Effect is turned off by pba_compat_auto 1 and given back (auto 0, pba off); a manual 0 is left alone
     ("compat_auto", lambda: seq(any_map, lambda: job("server", "compat_auto.lua", 60))),
@@ -1887,7 +1811,7 @@ if "--special" in opts:
     steps = special_steps
 # --quick: the fast checks (about 3 minutes, three maps) to run before each commit; the full battery
 # before merging into main or a release
-QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "ipe_blocked", "light_pure", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "npc_footsteps", "sound_origin", "source_embedded", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "streams_vol_now", "stream_own", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "physics_scrape_native", "speaker_once", "looping_cue", "manhack_loop", "restore_dup", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "sp_own_sounds", "sp_predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "soundtime_client", "patch_restart_client", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "relay_name_quota", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "mix_restart", "own_level", "native_mix", "native_duck", "brief_change", "change_new", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "source_long_rt hall", "breen_lips d1_trainstation_03", "once_native_end", "once_gone", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "meme_pipe", "meme_pipe_cl", "meme_pipe_clang (pure)", "pipe_map", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "burst_fair", "burst_keep", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "twodoors_unseen", "off_no_work", "native_predecode", "prewarm_null_entity", "prewarm_weapons", "mcp_encoding (pure)", "native_props_calm", "moved_local far", "moved_local across", "sync_doors_alloc", "lift_visible_same gm_construct", "detour_cap", "route_alt_street rp_downtown", "sky_route gm_construct", "long_line_decode", "breencast_long_render d1_trainstation_01", "line_first_play", "caption_net", "native_own", "native_own_mp", "mouth_chan", "native_pitch_now", "brief_mover_stop pba_demo", "loops_net_compact", "line_protect", "pause_flag", "hook_order", "burst_hold", "burst_short", "patch_channel_cut", "streams_rate", "late_handover", "player_state_restart", "timescale", "timescale_brief", "timescale_net", "whiz", "shot_batch_cut", "cut_order", "prewarm_npc_weapons", "canals_loud", "canals_loud selftest (pure)", "loops_copy_sync", "loops_copy_sync control", "cell_barrier gm_construct", "bundle_leaf_once twodoors", "loops_copy_sync_short", "loops_copy_sync_short control", "loops_copy_sync_short sentence", "loops_copy_sync_short sentence control", "early_line", "early_line control", "skylift_jumps d3_citadel_01", "skylift_jumps d3_citadel_01 control", "cabin_radio gm_cozyforestcabin", "cabin_radio gm_cozyforestcabin control", "stop_order", "stop_order control", "stop_order apart", "stop_order apart control", "range_edge_fade gm_converted_apartment", "range_edge_fade gm_converted_apartment control", "review_server S1", "review_server S1 control", "review_server M2", "review_server M2 control", "review_server M5", "review_server M5 control", "review_server S3", "review_server S3 control", "review_server S4", "review_server S4 control", "review_server S5", "review_server S5 control", "review_server S6", "review_server S6 control", "review_server S7", "review_server S9", "review_server S9 control", "review_server S10", "review_server S10 control", "review_server S12", "update_once", "reemit_error", "speech_switch", "speech_switch control", "dry_prefix_all", "dry_prefix_all control", "wet_bind", "wet_bind control", "change_taken", "change_taken control", "held_cut", "held_cut control", "handback_quiet", "handback_quiet control", "cut_name_newer", "cut_name_newer control", "early_release", "early_release control", "edge_fade_direct", "edge_fade_direct control", "edge_fade_near", "edge_fade_near control", "early_rules", "early_rules control", "follow_dead", "follow_dead control"}
+QUICK = {"GLuaTest pure suite", "mouth_stop", "stop_followers", "menu_config_static", "light_no_module", "ipe_blocked", "light_pure", "menu_fit", "portal_sweep tworooms", "bot_gunfire", "bot_footsteps", "npc_footsteps", "sound_origin", "source_embedded", "loop_removed", "looping_sound_stop", "looping_sound_stop_client", "weapon_loop_owner", "native_loop_fade_hidden", "native_vol_now", "streams_vol_now", "stream_own", "loop_fade_tail", "constraint_travel_loop", "loud_loop_far", "quiet_loop_far", "stopsound", "stopsound_console", "removed_oneshot", "channel_cut", "stop_script", "scene_cancel", "loop_reenable", "vehicle_state_sounds", "sentence_pos", "far_muffle", "impact_inside_prop", "client_loop", "native_doors", "native_features", "native_stereo", "sentence_parse", "sentence_files", "sentence_virtual", "native_sentences", "native_sentences_virtual", "path_hysteresis twodoors", "continuous_ramp twodoors", "native_volume_sfx", "native_law", "lowpass_hysteresis twodoors", "door_sweep open", "door_sweep closed", "underwater_slime d1_canals_06", "water_rules d1_canals_06", "water_reverb d1_canals_06", "water_light d1_canals_06", "water_planes d1_canals_06", "patch_oneshot", "physics_scrape", "physics_scrape_native", "speaker_once", "looping_cue", "manhack_loop", "restore_dup", "sound_duration", "sound_duration server", "soundtime_relay", "soundtime_reemit", "mp_own_sounds", "predicted_others", "sp_own_sounds", "sp_predicted_others", "source_slot_reuse", "listener_inside_prop", "runconsolecommand_blame", "patch_oneshot_client", "soundtime_offset", "soundtime_echo", "soundtime_client", "patch_restart_client", "relay_dict_overflow", "channel_no_overwrite", "relay_client_ready", "relay_name_quota", "native_own_dsp", "mix_groups", "mix_ducker", "mix_note_own", "mix_restart", "own_level", "native_mix", "native_duck", "brief_change", "change_new", "mic_disable", "native_dry_prefix", "silent_loops_cap", "native_src_near", "source_long_rt hall", "breen_lips d1_trainstation_03", "once_native_end", "once_gone", "lipsync_unseen", "manhack_loop_death", "npc_loop_death", "long_line", "caption_once d1_trainstation_05", "long_line_play_fail", "silent_handback", "silent_handback relay", "handback_replaced", "handback_scope", "speech_floor light", "speech_floor native", "channel_no_overwrite_server", "loops_cap_resume", "loops_stop_reentry", "loop_release_long", "loop_channel", "client_long_duck", "channel_one_rule", "long_lipsync_pref", "long_soundtime", "loop_far_muffle", "speaker_long_native", "door_spawned", "meme_pipe", "meme_pipe_cl", "meme_pipe_clang (pure)", "pipe_map", "loops_stop_named", "core_model", "vanilla_parity", "propagation_delay", "oneshot_reeval", "burst_budget", "burst_fair", "burst_keep", "gc_lean", "native_send_continuity lateral", "speaker_follow", "cl_enable_relay", "twodoors_closed", "twodoors_unseen", "off_no_work", "native_predecode", "prewarm_null_entity", "prewarm_weapons", "mcp_encoding (pure)", "native_props_calm", "moved_local far", "moved_local across", "sync_doors_alloc", "lift_visible_same gm_construct", "detour_cap", "route_alt_street rp_downtown", "sky_route gm_construct", "long_line_decode", "breencast_long_render d1_trainstation_01", "line_first_play", "caption_net", "native_own", "native_own_mp", "mouth_chan", "native_pitch_now", "brief_mover_stop pba_demo", "loops_net_compact", "line_protect", "pause_flag", "hook_order", "burst_hold", "burst_short", "patch_channel_cut", "streams_rate", "late_handover", "player_state_restart", "timescale", "timescale_brief", "timescale_net", "whiz", "shot_batch_cut", "cut_order", "prewarm_npc_weapons", "canals_loud", "canals_loud selftest (pure)", "loops_copy_sync", "cell_barrier gm_construct", "bundle_leaf_once twodoors", "loops_copy_sync_short", "loops_copy_sync_short sentence", "early_line", "early_line control", "skylift_jumps d3_citadel_01", "skylift_jumps d3_citadel_01 control", "cabin_radio gm_cozyforestcabin", "cabin_radio gm_cozyforestcabin control", "stop_order", "stop_order apart", "range_edge_fade gm_converted_apartment", "range_edge_fade gm_converted_apartment control", "review_server S1", "review_server M2", "review_server M5", "review_server S3", "review_server S4", "review_server S5", "review_server S6", "review_server S7", "review_server S9", "review_server S10", "review_server S12", "update_once", "reemit_error", "speech_switch", "dry_prefix_all", "wet_bind", "change_taken", "held_cut", "handback_quiet", "cut_name_newer", "early_release", "edge_fade_direct", "edge_fade_near", "early_rules", "follow_dead"}
 # --smoke: the core, under 2 minutes, to run before every commit (--quick stays the check before a merge)
 SMOKE = {"GLuaTest pure suite", "menu_config_static", "light_no_module", "portal_sweep tworooms",
          "native_doors", "native_features"}

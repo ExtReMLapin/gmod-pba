@@ -1,4 +1,4 @@
-"""Far slicer budget with a fast-moving listener (pba_far_sliced_cap).
+"""Far slicer budget with a fast-moving listener (the far slicer's budget cap).
 
 The user's case (2026-11-19, d3_breen_01, noclip at 500-2100 u/s): pba_sched cost 4.6 ms a frame on average and
 up to 131 ms, nearly all of it the far slicer (A.Slicer.Run, perfTimers.far_sliced max 150 ms) whose budget
@@ -16,7 +16,7 @@ How it went wrong: a far evaluation for a new listener position costs 12-37 ms a
 the Lua collector's steps (15-35 ms) land inside the slices and are counted in the jobs' time, so the pacing's
 estimate per job (SL.est, capped at 50 ms) rises, the waiting jobs' need (estimate / frames left, a full
 estimate each once overdue) rises with it, the slicer grants it, more evaluations run in one frame, more
-garbage... With the collector stopped for the window (--gc=0, report only) even pba_far_sliced_cap 0 stayed
+garbage... With the collector stopped for the window (--gc=0, report only) even the uncapped slicer stayed
 within the budget (p99 1.7 ms), so the collector stays on here: it is part of the mechanism.
 
 Thresholds: the slicer's own work is at most far_sliced_ms + far_force_ms (3.5 ms) plus one step past each
@@ -25,8 +25,7 @@ slicer's frames. First fixed before the fix at p99 <= 5.5 ms and <= 0.5 % of fra
 slicer then measured p99 2.1-6.2 ms (15.6 ms on a freshly started game, 12.7 ms with three other agents' games
 running) and max 6.7-38.5 ms, all its outliers collector steps. Set from those and from the bug's own scale
 (main: p99 55-70 ms, max 200-284 ms; cap 0: p99 120-283 ms, max 300-330 ms): p99 <= 20 ms and max <= 60 ms.
-Usage: python -I -u far_slicer_budget.py <mcp.py> [--cap=0|1] [--dur=15] [--gc=0] [--expect=red]
---expect=red: exit 0 when the check FAILS (the control: pba_far_sliced_cap 0 must reproduce the bug).
+Usage: python -I -u far_slicer_budget.py <mcp.py> [--dur=15] [--gc=0]
 """
 import json
 import os
@@ -37,10 +36,8 @@ import time
 MCP = sys.argv[1]
 HERE = os.path.dirname(os.path.abspath(__file__))
 OPTS = dict(a[2:].split("=", 1) for a in sys.argv[2:] if a.startswith("--") and "=" in a)
-CAP = OPTS.get("cap", "1")
 DUR = float(OPTS.get("dur", "15"))
 GC_ON = OPTS.get("gc") != "0"
-EXPECT_RED = OPTS.get("expect") == "red"
 MAP = "d3_breen_01"
 START = [-2449.4, -1380.2, 600.3]
 SPEED = 1500
@@ -98,8 +95,7 @@ fps0 = lua("client", "return { GetConVar('fps_max'):GetString(), GetConVar('fps_
 call("console_exec", {"cmd": "fps_max 240; fps_max_nofocus 240"})
 try:
     call("console_exec", {"realm": "client", "cmd": f"pba_far_sliced 1; pba_far_sliced_ms 1.5; pba_far_force_ms 2"})
-    call("console_exec", {"realm": "client", "cmd": f"pba_far_sliced_cap {CAP}"})
-    budget = lua("client", "return { ms = pba.cfg.far_sliced_ms, force = pba.cfg.far_force_ms, cap = pba.cfg.far_sliced_cap }")
+    budget = lua("client", "return { ms = pba.cfg.far_sliced_ms, force = pba.cfg.far_force_ms }")
     lua("server", "local p = Entity(1) p:SetMoveType(MOVETYPE_NOCLIP) p:SetPos(Vector(%f, %f, %f)) return true" % tuple(START))
     time.sleep(1)
     crowd = job("server", "perf_crowd.lua", {"n": 8, "radius": 2500, "seed": 7, "loopsOnly": True})
@@ -134,10 +130,6 @@ if not GC_ON:
     print("collector stopped: report only")
     print(json.dumps({"p99_ms": round(res["runP99"], 2), "over_share": round(share, 4), "pass": True, "report": True}))
     sys.exit(0)
-summary = {"p99_ms": round(res["runP99"], 2), "max_ms": round(res["runMax"], 2), "over_share": round(share, 4), "cap": CAP}
-if EXPECT_RED:
-    print("control (expected red):", "RED as expected" if not ok else "UNEXPECTED GREEN")
-    print(json.dumps(dict(summary, **{"pass": not ok, "control": True})))
-    sys.exit(0 if not ok else 1)
+summary = {"p99_ms": round(res["runP99"], 2), "max_ms": round(res["runMax"], 2), "over_share": round(share, 4)}
 print(json.dumps(dict(summary, **{"pass": ok})))
 sys.exit(0 if ok else 1)

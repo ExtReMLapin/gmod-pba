@@ -1,10 +1,10 @@
--- T23 (soundscape_engine, d1_town_01, server lua_job; SS_ENGINE = "0" / "1" prepended by the driver).
+-- T23 (soundscape_engine, d1_town_01, server lua_job).
 -- Soundscape ambience played around the ear (CHAN_STATIC on the world, within 64 u of the listener, a wave listed in
--- a soundscape script) is the engine's own with pba_soundscape_engine 1: pba's hook returns without processing it.
--- With 0 the same sounds are an ordinary client sound: pba muffles them through the wall the player faces.
+-- a soundscape script) is the engine's own: pba's hook returns without processing it. Before, the same sounds were an
+-- ordinary client sound: pba muffled them through the wall the player faces.
 -- The player stands 20 u from a wall facing it; the client emits a wind wave 30 u from the ear through the wall (3
 -- directions) the way the soundscape does, and counts how many pba's EntityEmitSound hook took (answered something: false = suppressed and re-emitted muffled).
--- Returns { n, taken, engine }: engine 1: taken = 0; engine 0: taken = 3 of 3 (measured: answer false, the copy muffled by pba).
+-- Returns { n, taken }: pass = taken 0 of n (the old behaviour took 3 of 3: answer false, the copy muffled by pba).
 -- (the client positions use LocalPlayer():EyePos(): EyePos() is 0,0,0 outside a render hook).
 local ply = player.GetHumans()[1]
 if not IsValid(ply) then return { err = "needs a human" } end
@@ -30,10 +30,8 @@ ply:SendLua([[net.Receive("pba_test_cl",function() RunString(net.ReadString(),"p
 local function client(code) net.Start("pba_test_cl") net.WriteString(code) net.Send(ply) end
 local ok, res = pcall(function()
 	job:sleep(1)
-	client('RunConsoleCommand("pba_soundscape_engine", "' .. SS_ENGINE .. '")')
-	job:sleep(1.5) -- the client's config poll (0.5 s)
 	client([==[
-		PBA_T = { n = 0, taken = 0, engine = pba.cfg.soundscape_engine, r = {} }
+		PBA_T = { n = 0, taken = 0, r = {} }
 		local hooks = hook.GetTable().EntityEmitSound
 		PBA_T.orig = hooks and hooks.pba
 		if PBA_T.orig then
@@ -59,7 +57,7 @@ local ok, res = pcall(function()
 	client(table.concat(code, "\n"))
 	job:sleep(1)
 	rep = nil
-	client([==[net.Start("pba_test_rep") net.WriteString(util.TableToJSON({ n = PBA_T.n, taken = PBA_T.taken, engine = PBA_T.engine, r = PBA_T.r })) net.SendToServer()]==])
+	client([==[net.Start("pba_test_rep") net.WriteString(util.TableToJSON({ n = PBA_T.n, taken = PBA_T.taken, r = PBA_T.r })) net.SendToServer()]==])
 	job:wait(function() return rep ~= nil end, 5)
 	return rep
 end)
@@ -71,4 +69,5 @@ client([==[
 net.Receivers["pba_test_rep"] = nil
 ply:SetPos(oldPos)
 if not ok then return { err = tostring(res) } end
+res.pass = (res.n or 0) >= 1 and res.taken == 0
 return res

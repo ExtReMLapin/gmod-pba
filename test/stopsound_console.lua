@@ -2,7 +2,7 @@
 -- server): the engine runs the command itself, no Lua function sees it (RunConsoleCommand's wrapper and
 -- concommand.Add are never called). Simulated by queueing the command through the engine's own
 -- RunConsoleCommand (pba.origCmd.run), which bypasses pba's wrapper exactly as typing it does.
--- Pass: a mirror and (native rendering on) native voices before; with pba_stopsound_watch 1, no mirror
+-- Pass: a mirror and (native rendering on) native voices before; no mirror
 -- and no native voice at 0.3 s and at 1.5 s after the command. The watch's next check is first pushed 600 s
 -- ahead, as a test stubbing RealTime while Think runs leaves it (the pure suite before it in the battery
 -- stalled the watch for ten minutes): the watch must not wait for it.
@@ -17,7 +17,6 @@ local function count()
 	return n
 end
 local function voices() return (N and N.render and pba_native) and pba_native.Stats().voices or 0 end
-run("pba_stopsound_watch", "1")
 if A.stopWatch then A.stopWatch.nextT = RealTime() + 600 end
 job:wait(function() return count() > 0 end, 5)
 if N and N.render then N.PlayVoice("vo/npc/male01/question06.wav", LocalPlayer():EyePos() + Vector(100, 0, 0), 1, 0, 100) end

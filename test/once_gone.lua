@@ -1,4 +1,4 @@
--- A followed long one-shot mirror whose module voice is gone is dropped at once (client lua_job; pba_loops_once_gone).
+-- A followed long one-shot mirror whose module voice is gone is dropped at once (client lua_job; once_gone).
 -- Sweep 2026-11-14, d2_prison_05: npc/antlion_guard/near_foot_light1.wav (0.54 s) counted alive 3.5 s, and on
 -- d2_prison_01 a 7.2 s scrape alive 10.3 s. The mirror had started (m.started) but its voice was gone
 -- (pba_native.Update found it ended: m.nativeId = nil); onceEnded() reads false for a mirror with neither patch
@@ -8,23 +8,19 @@
 -- 14-21 fps).
 -- Deterministic: the mirrors are built here, the slicer's SL.Held is replaced by a stub whose job never finishes
 -- (so the only way out of the mirror's wait is the fix), the clock is the real one but nothing depends on it.
--- Variant (a `local ONCE_GONE = 0` line put before the file): the option off, the old behaviour (red proof).
 -- Cases:
 --   gone      started, no voice, no job yet         -> dropped, no evaluation queued for it
 --   gone_job  started, no voice, a job pending      -> dropped, its job cancelled
 --   handback  started, no voice, handBack (engine will play it from its top) -> kept
 --   decoding  not started, no voice (file decoding) -> kept
--- Pass: the option on gives all four; off, `gone` and `gone_job` fail.
+-- Pass: all four.
 local A = pba
 local LP = A.Loops
 local SL = A.Slicer
 if not (LP and SL) then return { pass = false, err = "pba loops / slicer missing" } end
-local opt = ONCE_GONE
-if opt == nil then opt = 1 end
 local L = A.ListenerPos()
 if not L then return { pass = false, err = "no listener" } end
 local lp = LocalPlayer()
-A.SetOverride("loops_once_gone", opt)
 
 local calls, jobs = {}, {}
 local origHeld = SL.Held
@@ -76,13 +72,11 @@ res.checks.handback_kept = alive("handback")
 res.checks.decoding_kept = alive("decoding")
 res.calls = calls
 res.alive = { gone = alive("gone"), gone_job = alive("gone_job"), handback = alive("handback"), decoding = alive("decoding") }
-res.opt = opt
--- cleanup: what is left is marked done (the follow pass stops it), the stub and the override are removed
+-- cleanup: what is left is marked done (the follow pass stops it), the stub is removed
 for _, key in pairs(keys) do local m = LP.mirrors[key] if m then m.done = true end end
 job:sleep(0.8)
 for _, key in pairs(keys) do LP.mirrors[key] = nil end
 SL.Held = origHeld
-A.SetOverride("loops_once_gone", nil)
 if not ok then res.err = tostring(err) end
 res.fails = {}
 for k, v in SortedPairs(res.checks) do if not v then res.fails[#res.fails + 1] = k end end
