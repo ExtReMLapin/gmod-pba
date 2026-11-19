@@ -2729,6 +2729,69 @@ local SUITE = {
 				expect(dumpResult(r)).to.equal(full(list[#list][1]))
 			end)
 		end },
+		{ name = "Far sliced: pba_far_sliced_cap keeps a frame's work on the jobs not yet due within far_sliced_ms whatever the pacing asks; 0 = the pacing raises it; the answers are the synchronous ones either way", func = function()
+			withSlicedRooms(function(cfg, list)
+				local SL, PR = A.Slicer, A.Probes
+				local clock = A.Paths.slice.clock
+				local cap0 = A.cfg.far_sliced_cap
+				local L = Vector(300, 300, 64)
+				PR.fieldsByKey, P.cache = nil, {}
+				P.Compute(list[1][1], L, 75, cfg)
+				A.cfg.far_force_ms = 0
+				local B = 10 -- the frame's budget, in clock ticks (one per slice check)
+				A.cfg.far_sliced_ms = B * 1000
+				-- jobs held 10 s (never due here), and a pacing estimate far above the budget: what a listener moving
+				-- fast gave (every far evaluation a new listener field, 12-37 ms each against far_sliced_ms 1.5).
+				-- Returns the first frame's ticks, the answers, the jobs.
+				local function run(cap)
+					A.cfg.far_sliced_cap = cap
+					P.cache, SL.jobs = {}, {}
+					local jobs, got = {}, {}
+					for _, pr in ipairs(list) do
+						local j = SL.Defer(pr[1], L, 75, nil, cfg, 10)
+						if j then
+							jobs[#jobs + 1] = j
+							local k = #jobs
+							j.onDone = function(res) got[k] = res end
+						end
+					end
+					SL.est = 1e6
+					nextFrame()
+					local c0 = clock()
+					SL.Run()
+					local T = clock() - c0 - 1
+					for _ = 1, 5000 do
+						if #SL.jobs == 0 then break end
+						nextFrame()
+						SL.Run()
+					end
+					return T, got, jobs
+				end
+				local function full(S)
+					P.cache = {}
+					return dumpResult(P.Compute(S, L, 75, cfg))
+				end
+				local ok, err = pcall(function()
+					run(0) -- (warms what an evaluation keeps across requests: the next runs do equal work)
+					-- 0: the pacing's need (est over the frames left) is the frame's budget: every job done at once
+					local T0, got0, jobs0 = run(0)
+					expect(#jobs0 >= 5).to.beTrue()
+					expect(T0 > 10 * B).to.beTrue()
+					for k, j in ipairs(jobs0) do expect(dumpResult(got0[k])).to.equal(full(j.S)) end
+					-- 1: far_sliced_ms whatever the pacing asks (one slice check past it, and each job run's three clock
+					-- reads of bookkeeping); the jobs go on over the next frames, with the same answers
+					local T1, got1, jobs1 = run(1)
+					expect(T1 <= B + 1 + 3 * (#jobs1 + 1)).to.beTrue()
+					expect(#jobs1).to.equal(#jobs0)
+					for k, j in ipairs(jobs1) do
+						expect(got1[k] ~= nil).to.beTrue()
+						expect(dumpResult(got1[k])).to.equal(full(j.S))
+					end
+				end)
+				A.cfg.far_sliced_cap = cap0
+				if not ok then error(err, 0) end
+			end)
+		end },
 		{ name = "Far sliced: a job whose inputs changed while it was paused (door boxes, settings) is not served: restarted, it answers for the new inputs", func = function()
 			withSlicedRooms(function(cfg, list)
 				local SL, PR = A.Slicer, A.Probes

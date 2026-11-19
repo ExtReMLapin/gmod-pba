@@ -83,6 +83,15 @@ local function budgetLeft(first)
 	end
 	local b = (A.cfg.far_sliced_ms or 1.5) / 1000
 	if first then return math.max(math.min(b * SL.FIRST_SHARE - SL.spentFirst, b - SL.spent), 0) end
+	-- pba_far_sliced_cap: the jobs not yet due get far_sliced_ms a frame and no more (the time spent finishing due
+	-- ones, bounded by far_force_ms, is not taken from it). The pacing (SL.need) had no ceiling. With a listener
+	-- moving fast every far evaluation is a new one (12-37 ms, ~4.5 MB of garbage), the collector's steps inside
+	-- the slices are counted in the jobs' time too, the estimate per job (SL.est) rose to 20-50 ms, the overdue
+	-- jobs each asked for a full estimate in the next frame, and the slicer spent 100-300 ms in one frame, making
+	-- more garbage (d3_breen_01, noclip at 1500 u/s: test/far_slicer_budget.py). A job that does not finish in its
+	-- slices now reaches its deadline, where far_force_ms finishes it a little each frame and a playing sound keeps
+	-- its previous answer meanwhile, as before.
+	if (A.cfg.far_sliced_cap or 1) >= 0.5 then return math.max(b - (SL.spent - SL.forcedSpent), 0) end
 	return math.max(math.max(b, SL.need) - SL.spent, 0)
 end
 

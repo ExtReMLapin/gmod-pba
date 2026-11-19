@@ -1604,6 +1604,10 @@ steps = [
     # gm_construct first: path_quality field only ends on it (one load less); pba_demo: portal paths
     ("path_perceptual", lambda: py("path_perceptual.py", "--check", "--pairs=15", "gm_construct", "pba_demo")),
     # continuous sounds re-evaluated only on change (pba_reeval_adaptive): still cost, listener move, door
+    # far slicer within its budget while the listener moves fast (pba_far_sliced_cap; d3_breen_01, 8 hidden loops, noclip at
+    # 1500 u/s): Run per frame p99 <= 20 ms and max <= 60 ms; control: cap 0 must fail (frames of 100-330 ms). Cost test: alone
+    ("far_slicer_budget d3_breen_01", lambda: seq(lambda: load("d3_breen_01", 1), lambda: native_on(True), lambda: py("far_slicer_budget.py"))),
+    ("far_slicer_budget d3_breen_01 control", lambda: seq(lambda: load("d3_breen_01", 1), lambda: native_on(True), lambda: py("far_slicer_budget.py", "--cap=0", "--expect=red"))),
     ("reeval_adaptive", lambda: py("reeval_adaptive.py")),    # T6: relayed sounds carry the door loss and DSP, <= 30 bytes each, relay_rate falls back to the engine (muffled), allow_native 0
     ("relay_net", lambda: seq(lambda: load(TW), lambda: py("relay_net.py"))),
     # T8: the native module over 3 map changes, a disconnect / reconnect and stopsound (voices, mirrors, memory)

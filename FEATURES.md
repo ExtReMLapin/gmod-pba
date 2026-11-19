@@ -70,6 +70,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 |---|---|---|---|
 | Map traces of the probe graph and path tightening done in the engine (about 2.5x faster than `util.TraceHull` from Lua; checked against it on every map, off at the first difference) | — | ◐ experimental | C `native_traces` |
 | Third-person and death views: the server hears from where the player's view really is | ✅ | ✅ | S `ear_report` |
+| Far sounds' paths worked out over several frames within a fixed time per frame, also while the listener moves fast | ✅ | ✅ | C `far_sliced`, `far_sliced_ms`, `far_sliced_cap` |
 | `pba_enable 0` = exact vanilla (A/B) | ✅ | ✅ | S `enable` |
 | Menus (player, admin, Steam Audio) | ✅ | ✅ | — |
 | The server can forbid the native module (fairness in competitive play) | — | ✅ | S `allow_native` |
