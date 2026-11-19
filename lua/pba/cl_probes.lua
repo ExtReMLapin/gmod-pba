@@ -75,6 +75,35 @@ local function fillOut(o, f, ss, as, ep, _, fls, surf, sflags)
 end
 local function ntLine(t) return fillOut(t.output, NT.Trace(t.start, t.endpos, t.mask)) end
 local function ntHull(t) return fillOut(t.output, NT.Trace(t.start, t.endpos, t.mask, t.mins, t.maxs)) end
+-- pba_native_trace_nums (a module with trace.TraceN): the same engine traces, in and out as numbers. NT.Trace made
+-- one Vector per trace (its end point) and util.Trace* four: userdata, whose number since the last collector cycle
+-- sets the length of its atomic phase (the 15-50 ms frame spikes). The hit point is written into one Vector kept on
+-- the output table (numHitPos, made once): read before the next trace into that table, as util's (a caller keeping
+-- it copies it, ScanColumn's gap centres). NTN: TraceN once checked against util.Trace* (PR.NativeCheckN), else false.
+local NTN = false
+local function fillNums(o, f, ss, as, fls, hx, hy, hz, _, _, _, _, sflags, surf)
+	o.Hit = f < 1 or ss
+	o.Fraction, o.StartSolid, o.AllSolid, o.FractionLeftSolid = f, ss, as, fls
+	local hp = o.numHitPos
+	if not hp then hp = Vector() o.numHitPos = hp end
+	hp:SetUnpacked(hx, hy, hz)
+	o.HitPos = hp
+	o.HitTexture, o.HitNoDraw, o.HitWorld = surf or "", bit.band(sflags or 0, 0x80) ~= 0, true
+	return o
+end
+local function ntLineN(t)
+	local sx, sy, sz = t.start:Unpack()
+	local ex, ey, ez = t.endpos:Unpack()
+	return fillNums(t.output, NTN(sx, sy, sz, ex, ey, ez, t.mask))
+end
+local function ntHullN(t)
+	local sx, sy, sz = t.start:Unpack()
+	local ex, ey, ez = t.endpos:Unpack()
+	local ax, ay, az = t.mins:Unpack()
+	local bx, by, bz = t.maxs:Unpack()
+	return fillNums(t.output, NTN(sx, sy, sz, ex, ey, ez, t.mask, ax, ay, az, bx, by, bz))
+end
+local function numsOn() return NTN and (A.cfg.native_trace_nums or 1) >= 0.5 end
 
 -- Whether the native result differs from util's on what the probe code reads.
 local function nativeDiffers(t, f, ss, as, _, _, fls, surf, sflags)
@@ -101,11 +130,52 @@ function PR.NativeCheck(T, segs)
 	return bad
 end
 
+--- Number of checks on which T.TraceN differs from util.Trace*: the segments of PR.NativeCheck (lines and hulls
+-- alternately) with everything the numbers carry (hit, fraction, start / all in solid, where it leaves the solid,
+-- hit point, normal, texture, nodraw), then each segment's start traced as a point (P.FreeSource's startsSolid),
+-- then the lines with the mask of the path traces (sh_paths: detTrace, the inside of a wall, startsSolid).
+function PR.NativeCheckN(T, segs)
+	local mn, mx = Vector(-4, -4, -4), Vector(4, 4, 4)
+	local PMASK = bit.band(MASK_SOLID_BRUSHONLY, bit.bnot(CONTENTS_GRATE))
+	local bad = 0
+	local function cmp(t, f, ss, as, fls, hx, hy, hz, nx, ny, nz, _, sflags, surf)
+		if not f or abs(f - t.Fraction) > 1e-3 or (ss and true or false) ~= (t.StartSolid and true or false)
+			or (as and true or false) ~= (t.AllSolid and true or false) or (f < 1 or ss) ~= (t.Hit and true or false) then return 1 end
+		if ss and not as and t.FractionLeftSolid and abs((fls or -1) - t.FractionLeftSolid) > 1e-3 then return 1 end
+		local hp = t.HitPos
+		if hp and (abs(hx - hp.x) > 0.05 or abs(hy - hp.y) > 0.05 or abs(hz - hp.z) > 0.05) then return 1 end
+		if f < 1 and not ss then
+			local n = t.HitNormal
+			if n and nx and (abs(nx - n.x) > 1e-3 or abs(ny - n.y) > 1e-3 or abs(nz - n.z) > 1e-3) then return 1 end
+			if string.upper(surf or "") ~= string.upper(t.HitTexture or "") then return 1 end
+			if (bit.band(sflags or 0, 0x80) ~= 0) ~= (t.HitNoDraw and true or false) then return 1 end
+		end
+		return 0
+	end
+	for i, s in ipairs(segs) do
+		local a, b = s[1], s[2]
+		local hull = i % 2 == 0
+		local t = hull and util.TraceHull({ start = a, endpos = b, mins = mn, maxs = mx, mask = LINK_MASK, filter = worldOnly })
+			or util.TraceLine({ start = a, endpos = b, mask = LINK_MASK, filter = worldOnly })
+		if hull then
+			bad = bad + cmp(t, T.TraceN(a.x, a.y, a.z, b.x, b.y, b.z, LINK_MASK, -4, -4, -4, 4, 4, 4))
+		else
+			bad = bad + cmp(t, T.TraceN(a.x, a.y, a.z, b.x, b.y, b.z, LINK_MASK))
+		end
+		t = util.TraceLine({ start = a, endpos = a, mask = PMASK, filter = worldOnly })
+		bad = bad + cmp(t, T.TraceN(a.x, a.y, a.z, a.x, a.y, a.z, PMASK))
+		t = util.TraceLine({ start = b, endpos = a, mask = PMASK, filter = worldOnly })
+		bad = bad + cmp(t, T.TraceN(b.x, b.y, b.z, a.x, a.y, a.z, PMASK))
+	end
+	return bad
+end
+
 local function nativeTraces()
 	if (A.cfg.native_traces or 0) < 0.5 then return false end
 	if NT ~= nil then return NT end
 	if not ntSegs then return false end
-	NT = false
+	NT, NTN = false, false
+	A.Paths.numTN = false
 	local T = pba_native and not (A.Native and A.Native.outdated) and pba_native.trace
 	if not (T and T.Init and T.Init()) then return false end
 	-- a wrong layout (vtable, Ray_t) makes most traces differ; a rare hull difference exists (rp_downtown:
@@ -116,9 +186,23 @@ local function nativeTraces()
 		return false
 	end
 	NT = T
+	-- the numbers (module with TraceN): checked on their own, with the same tolerance per check (3 per segment)
+	if T.TraceN then
+		local badN = PR.NativeCheckN(T, ntSegs)
+		if badN > math.max(2, #ntSegs * 3 * 0.03) then
+			MsgN("[PBA] native number traces differ from util.Trace* on this map (" .. badN .. " of " .. #ntSegs * 3 .. "): left off")
+		else
+			-- for sh_paths' world traces (P.NumTrace): TraceN, and util.TraceLine as it was checked (a stub swapped in
+			-- later, a pure test's world, turns them off)
+			NTN = T.TraceN
+			A.Paths.numTN, A.Paths.numTL = NTN, util.TraceLine
+		end
+	end
 	return NT
 end
 PR.NativeTraces = function() return nativeTraces() and true or false end
+-- the check run again on the current segments (tests: a module table changed in place)
+PR.NativeRecheck = function() NT = nil return nativeTraces() and true or false end
 -- Sets the segments of the native check and checks again at once, from the build or load (a Think
 -- hook), not at the next trace: that one may come from a pure test whose stubbed util.Trace* would
 -- then be compared with the engine and switch the native traces off for the map.
@@ -128,6 +212,7 @@ local function setNativeSegs(segs)
 	nativeTraces()
 end
 -- (re-checked on the next map: a new client Lua state)
+PR.SetNativeSegs = setNativeSegs -- (the offline bench's graph, built outside PR.Start)
 
 -- A hit on an invisible tool brush (A.Paths.PassTool: toolsblockbullets...) is no obstacle: the trace
 -- goes on from where it leaves the brush (a few hops at most).
@@ -154,7 +239,7 @@ end
 local function upThroughDisp(a, b) return a.z < b.z - 1 and A.Paths.HasDisplacements and A.Paths.HasDisplacements() end
 
 local function clearSeg(a, b)
-	local TL = nativeTraces() and ntLine or util.TraceLine
+	local TL = nativeTraces() and (numsOn() and ntLineN or ntLine) or util.TraceLine
 	segTr.start, segTr.endpos = a, b
 	TL(segTr)
 	if segOut.Hit and not passThrough(segTr, segOut, TL, b) then return false end
@@ -181,7 +266,7 @@ local fatTr = { mins = HULL_MIN, maxs = HULL_MAX, mask = LINK_MASK, filter = wor
 -- World only: the graph's routes (PR.Pull at search time, cached for the session) must not depend on
 -- whether a door is open.
 local function clearFatWorld(a, b)
-	local TH = nativeTraces() and ntHull or util.TraceHull
+	local TH = nativeTraces() and (numsOn() and ntHullN or ntHull) or util.TraceHull
 	fatTr.start, fatTr.endpos = a, b
 	TH(fatTr)
 	if fatOut.Hit and not passThrough(fatTr, fatOut, TH, b) then return false end
@@ -256,7 +341,7 @@ end
 local bOut = {}
 local bTr = { mask = LINK_MASK, filter = worldOnly, output = bOut }
 local function buildLine(a, b, mask)
-	local TL = nativeTraces() and ntLine or util.TraceLine
+	local TL = nativeTraces() and (numsOn() and ntLineN or ntLine) or util.TraceLine
 	bTr.start, bTr.endpos, bTr.mask = a, b, mask or LINK_MASK
 	return TL(bTr)
 end

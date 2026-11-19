@@ -158,6 +158,40 @@ local function setDoor(k)
 end
 
 for k, v in pairs({ native_traces = 0, probes = 1, probe_dist = 1e6, water = 1, path_props = 1 }) do A.cfg[k] = v end
+-- NATIVE (eval_bench.py, env PBA_NATIVE=1|2): a stub of the module's traces over the same world, entities refused
+-- (world only, as pba_native.trace): Trace (its end point a Vector) and, with 2, TraceN (numbers). native_traces 1,
+-- native_trace_nums from PBA_NATIVE_NUMS (default 1). Userdata per evaluation (count mode): 4 per util.Trace* call
+-- (HitPos, HitNormal, StartPos, Normal: what GMod's result makes), 1 per Trace, 0 per TraceN, + pba's own Vectors.
+TRACES.ntv, TRACES.ntn = 0, 0
+if NATIVE and NATIVE >= 1 then
+	local function noEnt() return false end
+	local function run(sx, sy, sz, ex, ey, ez, mask, h)
+		local t = { start = Vector(sx, sy, sz), endpos = Vector(ex, ey, ez), mask = mask, filter = noEnt, output = {} }
+		return trace(t, h or 0)
+	end
+	local T = { Init = function() return true, true end, SetLayout = function() end }
+	function T.Trace(a, b, mask, mn, mx)
+		TRACES.ntv = TRACES.ntv + 1
+		DEPTH = DEPTH + 1
+		local o = run(a.x, a.y, a.z, b.x, b.y, b.z, mask, mx and mx.x)
+		local ep = Vector(o.HitPos)
+		DEPTH = DEPTH - 1
+		return o.Fraction, o.StartSolid, o.AllSolid, ep, o.Hit and 1 or 0, o.FractionLeftSolid, o.HitTexture, o.HitNoDraw and 0x80 or 0
+	end
+	if NATIVE >= 2 then
+		function T.TraceN(sx, sy, sz, ex, ey, ez, mask, _, _, _, hx)
+			TRACES.ntn = TRACES.ntn + 1
+			DEPTH = DEPTH + 1
+			local o = run(sx, sy, sz, ex, ey, ez, mask, hx)
+			local px, py, pz = o.HitPos.x, o.HitPos.y, o.HitPos.z
+			DEPTH = DEPTH - 1
+			return o.Fraction, o.StartSolid, o.AllSolid, o.FractionLeftSolid, px, py, pz, 0, 0, 0, o.Hit and 1 or 0,
+				o.HitNoDraw and 0x80 or 0, o.HitTexture
+		end
+	end
+	pba_native = { trace = T }
+	A.cfg.native_traces, A.cfg.native_trace_nums = 1, NATIVE_NUMS or 1
+end
 A.Graph.Get = function() return nil end
 setDoor(1)
 DEPTH = DEPTH + 1
@@ -165,6 +199,7 @@ local g = PR.BuildCo({ Vector(256, 256, 49) }, 128)
 PR.Prepare(g)
 DEPTH = DEPTH - 1
 PR.current = g
+if NATIVE and NATIVE >= 1 and PR.SetNativeSegs then PR.SetNativeSegs(PR.LinkSegs(g)) end -- (the native check, as PR.Start)
 
 local function free(p)
 	if util.PointContents(p) ~= 0 then return false end
@@ -415,7 +450,7 @@ local t0 = os.clock()
 for _, e in ipairs(sched) do
 	if e.door ~= curDoor then setDoor(e.door) curDoor = e.door end
 	P.cache = {}
-	local c0 = { TRACES.line, TRACES.hull, TRACES.contents, CNT.vnew, CNT.vcall, CNT.vfield }
+	local c0 = { TRACES.line, TRACES.hull, TRACES.contents, CNT.vnew, CNT.vcall, CNT.vfield, TRACES.ntv, TRACES.ntn }
 	collectgarbage("stop")
 	local kb0 = collectgarbage("count")
 	PROFON = (PROFWALK and e.tag:sub(1, 4) == "walk") or (not PROFWALK and e.rep > 1)
@@ -436,6 +471,9 @@ for _, e in ipairs(sched) do
 	addAgg(cls, "vnew", CNT.vnew - c0[4])
 	addAgg(cls, "vcall", CNT.vcall - c0[5])
 	addAgg(cls, "vfield", CNT.vfield - c0[6])
+	addAgg(cls, "ntv", TRACES.ntv - c0[7])
+	addAgg(cls, "ntn", TRACES.ntn - c0[8])
+	addAgg(cls, "ud", 4 * (TRACES.line - c0[1] + TRACES.hull - c0[2]) + (TRACES.ntv - c0[7]) + (CNT.vnew - c0[4]))
 	addAgg(cls, "kb", kb)
 	addAgg(cls, "ms", tc * 1000)
 	if mode == "dump" or mode == "count" then
@@ -449,8 +487,9 @@ for k in pairs(agg) do classes[#classes + 1] = k end
 table.sort(classes)
 for _, k in ipairs(classes) do
 	local a = agg[k]
-	summary[#summary + 1] = string.format("%-18s n=%4d  TraceLine %6.1f  TraceHull %6.1f  PointContents %5.1f  newVector %7.1f  VectorCall %7.1f  v.x %7.1f  KB %6.1f  ms %6.3f",
-		k, a.n, a.line / a.n, a.hull / a.n, a.contents / a.n, a.vnew / a.n, a.vcall / a.n, a.vfield / a.n, a.kb / a.n, a.ms / a.n)
+	summary[#summary + 1] = string.format("%-18s n=%4d  TraceLine %6.1f  TraceHull %6.1f  PointContents %5.1f  newVector %7.1f  VectorCall %7.1f  v.x %7.1f  KB %6.1f  ms %6.3f  NT.Trace %6.1f  TraceN %6.1f  userdata %7.1f",
+		k, a.n, a.line / a.n, a.hull / a.n, a.contents / a.n, a.vnew / a.n, a.vcall / a.n, a.vfield / a.n, a.kb / a.n, a.ms / a.n,
+		a.ntv / a.n, a.ntn / a.n, a.ud / a.n)
 end
 summary[#summary + 1] = string.format("evaluations %d, %.1f ms total, %.3f ms each", #sched, elapsed * 1000, elapsed * 1000 / #sched)
 if mode == "prof" then

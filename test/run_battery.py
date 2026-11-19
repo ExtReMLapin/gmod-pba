@@ -1520,6 +1520,9 @@ steps = [
     ("native_sentences_cold", lambda: seq(lambda: native_on(True), lambda: job("client", "native_sentences_cold.lua", 60))),
     # engine traces from the module (pba_native.trace): identical to util.TraceLine / TraceHull / PointContents
     ("native_trace", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("client", "native_trace.lua", 60))),
+    # pba_native_trace_nums: P.Compute identical with the option off and on (150 pairs), and the traces of a cold evaluation
+    # make at most 600 userdata with it on, more with it off (needs a module with trace.TraceN)
+    ("native_trace_nums gm_construct", lambda: seq(lambda: load("gm_construct"), lambda: native_on(True), lambda: job("client", "native_nums_compare.lua", 600))),
     # a loud server sound in sight is relayed to a client rendering native echoes, a quiet one is not
     ("echo_relay", lambda: seq(lambda: scenario(TW, "tworooms_closed"), echo_on, lambda: job("server", "echo_relay.lua", 20))),
     # a radio stream of another addon: door closed, listener 256,256 (pba_demo tworooms_closed)

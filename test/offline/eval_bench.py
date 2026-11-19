@@ -35,6 +35,9 @@ def run(repo, mode, pairs=200, seed=1, budget=None, gap=1, dscale=1):
     L.globals().SLICE_DSCALE = dscale
     L.globals().PYCLOCK = time.perf_counter  # (os.clock ticks by 1 ms on Windows: too coarse for slices)
     L.globals().SLICE_GAP = gap
+    # PBA_NATIVE=1: a stub of the module's traces (Trace), 2: and TraceN; PBA_NATIVE_NUMS: pba_native_trace_nums
+    L.globals().NATIVE = int(os.environ.get("PBA_NATIVE", "0"))
+    L.globals().NATIVE_NUMS = int(os.environ.get("PBA_NATIVE_NUMS", "1"))
     L.execute(open(os.path.join(HERE, "gmshim.lua"), encoding="utf-8").read())
     L.execute("EVAL_MODE = '%s'" % mode)
     L.execute(open(os.path.join(HERE, "eval_counting.lua"), encoding="utf-8").read())

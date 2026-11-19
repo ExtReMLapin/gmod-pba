@@ -81,6 +81,7 @@ declared in `lua/pba/sh_config.lua` (all prefixed `pba_`).
 | Feature | Light | Full | Option |
 |---|---|---|---|
 | Map traces of the probe graph and path tightening done in the engine (about 2.5x faster than `util.TraceHull` from Lua; checked against it on every map, off at the first difference) | — | ◐ experimental | C `native_traces` |
+| The paths' world-only traces (segment tests, corners, wall insides) and the probe traces done in the engine with numbers in and out: no Vector per trace, so fewer userdata for the garbage collector's pauses (checked against `util.TraceLine` on every map) | — | ✓ | C `native_trace_nums` |
 | Third-person and death views: the server hears from where the player's view really is | ✅ | ✅ | S `ear_report` |
 | Far sounds' paths worked out over several frames within a fixed time per frame, also while the listener moves fast | ✅ | ✅ | C `far_sliced`, `far_sliced_ms`, `far_sliced_cap`, `far_hold_pace` |
 | Cached paths never kept from a world that changed while they were worked out | ✅ | ✅ | C `cache_gen_guard` |
