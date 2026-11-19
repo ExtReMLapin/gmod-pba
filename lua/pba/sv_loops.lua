@@ -21,7 +21,7 @@ LP.released = LP.released or {} -- loops handed back to the engine while pba is 
 LP.capped = LP.capped or {}
 
 local OP_START, OP_UPDATE, OP_STOP = 0, 1, 2
--- (pba_loops_net_compact) the volume and pitch of a mirror the player already holds, by its id: ~7 bytes instead of
+-- the volume and pitch of a mirror the player already holds, by its id: ~7 bytes instead of
 -- the key and name strings and the whole body (audit B-14)
 local OP_COMPACT = 3
 local RESYNC = 2 -- a full update at least this often per player: a client that lost its mirror gets it back
@@ -60,10 +60,10 @@ local function send(op, l, plys, join)
 	if op ~= OP_STOP then
 		net.WriteUInt(l.id or 0, 16) -- (the compact updates' handle)
 		net.WriteString(l.name)
-		-- (pba_loops_join_pos) where its source is now: a moving source (a car, a helicopter) has left its start position,
+		-- where its source is now: a moving source (a car, a helicopter) has left its start position,
 		-- and a player joining it out of his PVS has no entity to follow (its offset from the entity kept)
 		local pos = l.pos
-		if l.pos0 and A.On(A.cfg, "loops_join_pos") and IsValid(l.ent) then pos = l.pos + (l.ent:WorldSpaceCenter() - l.pos0) end
+		if l.pos0 and IsValid(l.ent) then pos = l.pos + (l.ent:WorldSpaceCenter() - l.pos0) end
 		-- the common body (sh_core A.WriteSound, as pba_snd's): the speaker flag, SoundTime and face bit with it
 		A.WriteSound({ pos = pos, lvl = l.lvl, pitch = l.pitch, vol = l.vol, chan = l.chan or 0,
 			flags = l.speaker and (SND_SPEAKER or 64) or 0, dsp = l.dsp, idx = l.idx, st = l.st, face = l.face })
@@ -76,7 +76,7 @@ end
 --- A volume / pitch update of mirror l to `plys`: compact (id, volume, pitch) for the players who got a full copy
 -- of it less than RESYNC seconds ago, the full update for the others (a first message, or the periodic resync).
 local function sendUpdate(l, plys)
-	if A.Num(A.cfg, "loops_net_compact") < 0.5 or not l.id or not l.fullT then return send(OP_UPDATE, l, plys) end
+	if not l.id or not l.fullT then return send(OP_UPDATE, l, plys) end
 	local now = RealTime()
 	local full, compact = {}, {}
 	for _, p in ipairs(plys) do
@@ -460,8 +460,8 @@ end
 -- lines and loops followed there under another name (the engine replaces them; a capped one is over).
 function LP.CutChannel(idx, chan, name)
 	for _, x in pairs(LP.active) do
-		-- (pba_loops_cut_chan: that channel's only; the same name on another channel of the entity plays on)
-		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name, A.On(A.cfg, "loops_cut_chan") and chan or nil) end
+		-- (that channel's only; the same name on another channel of the entity plays on)
+		if x.idx == idx and x.chan == chan and x.name ~= name then LP.Stop(idx, x.name, chan) end
 	end
 	for k, x in pairs(LP.capped) do
 		if x.idx == idx and x.chan == chan and x.name ~= name then LP.capped[k] = nil end

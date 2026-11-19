@@ -53,10 +53,10 @@ local function loopStage(data, snd)
 	end
 	local idx = IsValid(e) and e:EntIndex() or 0
 	local key = idx .. ":" .. (data.Channel or 0) .. ":" .. data.SoundName
-	-- (pba_loops_world_pos) the world's positional loops by their place too: two of one name (two EmitSound(name, pos) of
+	-- the world's positional loops by their place too: two of one name (two EmitSound(name, pos) of
 	-- a map or an addon) shared a key, the second taken as an update of the first (no start, the first one's place)
 	local pos = data.Pos
-	if idx == 0 and pos and A.On(A.cfg, "loops_world_pos") then
+	if idx == 0 and pos then
 		key = key .. "@" .. math.floor(pos.x + 0.5) .. "," .. math.floor(pos.y + 0.5) .. "," .. math.floor(pos.z + 0.5)
 	end
 	local l = LP.active[key]
@@ -273,7 +273,7 @@ end
 -- who see him generate the footstep on their own client. PlayerFootstep runs right before that
 -- emission: the stepping player is noted for this tick, and the players whose PVS holds him are left
 -- out (relaying to them too doubled every step).
--- The footstep itself, by its name (pba_step_by_name): his gunshot or pain cry in the same tick is not one, and was left
+-- The footstep itself, by its name: his gunshot or pain cry in the same tick is not one, and was left
 -- out for every witness too (nothing played it for them: ~1 shot in 20 while running).
 hook.Add("PlayerFootstep", "pba_step", function(ply, _, _, snd)
 	A.stepPly, A.stepTick = ply, engine.TickCount()
@@ -283,10 +283,8 @@ end)
 local function stepper(data)
 	local e = data.Entity
 	if IsValid(e) and e:IsPlayer() and A.stepPly == e and A.stepTick == engine.TickCount() then
-		if A.On(A.cfg, "step_by_name") then
-			local f = A.stepFiles
-			if not f or not (A.StopReaches(f, data.SoundName) or A.StopReaches(f, data.OriginalSoundName)) then return nil end
-		end
+		local f = A.stepFiles
+		if not f or not (A.StopReaches(f, data.SoundName) or A.StopReaches(f, data.OriginalSoundName)) then return nil end
 		return e
 	end
 end
@@ -296,9 +294,7 @@ end
 -- holds emit in shared code). Another entity's sound made during his command (an NPC his bullet hits, a
 -- window it breaks) is sent to him as to anyone.
 local function predictedBy(e, predicted)
-	if not IsValid(predicted) then return false end
-	if A.Num(A.cfg, "predicted_exact") < 0.5 then return true end
-	if not IsValid(e) then return false end
+	if not IsValid(predicted) or not IsValid(e) then return false end
 	return e == predicted or e:GetOwner() == predicted
 end
 
@@ -356,9 +352,9 @@ function S.Audience(snd, ply, scale)
 	local kind = snd.kind
 	-- a followed sound (sv_loops entry): every player in range gets the mirror, the engine cannot resume midway
 	if kind == "mirror" or snd.subs then
-		-- (pba_loops_ready) not before his client runs: a start sent while he joins is lost and he would stay
+		-- not before his client runs: a start sent while he joins is lost and he would stay
 		-- subscribed to nothing; once ready, the 0.5 s timer (sv_loops) has him join it as a player entering its range
-		if A.On(A.cfg, "loops_ready") and not clientReady(ply) then return nil end
+		if not clientReady(ply) then return nil end
 		return LP.InRange(snd, ply, scale) and "mirror" or nil
 	end
 	local pos, data = snd.pos, snd.data
@@ -381,8 +377,8 @@ function S.Audience(snd, ply, scale)
 	-- (pba_native_own: the relay below, as for a native-all player's clear sound)
 	-- (not through a camera: the engine spatialises his sounds from there, so they take the path of any sound)
 	local ownEar = snd.own and ply ~= snd.skip and e == ply and A.HearsFromSelf(ply)
-	-- (pba_own_ready: not before his client runs; on a map change his userinfo still asks while his new client loads)
-	if ownEar and (not wantsOwn(ply) or (A.On(A.cfg, "own_ready") and not clientReady(ply))) then return "clear" end
+	-- (not before his client runs; on a map change his userinfo still asks while his new client loads)
+	if ownEar and (not wantsOwn(ply) or not clientReady(ply)) then return "clear" end
 	-- his own sound for his module (pba_native_own): no wall to look for between him and himself, and no
 	-- relay budget or per-name quota (an SMG's 13 shots a second hit the quota: the shots over it went to
 	-- the engine and the next relayed shot cut them on the weapon channel)
@@ -551,12 +547,10 @@ local function dispatchBrief(snd)
 	-- a sentence cannot be re-emitted to some players only (EmitSentence takes no filter): players
 	-- over budget get the relay anyway (sentences are rare, a few per minute)
 	if snd.sentence then
-		-- (pba_sentence_ready) ... but not to a player whose pba client is not ready: nothing would play it for him.
+		-- ... but not to a player whose pba client is not ready: nothing would play it for him.
 		-- Then the engine plays it for everyone, as it would without pba.
-		if A.On(A.cfg, "sentence_ready") then
-			for _, p in ipairs(clear) do if not clientReady(p) then A.stats.untouched = A.stats.untouched + 1 return end end
-			for _, m in ipairs(muffled) do if not clientReady(m.ply) then A.stats.untouched = A.stats.untouched + 1 return end end
-		end
+		for _, p in ipairs(clear) do if not clientReady(p) then A.stats.untouched = A.stats.untouched + 1 return end end
+		for _, m in ipairs(muffled) do if not clientReady(m.ply) then A.stats.untouched = A.stats.untouched + 1 return end end
 		for _, m in ipairs(muffled) do blocked[#blocked + 1] = m.ply end
 		muffled = {}
 	end

@@ -5,7 +5,7 @@
 --   3 both follow the ramp     4 the second player's mirror is lost (as a missed message), the ramp goes on
 --   5 the ramp stopped on vol 0.6 / pitch 120 (both mirrors must hold exactly that)   6 the loop stopped
 -- Pass (this half): the loop followed, nobody subscribed in phase 0, both players subscribed after, compact messages
--- used for the most part while the ramp runs (pba_loops_net_compact on), a full update still sent to each player.
+-- used for the most part while the ramp runs, a full update still sent to each player.
 local NAME = "ambient/machines/spin_loop.wav"
 local hs = player.GetHumans()
 if #hs < 2 or game.GetMap() ~= "pba_tworooms" then return { pass = false, err = "needs pba_tworooms with 2 humans" } end
@@ -54,7 +54,7 @@ net.Send = function(pl)
 	end
 	return oSend(pl)
 end
-local res = { key = key, compactOn = (pba.cfg.loops_net_compact or 1) >= 0.5 }
+local res = { key = key }
 local function phase(n, secs)
 	SetGlobalInt("pba_t_phase", n)
 	job:sleep(secs)
@@ -88,6 +88,6 @@ if not ok then res.err = tostring(err) res.pass = false return res end
 local small, big = 0, 0
 for _, m in ipairs(bytes) do if m.n <= 8 then small = small + 1 else big = big + 1 end end
 res.compact, res.full, res.msgs = small, big, #bytes
-res.pass = res.subs0 == 0 and res.subs4 == 2 and (small > big or not res.compactOn) and big >= 2 and not res.activeAfterStop
+res.pass = res.subs0 == 0 and res.subs4 == 2 and small > big and big >= 2 and not res.activeAfterStop
 	and math.abs(res.volEnd - 0.6) < 0.01 and res.pitchEnd == 120
 return res
