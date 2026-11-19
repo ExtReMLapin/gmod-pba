@@ -3,8 +3,7 @@
 -- at once around the listener, 100 u away, each from its own direction, client side (pba_native_all: the module plays
 -- them). The module's FINAL output (after the limiter / clip and the master volume) is recorded with
 -- pba_native.CaptureStart / CaptureStop, once per condition CL.runs = { { name, limiter, scale } ... }:
---   limiter   pba_native_limiter (1 lookahead limiter, 0 legacy soft clip, 2 hard clip)
---   pre       pba_native_limit_pre (1 the stage acts before the master volume, 0 after it: the 1.2 order)
+--   limiter   pba_native_limiter (1 lookahead limiter, 2 hard clip)
 --   scale     factor on every sound's volume (0.25 = the linear reference, 1 = the real pile)
 -- Reverb and echoes are off (the reflections are noise-built: two runs of the same pile would differ by more than the
 -- distortion measured) and so is the ducker (it would lower the pile by its own loudness).
@@ -50,14 +49,12 @@ local function emitPile(scale)
 end
 -- warm-up: the files decode (the first play of a file is the engine's until it is predecoded)
 set("pba_native_limiter", 1)
-set("pba_native_limit_pre", 1)
 for _ = 1, 2 do
 	emitPile(0.05)
 	job:sleep(3)
 end
 for _, run in ipairs(CL.runs or {}) do
 	set("pba_native_limiter", run.limiter)
-	set("pba_native_limit_pre", run.pre or 1)
 	job:sleep(0.5)
 	local ok, why = pba_native.CaptureStart(7)
 	if not ok then res.err = "CaptureStart: " .. tostring(why) break end

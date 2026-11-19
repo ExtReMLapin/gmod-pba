@@ -80,7 +80,7 @@ static void Run(IPLContext ctx, const Case& c) {
 	}
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return; }
 	render::SetOutputMode(c.outMode);
-	render::SetMixQuality(1, true, c.what == What::MasterPre);
+	render::SetMixQuality(1);
 	const std::string a = Wav(48000, 48000);
 	double secs = 0;
 	if (!render::LoadSound("a", a.data(), a.size(), &secs).empty()) { Check(false, "LoadSound"); render::Stop(); return; }

@@ -39,7 +39,7 @@
 struct Opt {
 	int voices = 8, paths = 0, stereo = 0, streams = 0, slots = 0, banks = 1, echoes = 0, room = 1;
 	int refl = 0, simthreads = 7, rays = 2048, bounces = 128, rev = 1, props = 200, still = 0;
-	int rt = 1, mmcss = 0, burn = 0, sampler = 1, updates = 120, panning = 0, pitchvar = 1, eqfrac = 50, hq = 1;
+	int rt = 1, mmcss = 0, burn = 0, sampler = 1, updates = 120, panning = 0, pitchvar = 1, eqfrac = 50;
 	int prio = 2; // audio thread priority: 2 = THREAD_PRIORITY_HIGHEST (miniaudio's default), 0 normal, 15 time critical
 	int simprio = 0; // priority of every non-audio thread of the bench (0 normal, -1 below normal...): set after start
 	int group = 0;    // source slots simulated in groups of this many (stagger.h; 0: all in one run)
@@ -60,7 +60,7 @@ static void ParseArgs(int argc, char** argv) {
 		I("banks", O.banks); I("echoes", O.echoes); I("room", O.room); I("refl", O.refl); I("simthreads", O.simthreads);
 		I("rays", O.rays); I("bounces", O.bounces); I("rev", O.rev); I("props", O.props); I("still", O.still); I("rt", O.rt);
 		I("mmcss", O.mmcss); I("burn", O.burn); I("sampler", O.sampler); I("updates", O.updates); I("panning", O.panning);
-		I("pitchvar", O.pitchvar); I("eqfrac", O.eqfrac); I("hq", O.hq); I("prio", O.prio); I("simprio", O.simprio); I("micro", O.micro); I("loadonly", O.loadonly); I("group", O.group);
+		I("pitchvar", O.pitchvar); I("eqfrac", O.eqfrac); I("prio", O.prio); I("simprio", O.simprio); I("micro", O.micro); I("loadonly", O.loadonly); I("group", O.group);
 		if (k == "secs") O.secs = std::atof(v.c_str());
 		if (k == "scene") O.scene = v;
 	}
@@ -773,9 +773,9 @@ int main(int argc, char** argv) {
 	timeBeginPeriod(1);
 	Calibrate();
 	sampler::Register(sampler::Game);
-	std::printf("[config] voices=%d paths=%d stereo=%d streams=%d slots=%d banks=%d echoes=%d room=%d refl=%d simthreads=%d rays=%d bounces=%d rev=%d scene=%s props=%d rt=%d prio=%d mmcss=%d burn=%d updates=%d panning=%d hq=%d secs=%.1f tsc=%.0f MHz\n",
+	std::printf("[config] voices=%d paths=%d stereo=%d streams=%d slots=%d banks=%d echoes=%d room=%d refl=%d simthreads=%d rays=%d bounces=%d rev=%d scene=%s props=%d rt=%d prio=%d mmcss=%d burn=%d updates=%d panning=%d secs=%.1f tsc=%.0f MHz\n",
 	            O.voices, O.paths, O.stereo, O.streams, O.slots, O.banks, O.echoes, O.room, O.refl, O.simthreads, O.rays, O.bounces, O.rev,
-	            O.scene.c_str(), O.props, O.rt, O.prio, O.mmcss, O.burn, O.updates, O.panning, O.hq, O.secs, g_tscHz / 1e6);
+	            O.scene.c_str(), O.props, O.rt, O.prio, O.mmcss, O.burn, O.updates, O.panning, O.secs, g_tscHz / 1e6);
 
 	IPLContextSettings cs{};
 	cs.version = STEAMAUDIO_VERSION;
@@ -784,7 +784,7 @@ int main(int argc, char** argv) {
 	if (!err.empty()) { std::printf("FAIL StartOffline: %s\n", err.c_str()); return 1; }
 	render::SetLimits(128, 1024);
 	render::SetWet(1.0f, 1.0f);
-	render::SetMixQuality(1, O.hq != 0);
+	render::SetMixQuality(1);
 	render::SetOutputMode(O.panning ? 1 : 0);
 
 	// ---- sound decode cost (main thread in the module: LoadSound; long files go through LoadSoundAsync): the first

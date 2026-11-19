@@ -7,9 +7,9 @@
 // before and after must print the same OUTPUT and ANSWERS hashes (one run per process: some state, the under-water
 // filter's, outlives Stop / Start).
 // Settings modes (--mode=<m>): "default" leaves every setting at the renderer's own default; "lua" sets what the addon's Lua
-// sends (pba_native_limit_pre 1, pba_native_pitch_glide 30...) with a blend below 1; "alt" turns every switchable setting the
-// other way (smoothing, continuous EQ, bank flush, slot fallback, diffuse-field EQ off, linear reading, legacy clip, own
-// limiter tuning). "lua" and "alt" also play a captured stream (fades, underrun, close) and move pitches (glide).
+// sends (pba_native_pitch_glide 30...) with a blend below 1; "alt" turns every switchable setting the other way (diffuse-field
+// EQ off, hard clip, own limiter tuning, no stream fade). "lua" and "alt" also play a captured stream (fades, underrun, close)
+// and move pitches (glide).
 // Usage: pba_render_script_test [--mode=default|lua|alt] [--expect <OUTPUT> <ANSWERS>] [--dump out.f32] (raw interleaved float32).
 // Pass: the script is heard; with --expect, both hashes equal the given ones.
 // Built with -DPBA_TESTS=ON (target pba_render_script_test).
@@ -75,25 +75,15 @@ enum class Mode { Default, Lua, Alt };
 // the settings of a mode, before the start (the renderer keeps them across Start)
 static void Settings(Mode mode) {
 	if (mode == Mode::Lua) {
-		render::SetMixQuality(1, true, true);
+		render::SetMixQuality(1);
 		render::SetPitchGlide(30);
 		render::SetHrtfBlend(0.8f);
 		render::SetStreamFade(5);
-		render::SetDiffuseSmooth(true);
-		render::SetEqContinuous(true);
-		render::SetSlotBankFlush(true);
-		render::SetSlotFallbackGain(true);
-		render::SetCapCompareNew(true);
 	} else if (mode == Mode::Alt) {
-		render::SetMixQuality(0, false, false);
+		render::SetMixQuality(2);
 		render::SetPitchGlide(80);
 		render::SetHrtfBlend(0.3f);
 		render::SetStreamFade(0);
-		render::SetDiffuseSmooth(false);
-		render::SetEqContinuous(false);
-		render::SetSlotBankFlush(false);
-		render::SetSlotFallbackGain(false);
-		render::SetCapCompareNew(false);
 		render::SetDiffuseFieldEq(false);
 		render::SetLimiterTuning(3, 120, 1.5f);
 	}
@@ -103,7 +93,6 @@ static Run Script(IPLContext ctx, Mode mode) {
 	Run r;
 	Hash ho, ha;
 	Settings(mode);
-	const bool pre = mode == Mode::Lua; // the output stage's place (SetMixQuality premaster) the mode keeps
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return r; }
 	std::vector<float> buf(2000 * 2);
 	auto pull = [&](unsigned frames) {
@@ -270,7 +259,7 @@ static Run Script(IPLContext ctx, Mode mode) {
 		}
 		render::StopVoice(vg);
 		pull(512);
-		// loud: the output stage acts (limiter, then the legacy clip and the hard clip), at a low master volume too
+		// loud: the output stage acts (limiter, then the hard clip), at a low master volume too
 		render::VoiceParams pl = P(0.5f, -1, 20.0f);
 		int vl = render::Play("a", pl, false);
 		idv(vl);
@@ -278,13 +267,9 @@ static Run Script(IPLContext ctx, Mode mode) {
 		render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 0.2f, &eL, &eR);
 		for (int k = 0; k < 4; ++k) pull(512);
 		meter(render::LimiterMinGain());
-		render::SetMixQuality(0, mode != Mode::Alt, pre);
+		render::SetMixQuality(2);
 		pull(1024);
-		render::SetMixQuality(2, mode != Mode::Alt, pre);
-		pull(1024);
-		render::SetMixQuality(1, mode != Mode::Alt, !pre);
-		pull(1024);
-		render::SetMixQuality(1, mode != Mode::Alt, pre);
+		render::SetMixQuality(1);
 		render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 0.7f, &eL, &eR);
 		render::StopVoice(vl);
 		pull(1024);
@@ -306,11 +291,9 @@ static Run Script(IPLContext ctx, Mode mode) {
 	render::SetOutputMode(1);
 	pull(1200);
 	render::SetOutputMode(0);
-	render::SetMixQuality(0, true, pre);
+	render::SetMixQuality(2);
 	pull(700);
-	render::SetMixQuality(2, false, !pre);
-	pull(700);
-	render::SetMixQuality(1, mode != Mode::Alt, pre);
+	render::SetMixQuality(1);
 	render::SetDiffuseSend(2.0f);
 	render::SetDiffuseRtRef(0);
 	render::SetSourceReverbScale(2.0f);

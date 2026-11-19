@@ -46,7 +46,7 @@ static std::string FloatWav(const std::vector<float>& x) {
 static double Median(IPLContext ctx, const std::string& wav, bool flush, int blocks, bool* loaded) {
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return 0; }
 	render::SetFlushDenormals(flush);
-	render::SetMixQuality(1, false, false); // (the decoder keeps the samples as they are: no resampling, 48 kHz)
+	render::SetMixQuality(1); // (a 48 kHz file: the decoder keeps the samples as they are)
 	double secs = 0;
 	*loaded = render::LoadSound("s.wav", wav.data(), wav.size(), &secs).empty();
 	double l, r;

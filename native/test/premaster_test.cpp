@@ -1,14 +1,12 @@
-// Offline check of the output stage's ORDER relative to the master volume (SetMixQuality's third argument,
-// pba_native_limit_pre): the engine mixes at full scale, clips there and only then applies the volume, so a loud sound
-// clips at any volume; the module's limiter / clip used to work AFTER the master volume, so at a low volume (0.16, the
-// user's) it never acted: the same shot came out unclipped and quieter than the engine's.
+// Offline check of the output stage's ORDER relative to the master volume: the engine mixes at full scale, clips there
+// and only then applies the volume, so a loud sound clips at any volume; the module's limiter / clip used to work AFTER
+// the master volume, so at a low volume (0.16, the user's) it never acted: the same shot came out unclipped and quieter
+// than the engine's. The stage now always acts before it.
 // A 440 Hz tone of peak 0.9 x gain 1.6 = 1.44 (a hot sound, as a shot played by the listener himself) is rendered as the
 // player's own voice at master volume 0.1 and the final output is recorded (render::CaptureBegin / CaptureFinish).
-// Pass: after the master volume the peak is 0.144 when the stage acts after it (the legacy order, premaster false: 0.144
-// is far under what the stage looks at) and at most 0.1 x the stage's ceiling when it acts before it (premaster true:
-// limiter -> <= 0.098, hard clip -> exactly 0.1); a tone under the ceiling passes untouched (x master) in both orders.
-// Built with -DPBA_TESTS=ON (target pba_premaster_test); pba_premaster_red_test (-DPBA_PREMASTER_RED) calls
-// SetMixQuality without the third argument, the module as it was: the checks of the new order must fail there.
+// Pass: after the master volume the peak is at most 0.1 x the stage's ceiling (limiter -> <= 0.098, hard clip ->
+// exactly 0.1); a tone under the ceiling passes untouched (x master).
+// Built with -DPBA_TESTS=ON (target pba_premaster_test).
 #include <phonon.h>
 
 #include <algorithm>
@@ -74,15 +72,10 @@ static float PeakOf(const std::string& path) {
 	return pk;
 }
 
-// one recording of the tone as an own voice at `gain`, master volume `master`, output stage `mode` acting before the
-// master volume when `pre`; returns the peak of the final output
-static float Run(const std::string& dir, const char* name, float gain, float master, int mode, bool pre) {
-#ifdef PBA_PREMASTER_RED
-	(void)pre;
-	render::SetMixQuality(mode, true); // the module as it was: the stage after the master volume
-#else
-	render::SetMixQuality(mode, true, pre);
-#endif
+// one recording of the tone as an own voice at `gain`, master volume `master`, output stage `mode`; returns the peak of
+// the final output
+static float Run(const std::string& dir, const char* name, float gain, float master, int mode) {
+	render::SetMixQuality(mode);
 	double l, r;
 	render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, master, &l, &r);
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -122,20 +115,14 @@ int main() {
 	if (!render::LoadSound("premaster_src.wav", wav.data(), wav.size(), nullptr).empty()) { std::printf("FAIL load\n"); return 1; }
 
 	const float master = 0.1f;
-	const float afterLim = Run(dir, "lim_post", 1.6f, master, 1, false);
-	const float preLim = Run(dir, "lim_pre", 1.6f, master, 1, true);
-	const float afterHard = Run(dir, "hard_post", 1.6f, master, 2, false);
-	const float preHard = Run(dir, "hard_pre", 1.6f, master, 2, true);
-	std::printf("  hot tone peaks (1.44 before the volume): limiter after %.4f, limiter before %.4f, hard clip after %.4f, hard clip before %.4f\n",
-	            afterLim, preLim, afterHard, preHard);
-	Check(std::fabs(afterLim - 0.144f) < 0.003f, "legacy order (limiter after the master volume): the hot tone passes at 1.44 x 0.1", afterLim, 0.144);
-	Check(std::fabs(afterHard - 0.144f) < 0.003f, "legacy order (hard clip after the master volume): nothing acts either", afterHard, 0.144);
+	const float preLim = Run(dir, "lim_pre", 1.6f, master, 1);
+	const float preHard = Run(dir, "hard_pre", 1.6f, master, 2);
+	std::printf("  hot tone peaks (1.44 before the volume): limiter %.4f, hard clip %.4f\n", preLim, preHard);
 	Check(preLim > 0.05f && preLim <= 0.1f * 0.981f, "premaster limiter: the output peak is at most 0.1 x the ceiling (0.98)", preLim, 0.098);
 	Check(preHard > 0.0995f && preHard <= 0.1001f, "premaster hard clip: the output peak is exactly 0.1 (full scale x master volume)", preHard, 0.1);
-	const float qPost = Run(dir, "q_post", 0.5f, master, 1, false);
-	const float qPre = Run(dir, "q_pre", 0.5f, master, 1, true);
-	std::printf("  quiet tone peaks (0.45 before the volume): after %.4f, before %.4f\n", qPost, qPre);
-	Check(std::fabs(qPost - 0.045f) < 0.001f && std::fabs(qPre - 0.045f) < 0.001f, "a tone under the ceiling passes untouched in both orders (0.45 x 0.1)", qPost, qPre);
+	const float qPre = Run(dir, "q_pre", 0.5f, master, 1);
+	std::printf("  quiet tone peak (0.45 before the volume): %.4f\n", qPre);
+	Check(std::fabs(qPre - 0.045f) < 0.001f, "a tone under the ceiling passes untouched (0.45 x 0.1)", qPre);
 	render::Stop();
 	std::printf(fails ? "FAILED %d\n" : "PASS\n", fails);
 	return fails ? 1 : 0;

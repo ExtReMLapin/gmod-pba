@@ -8,8 +8,7 @@
 // under the platforms: gain 0.0046, room send 0.0018, slot send 1.78) every new slot place gave a 30-60 ms burst at
 // -23 dBFS, 22 dB over the source's clear-sight direct sound at its true distance, heard as a metallic bang.
 // Pass: while the slot waits, the room bus gets no more than a voice without a slot gets from Lua (its own gain at
-// the listener), and never less than its own room send; the legacy mode (pba_native_slot_fallback 0) keeps the slot
-// send (control).
+// the listener), and never less than its own room send.
 #include <phonon.h>
 
 #include <algorithm>
@@ -108,14 +107,6 @@ int main() {
 	// a voice bound with no slot send (a silent holder): its room send only
 	const double hold = RoomRms(gain, send, 0, 0.0f) / ref;
 	Check(std::fabs(hold - send) <= send * 0.05, "slot send 0: room send only", hold, send);
-
-#ifdef PBA_SLOT_FB_API
-	// control: the legacy fallback (option off) is the slot send itself, as before
-	render::SetSlotFallbackGain(false);
-	const double legacy = RoomRms(gain, send, 0, srcSend) / ref;
-	Check(std::fabs(legacy - (send + srcSend)) <= (send + srcSend) * 0.05, "legacy mode: room send + slot send (control)", legacy, send + srcSend);
-	render::SetSlotFallbackGain(true);
-#endif
 
 	render::Stop();
 	iplContextRelease(&ctx);

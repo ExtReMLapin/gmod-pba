@@ -3,13 +3,12 @@
 // blend; the renderer took the new share for the whole block at once, so an Update from 0 to 0.85 (a source going
 // round a corner into a long winding corridor) dropped the direct sound by 8 dB in one sample and raised the room send
 // by x2.3 in one sample: a step in the waveform's envelope (a click), where the gain itself is ramped over the block.
-// SetDiffuseSmooth(true) (the default, pba_native_diffuse_smooth) ramps the share over the block like the gain.
+// The renderer now ramps the share over the block like the gain.
 // Measure: the envelope (RMS over 96-sample windows, one period) of a steady 500 Hz tone, direct mix and room send, around the
 // Update; the largest step between two windows must stay under 3 dB (the whole 8.2 dB change spread over a block of 5
 // windows is ~1.6 dB a window; unramped, one step holds the whole change). Control: an Update with the same share (no change) shows
 // no step either way.
-// Built with -DPBA_TESTS=ON: pba_diffuse_smooth_test, and pba_diffuse_smooth_red_test (-DPBA_DIFFUSE_SMOOTH_OFF: the
-// option off, the former step; this run must fail).
+// Built with -DPBA_TESTS=ON: pba_diffuse_smooth_test.
 #include <phonon.h>
 
 #include <algorithm>
@@ -60,13 +59,8 @@ struct Steps {
 static Steps Run(IPLContext ctx, float to) {
 	Steps r;
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return r; }
-#ifdef PBA_DIFFUSE_SMOOTH_OFF
-	render::SetDiffuseSmooth(false);
-#else
-	render::SetDiffuseSmooth(true);
-#endif
 	render::SetOutputMode(0);
-	render::SetMixQuality(1, true, false);
+	render::SetMixQuality(1);
 	render::SetDiffuseRtRef(0); // the share whatever the room (none offline)
 	render::SetDiffuseSend(1.5f);
 	const std::string a = Wav(48000 * 2, 48000);

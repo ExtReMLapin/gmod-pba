@@ -1,15 +1,14 @@
 // Offline check (no game, no device) of the voice cap facing a NEW voice. When a Play finds the cap reached, Reap made room
 // by stopping the least audible voice already playing, without comparing the new one: a footstep heard at -100 dB through
 // two walls evicted a gunshot or a line playing at full level, and then played inaudibly in its place.
-// SetCapCompareNew(true) (the default, pba_native_cap_new): the new voice is ranked with the others (same rule: spoken
+// The cap now ranks the new voice with the others (same rule: spoken
 // lines last, then the least audible); when it is the one to go, it is not started (Play still answers an id, a voice
 // already gone: Update false, as for a voice the cap took).
 // Cases, cap 4, four loud looping voices (gain 0.5):
 //  1. an inaudible new voice (gain 1e-5): the four loud ones all stay, the new one is gone;
 //  2. control: a louder new voice (gain 0.8): the quietest of the others goes (3 of the 4 stay), the new one plays;
 //  3. a quiet new spoken line (protect, gain 1e-5): taken last by the rule, so it plays and an unprotected loud voice goes.
-// Built with -DPBA_TESTS=ON: pba_voice_cap_new_test, and pba_voice_cap_new_red_test (-DPBA_CAP_NEW_OFF: the option off;
-// must fail).
+// Built with -DPBA_TESTS=ON: pba_voice_cap_new_test.
 #include <phonon.h>
 
 #include <cmath>
@@ -63,11 +62,6 @@ struct Res {
 static Res Case(IPLContext ctx, float newGain, bool newProtect) {
 	Res r;
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return r; }
-#ifdef PBA_CAP_NEW_OFF
-	render::SetCapCompareNew(false);
-#else
-	render::SetCapCompareNew(true);
-#endif
 	const std::string w = Wav(48000);
 	double secs = 0;
 	render::LoadSound("n.wav", w.data(), w.size(), &secs);

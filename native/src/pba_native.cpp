@@ -24,7 +24,7 @@
 //     Update(id, pos, gain, eqL, eqM, eqH, pitch [, diffuse [, send [, sh]]]) -> alive, pathFallback,
 //     StopVoice(id),
 //     PlayStream(channel, pos, gain, eqL, eqM, eqH [, pitch [, send [, own]]]),
-//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetDiffuseSmooth(bool), SetSlotBankFlush(bool), SetSlotGroup(n), SetEqContinuous(bool), SetCapCompareNew(bool),
+//     SetListener(pos, fwd, up, master), SetOutputMode(0|1), SetHrtfBlend(0..1), SetPitchGlide(ms), SetSlotGroup(n),
 //     Echo(name, pos, gain [, key, pitch, delay]), SetReflections(roomWet, echoWet [, rays, bounces]),
 //     RoomReverb() -> rt low/mid/high, Stats() -> table,
 //     SourceReflect(voiceId, pos [, srcSend [, lift]]) -> slot | -1, SetSourceReverbScale(k), SetSlotFallback(on),
@@ -37,8 +37,10 @@
 //     Update for a moving source), an unbound one 1 s. pos not a Vector: unbinds that voice.
 //     SetSourceLongRt(on [, passes]) -> on, simulatorAvailable, SlotReverbTimes() -> table: echo / source slots' own long-window
 //     reverb times (off by default, see g_optSrcLongRt)
-//     SetMixQuality(limiterMode 0|1|2, hqResample [, premaster]): output limiter / legacy soft clip / hard clip, sinc / linear decode
-//     resampling; premaster: the output stage acts before the master volume (the engine's order)
+//     SetMixQuality(limiterMode 1|2 [, hqResample, premaster]): output limiter / hard clip, before the master volume (the
+//     engine's order); the other two arguments are ignored (always the sinc resampler, always before the volume)
+//     SetSlotFallback, SetSlotBankFlush, SetEqContinuous, SetCapCompareNew, SetDiffuseSmooth(bool): ignored (no-ops kept
+//     for an older Lua: the corrected behaviour is the only one)
 //     SetStreamFade(ms): fade of a captured stream's edges (start, underrun, end), see render.h
 //     CaptureStart(seconds) / CaptureStop(name [, bits]) / CaptureState(): debug capture of the FINAL output (after the limiter
 //     and the master volume) into garrysmod/data/pba/<name>.wav (48 kHz stereo, float or 16 bit; no other folder)
@@ -2413,11 +2415,9 @@ LUA_FUNCTION(SetSourceReverbScale) {
 	return 0;
 }
 
-// SetSlotFallback(on): while a voice's source reverb slot is not simulated yet, its share goes to the room bus (the reverb at
-// the listener) at no more than the voice's gain at the listener (true, default; pba_native_slot_fallback), or at the slot
-// send, the source's 1 m power (false: the behaviour before)
+// SetSlotFallback(on): ignored. A voice whose source reverb slot is not simulated yet hands the room bus no more than its gain
+// at the listener (the slot send, the source's 1 m power, placed it at the listener: a 20 dB burst)
 LUA_FUNCTION(SetSlotFallback) {
-	render::SetSlotFallbackGain(LUA->GetBool(1));
 	return 0;
 }
 
@@ -2574,28 +2574,19 @@ LUA_FUNCTION(SetSlotGroup) {
 	return 0;
 }
 
-// SetSlotBankFlush(bool): a source slot bank weighted out is flushed with silence until its tail is over and keeps its response (true, the default); false: reset when weighted in again, which dropped the response, as before (pba_native_slot_bank_flush)
+// SetSlotBankFlush, SetEqContinuous, SetCapCompareNew, SetDiffuseSmooth (bool): ignored, kept for an older Lua. A source slot
+// bank weighted out is flushed with silence and keeps its response; a voice's direct EQ, once used, runs at every block;
+// at the voice cap a new voice is ranked with the playing ones; a voice's diffuse share is ramped over the block.
 LUA_FUNCTION(SetSlotBankFlush) {
-	render::SetSlotBankFlush(LUA->GetBool(1));
 	return 0;
 }
-
-// SetEqContinuous(bool): a voice's direct EQ, once used, is applied at every block after it, even with every band at 1 (true, the default); false: skipped while clear and resumed with stale filter state, as before (pba_native_eq_continuous)
 LUA_FUNCTION(SetEqContinuous) {
-	render::SetEqContinuous(LUA->GetBool(1));
 	return 0;
 }
-
-// SetCapCompareNew(bool): at the voice cap, a new voice is ranked with the playing ones and left out when it is the least audible (true, the default); false: a playing voice always makes room for it, as before (pba_native_cap_new)
 LUA_FUNCTION(SetCapCompareNew) {
-	render::SetCapCompareNew(LUA->GetBool(1));
 	return 0;
 }
-
-// SetDiffuseSmooth(bool): a voice's diffuse share changing is ramped over the block like its gain (true, the default);
-// false: the new share at once (an 8 dB step of the direct sound in one sample), as before (pba_native_diffuse_smooth)
 LUA_FUNCTION(SetDiffuseSmooth) {
-	render::SetDiffuseSmooth(LUA->GetBool(1));
 	return 0;
 }
 
@@ -2943,18 +2934,14 @@ LUA_FUNCTION(CaptureState) {
 	return 4;
 }
 
-// SetMixQuality(limiterMode, hqResample [, premaster]) -> limiterMode, hqResample: limiterMode 1 (default) = a lookahead peak
-// limiter, transparent below 0.98; 0 = the legacy soft clip from 0.8; 2 = hard clip at full scale (the engine's
-// int16 mix). hqResample (default true): the windowed-sinc 48 kHz resampler of the sounds decoded from now on
-// instead of the linear one. premaster (default true): the limiter / clip acts before the master volume, as the
-// engine's mix does (a loud sound clips at full scale whatever the volume), not after it. Absent in older modules
-// (Lua: nil, nothing pushed); an older module ignores the third argument.
+// SetMixQuality(limiterMode [, hqResample, premaster]) -> limiterMode, true: limiterMode 1 (default) = a lookahead peak
+// limiter, transparent below 0.98 (0, the former soft clip, is the limiter too); 2 = hard clip at full scale (the
+// engine's int16 mix). The stage acts before the master volume, as the engine's mix does. hqResample and premaster are
+// ignored (kept for an older Lua): the windowed-sinc 48 kHz resampler is the only one. Absent in older modules (Lua: nil).
 LUA_FUNCTION(SetMixQuality) {
-	const int lim = LUA->IsType(1, Type::Number) ? (int)LUA->GetNumber(1) : render::OutputMode();
-	const bool hq = LUA->IsType(2, Type::Bool) ? LUA->GetBool(2) : (LUA->IsType(2, Type::Number) ? LUA->GetNumber(2) >= 0.5 : true);
-	render::SetMixQuality(lim, hq, LUA->IsType(3, Type::Bool) ? LUA->GetBool(3) : true);
+	render::SetMixQuality(LUA->IsType(1, Type::Number) ? (int)LUA->GetNumber(1) : render::OutputMode());
 	LUA->PushNumber(render::OutputMode());
-	LUA->PushBool(hq);
+	LUA->PushBool(true);
 	return 2;
 }
 

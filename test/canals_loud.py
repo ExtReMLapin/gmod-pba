@@ -3,7 +3,7 @@
 The pile (test/canals_loud.lua): the razor train's horn (level 130), the train brake (100), an explosion (140) and two weapon
 reports (105), each 100 u from the listener in its own direction, played at once by the module. Same pile at volume x 0.25
 (the linear reference: far under any limiter) and x 1 (the real thing), per output stage (pba_native_limiter: 1 lookahead
-limiter = default, 0 legacy soft clip, 2 hard clip; stage 3 = the 1.2 order, the soft clip acting after the master volume). What is judged is the module's FINAL output (CaptureStart,
+limiter = default, 2 hard clip, the control). What is judged is the module's FINAL output (CaptureStart,
 before the master volume is taken off again):
   peak          largest |sample| of either channel (pre-master, i.e. divided by the master volume convar)
   flat          flat tops: runs of 3 or more consecutive samples at 0.99 or over, either channel (what a hard clip, or a soft
@@ -13,7 +13,7 @@ before the master volume is taken off again):
                 be hot (>= REF_HOT) or it proves nothing: a pile that never reaches the stage passes every stage
 Verdict (default stage): ref_peak >= REF_HOT, peak <= CEILING, flat <= FLAT_MAX.
 Usage (ONE test instance; MCP_INSTANCE=<id> if several run; the driver loads d1_canals_01 and restores the pba_* convars):
-  python -I -X utf8 test/canals_loud.py <mcp.py> [--map=d1_canals_01] [--dist=100] [--expect-red=0,2,3] [--out=<dir>]
+  python -I -X utf8 test/canals_loud.py <mcp.py> [--map=d1_canals_01] [--dist=100] [--expect-red=2] [--out=<dir>]
   python -I -X utf8 test/canals_loud.py --selftest
 """
 import json
@@ -31,7 +31,7 @@ from own_shot_capture import read_wav  # noqa: E402
 REF_HOT = 1.5     # the pile must exceed full scale by this factor in the linear reference (measured 3.8 on d1_canals_01)
 CEILING = 0.985   # the limiter's ceiling is 0.98
 FLAT_MAX = 20     # flat tops over the 3 s window (measured: limiter 0, soft clip 3510, hard clip 5661)
-STAGES = {1: "limiter (default)", 0: "soft clip", 2: "hard clip", 3: "1.2: soft clip, after volume"}
+STAGES = {1: "limiter (default)", 2: "hard clip"}
 
 
 def onset(x, thr=0.02):
@@ -109,10 +109,9 @@ def run_game(mcp, opts):
     T.lua("server", "local p = player.GetHumans()[1] p:GodEnable() p:StripWeapons() return true")
     time.sleep(3.0)
     runs = [{"name": "cl_ref_l1", "limiter": 1, "scale": 0.25}]
-    for st in (1, 0, 2, 3):
-        # stage 3 = what 1.2 had: the legacy soft clip acting AFTER the master volume (never reached at volume 0.16)
-        runs.append({"name": "cl_pile_l%d" % st, "limiter": 0 if st == 3 else st, "pre": 0 if st == 3 else 1, "scale": 1.0})
-    lua_runs = ",".join('{name="%s",limiter=%d,pre=%d,scale=%s}' % (r["name"], r["limiter"], r["pre"] if "pre" in r else 1, r["scale"]) for r in runs)
+    for st in STAGES:
+        runs.append({"name": "cl_pile_l%d" % st, "limiter": st, "scale": 1.0})
+    lua_runs = ",".join('{name="%s",limiter=%d,scale=%s}' % (r["name"], r["limiter"], r["scale"]) for r in runs)
     raw = T.job("client", "CL = {runs={%s},dist=%d}\n" % (lua_runs, int(opts.get("dist", 100)))
                 + open(os.path.join(HERE, "canals_loud.lua"), encoding="utf-8").read(), timeout_s=240)
     info = json.loads(raw) if isinstance(raw, str) else {"ok": False, "err": str(raw)}
@@ -126,7 +125,7 @@ def run_game(mcp, opts):
     sr = ref["rate"]
     ref_s = np.vstack([np.asarray(ref["l"]), np.asarray(ref["r"])])
     results, bad_default = {}, []
-    for st in (1, 0, 2, 3):
+    for st in STAGES:
         w = read_wav(paths["cl_pile_l%d" % st])
         m = analyse(np.vstack([np.asarray(w["l"]), np.asarray(w["r"])]), ref_s, vol, sr)
         results[st] = m
@@ -138,6 +137,8 @@ def run_game(mcp, opts):
     expect_red = [int(x) for x in opts.get("expect-red", "").split(",") if x != ""]
     ok = not bad_default
     for st in expect_red:
+        if st not in results:  # (0 the soft clip, 3 the 1.2 order: removed, nothing left to run)
+            continue
         if not judge(results[st]):
             ok = False
             print("FAIL stage %d was expected red" % st)

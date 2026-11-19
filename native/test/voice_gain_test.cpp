@@ -1,9 +1,9 @@
 // Offline check (no game, no device) of the gain and the send a voice is given.
 // Play / Update hand the module whatever number the Lua computed: a NaN, an infinite or a negative gain used to enter the voice
-// as it was (SetVoiceCtl) and went through the effects: NaN in the output (soft clip: noise, clicks), NaN in the energies of
+// as it was (SetVoiceCtl) and went through the effects: NaN in the output (the former soft clip: noise, clicks), NaN in the energies of
 // SetListener, the room send and the capture (limiter: the output reads 0 but the meters and the filters hold the NaN for
 // ever), or a huge sample. The module must keep such a voice quiet and finite, whatever the Lua asks for.
-// Every case: a looping voice (straight line and baked path, headphones and speakers, limiter and soft clip), the value asked,
+// Every case: a looping voice (straight line and baked path, headphones and speakers, limiter and hard clip), the value asked,
 // a few blocks; then a sane gain back, which must be heard and clean (a filter fed a NaN keeps it).
 // Built with -DPBA_TESTS=ON (target pba_voice_gain_test).
 #include <phonon.h>
@@ -58,10 +58,10 @@ struct Case {
 
 static void Run(IPLContext ctx, const Case& c, bool path, int outMode, int limiter) {
 	char label[200];
-	std::snprintf(label, sizeof label, "%s, %s, %s, %s", c.name, path ? "path" : "straight", outMode == 0 ? "headphones" : "speakers", limiter == 1 ? "limiter" : "soft clip");
+	std::snprintf(label, sizeof label, "%s, %s, %s, %s", c.name, path ? "path" : "straight", outMode == 0 ? "headphones" : "speakers", limiter == 1 ? "limiter" : "hard clip");
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return; }
 	render::SetOutputMode(outMode);
-	render::SetMixQuality(limiter, true, false);
+	render::SetMixQuality(limiter);
 	const std::string a = Wav(48000, 48000);
 	double secs = 0;
 	if (!render::LoadSound("a", a.data(), a.size(), &secs).empty()) { Check(false, "LoadSound"); render::Stop(); return; }
@@ -132,7 +132,7 @@ int main() {
 	for (const Case& c : cases)
 		for (int path = 0; path < 2; ++path)
 			for (int outMode = 0; outMode < 2; ++outMode)
-				for (int limiter = 1; limiter >= 0; --limiter) Run(ctx, c, path != 0, outMode, limiter);
+				for (int limiter : {1, 2}) Run(ctx, c, path != 0, outMode, limiter);
 	iplContextRelease(&ctx);
 	std::printf("%s\n", fails ? "FAILED" : "PASSED");
 	return fails ? 1 : 0;

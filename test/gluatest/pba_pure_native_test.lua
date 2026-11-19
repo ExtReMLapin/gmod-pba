@@ -971,27 +971,27 @@ return {
 			_G.LocalPlayer, A.NativeOwn = savedLP, savedOwn
 			if not ok then error(err, 0) end
 		end },
-		{ name = "ApplySettings pushes the output stage and the resampling to the module (pba_native_limiter, pba_native_resample_hq); a module without SetMixQuality is left alone", func = function()
+		{ name = "ApplySettings pushes the output stage to the module (pba_native_limiter: 1 or 2, never the former soft clip 0), with the sinc resampler and the stage before the master volume for an older module; a module without SetMixQuality is left alone", func = function()
 			local saved, savedRender = _G.pba_native, N.render
 			local got
 			local stub = {
 				SetReflections = function() end,
 				SetOutputMode = function() end,
-				SetMixQuality = function(mode, hq) got = { mode, hq } end,
+				SetMixQuality = function(mode, hq, pre) got = { mode, hq, pre } end,
 			}
 			_G.pba_native, N.render = stub, true
 			local ok, err = pcall(function()
-				withCfg({ native_limiter = 1, native_resample_hq = 1 }, function()
+				withCfg({ native_limiter = 1 }, function()
 					N.ApplySettings()
 					expect(got[1]).to.equal(1)
 					expect(got[2]).to.equal(true)
+					expect(got[3]).to.equal(true)
 				end)
-				withCfg({ native_limiter = 0, native_resample_hq = 0 }, function()
+				withCfg({ native_limiter = 0 }, function()
 					N.ApplySettings()
-					expect(got[1]).to.equal(0)
-					expect(got[2]).to.equal(false)
+					expect(got[1]).to.equal(1)
 				end)
-				withCfg({ native_limiter = 2, native_resample_hq = 1 }, function()
+				withCfg({ native_limiter = 2 }, function()
 					N.ApplySettings()
 					expect(got[1]).to.equal(2)
 				end)
