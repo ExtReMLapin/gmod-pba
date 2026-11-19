@@ -807,13 +807,14 @@ local STEP_SURFACES = { "concrete", "metal", "metalgrate", "metalpanel", "wood",
 	"mud", "sand", "chainlink", "water", "wade", "ladder", "default" }
 local STEP_SOUNDS = { "stepLeftSound", "stepRightSound" }
 
---- The wave files behind a sound script name (clean names); a name with no script is taken for a file.
-local function scriptFiles(s, out, seen)
+--- The wave files behind a sound script name (clean names), added to `out` once each (`seen`); a name with no script
+-- is taken for a file, unless scriptsOnly.
+local function scriptFiles(s, out, seen, scriptsOnly)
 	local p = sound.GetProperties(s)
 	local w = p and p.sound
 	if type(w) == "string" then w = { w } end
 	if type(w) ~= "table" then w = nil end
-	if not w and type(s) == "string" and (string.find(s, "/", 1, true) or string.find(string.lower(s), "%.[wm][ap][v3]$")) then w = { s } end
+	if not w and not scriptsOnly and type(s) == "string" and (string.find(s, "/", 1, true) or string.find(string.lower(s), "%.[wm][ap][v3]$")) then w = { s } end
 	for _, f in ipairs(w or {}) do
 		local n = type(f) == "string" and cleanName(f) or ""
 		if n ~= "" and not seen[n] then seen[n] = true out[#out + 1] = n end
@@ -889,13 +890,7 @@ function N.PrewarmList(yield)
 		end
 	end
 	for _, s in ipairs(scripts) do
-		local p = sound.GetProperties(s)
-		local w = p and p.sound
-		if isstring(w) then w = { w } end
-		for _, f in ipairs(istable(w) and w or {}) do
-			local n = cleanName(f)
-			if n ~= "" and not seen[n] then seen[n] = true out[#out + 1] = n end
-		end
+		scriptFiles(s, out, seen, true)
 		yield()
 	end
 	return out
@@ -1063,7 +1058,7 @@ local NPC_POLL, NPC_SCAN_S = 0.2, 3
 
 --- True when the NPC weapons' sounds are decoded ahead: the module, background decoding and the option on.
 function N.NpcWeaponPrewarmOn()
-	return N.ready and pba_native and pba_native.LoadSoundAsync
+	return N.ready and pba_native
 		and A.On(A.cfg, "native_predecode") and A.On(A.cfg, "native_prewarm_npc_weapons") or false
 end
 
