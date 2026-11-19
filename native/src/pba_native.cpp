@@ -3104,145 +3104,36 @@ void JoinBakeThread() {
 
 void RegisterTrace(GarrysMod::Lua::ILuaBase* LUA); // trace.cpp: pba_native.trace (engine traces)
 
+// the functions of the pba_native table, each under its own name
+#define PBA_FN(f) {#f, f}
+static const struct {
+	const char* name;
+	GarrysMod::Lua::CFunc fn;
+} kApi[] = {
+	PBA_FN(Version), PBA_FN(ModuleVersion), PBA_FN(PhononLevel), PBA_FN(Init), PBA_FN(LoadWorld), PBA_FN(Direct),
+	PBA_FN(BakePaths), PBA_FN(Paths), PBA_FN(BakeStatus), PBA_FN(RoomReverb), PBA_FN(Shutdown), PBA_FN(SetSimOptions),
+	PBA_FN(BakeReverb), PBA_FN(ReverbBakeStatus), PBA_FN(AudioStart), PBA_FN(AudioStop), PBA_FN(HasSound),
+	PBA_FN(LoadSound), PBA_FN(SetVoiceStereo), PBA_FN(Play), PBA_FN(Update), PBA_FN(StopVoice), PBA_FN(SetListener),
+	PBA_FN(RelDir), PBA_FN(TestBinaural), PBA_FN(RenderDebug), PBA_FN(SavePaths), PBA_FN(LoadPaths), PBA_FN(Echo),
+	PBA_FN(SourceReflect), PBA_FN(SetSourceLongRt), PBA_FN(SlotReverbTimes), PBA_FN(SetSourceSlots),
+	PBA_FN(SetSourceReverbScale), PBA_FN(SetSlotFallback), PBA_FN(SrcSlotStats), PBA_FN(SetSourceAccum),
+	PBA_FN(SetSourceNear), PBA_FN(SetMixQuality), PBA_FN(SetStreamFade), PBA_FN(CaptureStart), PBA_FN(CaptureStop),
+	PBA_FN(CaptureState), PBA_FN(SetOutputMode), PBA_FN(SetHrtfBlend), PBA_FN(SetPitchGlide), PBA_FN(SetSlotBankFlush),
+	PBA_FN(SetSlotGroup), PBA_FN(SetEqContinuous), PBA_FN(SetCapCompareNew), PBA_FN(SetDiffuseSmooth),
+	PBA_FN(SetReflections), PBA_FN(SetLimits), PBA_FN(Stats), PBA_FN(DynamicAdd), PBA_FN(DynamicMove),
+	PBA_FN(DynamicRemove), PBA_FN(DynamicCommit), PBA_FN(LoadSoundAsync), PBA_FN(LoadSentence), PBA_FN(SoundPending),
+	PBA_FN(SetUnderwater), PBA_FN(StreamFilter), PBA_FN(StreamCollect), PBA_FN(SetPaused), PBA_FN(StreamInfo),
+	PBA_FN(StreamCapture), PBA_FN(PlayStream),
+};
+#undef PBA_FN
+
 GMOD_MODULE_OPEN() {
 	LUA->PushSpecial(SPECIAL_GLOB);
 	LUA->CreateTable();
-	LUA->PushCFunction(Version);
-	LUA->SetField(-2, "Version");
-	LUA->PushCFunction(ModuleVersion);
-	LUA->SetField(-2, "ModuleVersion");
-	LUA->PushCFunction(PhononLevel);
-	LUA->SetField(-2, "PhononLevel");
-	LUA->PushCFunction(Init);
-	LUA->SetField(-2, "Init");
-	LUA->PushCFunction(LoadWorld);
-	LUA->SetField(-2, "LoadWorld");
-	LUA->PushCFunction(Direct);
-	LUA->SetField(-2, "Direct");
-	LUA->PushCFunction(BakePaths);
-	LUA->SetField(-2, "BakePaths");
-	LUA->PushCFunction(Paths);
-	LUA->SetField(-2, "Paths");
-	LUA->PushCFunction(BakeStatus);
-	LUA->SetField(-2, "BakeStatus");
-	LUA->PushCFunction(RoomReverb);
-	LUA->SetField(-2, "RoomReverb");
-	LUA->PushCFunction(Shutdown);
-	LUA->SetField(-2, "Shutdown");
-	LUA->PushCFunction(SetSimOptions);
-	LUA->SetField(-2, "SetSimOptions");
-	LUA->PushCFunction(BakeReverb);
-	LUA->SetField(-2, "BakeReverb");
-	LUA->PushCFunction(ReverbBakeStatus);
-	LUA->SetField(-2, "ReverbBakeStatus");
-	LUA->PushCFunction(AudioStart);
-	LUA->SetField(-2, "AudioStart");
-	LUA->PushCFunction(AudioStop);
-	LUA->SetField(-2, "AudioStop");
-	LUA->PushCFunction(HasSound);
-	LUA->SetField(-2, "HasSound");
-	LUA->PushCFunction(LoadSound);
-	LUA->SetField(-2, "LoadSound");
-	LUA->PushCFunction(SetVoiceStereo);
-	LUA->SetField(-2, "SetVoiceStereo");
-	LUA->PushCFunction(Play);
-	LUA->SetField(-2, "Play");
-	LUA->PushCFunction(Update);
-	LUA->SetField(-2, "Update");
-	LUA->PushCFunction(StopVoice);
-	LUA->SetField(-2, "StopVoice");
-	LUA->PushCFunction(SetListener);
-	LUA->SetField(-2, "SetListener");
-	LUA->PushCFunction(RelDir);
-	LUA->SetField(-2, "RelDir");
-	LUA->PushCFunction(TestBinaural);
-	LUA->SetField(-2, "TestBinaural");
-	LUA->PushCFunction(RenderDebug);
-	LUA->SetField(-2, "RenderDebug");
-	LUA->PushCFunction(SavePaths);
-	LUA->SetField(-2, "SavePaths");
-	LUA->PushCFunction(LoadPaths);
-	LUA->SetField(-2, "LoadPaths");
-	LUA->PushCFunction(Echo);
-	LUA->SetField(-2, "Echo");
-	LUA->PushCFunction(SourceReflect);
-	LUA->SetField(-2, "SourceReflect");
-	LUA->PushCFunction(SetSourceLongRt);
-	LUA->SetField(-2, "SetSourceLongRt");
-	LUA->PushCFunction(SlotReverbTimes);
-	LUA->SetField(-2, "SlotReverbTimes");
-	LUA->PushCFunction(SetSourceSlots);
-	LUA->SetField(-2, "SetSourceSlots");
-	LUA->PushCFunction(SetSourceReverbScale);
-	LUA->SetField(-2, "SetSourceReverbScale");
-	LUA->PushCFunction(SetSlotFallback);
-	LUA->SetField(-2, "SetSlotFallback");
-	LUA->PushCFunction(SrcSlotStats);
-	LUA->SetField(-2, "SrcSlotStats");
-	LUA->PushCFunction(SetSourceAccum);
-	LUA->SetField(-2, "SetSourceAccum");
-	LUA->PushCFunction(SetSourceNear);
-	LUA->SetField(-2, "SetSourceNear");
-	LUA->PushCFunction(SetMixQuality);
-	LUA->SetField(-2, "SetMixQuality");
-	LUA->PushCFunction(SetStreamFade);
-	LUA->SetField(-2, "SetStreamFade");
-	LUA->PushCFunction(CaptureStart);
-	LUA->SetField(-2, "CaptureStart");
-	LUA->PushCFunction(CaptureStop);
-	LUA->SetField(-2, "CaptureStop");
-	LUA->PushCFunction(CaptureState);
-	LUA->SetField(-2, "CaptureState");
-	LUA->PushCFunction(SetOutputMode);
-	LUA->SetField(-2, "SetOutputMode");
-	LUA->PushCFunction(SetHrtfBlend);
-	LUA->SetField(-2, "SetHrtfBlend");
-	LUA->PushCFunction(SetPitchGlide);
-	LUA->SetField(-2, "SetPitchGlide");
-	LUA->PushCFunction(SetSlotBankFlush);
-	LUA->SetField(-2, "SetSlotBankFlush");
-	LUA->PushCFunction(SetSlotGroup);
-	LUA->SetField(-2, "SetSlotGroup");
-	LUA->PushCFunction(SetEqContinuous);
-	LUA->SetField(-2, "SetEqContinuous");
-	LUA->PushCFunction(SetCapCompareNew);
-	LUA->SetField(-2, "SetCapCompareNew");
-	LUA->PushCFunction(SetDiffuseSmooth);
-	LUA->SetField(-2, "SetDiffuseSmooth");
-	LUA->PushCFunction(SetReflections);
-	LUA->SetField(-2, "SetReflections");
-	LUA->PushCFunction(SetLimits);
-	LUA->SetField(-2, "SetLimits");
-	LUA->PushCFunction(Stats);
-	LUA->SetField(-2, "Stats");
-	LUA->PushCFunction(DynamicAdd);
-	LUA->SetField(-2, "DynamicAdd");
-	LUA->PushCFunction(DynamicMove);
-	LUA->SetField(-2, "DynamicMove");
-	LUA->PushCFunction(DynamicRemove);
-	LUA->SetField(-2, "DynamicRemove");
-	LUA->PushCFunction(DynamicCommit);
-	LUA->SetField(-2, "DynamicCommit");
-	LUA->PushCFunction(LoadSoundAsync);
-	LUA->SetField(-2, "LoadSoundAsync");
-	LUA->PushCFunction(LoadSentence);
-	LUA->SetField(-2, "LoadSentence");
-	LUA->PushCFunction(SoundPending);
-	LUA->SetField(-2, "SoundPending");
-	LUA->PushCFunction(SetUnderwater);
-	LUA->SetField(-2, "SetUnderwater");
-	LUA->PushCFunction(StreamFilter);
-	LUA->SetField(-2, "StreamFilter");
-	LUA->PushCFunction(StreamCollect);
-	LUA->SetField(-2, "StreamCollect");
-	LUA->PushCFunction(SetPaused);
-	LUA->SetField(-2, "SetPaused");
-	LUA->PushCFunction(StreamInfo);
-	LUA->SetField(-2, "StreamInfo");
-	LUA->PushCFunction(StreamCapture);
-	LUA->SetField(-2, "StreamCapture");
-	LUA->PushCFunction(PlayStream);
-	LUA->SetField(-2, "PlayStream");
+	for (const auto& f : kApi) {
+		LUA->PushCFunction(f.fn);
+		LUA->SetField(-2, f.name);
+	}
 	RegisterTrace(LUA);
 	// capabilities of this build, so that Lua can use a feature only when the installed DLL has it (an
 	// older DLL silently ignores extra arguments: a start offset would replay a sound from its start)
