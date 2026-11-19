@@ -558,5 +558,6 @@ end)
 -- removal, on entity NULL); the relayed copies do the same. Loops are stopped by pba.Loops.
 hook.Add("EntityRemoved", "pba_relay_removed", function(e)
 	local idx = e:EntIndex()
-	if idx > 0 then A.recentTo[idx] = nil A.recentChan[idx] = nil end
+	-- (its brief sounds too: a new entity taking the index must not see its first change of one of those names dropped)
+	if idx > 0 then A.recentTo[idx] = nil A.recentChan[idx] = nil A.recentBrief[idx] = nil end
 end)

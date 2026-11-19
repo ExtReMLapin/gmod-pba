@@ -295,6 +295,19 @@ cases.S10 = function(opt)
 	return { pass = n == 2 and starts == 2, followed = n, starts = starts }
 end
 
+-- S12: the brief sounds of an entity are kept until their end (A.recentBrief, a change of one is not a new sound); they
+-- were kept past the entity's removal, so a new entity taking its index saw its first change of that name dropped.
+cases.S12 = function()
+	local e = prop(Vector(320, 256, 40))
+	job:sleep(0.2)
+	local idx = e:EntIndex()
+	e:EmitSound(LINE1, 75, 100, 1, CHAN_VOICE)
+	local noted = A.recentBrief[idx] ~= nil
+	e:Remove()
+	job:frames(2)
+	return { pass = noted and A.recentBrief[idx] == nil, noted = noted, keptAfterRemoval = A.recentBrief[idx] ~= nil }
+end
+
 -- ------------------------------------------------------------------ run
 local fn = cases[CASE]
 if not fn then unspy() return { pass = false, err = "no case " .. tostring(CASE) } end
