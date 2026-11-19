@@ -56,7 +56,7 @@ function SL.ResetStats()
 		-- pba_far_force_ms: due jobs past the frame's forced share (forceOver), given the cheap model (forceCheap) or
 		-- left to wait with their previous answer (forceWait, playing sounds)
 		forceOver = 0, forceCheap = 0, forceWait = 0,
-		-- pba_far_held_closer: playing sounds' answers dropped (farther from now than the one in use)
+		-- playing sounds' answers dropped (farther from now than the one in use)
 		dropped = 0 }
 end
 if not SL.stats then SL.ResetStats() end
@@ -83,29 +83,26 @@ local function budgetLeft(first)
 			st.frames, st.sumFrameMs = st.frames + 1, st.sumFrameMs + SL.spent * 1000
 			st.maxFrameMs = math.max(st.maxFrameMs, SL.spent * 1000)
 		end
-		SL.frame, SL.spent, SL.spentFirst, SL.need, SL.forcedSpent, SL.needHold = fr, 0, 0, 0, 0, 0
+		SL.frame, SL.spent, SL.spentFirst, SL.forcedSpent, SL.needHold = fr, 0, 0, 0, 0
 	end
 	local b = A.Num(A.cfg, "far_sliced_ms") / 1000
 	if first then return math.max(math.min(b * SL.FIRST_SHARE - SL.spentFirst, b - SL.spent), 0) end
-	-- pba_far_sliced_cap: the jobs not yet due get far_sliced_ms a frame and no more (the time spent finishing due
-	-- ones, bounded by far_force_ms, is not taken from it). The pacing (SL.need) had no ceiling. With a listener
+	-- The jobs not yet due get far_sliced_ms a frame and no more (the time spent finishing due
+	-- ones, bounded by far_force_ms, is not taken from it). The pacing had no ceiling. With a listener
 	-- moving fast every far evaluation is a new one (12-37 ms, ~4.5 MB of garbage), the collector's steps inside
 	-- the slices are counted in the jobs' time too, the estimate per job (SL.est) rose to 20-50 ms, the overdue
 	-- jobs each asked for a full estimate in the next frame, and the slicer spent 100-300 ms in one frame, making
 	-- more garbage (d3_breen_01, noclip at 1500 u/s: test/far_slicer_budget.py). A job that does not finish in its
 	-- slices now reaches its deadline, where far_force_ms finishes it a little each frame and a playing sound keeps
 	-- its previous answer meanwhile, as before.
-	if A.On(A.cfg, "far_sliced_cap") then
-		-- pba_far_hold_pace: the jobs of held sounds (pba_burst_hold_ms: a burst's impacts, held a few frames so as to
-		-- start at their full level) keep the pacing, up to HOLD_PACE x far_sliced_ms. Capped at far_sliced_ms, a
-		-- burst's jobs reached the end of their hold with a fraction of their work done and, past far_force_ms, got
-		-- the cheap model (26-36 dB under their level behind an open doorway). Their number is a burst's, not a
-		-- moving listener's far evaluations, and the ceiling stays bounded.
-		local c = b
-		if A.On(A.cfg, "far_hold_pace") then c = math.max(b, math.min(SL.needHold or 0, SL.HOLD_PACE * b)) end
-		return math.max(c - (SL.spent - SL.forcedSpent), 0)
-	end
-	return math.max(math.max(b, SL.need) - SL.spent, 0)
+	-- pba_far_hold_pace: the jobs of held sounds (pba_burst_hold_ms: a burst's impacts, held a few frames so as to
+	-- start at their full level) keep the pacing, up to HOLD_PACE x far_sliced_ms. Capped at far_sliced_ms, a
+	-- burst's jobs reached the end of their hold with a fraction of their work done and, past far_force_ms, got
+	-- the cheap model (26-36 dB under their level behind an open doorway). Their number is a burst's, not a
+	-- moving listener's far evaluations, and the ceiling stays bounded.
+	local c = b
+	if A.On(A.cfg, "far_hold_pace") then c = math.max(b, math.min(SL.needHold or 0, SL.HOLD_PACE * b)) end
+	return math.max(c - (SL.spent - SL.forcedSpent), 0)
 end
 
 -- ------------------------------------------------------------------ inputs an evaluation reads besides S, L
@@ -294,18 +291,16 @@ function SL.Run()
 	local now = RealTime()
 	local ft = SL.FrameDt()
 	table.sort(jobs, byDeadline)
-	-- pacing: what the jobs need this frame to finish by their deadlines evenly (a job past its expected
-	-- work still counts a quarter of it)
-	local need, needHold, est = 0, 0, SL.est
+	-- pacing of the held sounds' jobs (pba_far_hold_pace): what they need this frame to finish by their deadlines
+	-- evenly (a job past its expected work still counts a quarter of it)
+	local needHold, est = 0, SL.est
 	for _, j in ipairs(jobs) do
-		if not j.cancelled then
-			local x = math.max(est - j.cpu, est * 0.25) / math.max((j.deadline - now) / ft, 1)
-			need = need + x
-			if j.holdFor then needHold = needHold + x end -- (pba_far_hold_pace)
+		if not j.cancelled and j.holdFor then
+			needHold = needHold + math.max(est - j.cpu, est * 0.25) / math.max((j.deadline - now) / ft, 1)
 		end
 	end
 	budgetLeft()
-	SL.need, SL.needHold = need, needHold
+	SL.needHold = needHold
 	local forceB = A.Num(A.cfg, "far_force_ms") / 1000
 	local i = 1
 	while i <= #jobs do
@@ -390,7 +385,7 @@ local function heldDone(_, j)
 	if f then f(j.heldOwner) end
 end
 
--- pba_far_held_closer: where the answer in use was worked out for (owner.pbaSliceAt: source and listener as
+-- Where the answer in use was worked out for (owner.pbaSliceAt: source and listener as
 -- numbers, the table reused), and whether a finished job's answer is farther from where the source and the
 -- listener are now than that one. A job keeps the positions of its request and may finish seconds later (a far
 -- sound waits for its slices: 1.4-3.2 s measured on d3_breen_01 at 30 fps); its answer stood for "now" whatever
@@ -409,7 +404,7 @@ local function dist(v, x, y, z)
 end
 local function farther(owner, j, S, L)
 	local a = owner.pbaSliceAt
-	if not a or A.Num(A.cfg, "far_held_closer") < 0.5 then return false end
+	if not a then return false end
 	local off = dist(S, j.S.x, j.S.y, j.S.z) + dist(L, j.L.x, j.L.y, j.L.z) -- (the finished answer's error now)
 	local inUse = dist(S, a[1], a[2], a[3]) + dist(L, a[4], a[5], a[6]) -- (the heard one's)
 	return off > inUse + A.Num(A.cfg, "reeval_move")
@@ -424,7 +419,7 @@ function SL.Held(owner, S, L, sndlvl, srcEnt, onReady)
 	if j then
 		if not j.finished then return nil end
 		owner.pbaSlice = nil
-		-- (pba_far_held_closer: an answer farther from now than the one in use is dropped, and asked again below)
+		-- (an answer farther from now than the one in use is dropped, and asked again below)
 		if not (j.r and farther(owner, j, S, L)) then
 			if j.r then noteAt(owner, j.S, j.L) end
 			return j.r

@@ -7,11 +7,12 @@
 local A = pba
 local P = A.Paths
 local res = {}
--- pba_cache_src_near (Review P2, d8b39aa, default 1, merged after this test) also keeps the pinned pair apart: its
--- two sources are 13 u apart, past pba_reeval_move (8 u), so with it on the barrier off no longer reproduced the
--- shared result (shared_off = fresh, caseOk false: red since that merge). The barrier is measured alone (src_near
--- 0 in both arms, as when the bug was found); the defaults (both on) are checked apart (caseDefaults).
-local function cfgWith(v) return setmetatable({ cache_barrier = v, cache_src_near = 0 }, { __index = A.cfg }) end
+-- A source with no entity also reuses a cell-mate's path only within pba_reeval_move (8 u) of it (Review P2,
+-- d8b39aa): the pinned pair's two sources are 13 u apart, so without an entity the barrier off no longer
+-- reproduced the shared result. The pinned case is measured with one emitter entity for both sources (the key
+-- then names the emitter and that rule does not apply): the barrier alone; the defaults with no entity are
+-- checked apart (caseDefaults).
+local function cfgWith(v) return setmetatable({ cache_barrier = v }, { __index = A.cfg }) end
 local function level(r)
 	local s = 0
 	if r.voices then for _, v in ipairs(r.voices) do s = s + 10 ^ ((v.level or -99) / 10) end end
@@ -22,21 +23,24 @@ if not (A.Probes and A.Probes.current) then job:wait(function() return A.Probes 
 -- the pinned case (found by a scan of 153 same-cell pairs separated by a solid, gm_construct)
 local a, b, L = Vector(-1400.1787, -738.6718, -480.3931), Vector(-1400.1787, -744.4856, -492.0207), Vector(-1433.6841, -1209.4672, -351.8664)
 if game.GetMap() == "gm_construct" then
+	local E = LocalPlayer() -- (one emitter for both sources: see above)
 	P.InvalidateCache()
-	local fresh = level(P.Compute(b, L, 75, cfgWith(0)))
+	local fresh = level(P.Compute(b, L, 75, cfgWith(0), E))
 	P.InvalidateCache()
-	P.Compute(a, L, 75, cfgWith(0))
-	local old = level(P.Compute(b, L, 75, cfgWith(0)))
+	P.Compute(a, L, 75, cfgWith(0), E)
+	local old = level(P.Compute(b, L, 75, cfgWith(0), E))
 	P.InvalidateCache()
-	P.Compute(a, L, 75, cfgWith(1))
-	local new = level(P.Compute(b, L, 75, cfgWith(1)))
+	P.Compute(a, L, 75, cfgWith(1), E)
+	local new = level(P.Compute(b, L, 75, cfgWith(1), E))
 	res.fresh, res.shared_off, res.shared_on = fresh, old, new
 	res.sameCell = P.CacheKey(a, L, 75, nil, A.cfg):match("^[^|]*") == P.CacheKey(b, L, 75, nil, A.cfg):match("^[^|]*")
 	res.caseOk = res.sameCell and math.abs(old - fresh) > 3 and math.abs(new - fresh) < 0.01
 	P.InvalidateCache()
+	local freshNoEnt = level(P.Compute(b, L, 75, A.cfg))
+	P.InvalidateCache()
 	P.Compute(a, L, 75, A.cfg)
 	res.shared_defaults = level(P.Compute(b, L, 75, A.cfg))
-	res.caseDefaults = math.abs(res.shared_defaults - fresh) < 0.01
+	res.caseDefaults = math.abs(res.shared_defaults - freshNoEnt) < 0.01
 else
 	res.caseOk, res.caseDefaults = true, true
 	res.note = "pinned case needs gm_construct"

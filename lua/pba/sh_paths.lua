@@ -436,8 +436,7 @@ function P.SolidExit(entry, dir, L, mask)
 end
 
 --- Walls crossed by the straight line S -> L, traced from S only (see P.Walls). lisAt: the listener's end of
--- the line, S or L (pba_listener_object: the object holding it is no wall; the line's other end is the
--- source's, P.SourceObject).
+-- the line, S or L (the object holding it is no wall; the line's other end is the source's, P.SourceObject).
 -- scratch of wallsOneWay: the inside trace's start, the next wall trace's start, half a step along the line. Each is
 -- read by the trace right after it is set (no slice check between), so another evaluation's use in between is harmless.
 local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
@@ -446,14 +445,13 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 	local dir = (L - S):GetNormalized()
 	local start = S
 	ignoreEnt, ignoreLis, traceCfg = srcEnt, nil, cfg
-	local lisObj = lisAt and A.On(cfg, "listener_object")
 	for i = 1, maxWalls or 6 do
 		wallTr.start, wallTr.endpos = start, L
 		util.TraceLine(wallTr)
 		local tr = wallOut
 		if not tr.Hit or tr.Fraction >= 1 then break end
 		local trEnt = IsValid(tr.Entity) and not tr.Entity:IsWorld() and tr.Entity or nil
-		if lisObj and lisAt == S and i == 1 and tr.StartSolid and trEnt then
+		if lisAt == S and i == 1 and tr.StartSolid and trEnt then
 			-- the line starts inside an object at the listener's end: that object is ignored, traced again
 			ignoreLis = trEnt
 			util.TraceLine(wallTr)
@@ -489,7 +487,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 			backEnt, backTr.start, backTr.endpos = hitEnt, far, entry
 			util.TraceLine(backTr)
 			local back = backOut
-			if lisObj and lisAt == L and back.StartSolid and far:DistToSqr(L) < 1 then
+			if lisAt == L and back.StartSolid and far:DistToSqr(L) < 1 then
 				-- the line ends inside this object at the listener: no wall (traced from inside it, the line
 				-- re-hit it every 0.5 u, StartSolid: up to 6 walls for one crate around the listener)
 				ignoreLis = hitEnt
@@ -539,8 +537,7 @@ local function wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
 		end
 		local prev = walls[#walls]
 		if not hitEnt and prev and not prev.ent and not prev.water and prev.surfIdx == w.surfIdx
-			and (prev.thickness < 0.01 or w.thickness < 0.01) and prev.exit:DistToSqr(w.entry) <= 4
-			and A.On(cfg, "wall_merge_graze") then
+			and (prev.thickness < 0.01 or w.thickness < 0.01) and prev.exit:DistToSqr(w.entry) <= 4 then
 			-- the same world surface met twice within 2 u, one of the two hits a zero-thickness face: a line
 			-- grazing a brush's face (a floor's top at a wall's foot) left the 0.5 u probe out of the solid and
 			-- counted the face as a wall of its own, then the brush behind it again (rp_downtown: 18 dB in 8 u
@@ -677,14 +674,14 @@ end
 P.HasDisplacements = mapHasDisplacements
 
 --- The object a sound comes from: srcEnt itself, or for a sound played on the world (srcEnt nil or the
--- world) at a point inside an object, that object (pba_source_object). The engine plays impacts, breaks and
+-- world) at a point inside an object, that object. The engine plays impacts, breaks and
 -- debris on the world at the physics object's origin (vphysics_sound.h): traced from there, the object was
 -- its own wall (in plain sight, 20 to 70 dB and a relay for every impact). One point trace, entities only.
 local srcObjOut = {}
 local srcObjTr = { mask = MASK_SOLID, ignoreworld = true, output = srcObjOut }
 function P.SourceObject(S, srcEnt, cfg)
 	if IsValid(srcEnt) and not srcEnt:IsWorld() then return srcEnt end
-	if A.Num(cfg, "source_object") < 0.5 or not S then return srcEnt end
+	if not S then return srcEnt end
 	srcObjTr.start, srcObjTr.endpos = S, S
 	util.TraceLine(srcObjTr)
 	local e = srcObjOut.Entity
@@ -715,7 +712,7 @@ end
 -- lazy: the objects' ways round (w.detour) are left to P.WallDetours (P.Compute: after its listener field
 -- is read, in a far sound's slices, cl_slicer); they read the world only, the same numbers either way.
 -- noLis: L is not where a listener stands (a point the caller made up: P.BundleLine's bend), so an object L lies
--- inside is not the listener's own (pba_listener_object) but a wall the line ends in
+-- inside is not the listener's own (see wallsOneWay) but a wall the line ends in
 function P.Walls(S, L, maxWalls, srcEnt, lazy, cfg, noLis)
 	local lisAt = (not noLis) and L or nil
 	local w = wallsOneWay(S, L, maxWalls, srcEnt, lazy, lisAt, cfg)
@@ -1583,7 +1580,6 @@ local function edgeClearAt(u, h, M, S, L)
 end
 function P.WorldEdge(S, L, walls, cfg)
 	cfg = cfg or A.cfg
-	if A.Num(cfg, "world_edge") < 0.5 then return nil end
 	local first, last
 	for _, w in ipairs(walls or {}) do
 		if not w.ent and not w.water then
@@ -1642,20 +1638,16 @@ function P.WorldEdge(S, L, walls, cfg)
 	d1, l1, _, e1 = P.SegmentDoorLoss(S, best.apex, cfg)
 	d2, l2, _, e2 = P.SegmentDoorLoss(best.apex, L, cfg)
 	if e2 and e2 == e1 then
-		-- one leaf at the apex: paid once. pba_edge_leg_doors: only that leaf is left out of the second leg,
+		-- one leaf at the apex: paid once. Only that leaf is left out of the second leg,
 		-- not every door on it (pba_demo: two shut doors behind the apex dropped, 14 dB instead of 42, while
 		-- the straight line one step on paid all three: 28 dB in 16 u)
-		if A.On(cfg, "edge_leg_doors") then
-			local list = P.SegmentDoors(best.apex, L, A.On(cfg, "door_3d"))
-			d2, l2 = 0, 0
-			for _, h in ipairs(list or {}) do
-				if h[1] ~= e1 then
-					local l, lp = P.DoorSpanLoss(h[1], best.apex, L, cfg, h[2], h[3])
-					d2, l2 = d2 + l, math.max(l2, lp or 0)
-				end
+		local list = P.SegmentDoors(best.apex, L, A.On(cfg, "door_3d"))
+		d2, l2 = 0, 0
+		for _, h in ipairs(list or {}) do
+			if h[1] ~= e1 then
+				local l, lp = P.DoorSpanLoss(h[1], best.apex, L, cfg, h[2], h[3])
+				d2, l2 = d2 + l, math.max(l2, lp or 0)
 			end
-		else
-			d2, l2 = 0, 0
 		end
 	end
 	best.doorDb = d1 + d2
@@ -1678,7 +1670,7 @@ function P.AddEdge(t, e, L, cfg)
 	if t.midDb then t.midDb = math.max(-10 * math.log10(exp((-t.midDb / 10) * LN10) + eD), 0) end
 	t.lp = math.min(t.lp or 0, AC.LowpassLevel(tilt, cfg))
 	t.edgeDb, t.edgeApex, t.tilt = e.db, e.apex, tilt
-	if t.lpDb then t.lpDb = tilt end -- (pba_trans_tilt: kept continuous)
+	if t.lpDb then t.lpDb = tilt end -- (kept continuous)
 	t.edgeShare = eD / (eT + eD) -- (the share of its energy that goes over the edge: an opening, N.OpeningShare)
 	if t.pos and L then
 		local a, b = t.pos - L, e.apex - L
@@ -1847,7 +1839,6 @@ end
 -- hull; a door leaf is a lossy way through its doorway, charged by P.SegmentDoorLoss on the refined
 -- segments, not a shape), down to CORNER_EPS, and the corner law (AC.Corner) is applied there. The route
 -- keeps its clearance vertices for everything else (apparent position, homotopy, objects on its segments).
--- pba_corner_refine 0: the clearance vertices as they are.
 local CORNER_EPS, CORNER_HALVINGS, CORNER_SWEEPS = 0.125, 8, 3
 local cornerClear = detClear
 -- The bisections' probe points built in place (the same float operations as `v + (t - v) * mid` and `q + d * k`,
@@ -1881,7 +1872,6 @@ function P.CornerPoint(a, v, b, y, cfg)
 	-- sees it: the leg it slides on stays clear (part of it), the other one is traced, the route only
 	-- shortens, and the vertex ends on the edge. Only from a vertex whose legs are both clear.
 	if cornerClear(a, q) and cornerClear(q, b) then
-		local stepFirst = A.On(cfg, "corner_step_first")
 		for _ = 1, CORNER_SWEEPS do
 			local moved = false
 			for side = 1, 2 do
@@ -1889,14 +1879,14 @@ function P.CornerPoint(a, v, b, y, cfg)
 				local seg = far - q
 				local sl = seg:Length()
 				local s0, s1 = 0, 1
-				-- pba_corner_step_first: the smallest slide (CORNER_EPS) tried first. A vertex already on its
+				-- The smallest slide (CORNER_EPS) tried first. A vertex already on its
 				-- edge (60% of the sides on the offline bench: the confirming sweep, a leg it is pressed on)
 				-- cannot slide: one trace, where halving the whole leg took ~11. When it can, the same halving
 				-- follows (same answer). It differs only where that halving would land past an obstacle met
 				-- within CORNER_EPS of the vertex: none in 3 600 evaluations offline. (A doubling search from
 				-- the vertex saved 22% more traces but moved one copy of a route 1-2 dB from its twin where
 				-- the leg grazes the edge: visibility along such a leg is not monotonic.)
-				if stepFirst and sl >= CORNER_EPS then
+				if sl >= CORNER_EPS then
 					if y then sliceCheck() end
 					if not cornerClear(other, P.SCR.step(P.SCR.corner, q, seg, CORNER_EPS / sl)) then s1 = 0 end
 				end
@@ -1918,13 +1908,11 @@ end
 -- kept as a copy (the answer may be v itself, a caller's Vector); a NaN coordinate is not kept.
 local CORNER_KEEP = 4096
 local cornerKept
--- (and by corner_step_first: P.CornerPoint's answer depends on it)
-local cornerT, cornerN, cornerGen, cornerTL, cornerSF = {}, 0, nil, nil, nil
+local cornerT, cornerN, cornerGen, cornerTL = {}, 0, nil, nil
 function cornerKept(a, v, b, cfg)
 	local TL = util.TraceLine
-	local sf = A.On(cfg, "corner_step_first")
-	if cornerGen ~= P.worldGen or cornerTL ~= TL or cornerN >= CORNER_KEEP or cornerSF ~= sf then
-		cornerT, cornerN, cornerGen, cornerTL, cornerSF = {}, 0, P.worldGen, TL, sf
+	if cornerGen ~= P.worldGen or cornerTL ~= TL or cornerN >= CORNER_KEEP then
+		cornerT, cornerN, cornerGen, cornerTL = {}, 0, P.worldGen, TL
 	end
 	local ax, ay, az = a:Unpack()
 	local vx, vy, vz = v:Unpack()
@@ -1956,7 +1944,6 @@ local refineCorners
 -- two vertices on the two jambs of one doorway would otherwise chase each other).
 function P.RefineCorners(pts, cfg)
 	cfg = cfg or A.cfg
-	if A.Num(cfg, "corner_refine") < 0.5 then return refineCorners(pts, false, cfg) end
 	local n, TL = #pts, util.TraceLine
 	local m = refineMemo[pts]
 	local rp = A.On(cfg, "corner_relax")
@@ -1975,48 +1962,44 @@ function P.RefineCorners(pts, cfg)
 	end
 	local c = {}
 	for i = 1, n do c[3 * i - 2], c[3 * i - 1], c[3 * i] = pts[i]:Unpack() end
-	local out = refineCorners(pts, true, cfg)
+	local out = refineCorners(pts, cfg)
 	local keep = {}
 	for i = 1, #out do keep[i] = out[i] end
 	refineMemo[pts] = { n = n, TL = TL, gen = P.worldGen, c = c, out = keep, rp = rp }
 	return out
 end
-function refineCorners(pts, on, cfg)
+function refineCorners(pts, cfg)
 	local out = { pts[1] }
-	if on then
-		-- first the vertices that are no corner at all: kept by the tightening because its hull grazes a
-		-- wall where the thin line between their neighbours is clear. Left in, such a vertex bent the route
-		-- (a corner of 4 dB between two that see each other) whenever the copy of the route kept came from
-		-- that probe, and a walking source on pba_demo went 2-3 dB up and down every few steps
-		-- (path_perceptual). Pulled with the corners' own thin trace: from each kept vertex, the farthest
-		-- one it sees.
-		local kept, i = { pts[1] }, 1
-		while i < #pts do
-			local j = #pts
-			while j > i + 1 and not cornerClear(pts[i], pts[j]) do j = j - 1 sliceCheck() end
-			kept[#kept + 1] = pts[j]
-			i = j
-		end
-		pts = kept
+	-- first the vertices that are no corner at all: kept by the tightening because its hull grazes a
+	-- wall where the thin line between their neighbours is clear. Left in, such a vertex bent the route
+	-- (a corner of 4 dB between two that see each other) whenever the copy of the route kept came from
+	-- that probe, and a walking source on pba_demo went 2-3 dB up and down every few steps
+	-- (path_perceptual). Pulled with the corners' own thin trace: from each kept vertex, the farthest
+	-- one it sees.
+	local kept, i = { pts[1] }, 1
+	while i < #pts do
+		local j = #pts
+		while j > i + 1 and not cornerClear(pts[i], pts[j]) do j = j - 1 sliceCheck() end
+		kept[#kept + 1] = pts[j]
+		i = j
+	end
+	pts = kept
+	for x = 2, #pts - 1 do
+		sliceCheck()
+		out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1], cfg)
+	end
+	-- pba_corner_relax: one more pass, each corner (now on its edge) between its neighbours as refined. The
+	-- first pass keeps the clearance neighbours (from refined ones, two vertices on the two jambs of one
+	-- doorway chased each other), and a corner refined towards a clearance vertex far below an opening
+	-- stopped at the opening's sill, where the taut string between the refined corners bends at its lintel:
+	-- 14 u of detour, 4.6 dB, where the string only grazed the lintel and touched the far jamb
+	-- (gm_melancholia, under the radio's floor: 4.7 dB in 2 u as the jamb's shadow began)
+	if A.On(cfg, "corner_relax") and #pts > 3 then
+		out[#pts] = pts[#pts]
 		for x = 2, #pts - 1 do
 			sliceCheck()
-			out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1], cfg)
+			out[x] = cornerKept(out[x - 1], out[x], out[x + 1], cfg)
 		end
-		-- pba_corner_relax: one more pass, each corner (now on its edge) between its neighbours as refined. The
-		-- first pass keeps the clearance neighbours (from refined ones, two vertices on the two jambs of one
-		-- doorway chased each other), and a corner refined towards a clearance vertex far below an opening
-		-- stopped at the opening's sill, where the taut string between the refined corners bends at its lintel:
-		-- 14 u of detour, 4.6 dB, where the string only grazed the lintel and touched the far jamb
-		-- (gm_melancholia, under the radio's floor: 4.7 dB in 2 u as the jamb's shadow began)
-		if A.On(cfg, "corner_relax") and #pts > 3 then
-			out[#pts] = pts[#pts]
-			for x = 2, #pts - 1 do
-				sliceCheck()
-				out[x] = cornerKept(out[x - 1], out[x], out[x + 1], cfg)
-			end
-		end
-	else
-		for i = 2, #pts - 1 do out[i] = pts[i] end
 	end
 	out[#pts] = pts[#pts]
 	return out
@@ -2201,7 +2184,7 @@ local function bundleDoor(w) return w.ent and OPENABLE[w.ent:GetClass()] end
 function P.KeepWorldWall(w) return not w.ent and not w.water end
 function P.KeepNativeWorldWall(w, nativeDisp) return not w.ent and not w.water and not P.NativeLacks(w, nativeDisp) end
 -- tilt (optional): the centre line's muffling (P.EvalWalls' 4th); returned 4th as the bundle's, each line's weighted
--- by its energy like the loss (pba_trans_tilt: a wall entering the line moved the muffling by a whole wall's at once
+-- by its energy like the loss (a wall entering the line moved the muffling by a whole wall's at once
 -- where the loss moved by fifths)
 --- The four bend points of the bundle's offset lines (the midpoint of S-L moved across the line by the first
 -- Fresnel zone's radius there, at most pba_trans_bundle_r), or nil when that radius is under half a unit.
@@ -2225,23 +2208,20 @@ function P.BundleMids(S, L, cfg)
 end
 --- The walls one offset line S -> m -> L of the bundle pays (keep(w, karg) picks the world walls; door leaves are
 -- always in): traced from each end towards its bend m.
--- pba_trans_bundle_mid_leaf: m is a point of the bundle, not a listener, so a leaf that m lies in is not dropped as
--- the listener's own object (pba_listener_object: both halves ended inside the shut leaf of a doorway beside the
+-- m is a point of the bundle, not a listener, so a leaf that m lies in is not dropped as
+-- the listener's own object (both halves ended inside the shut leaf of a doorway beside the
 -- wall the centre cuts, the line counted as open air, and the bundle's mean gave 10 log10(5) = 7.0 dB through a
 -- shut door and 17 u of concrete: pba_twodoors, door_sweep_real's closed slide, 25.7 -> 6.9 -> 24.6 dB in 2 u
 -- steps); and a leaf is paid once per line (its loss is the leaf's, whatever the chord: P.EvalWalls), not once
 -- per half nor once per re-hit of the traces restarting inside it. World walls keep their chord on both halves.
 function P.BundleLine(S, L, m, srcEnt, cfg, keep, karg)
 	local sel = {}
-	local fix = A.On(cfg, "trans_bundle_mid_leaf")
 	local seen
 	for h = 1, 2 do
-		local half = P.Walls(h == 1 and S or L, m, cfg.trans_max_walls, srcEnt, true, cfg, fix)
+		local half = P.Walls(h == 1 and S or L, m, cfg.trans_max_walls, srcEnt, true, cfg, true)
 		for _, w in ipairs(half) do
 			if bundleDoor(w) then
-				if not fix then
-					sel[#sel + 1] = w
-				elseif not (seen and seen[w.ent]) then
+				if not (seen and seen[w.ent]) then
 					seen = seen or {}
 					seen[w.ent] = true
 					sel[#sel + 1] = w
@@ -2277,7 +2257,7 @@ function P.BundleWalls(S, L, srcEnt, cfg, loss, lp, mid, keep, karg, tilt)
 	return math.max(-10 * math.log10(gl / n) - dl, 0), lp, math.max(-10 * math.log10(gm / n) - dm, 0), bt
 end
 
---- How far inside the world the straight line runs (pba_trans_bundle_edge), as a fraction of the first Fresnel
+--- How far inside the world the straight line runs (leafFade), as a fraction of the first Fresnel
 -- zone's radius (P.BundleWalls' r): the smallest of the four offsets across it (up, down, either side) at which
 -- a parallel line first stops crossing the world walls keep(w) picks where the line crosses them (stepped, then
 -- bisected); 1 when no offset line
@@ -2438,7 +2418,7 @@ local function byLevelThenIndex(a, b)
 	if a.lvl ~= b.lvl then return a.lvl > b.lvl end
 	return a.i < b.i
 end
--- pba_model_soft_cull (continuity review step 2, A9): the paths past the n-th are not cut at their rank but fade
+-- Soft cut (continuity review step 2, A9): the paths past the n-th are not cut at their rank but fade
 -- out over SOFT_CULL_DB under the n-th (their loss raised by -10 log10 w): two routes of nearly equal level swapping
 -- ranks at the cut changed nothing at once, the one dropped took its energy away in one step
 local SOFT_CULL_DB = 6
@@ -2449,16 +2429,14 @@ function P.KeepLoudest(paths, n, sndlvl, cfg)
 	table.sort(idx, byLevelThenIndex)
 	local out = {}
 	for i = 1, n do out[i] = idx[i].p end
-	if A.On(cfg, "model_soft_cull") then
-		local ln = idx[n].lvl
-		for i = n + 1, #idx do
-			local w = 1 - ramp(ln - idx[i].lvl, 0, SOFT_CULL_DB)
-			if w <= 0 then break end
-			local p = idx[i].p
-			p.cullDb = -10 * math.log10(w)
-			p.lossDb = p.lossDb + p.cullDb
-			out[#out + 1] = p
-		end
+	local ln = idx[n].lvl
+	for i = n + 1, #idx do
+		local w = 1 - ramp(ln - idx[i].lvl, 0, SOFT_CULL_DB)
+		if w <= 0 then break end
+		local p = idx[i].p
+		p.cullDb = -10 * math.log10(w)
+		p.lossDb = p.lossDb + p.cullDb
+		out[#out + 1] = p
 	end
 	return out
 end
@@ -2541,7 +2519,7 @@ end
 -- mix, p.rawLossDb stays without it).
 -- direct (optional): straight-line distance source - listener (else the transmission's length or
 -- the paths' own `direct`): the voices together never exceed the free field at that distance.
--- pba_trans_window_soft: past the window's edge the transmission loses TRANS_WINDOW_SLOPE dB more per dB, dropped
+-- Past the window's edge the transmission loses TRANS_WINDOW_SLOPE dB more per dB, dropped
 -- only TRANS_WINDOW_FLOOR dB under the dominant voice (where its highs no longer count)
 local TRANS_WINDOW_SLOPE, TRANS_WINDOW_FLOOR = 3, 60
 -- P.SelectVoices' helpers, module-level (no closures per call: LuaJIT NYI FNEW)
@@ -2615,21 +2593,16 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 	table.sort(list, byLevelDesc)
 	local best = list[1] and list[1].level or -math.huge
 	local kept = {}
-	local soft = A.On(cfg, "model_soft_cull")
 	for _, p in ipairs(list) do
-		if not soft then
-			if p.level >= best - cfg.reject_db then kept[#kept + 1] = p end
-		else
-			-- pba_model_soft_cull (A10): faded out over SOFT_CULL_DB past reject_db instead of cut there (its loss,
-			-- raw loss included for the native law, raised by -10 log10 w)
-			local w = 1 - ramp(best - p.level, cfg.reject_db, cfg.reject_db + SOFT_CULL_DB)
-			if w > 0 then
-				if w < 1 then
-					local add = -10 * math.log10(w)
-					p.lossDb, p.mixLossDb, p.level = p.lossDb + add, (p.mixLossDb or p.lossDb) + add, p.level - add
-				end
-				kept[#kept + 1] = p
+		-- soft cut (A10): faded out over SOFT_CULL_DB past reject_db instead of cut there (its loss,
+		-- raw loss included for the native law, raised by -10 log10 w)
+		local w = 1 - ramp(best - p.level, cfg.reject_db, cfg.reject_db + SOFT_CULL_DB)
+		if w > 0 then
+			if w < 1 then
+				local add = -10 * math.log10(w)
+				p.lossDb, p.mixLossDb, p.level = p.lossDb + add, (p.mixLossDb or p.lossDb) + add, p.level - add
 			end
+			kept[#kept + 1] = p
 		end
 	end
 
@@ -2720,11 +2693,11 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		local g = AC.EngineGain(trans.length, sndlvl) * exp((-trans.lossDb / 20) * LN10)
 		local lvl = AC.GainToDb(g)
 		local dom = voices[1] and voices[1].level or -math.huge
-		-- pba_trans_window_soft: faded out past the window's edge instead of cut there: the transmission, often the
+		-- faded out past the window's edge instead of cut there: the transmission, often the
 		-- one voice carrying the highs, took them all away in one step as it crossed the window (pba_demo: one-voice
 		-- low-pass 30.5 -> 40.5 dB at 21 dB under the route)
 		local keep, raw = #voices == 0 or lvl >= dom - cfg.trans_window_db, trans.rawLossDb
-		if #voices > 0 and A.On(cfg, "trans_window_soft") then
+		if #voices > 0 then
 			local over = (dom - cfg.trans_window_db) - lvl
 			if over > 0 then
 				local add = TRANS_WINDOW_SLOPE * over
@@ -2748,24 +2721,20 @@ function P.SelectVoices(L, paths, trans, sndlvl, cfg, direct)
 		while j >= 1 and voices[j].level < v.level do voices[j + 1] = voices[j] j = j - 1 end
 		voices[j + 1] = v
 	end
-	if A.On(cfg, "model_soft_cull") then
-		-- pba_model_soft_cull (A16): a voice past max_voices gives its energy to the kept voice nearest in direction
-		-- (its gain and raw loss), instead of taking it away: the last voice's level no longer vanishes at once
-		while #voices > cfg.max_voices do
-			local x = table.remove(voices)
-			local dx, best, bd = (x.pos - L):GetNormalized(), nil, -math.huge
-			for _, v in ipairs(voices) do
-				local c = (v.pos - L):GetNormalized():Dot(dx)
-				if c > bd then best, bd = v, c end
-			end
-			if best and (x.gain or 0) > 0 then
-				local g = math.sqrt(best.gain * best.gain + x.gain * x.gain)
-				if best.rawLossDb and best.gain > 0 then best.rawLossDb = best.rawLossDb - 20 * math.log10(g / best.gain) end
-				best.gain, best.level = g, AC.GainToDb(g)
-			end
+	-- soft cut (A16): a voice past max_voices gives its energy to the kept voice nearest in direction
+	-- (its gain and raw loss), instead of taking it away: the last voice's level no longer vanishes at once
+	while #voices > cfg.max_voices do
+		local x = table.remove(voices)
+		local dx, best, bd = (x.pos - L):GetNormalized(), nil, -math.huge
+		for _, v in ipairs(voices) do
+			local c = (v.pos - L):GetNormalized():Dot(dx)
+			if c > bd then best, bd = v, c end
 		end
-	else
-		while #voices > cfg.max_voices do table.remove(voices) end
+		if best and (x.gain or 0) > 0 then
+			local g = math.sqrt(best.gain * best.gain + x.gain * x.gain)
+			if best.rawLossDb and best.gain > 0 then best.rawLossDb = best.rawLossDb - 20 * math.log10(g / best.gain) end
+			best.gain, best.level = g, AC.GainToDb(g)
+		end
 	end
 
 	-- one wavefront: obstacles only take away from the free field. Every route is modelled on its own up
@@ -3273,27 +3242,12 @@ function P.Cheap(S, L, sndlvl, cfg, srcEnt)
 		return r
 	end
 	r.clear, r.paths = false, {}
-	-- pba_cheap_same_trans: the walls' transmission of P.Compute itself (its stage: the bundle of lines or the
-	-- module's occlusion, the leaf fade), the routes round them left out. The raw sum of the walls was another
-	-- model: a sound switching between the cheap and the full evaluation (a burst, a forced far job) jumped
-	-- between the two (a car behind a building: -49 / -74 dB in turns).
-	if A.On(cfg, "cheap_same_trans") and P.TransmissionStage then
-		local worldBlocked = P.LineBlockers(walls, cfg)
-		P.TransmissionStage(r, S, L, walls, walls, cfg, srcEnt, worldBlocked)
-		r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
-		r.shadowDb = P.ShadowOf(r.voices, nil)
-		return r
-	end
-	local loss, lp, mid, tilt = P.EvalWalls(walls, cfg)
-	local last = walls[#walls]
-	local dir = (L - S):GetNormalized()
-	local tpos = last.exit + dir * 2
-	if A.On(cfg, "trans_pos_clamp") then -- (as P.Compute's transmission: never past the listener)
-		local rem = (L - last.exit):Dot(dir)
-		if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
-	end
-	r.trans = { walls = walls, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
-	if A.On(cfg, "trans_tilt") then r.trans.lpDb = tilt end
+	-- the walls' transmission of P.Compute itself (its stage: the bundle of lines or the module's occlusion,
+	-- the leaf fade), the routes round them left out. The raw sum of the walls was another model: a sound
+	-- switching between the cheap and the full evaluation (a burst, a forced far job) jumped between the two
+	-- (a car behind a building: -49 / -74 dB in turns).
+	local worldBlocked = P.LineBlockers(walls, cfg)
+	P.TransmissionStage(r, S, L, walls, walls, cfg, srcEnt, worldBlocked)
 	r.voices = P.SelectVoices(L, r.paths, r.trans, sndlvl, cfg, S:Distance(L))
 	r.shadowDb = P.ShadowOf(r.voices, nil)
 	return r
@@ -3522,7 +3476,7 @@ function P.ThroughPath(S, L, best, cfg)
 	local w = exp((-math.max(q.diffDb or q.lossDb or 0, 0) / 10) * LN10)
 	p.entryWall = w
 	p.entryLen = w * S:Distance(best.V) + (1 - w) * math.max(p.length - (q.pos or L):Distance(L), 0)
-	-- its bend (the diffuse model's, pba_bend_final) on the taut route, corners on their edges: the clearance
+	-- its bend (the diffuse model's, selectVoices) on the taut route, corners on their edges: the clearance
 	-- vertices of two copies of one route zigzag differently (diffuse share 0 / 0.42 / 0 in 2 u steps)
 	local taut = { best.V }
 	for _, v in ipairs(q.points or {}) do taut[#taut + 1] = v end
@@ -3534,9 +3488,9 @@ function P.ThroughPath(S, L, best, cfg)
 	return p
 end
 
-local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (pba_trans_leaf_fade)
+local TRANS_FADE_U = 16 -- world depth (u) over which a line through route-owned leaves fades in (leafFade)
 local EDGE_MIX_DB = 2 -- how much cheaper (dB) the edge must be to stand for a same-way route at its own loss (pba_edge_dup_mix)
-local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (pba_trans_bundle_edge)
+local TRANS_EDGE_DB = 30 -- its fade (dB) from inside the wall to its edge across the Fresnel zone (leafFade)
 -- P.Compute in stages (refactor step 14): each stage below is one part of the computation, called once in
 -- this order by P.Compute; they read and fill the result r. Same operations in the same order as the former
 -- single function (paths_golden: bit for bit).
@@ -3552,12 +3506,12 @@ local function cachedResult(S, L, sndlvl, cfg, key, lineState, now, timeOn, emit
 	local c = P.cache[key]
 	local barrier = A.On(cfg, "cache_barrier")
 	if c and now - c.t < cfg.cache_ttl then
-		-- pba_cache_src_near: with no entity (a map's ambient sound, a far emitter the client does not have) the key
+		-- With no entity (a map's ambient sound, a far emitter the client does not have) the key
 		-- cannot tell two emitters of one cell apart: two loops 30 u apart in one 32 u cell took each other's path,
 		-- whichever was evaluated first, in turns (a level flipping about every second with the listener still). The
 		-- cached path serves it only from where the same emitter could be: within reeval_move, as pba_group_time does.
 		local far = false
-		if not emitter and A.On(cfg, "cache_src_near") then
+		if not emitter then
 			local dx, dy, dz = S.x - c.sx, S.y - c.sy, S.z - c.sz
 			far = dx * dx + dy * dy + dz * dz > sq(A.Num(cfg, "reeval_move"))
 		end
@@ -3584,13 +3538,13 @@ end
 -- P.InvalidateCache emptied the cache, one entry per cell pair, level, emitter and line state, for good on a
 -- map whose doors never move
 local function storeResult(r, sndlvl, cfg, key, lineState, now, timeOn, emitter, S, L, gen0, world0, field0, region0)
-	-- pba_cache_gen_guard: the world model changed while this evaluation ran (a far sound's job, cl_slicer: a
+	-- The world model changed while this evaluation ran (a far sound's job, cl_slicer: a
 	-- setting, a door state, the probe graph or a door field changed between or inside its slices). Its answer,
 	-- partly on the old inputs, was kept under the NEW generation (read at the store): the job's own restart read
 	-- it back, and the next sounds of that cell or emitter got it for cache_ttl / reeval_max_s. Not kept then.
-	if gen0 and (gen0 ~= P.cacheGen or world0 ~= P.worldGen or field0 ~= (A.Probes and A.Probes.fieldEpoch or 0)) then return end
+	if gen0 ~= P.cacheGen or world0 ~= P.worldGen or field0 ~= (A.Probes and A.Probes.fieldEpoch or 0) then return end
 	-- (an object near the listener swept its region meanwhile, pba_native_moved_local: the same)
-	if region0 and region0 ~= P.regionGen and P.RegionTouched(region0, r) then return end
+	if region0 ~= P.regionGen and P.RegionTouched(region0, r) then return end
 	if now >= (P.cacheSweepT or 0) then
 		P.cacheSweepT = now + CACHE_SWEEP_S
 		local ttl = cfg.cache_ttl
@@ -3616,10 +3570,9 @@ end
 -- doorway: crossing it also reads the routes, whose door costs model the leaf
 local function lineBlockers(walls, cfg)
 	local worldBlocked, leafBlocked = false, false
-	local oneModel = A.On(cfg, "door_leaf_portal")
 	for _, w in ipairs(walls) do
 		if not w.ent and not w.water then worldBlocked = true end
-		if oneModel and w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
+		if w.ent and OPENABLE[w.ent:GetClass()] and not w.beside then leafBlocked = true end
 	end
 	return worldBlocked, leafBlocked
 end
@@ -3707,7 +3660,7 @@ local function nativeLoss(r, S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
 				loss = math.min(bl + el, cfg.trans_max)
 				mid = math.min(bm + em, cfg.trans_max)
 				lp = math.max(blp, elp)
-				-- the continuous muffling (pba_trans_tilt): the part Steam Audio sees unmuffled, the rest
+				-- the continuous muffling: the part Steam Audio sees unmuffled, the rest
 				-- through the walls it holds, mixed by energy; then the walls it lacks, in series
 				local o = math.Clamp(d.occlusion, 0, 1)
 				tilt = math.min(AC.MixTilt2(o * o, 0, sq((1 - o) * exp((-wl / 20) * LN10)), wt) + et, cfg.trans_max)
@@ -3718,7 +3671,7 @@ local function nativeLoss(r, S, L, tw, cfg, srcEnt, loss, lp, mid, tilt)
 	return loss, lp, mid, tilt
 end
 
--- Stage 5c, pba_trans_leaf_fade: a line through the world AND through leaves a route owns (the route through
+-- Stage 5c, the leaf fade: a line through the world AND through leaves a route owns (the route through
 -- those doorways) is that route's way plus the world it grazes. Where the world part thins out (the line
 -- clipping a wall's end or a door's jamb) the line becomes the route's own way, which the route already
 -- carries: the transmission fades in with the world depth crossed (0 -> TRANS_FADE_U) instead of appearing at
@@ -3741,12 +3694,12 @@ local function leafFade(r, S, L, walls, cfg, srcEnt)
 	end
 	if owned then
 		local fade = ramp(depth, 0, TRANS_FADE_U)
-		-- pba_trans_bundle_edge: and with how far inside the world the line runs across the Fresnel zone,
+		-- and with how far inside the world the line runs across the Fresnel zone,
 		-- so it is out before the line leaves the wall (pba_demo: 14 dB under the route, the one voice
 		-- carrying the highs, gone in one step at a jamb: one-voice low-pass 27.7 -> 40.5 dB)
 		-- (only for leaves on the line: past the wall it still goes through them, not into the open, where
 		-- the clear line takes over from the transmission instead)
-		if fade > 0 and onLine and A.On(cfg, "trans_bundle_edge") then
+		if fade > 0 and onLine then
 			local e = P.BundleEdge(S, L, srcEnt, cfg, P.KeepWorldWall)
 			-- linear in dB: the voice often carries the highs (the route's leaves muffle more than the
 			-- wall), which its level sets until it is some 30 dB under the route
@@ -3774,19 +3727,17 @@ local function transmission(r, S, L, walls, tw, cfg, srcEnt, worldBlocked)
 	local last = tw[#tw]
 	local dir = (L - S):GetNormalized()
 	local tpos = last.exit + dir * 2
-	-- pba_trans_pos_clamp: never past the listener (a wall exit within 2 u of L put the voice behind the
+	-- never past the listener (a wall exit within 2 u of L put the voice behind the
 	-- listener, and its direction flipped by 150-177 degrees along a wall: rp_downtown's street walk)
-	if A.On(cfg, "trans_pos_clamp") then
-		local rem = (L - last.exit):Dot(dir)
-		if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
-	end
+	local rem = (L - last.exit):Dot(dir)
+	if rem < 4 then tpos = last.exit + dir * math.max(rem * 0.5, 0) end
 	r.trans = { walls = tw, lossDb = loss, midDb = mid, lp = lp, length = S:Distance(L), pos = tpos }
-	-- pba_trans_tilt: the transmission's muffling is its walls' in series, continuous (dB), not the level of its
+	-- the transmission's muffling is its walls' in series, continuous (dB), not the level of its
 	-- most muffling wall read back as a step: a voice through three walls was mixed as one through a single one
 	-- (it seemed to carry the highs), and its own level steps moved the one-voice low-pass by 3.9 dB in 0.25 u
 	-- (pba_demo's source walk)
-	if A.On(cfg, "trans_tilt") then r.trans.lpDb = tilt end
-	if worldBlocked and A.On(cfg, "trans_leaf_fade") then leafFade(r, S, L, walls, cfg, srcEnt) end
+	r.trans.lpDb = tilt
+	if worldBlocked then leafFade(r, S, L, walls, cfg, srcEnt) end
 end
 
 P.TransmissionStage, P.LineBlockers = transmission, lineBlockers -- (P.Cheap: the same transmission model)
@@ -3934,14 +3885,13 @@ local function throughRoutes(r, S, L, tw, cfg, srcEnt)
 	end
 end
 
--- Stage 11, the voices heard. pba_bend_final: the diffuse model reads the bend of the route as heard (its
+-- Stage 11, the voices heard. The diffuse model reads the bend of the route as heard (its
 -- final points, corners on the real edges), not the bend of the coarse polyline the route was evaluated on
 -- (probe positions, before the corners are refined): that one jumped by 90-120 deg in 8 u while the route did
 -- not change (rp_downtown street walk: diffuse share 0.13 -> 0.47 in one step)
 local function selectVoices(r, S, L, sndlvl, cfg)
-	local bendFinal = A.On(cfg, "bend_final")
 	for _, p in ipairs(r.paths or {}) do
-		if bendFinal and p.points then
+		if p.points then
 			local _, b = P.PathShape(S, p.bendPts or p.points, L)
 			p.bendUse = b
 		else
@@ -3964,9 +3914,8 @@ function P.Compute(S, L, sndlvl, cfg, srcEnt)
 	if hit then return hit end
 	-- (the inputs' generation as the evaluation starts: storeResult keeps nothing if it moved on meanwhile)
 	-- (numbers, not a table: no garbage per evaluation)
-	local gen0 = A.On(cfg, "cache_gen_guard") and P.cacheGen or nil
+	local gen0, region0 = P.cacheGen, P.regionGen
 	local world0, field0 = P.worldGen, A.Probes and A.Probes.fieldEpoch or 0
-	local region0 = gen0 and P.regionGen or nil
 
 	local r = { S = S, L = L }
 	local walls = P.Walls(S, L, cfg.trans_max_walls, srcEnt, true, cfg)
