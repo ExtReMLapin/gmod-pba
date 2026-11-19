@@ -9,7 +9,7 @@ if A.JitFile then A.JitFile("cl_debug") end -- LuaJIT per file: pba_lua_interp (
 --- The overlay shows where sounds come from through walls (a wallhack): only when the server
 -- allows it (pba_allow_debug), for admins, in single player, or on the demo map.
 function A.DebugAllowed()
-	if (A.cfg.allow_debug or 0) >= 0.5 or game.SinglePlayer() then return true end
+	if A.On(A.cfg, "allow_debug") or game.SinglePlayer() then return true end
 	if A.IsDemoMap and A.IsDemoMap() then return true end
 	local ply = LocalPlayer()
 	return IsValid(ply) and ply:IsAdmin()
@@ -18,7 +18,7 @@ end
 --- Effective debug level: the player's choice, forced to 1 on the demo map, 0 when not allowed.
 function A.DebugLevel()
 	if not A.DebugAllowed() then return 0 end
-	local lvl = A.cfg.debug or 0
+	local lvl = A.Num(A.cfg, "debug")
 	if A.IsDemoMap and A.IsDemoMap() then
 		lvl = A.demoDebugLevel or math.max(lvl, 1) -- the demo's own button (in memory) wins there
 	end
@@ -72,7 +72,7 @@ hook.Add("PostDrawTranslucentRenderables", "pba_debug", function(depth, sky)
 		local age = now - rec.t
 		if age > HOLD then
 			A.debugLive[key] = nil
-		elseif shown < (A.cfg.debug_max or 48) then
+		elseif shown < A.Num(A.cfg, "debug_max") then
 			shown = shown + 1
 			local fade = 1 - age / HOLD
 			local r, S = rec.r, rec.S

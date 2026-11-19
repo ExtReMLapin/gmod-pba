@@ -140,41 +140,24 @@ unread = [n for n in opt_names if not re.match(r"^(dsp_lp\d|lp\d_db)$", n)
 print("%s static: every option is read somewhere (%d options; read nowhere: %s)"
       % ("PASS" if opt_names and not unread else "FAIL", len(opt_names), unread or "none"))
 
-# Static lock (offline only): a fallback `cfg.x or v` gives the option's default (A.CONFIG), so a partial cfg
-# (benches, DRY_SOURCE_CFG) behaves like the full one. FALLBACK_KNOWN lists the fallbacks that differ today
-# (file:option=value): a new one fails, and so does an entry no longer found (the list only shrinks).
-FALLBACK_KNOWN = set("""
-cl_loops.lua:continuous_ramp=0 cl_loops.lua:long_sounds=0 cl_loops.lua:loops=0
-cl_loops.lua:loops_client=0 cl_loops.lua:loops_cpp_client=0 cl_loops.lua:native_quiet_law=0
-cl_loops.lua:native_voice_mix=0 cl_loops.lua:patch_oneshots=0 cl_native.lua:lp_hyst_db=0 cl_native.lua:native_air=0
-cl_native.lua:native_all=0 cl_native.lua:native_dir=0 cl_native.lua:native_doors=0 cl_native.lua:native_doppler=0
-cl_native.lua:native_echo=0 cl_native.lua:native_loud_dry=0 cl_native.lua:native_path_fx=0 cl_native.lua:native_props=0
-cl_native.lua:native_render=0 cl_native.lua:native_reverb_window=0 cl_native.lua:native_room_open_area=0
-cl_native.lua:native_stereo_width=0 cl_native.lua:native_voice_mix=0 cl_probes.lua:group_angle=2
-cl_probes.lua:native_traces=0 cl_probes.lua:probe_skip_links=0 cl_probes.lua:route_pos_straight=0
-cl_render.lua:continuous_ramp=0 cl_render.lua:max_duration=10 cl_render.lua:native_all=0
-cl_render.lua:native_path_fx=0 cl_render.lua:oneshot_follow=0 cl_slicer.lua:far_sliced=0
-cl_streams.lua:continuous_ramp=0 cl_streams.lua:native_gain=0 cl_streams.lua:native_voice_mix=0 cl_streams.lua:streams=0
-cl_streams.lua:streams_filter=0 cl_streams.lua:streams_native=0 cl_demo.lua:native_render=0 sh_acoustics.lua:diffuse=0
-sh_acoustics.lua:trans_lf_bonus=0 sh_config.lua:enable=0 sh_core.lua:loops=0 sh_paths.lua:bend_final=0
-sh_paths.lua:corner_relax=0 sh_paths.lua:diff_freq=1000 sh_paths.lua:diffuse=0 sh_paths.lua:edge_dup_mix=0
-sh_paths.lua:edge_leg_doors=0 sh_paths.lua:group_time=0 sh_paths.lua:lp_hyst_db=0 sh_paths.lua:model_soft_cull=0
-sh_paths.lua:portal_diffuse_db=60 sh_paths.lua:portal_diffuse_lp=4 sh_paths.lua:reeval_adaptive=0
-sh_paths.lua:trans_bundle=0 sh_paths.lua:trans_bundle_edge=0 sh_paths.lua:trans_leaf_fade=0
-sh_paths.lua:trans_pos_clamp=0 sh_paths.lua:trans_route=0 sh_paths.lua:trans_tilt=0 sh_paths.lua:trans_window_soft=0
-sh_paths.lua:wall_merge_graze=0 sh_paths.lua:water_margin=0 sv_loops.lua:long_lipsync=0 sv_loops.lua:long_sounds=0
-sv_loops.lua:loops=0 sv_loops.lua:patch_oneshots=0 sv_loops.lua:phys_loops_muffle=0 sv_sound.lua:far_muffle=0
-sv_sound.lua:sentences=0
-""".split())
-cfg_defaults = {n: float(v) for n, v in re.findall(r"^\t(\w+)\s*=\s*\{\s*(-?[\d.]+)", cfg_src, re.M)}
-fb_seen = set()
-for k, v in srcs.items():
-    for name, val in re.findall(r"\bcfg\.(\w+)\s+or\s+(-?[\d.]+)", v):
-        if cfg_defaults.get(name) != float(val):
-            fb_seen.add("%s:%s=%s" % (k.rsplit("/", 1)[-1], name, val))
-fb_new, fb_stale = sorted(fb_seen - FALLBACK_KNOWN), sorted(FALLBACK_KNOWN - fb_seen)
-print("%s static: cfg fallbacks = the option's default (%d known exceptions; new: %s; gone from the code, drop from the list: %s)"
-      % ("PASS" if not fb_new and not fb_stale else "FAIL", len(FALLBACK_KNOWN), fb_new or "none", fb_stale or "none"))
+# Static lock (offline only): one option reader. An option is read through A.On(cfg, "x") / A.Num(cfg, "x")
+# (sh_config.lua), whose fallback is the default declared in A.CONFIG; a fallback written at the read site
+# (`(cfg or A.cfg).x or 0`, `A.cfg.x or 1`, `cfg["x"] or 2`) is forbidden in the code of lua/ (comments aside):
+# 97 of them did not equal the option's default (55 were `or 0` on an option at 1), a switch upside down for any
+# partial cfg. The pattern is checked against planted reads first, so the lock cannot pass by matching nothing.
+FALLBACK_RE = re.compile(r"(?:(?<![\w.])cfg|(?<![\w.])(?:A|pba)\.cfg)\s*\)?\s*(?:\.\s*\w+|\[\s*[\"'][^\"']+[\"']\s*\])\s+or\s+-?\.?\d")
+fb_probe = ['local a = ((cfg or A.cfg).loops or 0) >= 0.5', 'x = A.cfg.max_paths or 3', 'f(cfg.diffuse or 1)',
+            'y = pba.cfg["water_db"] or 12', 'z = (cfg or pba.cfg).diff_freq or .5']
+fb_clean = ['local a = A.On(cfg, "loops")', 'x = A.Num(A.cfg, "max_paths")', 'y = (r.e and v * A.cfg.native_gain) or 0',
+            'local myscfg = t.cfg2 or 0']
+fb_probe_ok = all(FALLBACK_RE.search(s) for s in fb_probe) and not any(FALLBACK_RE.search(s) for s in fb_clean)
+fb_seen = []
+for k, v in sorted(srcs.items()):
+    for i, ln in enumerate(v.splitlines(), 1):
+        if FALLBACK_RE.search(ln.split("--", 1)[0]):
+            fb_seen.append("%s:%d" % (k.rsplit("/", 1)[-1], i))
+print("%s static: options read only through A.On / A.Num, no fallback at the read site (pattern catches its probes: %s; reads with a fallback: %s)"
+      % ("PASS" if fb_probe_ok and not fb_seen else "FAIL", fb_probe_ok, fb_seen or "none"))
 
 # Static lock (offline only): the upper bound of a long sound (1800 s) is written in one place only:
 # A.LongDuration (sh_core.lua).

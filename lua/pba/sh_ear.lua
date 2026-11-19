@@ -96,7 +96,7 @@ if SERVER then
 
 	--- The view `ply`'s client reported, when it is fresh and the option is on; nil = use the model.
 	function A.ReportedEar(ply)
-		if (A.cfg.ear_report or 1) < 0.5 then return nil end
+		if A.Num(A.cfg, "ear_report") < 0.5 then return nil end
 		local s = A.pstate[ply]
 		if not s or not s.ear or RealTime() - (s.earT or 0) > STALE then return nil end
 		track(ply, s) -- (a jump since the last tick: the caller may run before the next Think)
@@ -121,7 +121,7 @@ end)
 local function tick()
 	local lp = LocalPlayer()
 	if not IsValid(lp) then return end
-	if (A.cfg.ear_report or 1) < 0.5 then
+	if A.Num(A.cfg, "ear_report") < 0.5 then
 		if sent then sent = false net.Start(NET) net.WriteBool(false) net.SendToServer() end
 		return
 	end

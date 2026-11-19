@@ -35,7 +35,7 @@ A.LineKey = lineKey
 A.speechT = A.speechT or {} -- file key -> RealTime() its speech caption arrived
 local SPEECH_CAP_S = 1
 local function isSpeech(key, t0)
-	if (A.cfg.handback_speech or 1) < 0.5 then return true end
+	if A.Num(A.cfg, "handback_speech") < 0.5 then return true end
 	if string.find(key, "null.wav", 1, true) then return false end -- (common/null.wav: silence)
 	local c = A.speechT[key]
 	if c and c >= t0 - SPEECH_CAP_S then return true end
@@ -74,7 +74,7 @@ end
 -- decoding for the module): the verdict waits for it, up to DECODE_WAIT_S (pba_loops_decode_wait).
 local DECODE_WAIT_S, DECODE_POLL_S = 5, 0.05
 function A.WatchLine(name, lag, why, handback, idx, chan, busy)
-	if (A.cfg.silent_handback or 1) < 0.5 or not name then return end
+	if A.Num(A.cfg, "silent_handback") < 0.5 or not name then return end
 	local t0, key = RealTime(), lineKey(name)
 	local w
 	if idx and idx > 0 and A.ReplacingChannel(chan) then
@@ -87,20 +87,20 @@ function A.WatchLine(name, lag, why, handback, idx, chan, busy)
 		-- a line whose file the module is still decoding is not silent: it starts once decoded (LP.StartDecoded).
 		-- Handed back meanwhile, the engine played it instead (d3_c17_12's 1.4 MB 'rockets' line: its decode on a
 		-- worker thread outlasted HANDBACK_S, and the mirror only retried at its next update round)
-		if busy and (A.cfg.loops_decode_wait or 1) >= 0.5 and RealTime() - t0 < DECODE_WAIT_S and busy() then
+		if busy and A.On(A.cfg, "loops_decode_wait") and RealTime() - t0 < DECODE_WAIT_S and busy() then
 			timer.Simple(DECODE_POLL_S, check)
 			return
 		end
 		if w then
 			local list = A.watchedLines[idx]
 			if list then list[w] = nil if next(list) == nil then A.watchedLines[idx] = nil end end
-			if w.cut and (A.cfg.handback_channel or 1) >= 0.5 then return end -- (replaced or stopped: over)
+			if w.cut and A.On(A.cfg, "handback_channel") then return end -- (replaced or stopped: over)
 		end
 		local t = A.renderedT[key]
 		if t and t >= t0 - 0.05 then return end
 		local q = A.silentT[key]
-		if q and q >= t0 - 0.05 and (A.cfg.handback_quiet or 1) >= 0.5 then return end -- (inaudible on purpose)
-		if (A.cfg.silent_handback or 1) < 0.5 or not isSpeech(key, t0) then return end
+		if q and q >= t0 - 0.05 and A.On(A.cfg, "handback_quiet") then return end -- (inaudible on purpose)
+		if A.Num(A.cfg, "silent_handback") < 0.5 or not isSpeech(key, t0) then return end
 		local ok = handback()
 		if ok == false then return end -- (stopped meanwhile: nothing to give back)
 		MsgN("[PBA] silent line handed back to the engine: ", name, " (", why, ")")
@@ -208,7 +208,7 @@ LP.CPP_PATCHES = {
 
 --- True when `name` on client entity e is one of the C++ patches of its class.
 local function cppPatch(e, name)
-	if (A.cfg.loops_cpp_client or 0) < 0.5 then return false end
+	if A.Num(A.cfg, "loops_cpp_client") < 0.5 then return false end
 	local files = LP.CPP_PATCHES[e:GetClass()]
 	return files ~= nil and files[string.lower(A.SoundFile(name))] == true
 end
@@ -217,7 +217,7 @@ end
 --- True when the C++ loops of client entity e have ended with its death (pba_loops_cpp_death): an NPC at
 --- 0 health or below (the health is networked; the engine-off state is not readable on the client).
 local function cppDead(e)
-	return (A.cfg.loops_cpp_death or 1) >= 0.5 and e:IsNPC() and e:Health() <= 0
+	return A.On(A.cfg, "loops_cpp_death") and e:IsNPC() and e:Health() <= 0
 end
 
 local function foreignPatch(e, name)
@@ -225,7 +225,7 @@ local function foreignPatch(e, name)
 	local i = p and LP.patchInfo[p]
 	if i and i.ent == e and i.name == name then return p end
 	-- a finished patch altered a moment ago: the engine starts it again (pba_patch_restart)
-	if (A.cfg.patch_restart or 1) < 0.5 then return end
+	if A.Num(A.cfg, "patch_restart") < 0.5 then return end
 	local key = e:EntIndex() .. "|" .. name
 	local r = LP.restarts[key]
 	if r and RealTime() - r.t < 1 and LP.finished[r.p] then
@@ -263,8 +263,8 @@ local apply
 -- ~2.4k u at level 60, where 1/r is still at -35 dB) stopped the path search of loops still well heard.
 local function quietFor(m, d)
 	local N = A.Native
-	if m.nativeId and N and (A.cfg.native_quiet_law or 0) >= 0.5 then
-		local q = A.cfg.quiet_db or -40
+	if m.nativeId and N and A.On(A.cfg, "native_quiet_law") then
+		local q = A.Num(A.cfg, "quiet_db")
 		if q <= -100 then return false end
 		return (m.edgeK and m.srvVol or m.vol or 1) * N.PhysClear(m.lvl, math.max(d, 1)) < 10 ^ (q / 20)
 	end
@@ -278,14 +278,14 @@ end
 -- or walking away past the quiet threshold), up to +20 dB over its law at 5000 u (sweep louder_vanilla).
 local function followQuiet(m, S, L)
 	local N, e = A.Native, m.lastEval
-	if not (e and N and (A.cfg.native_quiet_law or 0) >= 0.5) then return end
+	if not (e and N and A.On(A.cfg, "native_quiet_law")) then return end
 	if m.clearPath and IsValid(m.ent) then return end -- in clear sight: LP.FollowNative moves it every frame
 	local k = N.PhysClear(m.lvl, S:Distance(L)) / math.max(N.PhysClear(m.lvl, e.d), 1e-9)
 	local gain, send = e.gain * k, e.send * k
 	local el, em, eh, pos, pitch = e.el, e.em, e.eh, e.pos, e.pitch
-	if m.ramp and (A.cfg.continuous_ramp or 0) >= 0.5 then
+	if m.ramp and A.On(A.cfg, "continuous_ramp") then
 		local P, now = A.Paths, RealTime()
-		P.RampTo(m.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, gain, el, em, eh, pos, pitch)
+		P.RampTo(m.ramp, now, math.max(A.Num(A.cfg, "update_interval"), 0.05), L, gain, el, em, eh, pos, pitch)
 		gain, el, em, eh, pos, pitch = P.RampAt(m.ramp, now, L)
 	end
 	if not pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, send) then m.nativeId = nil end
@@ -308,12 +308,12 @@ end
 local function changeNow(m, vol)
 	if not m.nativeId then return false end
 	local kv, kp = 1, 1
-	if vol or (A.cfg.native_vol_now or 1) >= 0.5 then
+	if vol or A.On(A.cfg, "native_vol_now") then
 		local old, new = m.appliedVol, m.vol
 		if old and new and old ~= new and old > 1e-6 then kv = new / old m.appliedVol = new end
 	end
 	local pitched = false
-	if (A.cfg.native_pitch_now or 1) >= 0.5 then
+	if A.On(A.cfg, "native_pitch_now") then
 		local old, new = m.appliedPitch, m.pitch
 		if old and new and old ~= new and old > 1e-6 then kp = new / old m.appliedPitch = new pitched = true end
 	end
@@ -374,7 +374,7 @@ end
 -- corridor whose share moves 0.39 <-> 0.41 as the listener steps keeps one preset instead of switching
 -- at every update. m.tunnel: the choice heard so far (nil: none yet).
 local function holdTunnel(m, share)
-	m.tunnel = AC.DiffuseHold(share or 0, m.tunnel, A.cfg.diffuse_dsp_hyst or 0.05)
+	m.tunnel = AC.DiffuseHold(share or 0, m.tunnel, A.Num(A.cfg, "diffuse_dsp_hyst"))
 	return m.tunnel
 end
 
@@ -393,7 +393,7 @@ local function muffle(m, S, L)
 	if not r then return nil end
 	if r.far then
 		m.tunnel = false
-		if (A.cfg.keep_dsp or 1) >= 0.5 and (m.dsp or 0) ~= 0 then return r.gain, m.dsp end
+		if A.On(A.cfg, "keep_dsp") and (m.dsp or 0) ~= 0 then return r.gain, m.dsp end
 		return r.gain, r.dsp
 	end
 	A.DebugNote("loop:" .. m.key, S, L, r, m.name, "loop")
@@ -402,7 +402,7 @@ local function muffle(m, S, L)
 	local p, best, dp = 0, r.voices[1], 0
 	-- pba_native_voice_mix (continuity review C2): the preset from the voices' spectrum mixed by energy, as a
 	-- native voice's (N.MixVoices), not the first voice's level: two voices swapping order switched the preset
-	local mix, tilts = (A.cfg.native_voice_mix or 0) >= 0.5 and #r.voices > 1, {}
+	local mix, tilts = A.On(A.cfg, "native_voice_mix") and #r.voices > 1, {}
 	for _, v in ipairs(r.voices) do
 		p, dp = p + v.gain * v.gain, dp + (v.diffuse or 0) * v.gain * v.gain
 		if mix then tilts[#tilts + 1] = v.gain * v.gain tilts[#tilts + 1] = v.lpDb or AC.LevelDb(v.lp or 0) end
@@ -411,7 +411,7 @@ local function muffle(m, S, L)
 	local tunnel = holdTunnel(m, dp / math.max(p, 1e-12))
 	local g = math.sqrt(p) / math.max(AC.EngineGain(S:Distance(L), m.lvl), 1e-6)
 	-- the sound's own preset (radio, speaker) is kept (pba_keep_dsp): muffled by volume only
-	if (A.cfg.keep_dsp or 1) >= 0.5 and (m.dsp or 0) ~= 0 then return math.min(g, 1), m.dsp end
+	if A.On(A.cfg, "keep_dsp") and (m.dsp or 0) ~= 0 then return math.min(g, 1), m.dsp end
 	return math.min(g, 1), presetFor(lp, tunnel)
 end
 
@@ -481,12 +481,12 @@ end
 MIRROR.native = {}
 function MIRROR.native.update(m, S, L, gain, el, em, eh, pos, pitch, send)
 	local N = A.Native
-	if (A.cfg.continuous_ramp or 0) >= 0.5 then
+	if A.On(A.cfg, "continuous_ramp") then
 		-- glide to the new values over one interval (LP.FollowNative, every frame); the update
 		-- below sends what is heard now (unchanged) and checks the voice is still alive
 		local P, now = A.Paths, RealTime()
 		m.ramp = m.ramp or {}
-		P.RampTo(m.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, gain, el, em, eh, pos, pitch)
+		P.RampTo(m.ramp, now, math.max(A.Num(A.cfg, "update_interval"), 0.05), L, gain, el, em, eh, pos, pitch)
 		gain, el, em, eh, pos, pitch = P.RampAt(m.ramp, now, L)
 	else
 		m.ramp = nil
@@ -508,7 +508,7 @@ end
 LP.emissions = LP.emissions or {}
 A.CopySync = A.CopySync or {}
 function A.CopySync.Offset(key, z, name, pitch, max)
-	if not key or (A.cfg.loops_start_sync or 1) < 0.5 then return nil end
+	if not key or A.Num(A.cfg, "loops_start_sync") < 0.5 then return nil end
 	local g = LP.emissions[key]
 	if not g then return nil end
 	local off = z - g.t + g.off
@@ -560,7 +560,7 @@ end
 -- gone or the line is about over.
 function LP.EarlyRelease(m)
 	local e = m.early
-	if not (e and e.muted) or (A.cfg.early_release or 1) < 0.5 then return end
+	if not (e and e.muted) or A.Num(A.cfg, "early_release") < 0.5 then return end
 	-- (an entity the client saw and lost was removed; one never seen here, out of its view, is the engine copy's by index)
 	if RealTime() >= e.tEnd - 0.25 or (m.seen and not IsValid(m.ent)) then return end
 	earlyEngineVolume(m, e.ev)
@@ -577,7 +577,7 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 			-- decoding: wait for it (no engine fallback meanwhile); pba_loops_decode_wait: started the frame its
 			-- decode ends (LP.StartDecoded), not at the mirror's next update round (up to update_interval later)
 			m.decoding = true
-			if (A.cfg.loops_decode_wait or 1) >= 0.5 then LP.decoding[m] = true end
+			if A.On(A.cfg, "loops_decode_wait") then LP.decoding[m] = true end
 			return nil
 		end
 		m.decoding = nil
@@ -615,13 +615,13 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 	end
 	-- (pba_loops_native_fail: a voice the module could not start leaves the line to the engine patch below;
 	-- marked started, a long line was then dropped there as "already played": captioned, never heard)
-	if (id or 0) > 0 or (A.cfg.loops_native_fail or 1) < 0.5 then m.started = true end
+	if (id or 0) > 0 or A.Num(A.cfg, "loops_native_fail") < 0.5 then m.started = true end
 	m.nativeId = (id or 0) > 0 and id or nil
 	if m.nativeId then A.NoteRendered(m.name, gain) end
 	if m.nativeId and m.edgeK and not m.edgeT0 then m.edgeT0 = RealTime() end -- (pba_loops_edge_fade: from its first sample)
 	m.stSel, m.stW = nil, nil
 	-- a one-shot whose voice started late (its file decoding): it ends with its file from now (onceEnded)
-	if m.nativeId and m.once and m.endT and (A.cfg.loops_once_end or 1) >= 0.5 then
+	if m.nativeId and m.once and m.endT and A.On(A.cfg, "loops_once_end") then
 		local e = A.PlayEnd(m.name, m.pitch, offset and t0 - offset or nil, A.END_GRACE)
 		if e then m.endT = offset and e or math.max(m.endT, e) end
 	end
@@ -633,12 +633,12 @@ function MIRROR.native.start(m, S, L, gain, el, em, eh, pos, pitch, send, trans)
 		-- a voice with its slot from birth feeds the room bus only what enters through walls, as a short voice
 		-- (cl_render switchNative / N.PlayVoice): the slot fade starting from "no slot" sent the full gain to the
 		-- listener's room for its first ~0.5 s (Breencast br_welcome05: 0.28 against 0.012; pba_loops_slot_birth)
-		if m.srcBound and (A.cfg.loops_slot_birth or 1) >= 0.5 then m.slotW, m.slotT = 0, RealTime() end
+		if m.srcBound and A.On(A.cfg, "loops_slot_birth") then m.slotW, m.slotT = 0, RealTime() end
 		if m.srcBound then pba_native.Update(m.nativeId, pos, gain, el, em, eh, pitch, m.diffuse or 0, (trans or 0) * m.vol * A.cfg.native_gain * N.LoudWet(m.lvl)) end
 	end
 	-- a new voice starts at its target: the next ramp starts from there
 	m.ramp = nil
-	if m.nativeId and (A.cfg.continuous_ramp or 0) >= 0.5 then
+	if m.nativeId and A.On(A.cfg, "continuous_ramp") then
 		m.ramp = {}
 		A.Paths.RampTo(m.ramp, RealTime(), 0, L, gain, el, em, eh, pos, pitch)
 	end
@@ -654,14 +654,14 @@ end
 local function onceEnded(m)
 	if not m.once then return false end
 	if m.patch then return not m.patch:IsPlaying() or (m.endT ~= nil and RealTime() > m.endT) end
-	return m.nativeId ~= nil and m.endT ~= nil and (A.cfg.loops_once_end or 1) >= 0.5 and RealTime() > m.endT
+	return m.nativeId ~= nil and m.endT ~= nil and A.On(A.cfg, "loops_once_end") and RealTime() > m.endT
 end
 
 --- The mirror's own DSP preset keeps it on an engine patch (A.OwnDSP, pba_keep_dsp). A speaker's preset is not
 -- the sound's own: sv_loops writes dsp_speaker for the SND_SPEAKER flag a patch cannot carry, and the module
 -- renders that flag with N.SPEAKER_EQ, as the short speaker lines (pba_loops_speaker_native).
 local function ownDSP(m)
-	if m.speakerDsp and (A.cfg.loops_speaker_native or 1) >= 0.5 then return false end
+	if m.speakerDsp and A.On(A.cfg, "loops_speaker_native") then return false end
 	return A.OwnDSP(m.dsp)
 end
 
@@ -680,7 +680,7 @@ function apply(m, fade)
 		-- not networked (yet?): after a grace period, fall back to an anchor at the position
 		m.waited = (m.waited or 0) + 1
 		local wait
-		if m.born and (A.cfg.loops_start_sync or 1) >= 0.5 then wait = RealTime() - m.born < ENT_GRACE_S else wait = m.waited < 3 end
+		if m.born and A.On(A.cfg, "loops_start_sync") then wait = RealTime() - m.born < ENT_GRACE_S else wait = m.waited < 3 end
 		if wait and m.idx ~= 0 and not m.handBack then return end
 		ent = anchorFor(m)
 		if not ent then return end
@@ -704,7 +704,7 @@ function apply(m, fade)
 	-- completed (MIRROR.native.start: "a long one-shot that ended"): sweep 2026-11-14, a 0.54 s file alive 3.5 s,
 	-- a 7.2 s one 10.3 s. Dropped at once, its job with it (pba_loops_once_gone). Not a mirror handed back to the
 	-- engine (handBack: its patch plays it from its top), nor one not started yet (file decoding).
-	if m.once and m.started and not m.nativeId and not m.patch and not m.handBack and (A.cfg.loops_once_gone or 1) >= 0.5 then
+	if m.once and m.started and not m.nativeId and not m.patch and not m.handBack and A.On(A.cfg, "loops_once_gone") then
 		if A.Slicer then A.Slicer.Drop(m) end
 		m.done = true
 		return
@@ -787,7 +787,7 @@ end
 -- (refactor step 8: one switch for the ducker, pba_native_duck, which also gated the short sounds' notes;
 -- the long lines had their own, pba_long_duck, merged into it).
 local function noteDuck(name, pos, lvl, vol, chan, e, idx, pitch)
-	if (A.cfg.native_duck or 1) < 0.5 or not (A.Mix and A.Mix.NoteSound) then return end
+	if A.Num(A.cfg, "native_duck") < 0.5 or not (A.Mix and A.Mix.NoteSound) then return end
 	A.Mix.NoteSound({ SoundName = name, Pos = pos, SoundLevel = lvl, Volume = vol, Channel = chan, Entity = e,
 		EntIndex = idx }, A.ListenerPos(), A.PlaySeconds(name, pitch) or 0)
 end
@@ -821,11 +821,11 @@ function LP.HandleClient(data)
 	local key = "cl:" .. idx .. ":" .. chan .. ":" .. name
 	local m = LP.mirrors[key]
 	-- a client loop (CSoundPatch:Play arrives as a SND_CHANGE_VOL that starts the sound)
-	local loop = not m and (A.cfg.loops_client or 0) >= 0.5 and (A.cfg.loops or 0) >= 0.5 and A.IsLooping(name)
+	local loop = not m and A.On(A.cfg, "loops_client") and A.On(A.cfg, "loops") and A.IsLooping(name)
 	-- a client patch on a file without loop points (pba_patch_oneshots): its Play starts it once, for its
 	-- length; neither a loop nor an eligible one-shot (a change flag), it crossed every wall
-	local once = not m and not loop and change and (A.cfg.patch_oneshots or 0) >= 0.5 and (A.cfg.loops or 0) >= 0.5
-		and (A.cfg.loops_client or 0) >= 0.5 and not A.IsLooping(name)
+	local once = not m and not loop and change and A.On(A.cfg, "patch_oneshots") and A.On(A.cfg, "loops")
+		and A.On(A.cfg, "loops_client") and not A.IsLooping(name)
 	local src = (loop or once) and foreignPatch(e, name)
 	if src then LP.finished[src] = nil end -- (restarted: followed again)
 	local cpp = loop and not src and cppPatch(e, name)
@@ -833,7 +833,7 @@ function LP.HandleClient(data)
 	-- a loaded save: the engine hands the client the entity's C++ loop twice, the patch it restored (ResumeSound,
 	-- channel 0: the channel is not saved) and the one the entity makes anew (its own channel). One sound, one
 	-- mirror: the restored copy is swallowed (or its mirror replaced by the entity's own), never played at once.
-	if cpp and (A.cfg.patch_restore_dedupe or 1) >= 0.5 then
+	if cpp and A.On(A.cfg, "patch_restore_dedupe") then
 		for k, x in pairs(LP.mirrors) do
 			if x.client and x.cpp and x.idx == idx and x.name == name and x.chan ~= chan then
 				if chan == CHAN_AUTO then return true end
@@ -869,14 +869,14 @@ function LP.HandleClient(data)
 			if not A.LongDuration(dur, 0) then return false end
 		end
 	else
-		if (A.cfg.loops or 0) < 0.5 or (A.cfg.long_sounds or 0) < 0.5 or A.IsLooping(name) then return false end
+		if A.Num(A.cfg, "loops") < 0.5 or A.Num(A.cfg, "long_sounds") < 0.5 or A.IsLooping(name) then return false end
 		if not A.SoundTimeTaken(data, true) then return false end
 		local dur = A.SoundDuration(name) or 0
 		if not A.LongDuration(dur) then return false end
 	end
 	local n = 0
 	for _, x in pairs(LP.mirrors) do if x.client then n = n + 1 end end
-	if n >= (A.cfg.loops_max_cl or 32) then return false end -- cap: left to the engine
+	if n >= A.Num(A.cfg, "loops_max_cl") then return false end -- cap: left to the engine
 	m = { key = key, name = name, idx = idx, chan = chan, flags = flags, pos = data.Pos or e:WorldSpaceCenter(), lvl = lvl,
 		dsp = data.DSP or 0, once = not ((src or cpp) and not once), client = true, ent = e, vol = data.Volume or 1, pitch = data.Pitch or 100,
 		src = src and setmetatable({ src }, { __mode = "v" }) or nil, cpp = cpp or nil }
@@ -903,15 +903,15 @@ LP.silenced = LP.silenced or {}
 function LP.TakeEarly(d)
 	local N = A.Native
 	local name = d.SoundName
-	if (A.cfg.early_line_takeover or 1) < 0.5 or not (N and N.EarlyVerdict) or not name then return "off" end
+	if A.Num(A.cfg, "early_line_takeover") < 0.5 or not (N and N.EarlyVerdict) or not name then return "off" end
 	local secs = A.PlaySeconds(name, d.Pitch)
 	if not secs then return "length" end
 	local now = RealTime()
 	local t0 = now - (d.elapsed or 0)
 	local caps = pba_native and pba_native.caps
 	local on = N.render and A.Enabled() and pba_native.Play ~= nil and A.Render.NativeOK(name, d.DSP)
-	local allNative = (A.cfg.native_all or 1) >= 0.5
-	local rules = (A.cfg.early_line_rules or 1) >= 0.5
+	local allNative = A.On(A.cfg, "native_all")
+	local rules = A.On(A.cfg, "early_line_rules")
 	-- (pba_early_line_rules) a line this client could not take yet reaches it marked blocked whatever its verdict: in
 	-- clear sight (no wall on the straight line, the server's own far-muffle test) and with pba_native_all 0 it is
 	-- the engine's, as every clear sound then (review M8: the module took it)
@@ -1021,7 +1021,7 @@ net.Receive("pba_loop", function()
 	if op == OP_START and m then stopMirror(m) m = nil end
 	-- a change of a long one-shot whose mirror already ended here: it must not start it again from its top
 	-- (the server keeps the line until its own end time, a little later)
-	if not m and once and op == OP_UPDATE and (A.cfg.loops_once_end or 1) >= 0.5 then return end
+	if not m and once and op == OP_UPDATE and A.On(A.cfg, "loops_once_end") then return end
 	local new = not m
 	if not m then
 		m = { key = key, name = name, idx = idx, chan = chan, flags = d.Flags, pos = pos, lvl = lvl, dsp = dsp, once = once, speaker = speaker or nil,
@@ -1036,13 +1036,13 @@ net.Receive("pba_loop", function()
 		-- its end: the file's length at its start pitch (onceEnded). Without it a server long one-shot's
 		-- engine patch, which reads "playing" long after its file ended, lived on for good, and the next
 		-- volume change replayed it from the top (the Breencast looping, d1_trainstation_02, 2026-11-13)
-		if once and (A.cfg.loops_once_end or 1) >= 0.5 then m.endT = A.PlayEnd(name, pitch, nil, A.END_GRACE) end
+		if once and A.On(A.cfg, "loops_once_end") then m.endT = A.PlayEnd(name, pitch, nil, A.END_GRACE) end
 		LP.mirrors[key] = m
 	end
 	m.ent = idx ~= 0 and Entity(idx) or nil
 	if sid ~= 0 then LP.byId[sid] = m end
 	-- a loop joined midway, rendered by the module: faded in (pba_loops_edge_fade)
-	if new and joined and not once and (A.cfg.loops_edge_fade or 1) > 0 and A.Native and A.Native.render and A.Enabled()
+	if new and joined and not once and A.Num(A.cfg, "loops_edge_fade") > 0 and A.Native and A.Native.render and A.Enabled()
 		and LP.NearEdge(pos, lvl) then
 		m.edgeK = LP.EDGE_FLOOR
 	end
@@ -1061,7 +1061,7 @@ net.Receive("pba_loop", function()
 	apply(m, 0)
 	-- a source the client does not know: its wait is a tenth of a second (ENT_GRACE_S), taken here and not at its next
 	-- evaluation turn (up to 0.25 s later, staggered between the mirrors: the copies of one emission started apart)
-	if new and m.once and m.born and (A.cfg.loops_start_sync or 1) >= 0.5 and not m.nativeId and not m.patch and not m.done then
+	if new and m.once and m.born and A.On(A.cfg, "loops_start_sync") and not m.nativeId and not m.patch and not m.done then
 		timer.Simple(A.RealDelay(ENT_GRACE_S + 0.01), function()
 			if LP.mirrors[m.key] == m and not m.done and not m.nativeId and not m.patch and not m.handBack and not m.decoding then apply(m, 0) end
 		end)
@@ -1112,7 +1112,7 @@ LP.EDGE_FLOOR = 1e-3
 -- and a machine beside a player who spawned there was faded in from -60 dB (review M6). 0: every join faded.
 local EDGE_NEAR = 0.8
 function LP.NearEdge(S, lvl)
-	if (A.cfg.loops_edge_fade_near or 1) < 0.5 then return true end
+	if A.Num(A.cfg, "loops_edge_fade_near") < 0.5 then return true end
 	local L = A.ListenerPos()
 	if not (L and S and lvl) then return true end
 	local r = A.AudibleRadius(lvl) * EDGE_NEAR
@@ -1125,7 +1125,7 @@ local function edgeFade(now)
 	local N = A.Native
 	for _, m in pairs(LP.mirrors) do
 		if m.edgeK and not m.done then
-			local T = A.cfg.loops_edge_fade or 1
+			local T = A.Num(A.cfg, "loops_edge_fade")
 			if m.patch then
 				-- an engine patch after all (its file not for the module): the engine fades it
 				m.edgeK, m.vol = nil, m.srvVol
@@ -1137,7 +1137,7 @@ local function edgeFade(now)
 				m.edgeK = k
 				m.vol = (m.srvVol or 1) * k
 				-- (pba_loops_edge_fade_direct: whatever pba_native_vol_now, which left the voice at the floor until an evaluation)
-				changeNow(m, (A.cfg.loops_edge_fade_direct or 1) >= 0.5) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
+				changeNow(m, A.On(A.cfg, "loops_edge_fade_direct")) -- (the voice's gain, sends, ramp and last evaluation scaled with it)
 				-- its source reverb slot's feed at once, not at its 0.3 s rebinding
 				if m.srcBound and N then
 					local S = IsValid(m.ent) and m.ent:WorldSpaceCenter() or m.pos
@@ -1153,7 +1153,7 @@ end
 -- evaluation's Update does (its once_gone / handback / early release then follow). Before, the answer was dropped and a
 -- still scene kept a dead id until an evaluation came.
 local function followDead(m, alive)
-	if not alive and (A.cfg.loops_follow_dead or 1) >= 0.5 then m.nativeId = nil end
+	if not alive and A.On(A.cfg, "loops_follow_dead") then m.nativeId = nil end
 end
 
 function LP.FollowNative(L)
@@ -1225,8 +1225,8 @@ function LP.Tick()
 	local now = RealTime()
 	local dt = lastT and math.min(now - lastT, 0.5) or 0
 	lastT = now
-	local interval = math.max(A.cfg.update_interval or 0.25, 0.05)
-	if (A.cfg.loops_stagger or 1) < 0.5 then
+	local interval = math.max(A.Num(A.cfg, "update_interval"), 0.05)
+	if A.Num(A.cfg, "loops_stagger") < 0.5 then
 		acc = acc + dt
 		if acc < interval then return false end
 		acc = 0

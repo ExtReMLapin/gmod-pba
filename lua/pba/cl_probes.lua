@@ -103,7 +103,7 @@ local function ntHullN(t)
 	local bx, by, bz = t.maxs:Unpack()
 	return fillNums(t.output, NTN(sx, sy, sz, ex, ey, ez, t.mask, ax, ay, az, bx, by, bz))
 end
-local function numsOn() return NTN and (A.cfg.native_trace_nums or 1) >= 0.5 end
+local function numsOn() return NTN and A.On(A.cfg, "native_trace_nums") end
 
 -- Whether the native result differs from util's on what the probe code reads.
 local function nativeDiffers(t, f, ss, as, _, _, fls, surf, sflags)
@@ -171,7 +171,7 @@ function PR.NativeCheckN(T, segs)
 end
 
 local function nativeTraces()
-	if (A.cfg.native_traces or 0) < 0.5 then return false end
+	if A.Num(A.cfg, "native_traces") < 0.5 then return false end
 	if NT ~= nil then return NT end
 	if not ntSegs then return false end
 	NT, NTN = false, false
@@ -574,7 +574,7 @@ function PR.BuildCo(seeds, s, budgetFn, bounds)
 		end
 		return c, colIds[ck]
 	end
-	local skipLinks = (A.cfg.probe_skip_links or 0) >= 0.5
+	local skipLinks = A.On(A.cfg, "probe_skip_links")
 	local queue, qh, truncated = {}, 1, false
 	local function node(i, j, k)
 		local c, ids = column(i, j)
@@ -761,7 +761,7 @@ function PR.Deserialize(text, hash, spacing)
 	if not text then return nil end
 	local nl = string.find(text, "\n", 1, true)
 	local head = util.JSONToTable(nl and string.sub(text, 1, nl - 1) or text)
-	if not head or head.v ~= CACHE_VERSION + (((A.cfg.probe_skip_links or 0) >= 0.5) and 0.5 or 0) or (hash and head.hash ~= hash) then return nil end
+	if not head or head.v ~= CACHE_VERSION + ((A.On(A.cfg, "probe_skip_links")) and 0.5 or 0) or (hash and head.hash ~= hash) then return nil end
 	local want = tonumber(head.want) or tonumber(head.spacing)
 	if spacing and not (want and abs(want - spacing) < 1e-3) then return nil end
 	local s = tonumber(head.spacing)
@@ -1257,7 +1257,7 @@ function PR.StateSig(g)
 	local function mix(v) acc = (acc * 31 + v) % 2147483647 end
 	local D = A.Doors
 	if D and D.byEnt then
-		if (A.cfg.state_sig_sorted or 1) >= 0.5 then
+		if A.On(A.cfg, "state_sig_sorted") then
 			-- pba_state_sig_sorted: the doors in index order. The mix is not commutative, and pairs() walks the same
 			-- states in another order once the table was rehashed (a door gone and back, one more door then one less):
 			-- the signature changed with no state changed, and the link costs, the door fields and the far jobs were
@@ -1301,7 +1301,7 @@ function PR.LinkCosts(g, yield)
 	local AC = A.AC
 	local cfg = A.cfg
 	local rate = A.Paths.DOOR_UNITS_PER_DB or 40
-	local closedDef = cfg.door_closed_db or 28
+	local closedDef = A.Num(cfg, "door_closed_db")
 	local db = {}
 	local D = A.Doors
 	local k = 0
@@ -1606,7 +1606,7 @@ function PR.AdvanceDoorFields()
 		end)
 		PR.doorFieldJob = job
 	end
-	PR.doorFieldDeadline = SysTime() + (A.cfg.probe_field_ms or 1) / 1000
+	PR.doorFieldDeadline = SysTime() + A.Num(A.cfg, "probe_field_ms") / 1000
 	local ok, res = coroutine.resume(job.co)
 	if not ok then
 		PR.doorFieldJob = nil
@@ -1623,7 +1623,7 @@ function PR.AdvanceDoorFields()
 		-- pba_door_field_invalidate: the paths worked out on the old field (a door just closed: still the way through
 		-- it) were kept for cache_ttl, and a loop re-evaluated at the door's change kept them for reeval_max_s (its
 		-- state's generation unchanged): the closed door still heard through for 1-2 s, then the switch
-		if (A.cfg.door_field_invalidate or 1) >= 0.5 then A.Paths.InvalidateCache() end
+		if A.On(A.cfg, "door_field_invalidate") then A.Paths.InvalidateCache() end
 	end
 end
 hook.Add("Think", "pba_probes_door_field", function() PR.AdvanceDoorFields() end)
@@ -1996,14 +1996,14 @@ end
 --- The group guard of a sound for this evaluation (nil: pba_group off or the sound is not far), a function of
 -- a start probe: whether its arrival may be shared.
 local function groupGuard(S, L, cfg, srcEnt)
-	if (cfg.group or 0) < 0.5 then return nil end
+	if A.Num(cfg, "group") < 0.5 then return nil end
 	local d = S:Distance(L)
-	if d < (cfg.group_min_dist or 1000) then return nil end
+	if d < A.Num(cfg, "group_min_dist") then return nil end
 	local P = A.Paths
 	local lineS = string.sub(P.LineState(S, L, srcEnt), 1, 1)
 	if lineS == "c" then return nil end
 	local st = IsValid(srcEnt) and PR.groupState[srcEnt] or nil
-	local deg = cfg.group_angle or 2
+	local deg = A.Num(cfg, "group_angle")
 	local cosMax = math.cos(math.rad(st and st.shared and deg or deg * GROUP_ENTER))
 	local u = (S - L) / d
 	local any = false
@@ -2113,7 +2113,7 @@ function PR.RouteHeardPos(p, pulled, S, L, cfg)
 	-- opening it goes through), not at the source: at the source, the listener-room send took the
 	-- source's own level as what enters the listener's space (rp_downtown's doorway: 12.5 dB in 4 u, the
 	-- route toggling between a corner at the jamb and none), and the direction swung by up to 177 deg
-	if #pulled >= 3 and (cfg.route_pos_straight or 0) >= 0.5 and p.pos and p.pos:DistToSqr(S) < 1 then
+	if #pulled >= 3 and A.On(cfg, "route_pos_straight") and p.pos and p.pos:DistToSqr(S) < 1 then
 		local v, ab = pulled[#pulled - 1], L - S
 		-- (its doorway's leaf when it has one: the vertex may be a probe deep in a room)
 		local ent = PR.HeardLeaf(p.leaves, S, L)
@@ -2196,7 +2196,7 @@ local function altBranches(f, n, L)
 	end)
 	local out, roots = {}, {}
 	f.altPulled = f.altPulled or {}
-	local byFork = (A.cfg.route_alt_fork or 1) >= 0.5
+	local byFork = A.On(A.cfg, "route_alt_fork")
 	for _, c in ipairs(cands) do
 		local x, m = c[2], c[3]
 		local rt = f.root[m]
@@ -2389,7 +2389,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	local starts = PR.Visible(g, S, (k or 3) + 2)
 	-- (pba_probe_air_hop) a source that sees no probe: through a point of the open air (PR.AirHop above)
 	local hop, hopW
-	if #starts == 0 and (cfg.probe_air_hop or 1) >= 0.5 then
+	if #starts == 0 and A.On(cfg, "probe_air_hop") then
 		starts, hop, hopW = PR.AirHop(g, S, L, f, (k or 3) + 2)
 		starts = starts or {}
 	end
@@ -2454,7 +2454,7 @@ function PR.FieldRoutes(S, L, k, cfg, srcEnt)
 	end
 	if guardDone then guardDone() end
 	-- pba_route_alt: the way the tree did not take (altBranches), from the best probe S sees
-	if (cfg.route_alt or 1) >= 0.5 then
+	if A.On(cfg, "route_alt") then
 		local inners = fieldPaths(f, starts, S, L)
 		local n = inners.nodes[1]
 		if n then

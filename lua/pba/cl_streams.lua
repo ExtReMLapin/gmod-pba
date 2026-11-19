@@ -33,14 +33,14 @@ for _, k in ipairs({ "SetPlaybackRate", "GetPlaybackRate", "Pause", "Stop", "Pla
 	if O[k] == nil then O[k] = meta[k] end
 end
 
-local function enabled() return (A.cfg.streams or 0) >= 0.5 and A.Enabled() end
+local function enabled() return A.On(A.cfg, "streams") and A.Enabled() end
 
 local function record(ch)
 	local r = ST.chans[ch]
 	if r then return r end
 	local ok, is3d = pcall(function() return ch:Is3D() and ch:Get3DEnabled() end)
 	if not ok or not is3d then return nil end -- 2D channels (interface music): untouched
-	if table.Count(ST.chans) >= (A.cfg.streams_max or 16) then return nil end -- cap: untouched
+	if table.Count(ST.chans) >= A.Num(A.cfg, "streams_max") then return nil end -- cap: untouched
 	local okv, vol = pcall(O.GetVolume, ch)
 	r = { vol = okv and vol or 1, g = 1, apparent = nil, eq = { 1, 1, 1 } }
 	-- the playback rate the owner already set (SetPlaybackRate before the first SetPos): read, not assumed
@@ -84,7 +84,7 @@ end
 -- channel volume, so visualisers keep working), the module plays the captured audio
 local function nativeMode(r)
 	local N = A.Native
-	return N and N.render and (A.cfg.streams_native or 0) >= 0.5 and pba_native and pba_native.PlayStream
+	return N and N.render and A.On(A.cfg, "streams_native") and pba_native and pba_native.PlayStream
 		and not r.nativeFailed
 end
 
@@ -97,7 +97,7 @@ ST.adapters = ST.adapters or {}
 --- The source's power: the owner's volume, or an adapter's knob volume (sets r.lawMin, read by bassGain).
 local function srcVol(ch, r)
 	r.lawMin = nil
-	if (A.cfg.compat_auto or 1) >= 0.5 and r.emitter then
+	if A.On(A.cfg, "compat_auto") and r.emitter then
 		for _, f in pairs(ST.adapters) do
 			local ok, v, mn = pcall(f, ch, r)
 			if ok and v then r.lawMin = mn return v end
@@ -128,7 +128,7 @@ local function streamSend(ch, r, L, g, pos)
 		local law = function(d) return bassGain(ch, d, r) end
 		r.srcBound = N.BindSource(r.nativeId, r.pos, halted and 0 or srcVol(ch, r) * N.SlotSend(law, r.pos:Distance(L)) * A.cfg.native_gain, 1) -- (wet 1: a stream has no sound level, its room send keeps all its reverb)
 	end
-	return N.SlotFadeSend(r, r.srcBound, r.entryG and srcVol(ch, r) * r.entryG * A.cfg.native_gain or 0, g)
+	return N.SlotFadeSend(r, r.srcBound, (r.entryG and srcVol(ch, r) * r.entryG * A.cfg.native_gain) or 0, g)
 end
 
 --- Native voice of a stream: position, gain (owner volume x BASS distance law x path), EQ.
@@ -148,7 +148,7 @@ end
 -- samples the module captures at that speed (a rate of 2 delivers them twice as fast), so a voice reading at x1
 -- played 2 bursts per second where BASS played 4 and its ring ran dry or over (gaps and skips).
 local function pitchOf(r)
-	if (A.cfg.streams_rate or 1) < 0.5 then return 100 end
+	if A.Num(A.cfg, "streams_rate") < 0.5 then return 100 end
 	return (r.rate or 1) * 100
 end
 
@@ -272,7 +272,7 @@ local function evaluate(ch, r, L)
 	-- pba_native_voice_mix, for the BASS channel too (continuity review C1): its position, filter and length are
 	-- the voices' mixed by energy (in the channel's law), as one native voice's (N.MixVoices), not voices[1]'s.
 	-- Two voices near the same level swapping order turned the radio by up to 177 degrees and its filter by 12 dB
-	local mix = (A.cfg.native_voice_mix or 0) >= 0.5 and #res.voices > 1
+	local mix = A.On(A.cfg, "native_voice_mix") and #res.voices > 1
 	local sum, dist, lenE, tilts = Vector(0, 0, 0), 0, 0, {}
 	for _, v in ipairs(res.voices) do
 		local len = v.len or dS
@@ -322,7 +322,7 @@ local function filter(ch, r)
 	if not (N and N.ready and pba_native and pba_native.StreamFilter) then return end
 	-- switched off (pba_streams_filter 0): the EQ already on the channel goes flat, or the stream stayed
 	-- muffled with the setting off until it was released
-	if (A.cfg.streams_filter or 0) < 0.5 then
+	if A.Num(A.cfg, "streams_filter") < 0.5 then
 		if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) r.filtered = nil end
 		return
 	end
@@ -380,7 +380,7 @@ local function rampStep(ch, r, L, now)
 		-- a BASS channel taken over glides from how its owner played it (a native voice starts at its target)
 		if not r.nativeId then A.Paths.RampTo(r.ramp, now, 0, L, 1, 1, 1, 1, r.pos) end
 	end
-	A.Paths.RampTo(r.ramp, now, math.max(A.cfg.update_interval or 0.25, 0.05), L, rampTarget(ch, r, L))
+	A.Paths.RampTo(r.ramp, now, math.max(A.Num(A.cfg, "update_interval"), 0.05), L, rampTarget(ch, r, L))
 	applyRamp(ch, r, L, now)
 end
 
@@ -409,7 +409,7 @@ function meta:SetVolume(v)
 	if r.nativeId and r.reeval then r.reeval.force = true end -- the route follows at its next turn
 	-- the native voice's gain follows at once (pba_streams_vol_now), as BASS's channel does: before, the change
 	-- waited for the forced re-evaluation (up to an update interval, then a ramp over one interval)
-	if old and (A.cfg.streams_vol_now or 1) >= 0.5 then pcall(volumeNow, self, r, old) end
+	if old and A.On(A.cfg, "streams_vol_now") then pcall(volumeNow, self, r, old) end
 	local ok = pcall(applyVol, self, r)
 	if not ok then return O.SetVolume(self, v) end
 end
@@ -432,7 +432,7 @@ function meta:SetPlaybackRate(rate)
 	local ok, got = pcall(O.GetPlaybackRate, self)
 	if ok and type(got) == "number" and got > 0 then r.rate = got
 	elseif type(rate) == "number" and rate > 0 then r.rate = rate end
-	if r.nativeId and enabled() and (A.cfg.streams_rate or 1) >= 0.5 then pcall(voiceNow, self, r) end
+	if r.nativeId and enabled() and A.On(A.cfg, "streams_rate") then pcall(voiceNow, self, r) end
 end
 
 --- Pause, Stop and Play of the owner (pba_streams_stop_now). The voice plays what the module captured: the ~120 ms
@@ -440,7 +440,7 @@ end
 -- the voice at once (its gain and sends 0 until Play; the ring empties meanwhile), a Stop ends it (a stopped
 -- channel is destroyed by GMod; if it were not, the next evaluation starts a new voice).
 local function cutNow(ch, r, stop)
-	if not (r.nativeId and enabled() and (A.cfg.streams_stop_now or 1) >= 0.5) then return end
+	if not (r.nativeId and enabled() and A.On(A.cfg, "streams_stop_now")) then return end
 	if stop then
 		nativeStop(ch, r)
 		dropRamp(r)
@@ -515,7 +515,7 @@ local function process(ch, r, L)
 		ErrorNoHalt("[PBA] stream evaluation failed: " .. tostring(err) .. "\n")
 	end
 	if ok and err ~= "pending" then
-		local ramp = (A.cfg.continuous_ramp or 0) >= 0.5
+		local ramp = A.On(A.cfg, "continuous_ramp")
 		if nativeMode(r) then
 			if r.filtered then pcall(pba_native.StreamFilter, ch, 1, 1, 1) end
 			if not r.nativeId then

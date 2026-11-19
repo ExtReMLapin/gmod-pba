@@ -17,7 +17,7 @@ A.Render = R
 
 --- True when S is beyond lod_dist from L: no path search there.
 function R.Beyond(S, L)
-	local d = A.cfg.lod_dist or 6000
+	local d = A.Num(A.cfg, "lod_dist")
 	return S:DistToSqr(L) > d * d
 end
 
@@ -25,7 +25,7 @@ end
 -- lod_dist or no wall stands on the straight line; else the DSP preset, gain and low-pass level of its walls.
 -- ent: the sound's entity (its own object is not a wall, P.SourceObject).
 function R.Far(S, L, ent)
-	if (A.cfg.far_muffle or 1) < 0.5 or not R.Beyond(S, L) then return nil end
+	if A.Num(A.cfg, "far_muffle") < 0.5 or not R.Beyond(S, L) then return nil end
 	local P = A.Paths
 	local walls = P.Walls(P.FreeSource(S), L, 1, P.SourceObject(S, IsValid(ent) and ent or nil))
 	if #walls == 0 then return nil end
@@ -57,7 +57,7 @@ end
 -- switchNative) and the loop / long-sound mirrors (cl_loops) bound a slot and fed the room (review C4).
 function R.Dry(name)
 	local N = A.Native
-	return (A.cfg.native_dry_prefix_all or 1) >= 0.5 and N ~= nil and N.DryMix ~= nil and N.DryMix(name) or false
+	return A.On(A.cfg, "native_dry_prefix_all") and N ~= nil and N.DryMix ~= nil and N.DryMix(name) or false
 end
 
 --- What a module voice adds to its path's EQ and pitch, whatever its owner: a speaker's EQ (speaker true:

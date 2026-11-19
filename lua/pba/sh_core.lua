@@ -267,14 +267,14 @@ end
 -- (the engine does not speed them up), while CurTime() and timer.Simple run at the time scale: pba_timescale 1 counts
 -- sound ends in RealTime(), 0 in CurTime() as before.
 function A.SoundNow()
-	if (A.cfg.timescale or 1) >= 0.5 then return RealTime() end
+	if A.On(A.cfg, "timescale") then return RealTime() end
 	return CurTime()
 end
 
 --- A timer.Simple delay that lasts `secs` real seconds at any time scale (timer.Simple counts game time: at
 -- host_timescale 4 a 0.3 s wait for the network or a decode ends after 0.075 s). Unchanged with pba_timescale 0.
 function A.RealDelay(secs)
-	if (A.cfg.timescale or 1) < 0.5 then return secs end
+	if A.Num(A.cfg, "timescale") < 0.5 then return secs end
 	-- (the replicated convar: game.GetTimeScale() reads 1 on a client whatever the scale)
 	A.hostTimescaleCV = A.hostTimescaleCV or GetConVar("host_timescale")
 	local ts = A.hostTimescaleCV and A.hostTimescaleCV:GetFloat()
@@ -313,7 +313,7 @@ function A.WriteSound(s)
 	net.WriteUInt(s.idx or 0, 16)
 	-- its own start time (SoundTime: the shots of a weapon fired between two network updates, each at
 	-- its tick), in ms modulo 65.536 s: the client keeps their spacing (cl_render A.SoundTimeDelay)
-	local st = (A.cfg.soundtime or 1) >= 0.5 and s.st or 0
+	local st = A.On(A.cfg, "soundtime") and s.st or 0
 	net.WriteBool(st ~= 0)
 	if st ~= 0 then net.WriteUInt(math.floor(st * 1000 + 0.5) % 65536, 16) end
 	net.WriteBool(s.face or false)
@@ -346,7 +346,7 @@ function A.WithChannelRule(fn)
 		local idx, chan = ruleSlot(data)
 		if not idx then
 			-- pba_channel_one_rule 0: the server's followed long lines of the world were cut as well
-			if SERVER and (A.cfg.channel_one_rule or 1) < 0.5 and not A.reemitting and A.CutsChannel(data.Channel, data.Flags)
+			if SERVER and A.Num(A.cfg, "channel_one_rule") < 0.5 and not A.reemitting and A.CutsChannel(data.Channel, data.Flags)
 				and (not IsValid(data.Entity) or data.Entity:IsWorld()) and A.Loops and A.Loops.CutChannel then
 				local ret = fn(data)
 				A.Loops.CutChannel(0, data.Channel, data.SoundName)
@@ -370,7 +370,7 @@ function A.WithChannelRule(fn)
 		-- the client's copies and mirrors on that channel stop before the new sound plays (cl_render
 		-- A.CutChannel; a relayed sound, which never reaches this hook, cuts them in A.Process)
 		-- (pba_channel_one_rule 0: none, the sound left to the engine cut nothing of pba's)
-		if CLIENT and A.CutChannel and (A.cfg.channel_one_rule or 1) >= 0.5 then A.CutChannel(idx, chan, nil, A.ClientSoundDelay(data)) end
+		if CLIENT and A.CutChannel and A.On(A.cfg, "channel_one_rule") then A.CutChannel(idx, chan, nil, A.ClientSoundDelay(data)) end
 		-- what the engine played before this sound; the handler's re-emissions record themselves anew
 		local per = A.vanillaOn[idx]
 		local prev = per and per[chan]
@@ -437,7 +437,7 @@ function A.OnConfigChanged(name)
 	if (name == "enable" or name == "cl_enable") and CLIENT and A.SayReady then A.SayReady() end
 	-- loops switched off: their mirrors go back to the engine; on again: taken over again
 	if name == "loops" and SERVER and A.Loops and A.hooksInstalled then
-		if (A.cfg.loops or 0) < 0.5 then A.Loops.Release() else timer.Simple(0, A.Loops.AdoptAmbients) end
+		if A.Num(A.cfg, "loops") < 0.5 then A.Loops.Release() else timer.Simple(0, A.Loops.AdoptAmbients) end
 	end
 	-- pba_compat_auto switched: Sound Muffling Effect is turned off, or given back its value
 	-- the player's lip sync choice reaches the server (sv_loops MouthStart, the long lines' mouth copy)
@@ -704,8 +704,8 @@ function A.SoundTimeTaken(data, long)
 	local st = data.SoundTime or 0
 	if st == 0 or math.abs(st - CurTime()) <= 0.25 then return true end
 	-- (a sound made on this client: pba_soundtime_client, its own player's switch; the server's: pba_soundtime)
-	if (A.cfg[SERVER and "soundtime" or "soundtime_client"] or 1) < 0.5 then return false end
-	return not long or (A.cfg.long_soundtime or 1) >= 0.5
+	if A.Num(A.cfg, SERVER and "soundtime" or "soundtime_client") < 0.5 then return false end
+	return not long or A.On(A.cfg, "long_soundtime")
 end
 
 --- Seconds a sound stamped away from now waits before it starts, on the client that made it: the stamp's lead
@@ -942,7 +942,7 @@ local posMemoFrame = CLIENT and setmetatable({}, { __mode = "k" }) or nil
 local NOCHAN = -1
 
 local function entSoundPos(e, ch)
-	if (A.cfg.sound_origin or 1) >= 0.5 and not e:IsWorld() then
+	if A.On(A.cfg, "sound_origin") and not e:IsWorld() then
 		-- the shot of a weapon comes from its muzzle
 		local w = A.ShotWeapon(e, ch)
 		if w then return muzzlePos(w) end
@@ -971,7 +971,7 @@ function A.EntSoundPos(e, ch)
 			if L then return L + ang:Forward() end
 		end
 	end
-	if not posMemo or (A.cfg.sound_pos_memo or 1) < 0.5 then return entSoundPos(e, ch) end
+	if not posMemo or A.Num(A.cfg, "sound_pos_memo") < 0.5 then return entSoundPos(e, ch) end
 	local k = ch or NOCHAN
 	local fr = FrameNumber()
 	local mf = posMemoFrame[e]

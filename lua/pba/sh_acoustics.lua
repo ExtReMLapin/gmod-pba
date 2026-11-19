@@ -204,7 +204,7 @@ end
 -- holds this choice near the threshold (AC.DiffuseHold, applied by the renderers that choose the preset (cl_loops, cl_render) to the voices it returns).
 function AC.DSPForVoice(level, diffuse, cfg)
 	cfg = cfg or A.cfg
-	if (cfg.diffuse or 0) >= 0.5 and (diffuse or 0) >= (cfg.diffuse_dsp_at or 0.4) then
+	if A.On(cfg, "diffuse") and (diffuse or 0) >= A.Num(cfg, "diffuse_dsp_at") then
 		return level >= 2 and 117 or 116
 	end
 	return AC.DSPForLevel(level, cfg)
@@ -238,7 +238,7 @@ end
 -- while the share is within `margin` of the threshold. Returns true when the tunnel preset applies.
 function AC.DiffuseHold(share, prev, margin, cfg)
 	cfg = cfg or A.cfg
-	local at = cfg.diffuse_dsp_at or 0.4
+	local at = A.Num(cfg, "diffuse_dsp_at")
 	share = share or 0
 	if prev == nil or not margin or margin <= 0 then return share >= at end
 	if prev then return share >= at - margin end
@@ -300,7 +300,7 @@ end
 --- Transmission loss (dB) and low-pass level of one wall.
 -- matType: MAT_* ; surf: surfaceprop name (may be nil) ; thickness: units.
 function AC.WallLoss(matType, surf, thickness)
-	if surf == "pba_water" then return (pba.cfg.water_db or 24), 4 end
+	if surf == "pba_water" then return pba.Num(pba.cfg, "water_db"), 4 end
 	local e = surf and AC.SURF_TABLE[string.lower(surf)] or AC.MAT_TABLE[matType] or AC.MAT_DEFAULT_ENTRY
 	return evalEntry(e, thickness)
 end
@@ -336,7 +336,7 @@ end
 -- straight line slides off the leaf onto the wall although it still comes through the leaf.
 function AC.LeafDb(closedDb, cfg)
 	cfg = cfg or pba.cfg
-	return math.max(closedDb * (cfg.trans_scale or 1) - (cfg.trans_lf_bonus or 0), 0)
+	return math.max(closedDb * A.Num(cfg, "trans_scale") - A.Num(cfg, "trans_lf_bonus"), 0)
 end
 
 function AC.DoorGain(frac, closedDb)

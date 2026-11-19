@@ -66,7 +66,7 @@ function DM.ApplyNative()
 		end
 		if n.ready and not n.render and not nativeTried and n.StartRender then
 			nativeTried = true
-			if (A.cfg.native_render or 0) < 0.5 then A.SetOverride("native_render", 1, true) end
+			if A.Num(A.cfg, "native_render") < 0.5 then A.SetOverride("native_render", 1, true) end
 			n.StartRender()
 		end
 	else
@@ -389,7 +389,7 @@ local function buttonState(r, i, b)
 		end
 	elseif b.kind == "select" and DM.sel[r.id] and DM.sel[r.id][b.group] == b.id then
 		col = Color(215, 150, 30)
-	elseif b.setting and (A.cfg[b.setting] or 0) >= 0.5 then
+	elseif b.setting and A.On(A.cfg, b.setting) then
 		col = Color(40, 150, 80)
 	end
 	if b.native and not DM.NativeAvailable() then disabled = true end
@@ -459,12 +459,12 @@ function DM.PressLocal(r, i)
 	if b.client then
 		if b.setting then
 			-- one fix on / off, in memory only (no convar written); the room's Reset gives it back
-			local v = (A.cfg[b.setting] or 0) >= 0.5 and 0 or 1
+			local v = A.On(A.cfg, b.setting) and 0 or 1
 			A.SetOverride(b.setting, v)
 			if A.Paths then A.Paths.InvalidateCache() end
 			DM.Toast(L(b.label) .. L(v == 1 and DM.UI.setting_on or DM.UI.setting_off))
 		elseif b.id == "out" then
-			local v = (A.cfg.native_out or 0) >= 0.5 and 0 or 1
+			local v = A.On(A.cfg, "native_out") and 0 or 1
 			A.SetOverride("native_out", v, true)
 			if A.Native and A.Native.ApplySettings then A.Native.ApplySettings() end
 			DM.Toast(L(v == 1 and DM.UI.out_sp or DM.UI.out_hp))

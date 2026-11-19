@@ -54,7 +54,7 @@ function W.Miss(ent, data, ply, kind)
 end
 
 local function onBullets(ent, data)
-	if (A.cfg.whiz or 1) < 0.5 or not A.Enabled() then return end
+	if A.Num(A.cfg, "whiz") < 0.5 or not A.Enabled() then return end
 	-- the engine whizzes only for a tracer it draws
 	local freq = data.Tracer
 	if not freq or freq <= 0 then return end

@@ -25,10 +25,10 @@ net.Receive("pba_ready", function(_, ply)
 	st.off = net.BytesLeft() and net.BytesLeft() > 0 and net.ReadBool() or false
 end)
 function A.ClientReady(ply) -- (the audience rule, sv_sound)
-	return A.PState(ply).ready == true or (A.cfg.relay_ready or 1) < 0.5
+	return A.PState(ply).ready == true or A.Num(A.cfg, "relay_ready") < 0.5
 end
 function A.ClientOff(ply) -- (the audience rule, sv_sound)
-	return A.PState(ply).off == true and (A.cfg.relay_cl_enable or 1) >= 0.5
+	return A.PState(ply).off == true and A.On(A.cfg, "relay_cl_enable")
 end
 
 -- (pba_early_line_takeover) Lines a joining player hears before his client can render them. On a map load the
@@ -46,7 +46,7 @@ local EARLY_MIN_S = 1     -- a shorter line is not worth a second voice (the mar
 local EARLY_OPEN_S = 60   -- a client that never asks (an older pba) closes its window after this long
 --- True while ply's early window is open (pba_early_line_takeover).
 function A.EarlyOpen(ply)
-	if (A.cfg.early_line_takeover or 1) < 0.5 then return false end
+	if A.Num(A.cfg, "early_line_takeover") < 0.5 then return false end
 	local st = A.PState(ply)
 	if st.earlyDone then return false end
 	local now = RealTime()
@@ -88,7 +88,7 @@ end
 -- stays). A line left in the list after its stop was handed to the player's module once he was ready (a ghost line;
 -- replaced on its channel: two lines over each other).
 function A.PurgeEarly(idx, name, chan, keep)
-	if (A.cfg.early_purge or 1) < 0.5 or idx <= 0 then return end
+	if A.Num(A.cfg, "early_purge") < 0.5 or idx <= 0 then return end
 	local files = name and name ~= "" and A.StopFiles(name) or nil
 	local tick = engine.TickCount()
 	for _, p in ipairs(player.GetHumans()) do
@@ -109,7 +109,7 @@ net.Receive("pba_early", function(_, ply)
 	local st = A.PState(ply)
 	local list = st.early
 	st.earlyDone, st.early = true, nil
-	if not list or (A.cfg.early_line_takeover or 1) < 0.5 then return end
+	if not list or A.Num(A.cfg, "early_line_takeover") < 0.5 then return end
 	local now, out = RealTime(), {}
 	for _, x in ipairs(list) do if x.t + x.secs > now then out[#out + 1] = x end end
 	if #out == 0 then return end
@@ -332,8 +332,8 @@ function A.RelayStop(e, name, chan, except)
 	local r = idx > 0 and A.recentTo[idx]
 	if not r then return end
 	local plys, now = {}, CurTime()
-	local inOrder = (A.cfg.stop_order or 1) >= 0.5
-	local both = (A.cfg.stop_both or 1) >= 0.5
+	local inOrder = A.On(A.cfg, "stop_order")
+	local both = A.On(A.cfg, "stop_both")
 	local behind -- (the players relayed a copy of e in this tick)
 	local recent -- (pba_stop_both: those relayed one in the last STOP_BOTH_S: the stop goes on both streams)
 	for p, t in pairs(r) do
@@ -395,7 +395,7 @@ function A.CutChannel(data, idx, chan)
 	local keep = {}
 	for _, p in ipairs(A.relayedTo or {}) do keep[p] = true end
 	local plys, now = {}, CurTime()
-	local both = (A.cfg.stop_both or 1) >= 0.5
+	local both = A.On(A.cfg, "stop_both")
 	local recent -- (pba_stop_both: the cut on both streams)
 	for p, t in pairs(held) do
 		if not keep[p] then
@@ -412,7 +412,7 @@ function A.CutChannel(data, idx, chan)
 	end
 	if next(held) == nil then rc[chan] = nil end
 	if #plys == 0 then return end
-	local st = (A.cfg.soundtime or 1) >= 0.5 and data.SoundTime or 0
+	local st = A.On(A.cfg, "soundtime") and data.SoundTime or 0
 	local function cut(to, unreliable)
 		net.Start("pba_snd_stop", unreliable)
 		net.WriteUInt(idx, 16)
@@ -455,7 +455,7 @@ end
 --- True when data is a volume / pitch change of a brief sound that still plays; second value: pba took it
 -- over (else the engine plays it).
 function A.BriefPlaying(data)
-	if (A.cfg.brief_updates or 1) < 0.5 then return false end
+	if A.Num(A.cfg, "brief_updates") < 0.5 then return false end
 	if bit.band(data.Flags or 0, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(data.Flags or 0, SND_STOP) ~= 0 then return false end
 	local e = data.Entity
 	local r = IsValid(e) and A.recentBrief[e:EntIndex()]
@@ -469,7 +469,7 @@ end
 -- line with a pitch other than 1; EmitSound(..., SND_CHANGE_PITCH) on a new sound): pba_change_new takes it as
 -- any new sound (A.Eligible). A real change of a playing sound stays as it was (b5139cb): the engine's, or dropped.
 function A.NewChange(data)
-	if (A.cfg.change_new or 1) < 0.5 then return false end
+	if A.Num(A.cfg, "change_new") < 0.5 then return false end
 	local flags = data.Flags or 0
 	if bit.band(flags, SND_CHANGE_VOL + SND_CHANGE_PITCH) == 0 or bit.band(flags, SND_STOP) ~= 0 then return false end
 	local e = data.Entity
