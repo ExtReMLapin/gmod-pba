@@ -2,7 +2,7 @@
 // The direct path skipped its EQ (Steam Audio's direct effect: three IIR band filters, then a gain) while every band was
 // >= 0.999, and applied it again when a band went under: the effect then resumed with the filters' state and the gain of
 // its last use, possibly seconds before (another signal, another EQ). Its first block crossfades from that stale state:
-// a transient. SetEqContinuous(true) (the default, pba_native_eq_continuous) keeps applying the EQ of a voice that has
+// a transient. The renderer now keeps applying the EQ of a voice that has
 // used it (at 1 the filters pass the signal through and their state follows it).
 // Measure, on the listener's own (unspatialised) voice so the output is the EQ'd signal itself: noise, EQ 0.3 on every
 // band (normalised by the effect into a gain of 0.3) for 10 blocks, then the gap (40 blocks), then EQ 0.9. Run twice:
@@ -10,7 +10,7 @@
 // the block where 0.9 comes back must be the same in both runs (difference 40 dB under the signal), where the stale
 // state of the skipped effect differs by its gain ramp from 0.3 (the former code: ~ -6 dB). Control: the blocks just
 // before the return match too.
-// Built with -DPBA_TESTS=ON: pba_eq_resume_test, and pba_eq_resume_red_test (-DPBA_EQ_CONT_OFF: the option off; must fail).
+// Built with -DPBA_TESTS=ON: pba_eq_resume_test.
 #include <phonon.h>
 
 #include <cmath>
@@ -47,12 +47,7 @@ constexpr int kFirst = 10, kGap = 40, kAfter = 6;
 static std::vector<float> Run(IPLContext ctx, float gapEq) {
 	std::vector<float> l;
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return l; }
-#ifdef PBA_EQ_CONT_OFF
-	render::SetEqContinuous(false);
-#else
-	render::SetEqContinuous(true);
-#endif
-	render::SetMixQuality(1, true, false);
+	render::SetMixQuality(1);
 	const std::string a = Wav(48000 * 3, 48000);
 	double secs = 0;
 	render::LoadSound("a", a.data(), a.size(), &secs);

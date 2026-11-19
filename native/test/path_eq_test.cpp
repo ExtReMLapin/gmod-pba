@@ -2,10 +2,10 @@
 // Steam Audio's IPLPathEffect applies the 3-band EQ as given (the direct effect floors every band at 1/16 of the
 // strongest one: the path effect, with normalizeEQ off, does not), and its band filters divide by the band gain: a
 // MID band of exactly 0 gives NaN (0/0 in the peaking filter), a negative one a NaN too (square root). A NaN in the
-// path voice's output reaches the speakers with the soft clip (noise, clicks, silence), and with the limiter the
+// path voice's output reached the speakers with the former soft clip (noise, clicks, silence), and with the limiter the
 // output reads 0 but the energies SetListener reports, the room send and the capture are NaN, and the limiter's state
 // is poisoned. The module must never hand such a value to Steam Audio, whatever the Lua asks for.
-// Every case: a looping voice with a path (headphones and speakers, limiter and soft clip), the EQ asked, a few blocks;
+// Every case: a looping voice with a path (headphones and speakers, limiter and hard clip), the EQ asked, a few blocks;
 // then the EQ back to neutral, which must come out clean too (a filter fed a NaN keeps it for ever).
 // Pass: no non-finite sample in the output, the mix capture and the room send, no NaN in the energies, the voice is heard.
 // Built with -DPBA_TESTS=ON (target pba_path_eq_test).
@@ -58,14 +58,14 @@ struct Case {
 	float eq[3];
 };
 
-// one run: output mode (0 headphones, 1 speakers), limiter mode (1 limiter, 0 soft clip), the EQ asked.
+// one run: output mode (0 headphones, 1 speakers), limiter mode (1 limiter, 2 hard clip), the EQ asked.
 // Returns false when the voice could not be started (the test setup is wrong).
 static void Run(IPLContext ctx, const Case& c, int outMode, int limiter) {
 	char label[160];
-	std::snprintf(label, sizeof label, "%s, %s, %s", c.name, outMode == 0 ? "headphones" : "speakers", limiter == 1 ? "limiter" : "soft clip");
+	std::snprintf(label, sizeof label, "%s, %s, %s", c.name, outMode == 0 ? "headphones" : "speakers", limiter == 1 ? "limiter" : "hard clip");
 	if (!render::StartOffline(ctx).empty()) { Check(false, "StartOffline"); return; }
 	render::SetOutputMode(outMode);
-	render::SetMixQuality(limiter, true, false);
+	render::SetMixQuality(limiter);
 	const std::string a = Wav(48000, 48000);
 	double secs = 0;
 	if (!render::LoadSound("a", a.data(), a.size(), &secs).empty()) { Check(false, "LoadSound"); render::Stop(); return; }
@@ -139,7 +139,7 @@ int main() {
 	};
 	for (const Case& c : cases)
 		for (int outMode = 0; outMode < 2; ++outMode)
-			for (int limiter = 1; limiter >= 0; --limiter) Run(ctx, c, outMode, limiter);
+			for (int limiter : {1, 2}) Run(ctx, c, outMode, limiter);
 	iplContextRelease(&ctx);
 	std::printf("%s\n", fails ? "FAILED" : "PASSED");
 	return fails ? 1 : 0;

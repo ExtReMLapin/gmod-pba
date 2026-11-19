@@ -283,7 +283,7 @@ int main() {
 			case 0: render::SetPaused(rng() % 2 == 0); break;
 			case 1: render::SetUnderwater((float)(rng() % 3) / 2); break;
 			case 2: render::SetWet((float)(rng() % 3), (float)(rng() % 3)); break;
-			case 3: render::SetMixQuality((int)(rng() % 3), rng() % 2 == 0, rng() % 2 == 0); break;
+			case 3: render::SetMixQuality((int)(rng() % 3)); break;
 			case 4: render::SetOutputMode((int)(rng() % 2)); break;
 			case 5: render::SetDiffuseSend((float)(rng() % 3)); render::SetDiffuseRtRef((float)(rng() % 3)); break;
 			case 6: render::SetSourceReverbScale((float)(rng() % 3)); render::SetDiffuseFieldEq(rng() % 2 == 0); break;
@@ -327,7 +327,7 @@ int main() {
 		render::LoadSound("base" + std::to_string(i), w.data(), w.size(), &secs);
 	}
 	render::SetPaused(false);
-	render::SetMixQuality(1, true, false);
+	render::SetMixQuality(1);
 	for (int id = 1; id <= lastId + 10; ++id) render::StopVoice(id);
 	std::vector<float> buf(512 * 2);
 	// (a stopped echo voice held back by its echo slot's generation, which the reflection thread above publishes at

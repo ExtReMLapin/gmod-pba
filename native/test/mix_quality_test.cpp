@@ -12,9 +12,7 @@
 //    (PBA_MIX_WAV=<file.wav>[;<file.wav>...], 16-bit 1 / 2 channels, e.g. weapons/smg1/smg1_fire1.wav and an
 //    explosion copied out of the game's VPK).
 //
-// Built with -DPBA_TESTS=ON: target pba_mix_quality_test (the module's defaults: sinc resampler, limiter) and
-// pba_mix_quality_red_test (-DPBA_MIX_LEGACY: linear resampler and soft clip from 0.8, as before the change; the
-// same checks must fail there).
+// Built with -DPBA_TESTS=ON: target pba_mix_quality_test (the module's defaults: sinc resampler, limiter).
 #include <phonon.h>
 
 #include <algorithm>
@@ -513,11 +511,7 @@ int main() {
 	if (iplContextCreate(&cs, &ctx) != IPL_STATUS_SUCCESS) { std::printf("FAIL context\n"); return 1; }
 	const std::string err = render::Start(ctx, nullptr, 0);
 	if (!err.empty()) { std::printf("FAIL Start: %s\n", err.c_str()); return 1; }
-#ifdef PBA_MIX_LEGACY
-	render::SetMixQuality(0, false); // the module as it was: linear resampling, soft clip from 0.8
-	std::printf("(legacy mix: linear resampling, soft clip from 0.8)\n");
-#endif
-	if (const char* e = std::getenv("PBA_MIX_MODE")) render::SetMixQuality(std::atoi(e), true); // 2: hard clip (numbers only)
+	if (const char* e = std::getenv("PBA_MIX_MODE")) render::SetMixQuality(std::atoi(e)); // 2: hard clip (numbers only)
 	if (const char* e = std::getenv("PBA_LIM_TUNE")) { // "fastMs,slowMs,K"
 		float a = 6, b = 50, k = 3;
 		std::sscanf(e, "%f,%f,%f", &a, &b, &k);

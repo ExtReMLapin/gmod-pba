@@ -19,8 +19,7 @@
 //   edges    a constant stream stalls and resumes: the cut and the return are faded, not a step of the waveform (a click)
 //   own      a stream played as the listener's own (VoiceParams::own) is the same in both ears, not spatialised
 //
-// Built with -DPBA_TESTS=ON: target pba_stream_resample_test (the module's defaults) and pba_stream_resample_red_test
-// (-DPBA_STREAM_LEGACY: pba_native_resample_hq off = linear reading; the image checks must fail there);
+// Built with -DPBA_TESTS=ON: target pba_stream_resample_test (the module's defaults);
 // pba_stream_fade_red_test (-DPBA_STREAM_NOFADE: pba_native_stream_fade 0; the edges checks must fail there) and
 // pba_stream_own_red_test (-DPBA_STREAM_NOOWN: own not passed, as PlayStream used to ignore it; the own check must fail).
 #include <phonon.h>
@@ -421,10 +420,6 @@ int main() {
 	if (iplContextCreate(&cs, &ctx) != IPL_STATUS_SUCCESS) { std::printf("FAIL context\n"); return 1; }
 	const std::string err = render::Start(ctx, nullptr, 0);
 	if (!err.empty()) { std::printf("FAIL Start: %s\n", err.c_str()); return 1; }
-#ifdef PBA_STREAM_LEGACY
-	render::SetMixQuality(render::OutputMode(), false); // linear reading of the streams
-	std::printf("(legacy: pba_native_resample_hq 0, linear reading)\n");
-#endif
 #ifdef PBA_STREAM_NOFADE
 	render::SetStreamFade(0); // no fade at the stream's edges (pba_native_stream_fade 0)
 	std::printf("(no fade: pba_native_stream_fade 0)\n");

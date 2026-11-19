@@ -32,7 +32,7 @@ int main() {
 	IPLContext ctx = nullptr;
 	if (iplContextCreate(&cs, &ctx) != IPL_STATUS_SUCCESS) { std::printf("FAIL context\n"); return 1; }
 	if (!render::StartOffline(ctx).empty()) { std::printf("FAIL StartOffline\n"); return 1; }
-	render::SetMixQuality(1, true, false);
+	render::SetMixQuality(1);
 	render::SetStreamFade(5);
 	double eL, eR;
 	render::SetListener({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 1.0f, &eL, &eR);

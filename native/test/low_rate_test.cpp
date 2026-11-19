@@ -12,8 +12,7 @@
 //           at a fractional position
 //   sentences  a sentence word with its own pitch
 //
-// Built with -DPBA_TESTS=ON: target pba_low_rate_test (the module's defaults) and pba_low_rate_red_test
-// (-DPBA_LOWRATE_LEGACY: linear resampling at decode, the module before v1.4.0; the checks must fail there).
+// Built with -DPBA_TESTS=ON: target pba_low_rate_test.
 #include <phonon.h>
 
 #include <algorithm>
@@ -328,10 +327,6 @@ int main() {
 	if (iplContextCreate(&cs, &ctx) != IPL_STATUS_SUCCESS) { std::printf("FAIL context\n"); return 1; }
 	const std::string err = render::Start(ctx, nullptr, 0);
 	if (!err.empty()) { std::printf("FAIL Start: %s\n", err.c_str()); return 1; }
-#ifdef PBA_LOWRATE_LEGACY
-	render::SetMixQuality(0, false); // linear resampling at decode
-	std::printf("(legacy: linear resampling at decode)\n");
-#endif
 	DecodeTests();
 	PitchTests();
 	ToneTests();
