@@ -1393,6 +1393,8 @@ steps = [
     ("native_props_calm", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_calm_setup.lua"), lambda: job("client", "native_props_calm.lua", 60))),
     ("native_props_add", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_add_setup.lua"), lambda: job("client", "native_props_add.lua", 60))),
     ("native_props_churn", lambda: seq(lambda: load(TW), lambda: native_on(True), lambda: job("server", "native_props_add_setup.lua"), lambda: job("client", "native_props_churn.lua", 90))),
+    ("native_scene_far", lambda: seq(lambda: load("gm_construct"), lambda: native_on(True), lambda: job("server", "native_scene_far_setup.lua", pre="local args = { dist = 2100 }"), lambda: job("client", "native_scene_far.lua", 60, pre="local args = { far = true, dist = 2100 }"))),
+    ("native_scene_far near", lambda: seq(lambda: load("gm_construct"), lambda: native_on(True), lambda: job("server", "native_scene_far_setup.lua", pre="local args = { dist = 260 }"), lambda: job("client", "native_scene_far.lua", 60, pre="local args = { far = false, dist = 260 }"))),
     ("detour_cap", lambda: seq(lambda: load(TW), lambda: job("server", "detour_cap_setup.lua"), lambda: job("client", "detour_cap.lua", 60))),
     ("native_features", lambda: seq(lambda: scenario(TW, "tworooms_closed"), lambda: native_on(True),
                                     lambda: job("client", "native_features.lua"))),

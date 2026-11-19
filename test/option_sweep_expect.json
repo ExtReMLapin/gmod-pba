@@ -251,6 +251,10 @@
   "pos0": "hook",
   "why": "native module scene (which props enter it over the cap): test native_props_churn"
  },
+ "native_scene_far_m": {
+  "pos0": "hook",
+  "why": "native module scene (far moves sent at rest): test native_scene_far"
+ },
  "native_props_add_ms": {
   "pos0": "hook",
   "why": "native module scene (when props enter it, spread over the syncs): test native_props_add"

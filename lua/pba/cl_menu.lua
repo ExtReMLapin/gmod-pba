@@ -217,6 +217,7 @@ function Build.native(panel)
 	dep(chk(panel, "Update props only out of fights", "native_props_calm"), "ready")
 	dep(sld(panel, "Props entering the scene: ms per update (0 = all at once)", "native_props_add_ms", 1), "ready")
 	dep(chk(panel, "Props over the cap: only the ranking's winners enter", "native_props_rank_keep"), "ready")
+	dep(sld(panel, "Far moving objects: updated once at rest beyond (m, 0 = never)", "native_scene_far_m"), "ready")
 	dep(sld(panel, "Spinning objects: seconds before they are updated rarely (0 = never)", "native_spin_s", 1), "ready")
 
 	panel:Help("Limits:")

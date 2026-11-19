@@ -1812,6 +1812,12 @@ end
 
 N.BoxMesh = boxMesh
 local MOVED_NEAR2 = 1024 * 1024 -- units: dynamic objects whose motion re-evaluates the continuous sounds
+-- pba_native_scene_far_m: a door, mover or prop farther than that from the listener sends its move once it has rested
+-- FAR_REST_S (or after FAR_MAX_S of motion). Every scene commit restarts Steam Audio's accumulated reflections of every
+-- source (and the source slots' listener anchor): a door swinging or a car driving 40 m off committed the scene at every
+-- 0.1 s sync, and the reverb's averages never converged (srcAnchorMoves ~4/s with the listener still)
+local FAR_REST_S, FAR_MAX_S = 0.3, 5
+local UNITS_PER_M = 1 / 0.01905
 -- Spinners: an object that has moved at every sync for pba_native_spin_s (3 s) without its centre leaving a
 -- AMBIENT_RADIUS2 (16 u) circle turns in place for ever (a ceiling fan, a radar, a windmill): its place in the
 -- scene is refreshed every AMBIENT_PERIOD s only, and it no longer empties the path cache. Each refresh is a scene
@@ -2081,8 +2087,11 @@ function N.SyncDoors()
 	-- continuous sounds re-evaluate (reeval_adaptive; P.ReevalDue watches the world version)
 	local L, moved = A.ListenerPos(), false
 	local function near(p) return L and p and p:DistToSqr(L) < MOVED_NEAR2 end
+	local farM = A.cfg.native_scene_far_m or 20
+	local farR2 = farM > 0 and L and (farM * UNITS_PER_M) ^ 2 or nil
 	local function track(e, id, d)
 		local p, a = e:GetPos(), e:GetAngles()
+		local movingNow = d.sp and (d.sp ~= p or d.sa ~= a)
 		-- sustained spin in place (see pba_native_spin_s): counted over the syncs, whatever was sent
 		if d.sp and (d.sp ~= p or d.sa ~= a) then
 			local c = e:WorldSpaceCenter()
@@ -2101,6 +2110,13 @@ function N.SyncDoors()
 			return
 		end
 		if not d.p or d.p ~= p or d.a ~= a then
+			if farR2 and d.p and p:DistToSqr(L) > farR2 then
+				-- far from the listener: sent once it rests (or after FAR_MAX_S of motion), not at every sync
+				if movingNow or not d.farLast then d.farLast = now end
+				d.farT0 = d.farT0 or now
+				if now - d.farLast < FAR_REST_S and now - d.farT0 < FAR_MAX_S then return end
+			end
+			d.farT0, d.farLast = nil, nil
 			if d.prop then
 				if hold then return end -- sent once the fight is over, where it came to rest
 				propSent = true
