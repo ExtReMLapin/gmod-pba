@@ -798,19 +798,10 @@ local SEED_CLASSES = { info_node = true, info_node_hint = true, info_teleport_de
 -- at the first build (another start, another graph for good).
 function PR.MapSeeds(g)
 	local ents = g.bsp.entities or {}
-	local f = file.Open("maps/" .. g.map .. ".bsp", "rb", "GAME")
-	if f then
-		f:Seek(8) -- lump 0 (entities): offset, length
-		local ofs, len = f:ReadLong(), f:ReadLong()
-		if ofs and len and len > 0 then
-			f:Seek(ofs)
-			local text = f:Read(len)
-			if text then
-				local all = A.BSP.ParseEntities(text, SEED_CLASSES)
-				if #all > 0 then ents = all end
-			end
-		end
-		f:Close()
+	local text = A.BSP.EntityText(g.map)
+	if text then
+		local all = A.BSP.ParseEntities(text, SEED_CLASSES)
+		if #all > 0 then ents = all end
 	end
 	local seeds, seen = {}, {}
 	for _, e in ipairs(ents) do
