@@ -1,6 +1,6 @@
 // Offline check (no game, Steam Audio only) of the LEVEL of the parametric tail of the hybrid reverb at its handover from the
 // convolved part. Built with -DPBA_TESTS=ON (target pba_hybrid_tail_test, phonon.dll next to it); `pba_hybrid_tail_test explore`
-// also prints the energy per time bin and the Schroeder curves, `explore <bounces> <airOff> <repeats>` changes the setup.
+// also prints the energy per time bin and the Schroeder curves, `explore <bounces> <airOff> <repeats> <truthRays>` changes the setup.
 //
 // Measured in game (map pba_pipe, 68 x 34 x 17 m steel hall, reverb time 5.7 s): the late decay of the rendered reverb has the right
 // slope, but the level drops by ~22 dB at the handover (~0.45 s) and the tail's line sits 16-21 dB under the steady-state level, so the
@@ -8,7 +8,7 @@
 //
 // A closed room is simulated as the module does (hybrid reflections at the listener, order 1, 2048 rays, 0.5 s convolved part,
 // transition at 0.5 s with 25 % overlap), and rendered through iplReflectionEffectApply as the module does. The TRUTH is the same room
-// simulated with a convolution reflection effect over the whole response (4096 rays, 256 bounces): the hybrid response must follow it
+// simulated with a convolution reflection effect over the whole response (16384 rays, 256 bounces): the hybrid response must follow it
 // where the convolved part ends. Two rooms: a short one (8 x 4 x 6 m, 0.9 s) and a long one (68 x 34 x 17 m, 5.3 s, bands with
 // different reverb times through the air absorption). The reverb times given to the tail are the ones of the module: the main
 // simulation's for the short room, a long-window parametric simulation's (what pba_native_source_long_rt and the room bus use) for the
@@ -42,7 +42,16 @@ static int fails = 0;
 static bool g_explore = false;
 static int g_bounces = 64; // the module's 16 leave no energy at 0.4 s in a small room (see main)
 static bool g_airOff = false;
-static int g_repeat = 3;
+// Checks 1 and 2 compare levels in 50-100 ms windows, and every simulation is a Monte Carlo estimate (random rays and
+// scattering, 4 threads: not reproducible from one run to the next). Measured 2026-11-19, 40 runs of the former setup
+// (median of 3 single responses, truth of 4096 rays): the long room's largest window gap 4.26 dB on average, 3.4 to
+// 5.3 (1 run in 40 over the 5 dB limit), the gap of one window moving by 1 dB between two simulations of one process
+// and the truth's own scatter moving all of them together. Its level does not move: a mean of 4.2 dB with the setup
+// below (mean power of 6 simulations, truth of 16384 rays; 40 runs: 3.53 to 4.70, standard deviation 0.23, none over
+// 5 dB; 12 s a run instead of 8). That level is a real dip of Steam Audio's response in the window just after the
+// convolved part (0.50-0.55 s, the next window 1-2 dB higher), not noise: a lower limit would fail on it every time.
+static int g_repeat = 6;
+static int g_truthRays = 16384; // the whole truth's rays (the per-band truths keep 4096: checks 3 and 4 use medians)
 static void Check(bool ok, const char* what, double a = 0, double b = 0) {
 	std::printf("%s %s (%.4g, %.4g)\n", ok ? "ok  " : "FAIL", what, a, b);
 	if (!ok) ++fails;
@@ -186,13 +195,17 @@ static std::vector<float> Impulse(IPLContext ctx, IPLReflectionEffectType type, 
 	return w;
 }
 
-// power per sample of h in [t0, t1) s, dB
-static double EDb(const std::vector<float>& h, double t0, double t1) {
+// power per sample of h in [t0, t1) s, linear and dB
+static double EPow(const std::vector<float>& h, double t0, double t1) {
 	double e = 0;
 	const size_t a = (size_t)(t0 * kRate), b = std::min(h.size(), (size_t)(t1 * kRate));
 	for (size_t i = a; i < b; ++i) e += (double)h[i] * h[i];
-	return 10 * std::log10(std::max(e / std::max(1.0, (t1 - t0) * kRate), 1e-30));
+	return e / std::max(1.0, (t1 - t0) * kRate);
 }
+static double PDb(double p) { return 10 * std::log10(std::max(p, 1e-30)); }
+static double EDb(const std::vector<float>& h, double t0, double t1) { return PDb(EPow(h, t0, t1)); }
+static const int kWins = 6; // check 2: the 50 ms windows from 0.3 s to 0.6 s
+static double WinT(int i) { return 0.3 + 0.05 * i; }
 
 static void Fft(std::vector<std::complex<double>>& a) {
 	const size_t n = a.size();
@@ -255,6 +268,8 @@ struct Case {
 struct Result {
 	double off = 0, offBand[3] = {0, 0, 0}, offBandFull[3] = {0, 0, 0}, maxStep = 0, rtIndep[3] = {0, 0, 0};
 	int minBand = 0; // the band with the shortest reverb time: tone correction leaves it alone
+	// power per sample of the hybrid response (linear) over 0.5 - 0.6 s and over each window of check 2
+	double pOff = 0, pWin[kWins] = {};
 };
 
 static double Median(std::vector<double> v) {
@@ -293,6 +308,7 @@ static bool Measure(IPLContext ctx, Room& room, const Case& c, double total, con
 	}
 	// 1. level after the handover (0.5 - 0.6 s: the convolved part is over, the tail alone) against the truth
 	r->off = EDb(h, 0.5, 0.6) - EDb(ht, 0.5, 0.6);
+	r->pOff = EPow(h, 0.5, 0.6);
 	// per band: the middle of the band, against the truth of that band alone (in the whole truth, the highest band reads the middle
 	// one's level once the air has absorbed it, through the reconstructor's band filters: -12 to -14 dB at 0.5 s for a tail that is
 	// right; the whole band against the whole truth is printed for reference)
@@ -302,7 +318,10 @@ static bool Measure(IPLContext ctx, Room& room, const Case& c, double total, con
 	}
 	// 2. no step: over the 50 ms windows from the end of the convolved part's full weight (0.3 s) to 0.6 s
 	r->maxStep = 0;
-	for (double t = 0.3; t < 0.59; t += 0.05) r->maxStep = std::max(r->maxStep, std::fabs(EDb(h, t, t + 0.05) - EDb(ht, t, t + 0.05)));
+	for (int i = 0; i < kWins; ++i) {
+		r->pWin[i] = EPow(h, WinT(i), WinT(i) + 0.05);
+		r->maxStep = std::max(r->maxStep, std::fabs(PDb(r->pWin[i]) - EDb(ht, WinT(i), WinT(i) + 0.05)));
+	}
 	// 3. the level at the handover must not depend on the reverb times the tail is given, only its decay does: the same response with
 	// flat reverb times (the lowest of the three) against the ones above, per band, 0.55 - 0.6 s, minus the decay difference
 	// (13.8 / RT nepers per second from the start of the tail at 0.375 s)
@@ -326,6 +345,7 @@ int main(int argc, char** argv) {
 	if (argc > 2) g_bounces = atoi(argv[2]);
 	if (argc > 3) g_airOff = atoi(argv[3]) != 0;
 	if (argc > 4) g_repeat = atoi(argv[4]);
+	if (argc > 5) g_truthRays = atoi(argv[5]);
 	IPLContextSettings cs{};
 	cs.version = STEAMAUDIO_VERSION;
 	IPLContext ctx = nullptr;
@@ -343,7 +363,7 @@ int main(int argc, char** argv) {
 		const double total = std::min(14.0, std::max(3.0, 1.4 * eyring));
 		// truth: the whole response convolved
 		Sim truth;
-		if (!truth.Run(room, IPL_REFLECTIONEFFECTTYPE_CONVOLUTION, (float)total, 1, 4096, 256, lis, sp)) { std::printf("FAIL truth sim\n"); return 1; }
+		if (!truth.Run(room, IPL_REFLECTIONEFFECTTYPE_CONVOLUTION, (float)total, 1, g_truthRays, 256, lis, sp)) { std::printf("FAIL truth sim\n"); return 1; }
 		const std::vector<float> ht = Impulse(ctx, IPL_REFLECTIONEFFECTTYPE_CONVOLUTION, truth, (int)(total * kRate), nullptr, total);
 		truth.Free();
 		// the truth of each band alone
@@ -360,23 +380,32 @@ int main(int argc, char** argv) {
 			bandTruth.Free();
 			bandRoom.Free();
 		}
-		std::vector<double> off, step, band[3], bandFull[3], indep[3];
+		std::vector<double> band[3], bandFull[3], indep[3];
 		Result last;
+		double pOff = 0, pWin[kWins] = {};
 		for (int i = 0; i < g_repeat; ++i) {
 			Result r;
 			if (!Measure(ctx, room, c, total, ht, htb, &r, g_explore && i == 0)) { std::printf("FAIL hybrid sim\n"); return 1; }
-			off.push_back(r.off);
 			last = r;
-			step.push_back(r.maxStep);
+			pOff += r.pOff / g_repeat;
+			for (int w = 0; w < kWins; ++w) pWin[w] += r.pWin[w] / g_repeat;
 			for (int b = 0; b < 3; ++b) {
 				band[b].push_back(r.offBand[b]);
 				bandFull[b].push_back(r.offBandFull[b]);
 				indep[b].push_back(r.rtIndep[b]);
 			}
 		}
-		res[k].off = Median(off);
+		// checks 1 and 2 on the mean power of the repeats (see Result)
+		res[k].off = PDb(pOff) - EDb(ht, 0.5, 0.6);
+		res[k].maxStep = 0;
+		std::printf("  hybrid minus truth per 50 ms window from 0.3 s (mean power of %d simulations):", g_repeat);
+		for (int w = 0; w < kWins; ++w) {
+			const double g = PDb(pWin[w]) - EDb(ht, WinT(w), WinT(w) + 0.05);
+			res[k].maxStep = std::max(res[k].maxStep, std::fabs(g));
+			std::printf(" %+.2f", g);
+		}
+		std::printf(" dB\n");
 		res[k].minBand = last.minBand;
-		res[k].maxStep = Median(step);
 		for (int b = 0; b < 3; ++b) {
 			res[k].offBand[b] = Median(band[b]);
 			res[k].offBandFull[b] = Median(bandFull[b]);
