@@ -107,6 +107,10 @@
   "pos0": "hook",
   "why": "per-frame budget of held sounds' far jobs (cl_slicer), outside a direct P.Compute (pure test review M4)"
  },
+ "far_held_closer": {
+  "pos0": "hook",
+  "why": "which finished far job's answer a playing sound applies (cl_slicer SL.Held), outside a direct P.Compute (pure test: far_held_closer)"
+ },
  "far_sliced_cap": {
   "pos0": "hook",
   "why": "per-frame ceiling of the far slicer's budget (cl_slicer), outside a direct P.Compute"

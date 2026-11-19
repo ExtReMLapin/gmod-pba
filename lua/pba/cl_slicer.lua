@@ -55,7 +55,9 @@ function SL.ResetStats()
 		at = { 0, 0, 0, 0, 0 }, maxWaitMs = 0,
 		-- pba_far_force_ms: due jobs past the frame's forced share (forceOver), given the cheap model (forceCheap) or
 		-- left to wait with their previous answer (forceWait, playing sounds)
-		forceOver = 0, forceCheap = 0, forceWait = 0 }
+		forceOver = 0, forceCheap = 0, forceWait = 0,
+		-- pba_far_held_closer: playing sounds' answers dropped (farther from now than the one in use)
+		dropped = 0 }
 end
 if not SL.stats then SL.ResetStats() end
 
@@ -386,6 +388,32 @@ local function heldDone(_, j)
 	local f = j.heldReady
 	if f then f(j.heldOwner) end
 end
+
+-- pba_far_held_closer: where the answer in use was worked out for (owner.pbaSliceAt: source and listener as
+-- numbers, the table reused), and whether a finished job's answer is farther from where the source and the
+-- listener are now than that one. A job keeps the positions of its request and may finish seconds later (a far
+-- sound waits for its slices: 1.4-3.2 s measured on d3_breen_01 at 30 fps); its answer stood for "now" whatever
+-- happened meanwhile. A view that went to a camera and came back (d3_breen_01's blackout, a point_viewcontrol
+-- 1200 u away for 2.7 s) got the camera's answers 0.1-2.5 s after it was back: each far sound flipped to the
+-- camera's level and route until its next answer, with the listener still. A listener walking on gets answers
+-- nearer to where he is than the one in use (applied); one gone back does not (dropped, asked again).
+local function noteAt(owner, S, L)
+	local a = owner.pbaSliceAt
+	if not a then a = {} owner.pbaSliceAt = a end
+	a[1], a[2], a[3], a[4], a[5], a[6] = S.x, S.y, S.z, L.x, L.y, L.z
+end
+local function dist(v, x, y, z)
+	local dx, dy, dz = v.x - x, v.y - y, v.z - z
+	return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+local function farther(owner, j, S, L)
+	local a = owner.pbaSliceAt
+	if not a or (A.cfg.far_held_closer or 1) < 0.5 then return false end
+	local off = dist(S, j.S.x, j.S.y, j.S.z) + dist(L, j.L.x, j.L.y, j.L.z) -- (the finished answer's error now)
+	local inUse = dist(S, a[1], a[2], a[3]) + dist(L, a[4], a[5], a[6]) -- (the heard one's)
+	return off > inUse + (A.cfg.reeval_move or 8)
+end
+
 --- Continuous sounds (loops, streams, followed one-shots): `owner` is the caller's table for that sound.
 -- Returns the final result to use now, or nil while its evaluation runs in slices: the caller keeps what it
 -- has (no new value goes to its hysteresis), and onReady(owner) is called once the result is ready, which
@@ -395,13 +423,21 @@ function SL.Held(owner, S, L, sndlvl, srcEnt, onReady)
 	if j then
 		if not j.finished then return nil end
 		owner.pbaSlice = nil
-		return j.r
+		-- (pba_far_held_closer: an answer farther from now than the one in use is dropped, and asked again below)
+		if not (j.r and farther(owner, j, S, L)) then
+			if j.r then noteAt(owner, j.S, j.L) end
+			return j.r
+		end
+		SL.stats.dropped = (SL.stats.dropped or 0) + 1
 	end
 	-- after its first answer, an update may wait up to update_interval (see SL.Compute's minReach)
 	local lag = owner.pbaSliceSeen and (A.cfg.update_interval or 0.25) or nil
 	local r, job = SL.Compute(S, L, sndlvl, srcEnt, owner.pbaCfg, lag)
 	owner.pbaSliceSeen = true
-	if not job then return r end
+	if not job then
+		if r then noteAt(owner, S, L) end
+		return r
+	end
 	owner.pbaSlice = job
 	job.canWait = lag ~= nil -- (it has an answer: past pba_far_force_ms it keeps it rather than the cheap model)
 	job.heldReady, job.heldOwner = onReady, owner
@@ -434,6 +470,7 @@ if concommand then
 			s.at[1], s.at[2], s.at[3], s.at[4], s.at[5]))
 		print(string.format("[PBA]   past pba_far_force_ms: %d (%d cheap model, %d kept their answer and waited)",
 			s.forceOver or 0, s.forceCheap or 0, s.forceWait or 0))
+		print(string.format("[PBA]   playing sounds' answers dropped, farther from now than the one in use: %d", s.dropped or 0))
 		SL.ResetStats()
 	end)
 end
