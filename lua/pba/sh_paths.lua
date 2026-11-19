@@ -1844,7 +1844,6 @@ end
 -- hull; a door leaf is a lossy way through its doorway, charged by P.SegmentDoorLoss on the refined
 -- segments, not a shape), down to CORNER_EPS, and the corner law (AC.Corner) is applied there. The route
 -- keeps its clearance vertices for everything else (apparent position, homotopy, objects on its segments).
--- pba_corner_refine 0: the clearance vertices as they are.
 local CORNER_EPS, CORNER_HALVINGS, CORNER_SWEEPS = 0.125, 8, 3
 local cornerClear = detClear
 -- The bisections' probe points built in place (the same float operations as `v + (t - v) * mid` and `q + d * k`,
@@ -1878,7 +1877,6 @@ function P.CornerPoint(a, v, b, y, cfg)
 	-- sees it: the leg it slides on stays clear (part of it), the other one is traced, the route only
 	-- shortens, and the vertex ends on the edge. Only from a vertex whose legs are both clear.
 	if cornerClear(a, q) and cornerClear(q, b) then
-		local stepFirst = A.On(cfg, "corner_step_first")
 		for _ = 1, CORNER_SWEEPS do
 			local moved = false
 			for side = 1, 2 do
@@ -1886,14 +1884,14 @@ function P.CornerPoint(a, v, b, y, cfg)
 				local seg = far - q
 				local sl = seg:Length()
 				local s0, s1 = 0, 1
-				-- pba_corner_step_first: the smallest slide (CORNER_EPS) tried first. A vertex already on its
+				-- The smallest slide (CORNER_EPS) tried first. A vertex already on its
 				-- edge (60% of the sides on the offline bench: the confirming sweep, a leg it is pressed on)
 				-- cannot slide: one trace, where halving the whole leg took ~11. When it can, the same halving
 				-- follows (same answer). It differs only where that halving would land past an obstacle met
 				-- within CORNER_EPS of the vertex: none in 3 600 evaluations offline. (A doubling search from
 				-- the vertex saved 22% more traces but moved one copy of a route 1-2 dB from its twin where
 				-- the leg grazes the edge: visibility along such a leg is not monotonic.)
-				if stepFirst and sl >= CORNER_EPS then
+				if sl >= CORNER_EPS then
 					if y then sliceCheck() end
 					if not cornerClear(other, P.SCR.step(P.SCR.corner, q, seg, CORNER_EPS / sl)) then s1 = 0 end
 				end
@@ -1915,13 +1913,11 @@ end
 -- kept as a copy (the answer may be v itself, a caller's Vector); a NaN coordinate is not kept.
 local CORNER_KEEP = 4096
 local cornerKept
--- (and by corner_step_first: P.CornerPoint's answer depends on it)
-local cornerT, cornerN, cornerGen, cornerTL, cornerSF = {}, 0, nil, nil, nil
+local cornerT, cornerN, cornerGen, cornerTL = {}, 0, nil, nil
 function cornerKept(a, v, b, cfg)
 	local TL = util.TraceLine
-	local sf = A.On(cfg, "corner_step_first")
-	if cornerGen ~= P.worldGen or cornerTL ~= TL or cornerN >= CORNER_KEEP or cornerSF ~= sf then
-		cornerT, cornerN, cornerGen, cornerTL, cornerSF = {}, 0, P.worldGen, TL, sf
+	if cornerGen ~= P.worldGen or cornerTL ~= TL or cornerN >= CORNER_KEEP then
+		cornerT, cornerN, cornerGen, cornerTL = {}, 0, P.worldGen, TL
 	end
 	local ax, ay, az = a:Unpack()
 	local vx, vy, vz = v:Unpack()
@@ -1953,7 +1949,6 @@ local refineCorners
 -- two vertices on the two jambs of one doorway would otherwise chase each other).
 function P.RefineCorners(pts, cfg)
 	cfg = cfg or A.cfg
-	if A.Num(cfg, "corner_refine") < 0.5 then return refineCorners(pts, false, cfg) end
 	local n, TL = #pts, util.TraceLine
 	local m = refineMemo[pts]
 	local rp = A.On(cfg, "corner_relax")
@@ -1972,48 +1967,44 @@ function P.RefineCorners(pts, cfg)
 	end
 	local c = {}
 	for i = 1, n do c[3 * i - 2], c[3 * i - 1], c[3 * i] = pts[i]:Unpack() end
-	local out = refineCorners(pts, true, cfg)
+	local out = refineCorners(pts, cfg)
 	local keep = {}
 	for i = 1, #out do keep[i] = out[i] end
 	refineMemo[pts] = { n = n, TL = TL, gen = P.worldGen, c = c, out = keep, rp = rp }
 	return out
 end
-function refineCorners(pts, on, cfg)
+function refineCorners(pts, cfg)
 	local out = { pts[1] }
-	if on then
-		-- first the vertices that are no corner at all: kept by the tightening because its hull grazes a
-		-- wall where the thin line between their neighbours is clear. Left in, such a vertex bent the route
-		-- (a corner of 4 dB between two that see each other) whenever the copy of the route kept came from
-		-- that probe, and a walking source on pba_demo went 2-3 dB up and down every few steps
-		-- (path_perceptual). Pulled with the corners' own thin trace: from each kept vertex, the farthest
-		-- one it sees.
-		local kept, i = { pts[1] }, 1
-		while i < #pts do
-			local j = #pts
-			while j > i + 1 and not cornerClear(pts[i], pts[j]) do j = j - 1 sliceCheck() end
-			kept[#kept + 1] = pts[j]
-			i = j
-		end
-		pts = kept
+	-- first the vertices that are no corner at all: kept by the tightening because its hull grazes a
+	-- wall where the thin line between their neighbours is clear. Left in, such a vertex bent the route
+	-- (a corner of 4 dB between two that see each other) whenever the copy of the route kept came from
+	-- that probe, and a walking source on pba_demo went 2-3 dB up and down every few steps
+	-- (path_perceptual). Pulled with the corners' own thin trace: from each kept vertex, the farthest
+	-- one it sees.
+	local kept, i = { pts[1] }, 1
+	while i < #pts do
+		local j = #pts
+		while j > i + 1 and not cornerClear(pts[i], pts[j]) do j = j - 1 sliceCheck() end
+		kept[#kept + 1] = pts[j]
+		i = j
+	end
+	pts = kept
+	for x = 2, #pts - 1 do
+		sliceCheck()
+		out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1], cfg)
+	end
+	-- pba_corner_relax: one more pass, each corner (now on its edge) between its neighbours as refined. The
+	-- first pass keeps the clearance neighbours (from refined ones, two vertices on the two jambs of one
+	-- doorway chased each other), and a corner refined towards a clearance vertex far below an opening
+	-- stopped at the opening's sill, where the taut string between the refined corners bends at its lintel:
+	-- 14 u of detour, 4.6 dB, where the string only grazed the lintel and touched the far jamb
+	-- (gm_melancholia, under the radio's floor: 4.7 dB in 2 u as the jamb's shadow began)
+	if A.On(cfg, "corner_relax") and #pts > 3 then
+		out[#pts] = pts[#pts]
 		for x = 2, #pts - 1 do
 			sliceCheck()
-			out[x] = cornerKept(pts[x - 1], pts[x], pts[x + 1], cfg)
+			out[x] = cornerKept(out[x - 1], out[x], out[x + 1], cfg)
 		end
-		-- pba_corner_relax: one more pass, each corner (now on its edge) between its neighbours as refined. The
-		-- first pass keeps the clearance neighbours (from refined ones, two vertices on the two jambs of one
-		-- doorway chased each other), and a corner refined towards a clearance vertex far below an opening
-		-- stopped at the opening's sill, where the taut string between the refined corners bends at its lintel:
-		-- 14 u of detour, 4.6 dB, where the string only grazed the lintel and touched the far jamb
-		-- (gm_melancholia, under the radio's floor: 4.7 dB in 2 u as the jamb's shadow began)
-		if A.On(cfg, "corner_relax") and #pts > 3 then
-			out[#pts] = pts[#pts]
-			for x = 2, #pts - 1 do
-				sliceCheck()
-				out[x] = cornerKept(out[x - 1], out[x], out[x + 1], cfg)
-			end
-		end
-	else
-		for i = 2, #pts - 1 do out[i] = pts[i] end
 	end
 	out[#pts] = pts[#pts]
 	return out

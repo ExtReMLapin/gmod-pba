@@ -2069,11 +2069,11 @@ local SUITE = {
 			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
 			if not ok then error(err, 0) end
 		end },
-		{ name = "CornerPoint: trying the smallest slide first (pba_corner_step_first) gives the full halving's point, in fewer traces", func = function()
+		{ name = "CornerPoint: trying the smallest slide first, the point found sees both neighbours", func = function()
 			-- the same doorway; vertices around both jambs, from either room, and a pillar in room A
 			local boxes = { { Vector(512, -1000, -100), Vector(528, 97, 300) }, { Vector(512, 143, -100), Vector(528, 1000, 300) },
 				{ Vector(300, 200, -100), Vector(340, 240, 300) } }
-			local savedTL, savedNT, savedSF = util.TraceLine, A.cfg.native_traces, A.cfg.corner_step_first
+			local savedTL, savedNT = util.TraceLine, A.cfg.native_traces
 			local n = 0
 			local function stub()
 				-- a new function each time: the corner memos are kept per trace function
@@ -2106,20 +2106,23 @@ local SUITE = {
 					local V = Vector(rnd(490, 560), i % 2 == 0 and rnd(60, 100) or rnd(140, 180), rnd(0, 100))
 					cases[i] = { S, V, L }
 				end
-				local got, traces = {}, {}
-				for mode = 0, 1 do
-					A.cfg.corner_step_first = mode
-					util.TraceLine, n = stub(), 0
-					got[mode] = {}
-					for i, c in ipairs(cases) do got[mode][i] = P.CornerPoint(c[1], c[2], c[3]) end
-					traces[mode] = n
+				local function clear(a, b)
+					for _, x in ipairs(boxes) do
+						local t0, t1 = segBox(a, b, x[1], x[2])
+						if t0 and t1 - t0 > 1e-6 then return false end
+					end
+					return true
 				end
-				for i = 1, #cases do
-					expect(got[1][i] == got[0][i]).to.beTrue()
+				util.TraceLine, n = stub(), 0
+				for _, c in ipairs(cases) do
+					local q = P.CornerPoint(c[1], c[2], c[3])
+					if clear(c[1], c[2]) and clear(c[2], c[3]) then
+						expect(clear(c[1], q) and clear(q, c[3])).to.beTrue()
+					end
 				end
-				expect(traces[1] < traces[0] * 0.8).to.beTrue()
+				print(string.format("[pba test] CornerPoint: %d traces for %d corners", n, #cases))
 			end)
-			util.TraceLine, A.cfg.native_traces, A.cfg.corner_step_first = savedTL, savedNT, savedSF
+			util.TraceLine, A.cfg.native_traces = savedTL, savedNT
 			if not ok then error(err, 0) end
 		end },
 		{ name = "DetourDelta: the world closing on the best way round an object moves it by degrees along its edge (was a jump to the next edge: 10 -> 3 dB in 2 u, pba_twodoors)", func = function()
@@ -2295,7 +2298,7 @@ local SUITE = {
 				o.StartSolid = t0 == 0
 				return o
 			end
-			local cfg = setmetatable({ prop_max_db = 18, corner_refine = 0 }, { __index = CFG })
+			local cfg = setmetatable({ prop_max_db = 18 }, { __index = CFG })
 			local ok, err = pcall(function()
 				D.byEnt[9989] = { frac = 1, closedDb = 28, closedLp = 3 }
 				local S, L = Vector(640, 120, 56), Vector(424, 70, 56)
